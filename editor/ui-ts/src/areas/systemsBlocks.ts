@@ -812,7 +812,7 @@ function orderedArgNames(args: Readonly<Record<string, JsonValue>>): readonly st
  * палитра ненаполненных слотов. Незаполненного слота в документе нет — он
  * появляется тем, что автор его поставил.
  */
-export function actionNodeBlock(env: BlockEnvironment, path: JsonPath, node: JsonValue): UiNode {
+function actionNodeBlock(env: BlockEnvironment, path: JsonPath, node: JsonValue): UiNode {
   const read = readActionNode(node);
   if (read === undefined) {
     // Узел, у которого не один ключ, — не узел действия (ACT-1). О том, что это

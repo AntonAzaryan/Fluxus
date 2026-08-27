@@ -56,11 +56,11 @@ export const VISUALS_OPERATIONS = {
 } as const;
 
 /** Где в манифесте лежат записи (ASSET-6) — доменное знание вклада, а не каркаса. */
-export const ENTRIES_KEY = 'entities';
+const ENTRIES_KEY = 'entities';
 /** Поля записи, в которые пишет просмотрщик (ASSET-6). */
-export const MODEL_KEY = 'model';
-export const DEFAULT_SKIN_KEY = 'defaultSkin';
-export const SKINS_KEY = 'skins';
+const MODEL_KEY = 'model';
+const DEFAULT_SKIN_KEY = 'defaultSkin';
+const SKINS_KEY = 'skins';
 
 const DOCUMENT: OperationParamSpec = {
   type: 'document',
@@ -79,7 +79,7 @@ const asDocument = (params: OperationParams): DocumentId => params.document as D
 const asString = (params: OperationParams, name: string): string => params[name] as string;
 
 /** Путь записи манифеста внутри документа. */
-export function entryPath(entry: string, ...rest: readonly string[]): JsonPath {
+function entryPath(entry: string, ...rest: readonly string[]): JsonPath {
   return [ENTRIES_KEY, entry, ...rest];
 }
 
@@ -176,7 +176,7 @@ function checkEntry(
  * скины и маппинг анимаций — соседние поля той же записи, и выбор модели их не
  * трогает. Что при этом пересобрать в кадре, решает подсистема (REND-17).
  */
-export const setEntryModelOperation: AuthoringOperation = {
+const setEntryModelOperation: AuthoringOperation = {
   id: VISUALS_OPERATIONS.setModel,
   descriptionKey: 'ui.operation.visuals.entry.setModel',
   params: { document: DOCUMENT, entry: ENTRY, asset: ASSET },
@@ -196,7 +196,7 @@ export const setEntryModelOperation: AuthoringOperation = {
  * `defaultSkin`, которому не соответствует ни одна подмена, — не выбор, а
  * опечатка, и рантайм на неё ответит молчанием.
  */
-export const setEntryDefaultSkinOperation: AuthoringOperation = {
+const setEntryDefaultSkinOperation: AuthoringOperation = {
   id: VISUALS_OPERATIONS.setDefaultSkin,
   descriptionKey: 'ui.operation.visuals.entry.setDefaultSkin',
   params: { document: DOCUMENT, entry: ENTRY, skin: SKIN },
@@ -221,7 +221,7 @@ export const setEntryDefaultSkinOperation: AuthoringOperation = {
  * заводит: подмена и есть весь скин, и первая его подмена — то же действие, что
  * следующая. Записи это не касается — она уже существует.
  */
-export const setEntrySkinTextureOperation: AuthoringOperation = {
+const setEntrySkinTextureOperation: AuthoringOperation = {
   id: VISUALS_OPERATIONS.setSkinTexture,
   descriptionKey: 'ui.operation.visuals.entry.setSkinTexture',
   params: { document: DOCUMENT, entry: ENTRY, skin: SKIN, slot: SLOT, asset: ASSET },

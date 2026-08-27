@@ -51,7 +51,7 @@ import {
  * нечем — его изображение живёт эмиттером сцены, а не отдельным инстансом
  * (REND-24), — и по расширению `.json` он неотличим от прочих документов.
  */
-export const BROWSABLE_LOADERS: readonly AssetLoader[] = Object.freeze([
+const BROWSABLE_LOADERS: readonly AssetLoader[] = Object.freeze([
   mdxLoader,
   gltfLoader,
   pngTextureLoader,

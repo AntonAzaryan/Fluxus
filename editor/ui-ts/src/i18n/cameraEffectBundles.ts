@@ -24,7 +24,7 @@ import en from './locales/cameraEffect.en.json';
 import ru from './locales/cameraEffect.ru.json';
 
 /** Префикс пространства описаний эффектов — первый сегмент пути ED-28. */
-export const CAMERA_EFFECT_KIND = 'cameraEffect';
+const CAMERA_EFFECT_KIND = 'cameraEffect';
 export const CAMERA_EFFECT_KEY_PREFIX = `${CAMERA_EFFECT_KIND}.`;
 
 export const CAMERA_EFFECT_BUNDLES: LocaleBundles = { en, ru };

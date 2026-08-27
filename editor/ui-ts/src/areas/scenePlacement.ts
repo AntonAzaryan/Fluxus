@@ -277,7 +277,7 @@ function overridesOf(entries: readonly [string, string, number][]): JsonObject {
  * Постановка инстанса префаба в точку поверхности (ED-16). Возвращает дескриптор
  * дописанной записи — им же вызывающий её и выделяет (ED-17).
  */
-export const addPlacementOperation: AuthoringOperation = {
+const addPlacementOperation: AuthoringOperation = {
   id: PLACEMENT_OPERATIONS.add,
   descriptionKey: 'ui.operation.scene.placement.add',
   params: { document: DOCUMENT, list: LIST, prefab: PREFAB, x: X, y: Y, turns: OPTIONAL_TURNS, binding: BINDING },
@@ -305,7 +305,7 @@ export const addPlacementOperation: AuthoringOperation = {
  * Перемещение размещённого (ED-16). Пишет ровно два поля своей записи и
  * списка не касается: порядок записей от перемещения не меняется.
  */
-export const movePlacementOperation: AuthoringOperation = {
+const movePlacementOperation: AuthoringOperation = {
   id: PLACEMENT_OPERATIONS.move,
   descriptionKey: 'ui.operation.scene.placement.move',
   params: { document: DOCUMENT, record: RECORD, x: X, y: Y, binding: BINDING, layer: LAYER },
@@ -337,7 +337,7 @@ export const movePlacementOperation: AuthoringOperation = {
  * Поворот размещённого (ED-16). Угол — доля оборота в Q16.16, единица самого
  * ядра (`fixed.sin`); второй единицы редактор не вводит.
  */
-export const rotatePlacementOperation: AuthoringOperation = {
+const rotatePlacementOperation: AuthoringOperation = {
   id: PLACEMENT_OPERATIONS.rotate,
   descriptionKey: 'ui.operation.scene.placement.rotate',
   params: { document: DOCUMENT, record: RECORD, turns: TURNS, binding: BINDING, layer: LAYER },

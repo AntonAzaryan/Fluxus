@@ -112,16 +112,6 @@ export function prefabRecords(
   return out;
 }
 
-/** Запись prefab'а как объект; `undefined` — записи с таким именем нет. */
-export function prefabEntry(config: JsonValue | undefined, name: string): JsonValue | undefined {
-  const list = getAtPath(config ?? null, PREFAB_LIST);
-  if (!isJsonArray(list)) return undefined;
-  for (const entry of list) {
-    if (isJsonObject(entry) && entry.name === name) return entry;
-  }
-  return undefined;
-}
-
 /**
  * Состав компонента: объявленный контентом читается из документа, а
  * синтезируемый загрузчиком — у поднятого мира (дельта ED-6). Оба нужны в

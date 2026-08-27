@@ -117,10 +117,10 @@ export const OBJECTS_AREA_ID = 'area.objects';
 export const OBJECT_LISTS: readonly JsonPath[] = Object.freeze([COMPONENT_LIST, PREFAB_LIST]);
 
 /** Вид конфига сцены (SER-7). Вид принадлежит документу, а не области. */
-export const DEFAULT_CONFIG_KIND: DocumentKind = 'scene';
+const DEFAULT_CONFIG_KIND: DocumentKind = 'scene';
 
 /** Вид манифеста визуалов (ASSET-6) — вторая половина пары ED-19. */
-export const DEFAULT_VISUALS_KIND: DocumentKind = 'visuals';
+const DEFAULT_VISUALS_KIND: DocumentKind = 'visuals';
 
 /** Действие DSL, чей аргумент называет prefab (ACT-1) — адрес ссылки, не правило. */
 export const SPAWN_ACTION = 'spawnEntity';
@@ -153,7 +153,7 @@ const SECTION_BY_KEY: ReadonlyMap<string, ObjectsSection> = new Map([
 ]);
 
 /** Какие документы область правит: конфиг сцены и манифест его визуалов. */
-export interface ObjectsProjectIds {
+interface ObjectsProjectIds {
   readonly config: ContentPath;
   readonly visuals: ContentPath;
 }
@@ -179,7 +179,7 @@ export interface ObjectsAreaOptions {
 }
 
 /** Умолчание адресов ссылок: оба места лежат полями конфига сцены. */
-export function defaultPrefabReferences(ids: ObjectsProjectIds): readonly PrefabReferenceSite[] {
+function defaultPrefabReferences(ids: ObjectsProjectIds): readonly PrefabReferenceSite[] {
   return Object.freeze([
     { document: ids.config, list: ['initial'], field: PREFAB_REFERENCE_KEY },
     {

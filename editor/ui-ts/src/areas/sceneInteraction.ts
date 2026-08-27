@@ -140,7 +140,7 @@ export interface ScenePicker {
  * presentation-состояния: сущность знает набор инстансов (REND-11), и перевод
  * делает он, а не инструмент.
  */
-export interface StageHighlight {
+interface StageHighlight {
   readonly kind: 'highlight';
   /** Ключ наложения в наборе (REND-16) — устойчивый и уникальный. */
   readonly key: string;
@@ -165,7 +165,7 @@ export type SceneOverlay = StageHighlight | OverlayGizmo | OverlayCells | Overla
  * (REND-16). Оставленное наложение врало бы о месте, где кисть покрасит, и
  * оставалось бы висеть, пока автор не вернётся в кадр.
  */
-export type StagePointerPhase = 'down' | 'move' | 'up' | 'cancel' | 'leave';
+type StagePointerPhase = 'down' | 'move' | 'up' | 'cancel' | 'leave';
 
 export interface StagePointer {
   readonly phase: StagePointerPhase;
@@ -179,10 +179,10 @@ export interface StagePointer {
 // ------------------------------------------------------------------ инструмент
 
 /** Режим инструмента: выделять существующее или ставить новое (ED-16, ED-17). */
-export type PlacementMode = 'select' | 'place';
+type PlacementMode = 'select' | 'place';
 
 /** Что инструмент правит и чем видит кадр; подаётся отрисовкой области. */
-export interface PlacementToolInput {
+interface PlacementToolInput {
   /** Сквозное выделение, суженное до области (ED-23). */
   readonly selection: AreaSelection;
   /** Кадр вьюпорта; null — в этой среде рисовать нечем, и попадать не во что. */

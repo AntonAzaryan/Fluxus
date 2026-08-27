@@ -67,17 +67,17 @@ import type { SceneStage } from './sceneStage.js';
  * документ прогона (сценарий CLI-2, конфиг матча NTR-5), которого у редактора
  * пока нет, — поэтому здесь она настройка runner'а, а не выдумка о сцене.
  */
-export const PREVIEW_TICK_SECONDS = 1 / 60;
+const PREVIEW_TICK_SECONDS = 1 / 60;
 
 /**
  * Зерно мира прогона. По той же причине константа: сцена зерна не хранит, а
  * два прогона одних и тех же документов обязаны совпадать (DET-1) — иначе
  * «проверил правку» означало бы «посмотрел один из вариантов».
  */
-export const PREVIEW_WORLD_SEED = 20260805;
+const PREVIEW_WORLD_SEED = 20260805;
 
 /** Тег сообщения, которым главный поток отдаёт воркеру сцену прогона. */
-export const PREVIEW_SCENE_MESSAGE = 'preview-scene';
+const PREVIEW_SCENE_MESSAGE = 'preview-scene';
 
 /**
  * Сцена прогона на пути в воркер. Отдельным сообщением, а не аргументом
@@ -174,7 +174,7 @@ export function startPreviewSimulation(
  * синхронных портов, потому что настоящего воркера в headless-прогоне нет, а
  * проверять надо ЧТО пересекает границу, а не чем оно её пересекает.
  */
-export interface PreviewBackend {
+interface PreviewBackend {
   readonly port: ShellPort;
   /**
    * Пуск второй стороны. Зовётся ПОСЛЕ подключения главного потока: handshake
@@ -189,7 +189,7 @@ export interface PreviewBackend {
 export type PreviewBackendFactory = (message: PreviewSceneMessage) => PreviewBackend;
 
 /** Воркер веба: тот же механизм, что у игрового клиента (SHELL-1). */
-export function workerPreviewBackend(message: PreviewSceneMessage): PreviewBackend {
+function workerPreviewBackend(message: PreviewSceneMessage): PreviewBackend {
   const worker = new Worker(new URL('./previewWorker.ts', import.meta.url), { type: 'module' });
   const port = shellPort(worker);
   return {

@@ -31,7 +31,7 @@ import { withValidation, type ValidationState } from './validation.js';
  * языка клавиатуру не изображает, а платить за это лишними остановками Tab
  * незачем.
  */
-export interface RovingSpec {
+interface RovingSpec {
   /** Идентификатор контейнера; по нему каркас возвращает фокус после перерисовки. */
   readonly rovingId?: string;
   /** Строка, держащая фокус. По умолчанию — выделенная, иначе первая. */

@@ -45,7 +45,6 @@ import { TOKENS, tokenValue } from './tokens.js';
  */
 export {
   APP_CLASS,
-  SCOPE,
   TOKEN_SCOPE_CLASS,
   VIEWPORT_CLASS,
   VIEWPORT_OVERLAY_CLASS,

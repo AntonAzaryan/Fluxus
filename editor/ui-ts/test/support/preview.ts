@@ -27,7 +27,7 @@ interface TestPort {
 }
 
 /** Сообщение канала в виде, пригодном для сравнения двух прогонов. */
-export interface RecordedMessage {
+interface RecordedMessage {
   /** Кто отправил: главный поток или воркер. */
   readonly from: 'main' | 'worker';
   readonly kind: string;

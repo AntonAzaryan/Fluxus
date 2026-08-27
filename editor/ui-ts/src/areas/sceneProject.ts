@@ -82,7 +82,7 @@ const EMPTY_PRESENTATION: JsonValue = Object.freeze({});
  * Список декораций сюда не входит: он лежит в парном документе (PRES-2), а не
  * в конфиге, и открывается вместе с ним.
  */
-export const PROJECT_LISTS: readonly JsonPath[] = Object.freeze([
+const PROJECT_LISTS: readonly JsonPath[] = Object.freeze([
   PLACEMENT_LIST,
   ...OBJECT_LISTS,
   ...SYSTEM_LISTS,

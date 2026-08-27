@@ -44,9 +44,6 @@ import type { ValidationSeverity, ValidationState } from '../widgets/validation.
 import { viewportFrame } from '../viewport.js';
 import sample from './sampleDocument.json';
 
-/** Данные страницы — открытый документ и его схема, как их видит редактор. */
-export const SAMPLE_DOCUMENT = sample;
-
 /** Описания полей проекта: бандл, который в жизни лежит в дереве контента. */
 export const SAMPLE_DESCRIPTIONS = sample.descriptions;
 

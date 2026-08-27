@@ -122,7 +122,7 @@ function freeOrder(list: JsonValue | undefined): number {
  * следующими действиями. Пустое тело ядро принимает (`bodyOf` от пустого списка
  * — пустой список), и до первого блока система просто ничего не делает.
  */
-export const createSystemOperation: AuthoringOperation = {
+const createSystemOperation: AuthoringOperation = {
   id: SYSTEM_OPERATIONS.create,
   descriptionKey: 'ui.operation.systems.system.create',
   params: { document: DOCUMENT, list: LIST, name: SYSTEM_NAME },
@@ -169,7 +169,7 @@ function listAt(
  * Узел в конец списка внутри записи (ED-5). Возвращает индекс дописанного —
  * им вызывающий раскрывает поставленный блок, не пересчитывая длину списка.
  */
-export const appendNodeOperation: AuthoringOperation = {
+const appendNodeOperation: AuthoringOperation = {
   id: SYSTEM_OPERATIONS.append,
   descriptionKey: 'ui.operation.systems.node.append',
   params: { document: DOCUMENT, record: RECORD, path: NODE_PATH, node: NODE },
@@ -206,7 +206,7 @@ export const appendNodeOperation: AuthoringOperation = {
  * заполняет автор следующим действием, и до тех пор о них говорит валидация, а
  * не операция (ED-8).
  */
-export const setTriggerSourceOperation: AuthoringOperation = {
+const setTriggerSourceOperation: AuthoringOperation = {
   id: SYSTEM_OPERATIONS.source,
   descriptionKey: 'ui.operation.systems.trigger.setSource',
   params: { document: DOCUMENT, record: RECORD, source: SOURCE, type: EVENT_TYPE },

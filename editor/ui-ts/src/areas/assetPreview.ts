@@ -80,7 +80,7 @@ export interface AssetStates {
   onInvalidate?(listener: () => void): () => void;
 }
 
-export type AssetStatus = 'loading' | 'ready' | 'failed';
+type AssetStatus = 'loading' | 'ready' | 'failed';
 
 /** Ассет глазами просмотрщика: чем он оказался и почему не открылся (ASSET-4). */
 export interface OpenedAsset {

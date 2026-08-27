@@ -73,19 +73,19 @@ export const CAMERA_EFFECTS_OPERATIONS = {
 export const REMOVE_BINDING_OPERATION = 'document.removeValue';
 
 /** Где в манифесте лежит секция и её таблицы (ASSET-8) — доменное знание вклада. */
-export const SECTION_KEY = 'cameraEffects';
+const SECTION_KEY = 'cameraEffects';
 export const EVENTS_TABLE = 'events';
 export const STATES_TABLE = 'states';
 export const EFFECT_KEY = 'effect';
 
 /** Таблица секции и вид эффекта, который в ней законен (ASSET-8, CAM-9). */
-export const TABLE_KINDS: Readonly<Record<string, CameraEffectKind>> = Object.freeze({
+const TABLE_KINDS: Readonly<Record<string, CameraEffectKind>> = Object.freeze({
   [EVENTS_TABLE]: 'impulse',
   [STATES_TABLE]: 'lasting',
 });
 
 /** Имена таблиц в порядке секции — из них автор и выбирает. */
-export const TABLES: readonly string[] = Object.freeze([EVENTS_TABLE, STATES_TABLE]);
+const TABLES: readonly string[] = Object.freeze([EVENTS_TABLE, STATES_TABLE]);
 
 const DOCUMENT: OperationParamSpec = {
   type: 'document',
@@ -230,7 +230,7 @@ function checkBinding(
  * удаляются: иначе автор остаётся с числами, на которые валидация тут же
  * ругается, и чистит их руками. Потеря чисел обратима одним undo (ED-18).
  */
-export function bindCameraEffectOperation(
+function bindCameraEffectOperation(
   description: CameraEffectsDescription = CAMERA_EFFECTS_DESCRIPTION,
 ): AuthoringOperation {
   return {
@@ -291,7 +291,7 @@ function requireParam(
  * объявленным диапазоном: приведение к границе — поведение кадра (CAM-6), а не
  * разрешение писать такое на диск (ASSET-8).
  */
-export function setCameraEffectParamOperation(
+function setCameraEffectParamOperation(
   description: CameraEffectsDescription = CAMERA_EFFECTS_DESCRIPTION,
 ): AuthoringOperation {
   return {

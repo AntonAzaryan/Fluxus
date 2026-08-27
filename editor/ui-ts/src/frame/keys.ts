@@ -134,7 +134,7 @@ function canonical(parts: readonly string[]): string {
 }
 
 /** Нажатие в канонической записи сочетания — то, с чем сравнивается объявленное. */
-export function bindingOf(stroke: KeyStroke): string {
+function bindingOf(stroke: KeyStroke): string {
   const [ctrl, shift, alt] = MODIFIERS;
   return canonical([
     ...(stroke.ctrl && ctrl !== undefined ? [ctrl] : []),

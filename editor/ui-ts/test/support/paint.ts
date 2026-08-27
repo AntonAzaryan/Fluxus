@@ -29,7 +29,7 @@ export const PAINT_SIDE = 8;
 const rows = (fill: string): string[] =>
   Array.from({ length: PAINT_SIDE }, () => fill.repeat(PAINT_SIDE));
 
-export const PAINT_SCENE = {
+const PAINT_SCENE = {
   components: [{ name: 'Position', fields: { x: 'fixed', y: 'fixed' } }],
   prefabs: [{ name: 'Hero', tags: ['Hero'], components: { Position: { x: 98304, y: 98304 } } }],
   terrain: {
@@ -43,7 +43,7 @@ export const PAINT_SCENE = {
   capacity: 16,
 };
 
-export const PAINT_CURVATURE = {
+const PAINT_CURVATURE = {
   width: PAINT_SIDE,
   height: PAINT_SIDE,
   // Узловые ряды (PAINT_SIDE+1)² нулей (ASSET-7).

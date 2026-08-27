@@ -63,7 +63,7 @@ import {
 } from './sceneTerrain.js';
 
 /** Слой данных, который правит кисть: sim-ассет террейна или карта кривизны. */
-export type BrushLayer = 'terrain' | 'curvature';
+type BrushLayer = 'terrain' | 'curvature';
 
 /**
  * Что кисть террейна делает с клеткой (ED-10). Четыре значения — четыре глагола
@@ -91,13 +91,13 @@ export const BRUSH_LEVELS: readonly number[] = Object.freeze(
 export const BRUSH_SIZES: readonly number[] = Object.freeze([1, 3, 5]);
 
 /** Где лежит правимый ассет: документ и путь внутри него (пустой — сам документ). */
-export interface BrushTarget {
+interface BrushTarget {
   readonly document: DocumentId;
   readonly path: JsonPath;
 }
 
 /** Размеры сетки — столько, сколько нужно кисти, чтобы не выйти за карту. */
-export interface BrushGrid {
+interface BrushGrid {
   readonly width: number;
   readonly height: number;
 }

@@ -150,14 +150,14 @@ export const ASSETS_VIEWPORT_ID = 'fx-assets-viewport';
  * — не совпадение, а условие того, что документ у них один (сессия открывает
  * его однажды).
  */
-export const DEFAULT_VISUALS_KIND: DocumentKind = 'visuals';
+const DEFAULT_VISUALS_KIND: DocumentKind = 'visuals';
 
 /**
  * Вид документов сцены. Просмотрщик их не правит и не открывает — он лишь
  * собирает из них подсказки имён событий тика (ED-14), и вид приходит той же
  * настройкой, что вид манифеста.
  */
-export const DEFAULT_SCENE_KIND: DocumentKind = 'scene';
+const DEFAULT_SCENE_KIND: DocumentKind = 'scene';
 
 /** Обратные каналы кадра: он объявляет то, что видно в интерфейсе (ED-8, CAM-2). */
 export interface AssetStageHooks {

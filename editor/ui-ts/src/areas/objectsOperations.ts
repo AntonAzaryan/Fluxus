@@ -48,7 +48,6 @@
  */
 import {
   OperationError,
-  getAtPath,
   isJsonArray,
   isJsonObject,
   pathStartsWith,
@@ -73,7 +72,7 @@ export const PAIR_OPERATIONS = {
 } as const;
 
 /** Где в манифесте визуалов лежат записи сим-сущностей (ASSET-6). */
-export const MANIFEST_ENTITIES: JsonPath = Object.freeze(['entities']);
+const MANIFEST_ENTITIES: JsonPath = Object.freeze(['entities']);
 
 /**
  * Место, называющее имя prefab'а вне самой пары. Форма одна на оба известных
@@ -315,7 +314,7 @@ function nameOfRecord(operationId: string, ctx: OperationContext, document: Docu
  * (ED-7). Модель приходит параметром — выбирает её просмотрщик ассетов (ED-20),
  * и своего способа назвать модель у этой операции нет.
  */
-export const createPrefabPairOperation: AuthoringOperation = {
+const createPrefabPairOperation: AuthoringOperation = {
   id: PAIR_OPERATIONS.create,
   descriptionKey: 'ui.operation.objects.prefab.create',
   params: { document: DOCUMENT, list: LIST, name: PREFAB_NAME, visuals: VISUALS, model: MODEL },
@@ -365,7 +364,7 @@ export const createPrefabPairOperation: AuthoringOperation = {
  * запрещать переименование за чужое нарушение значило бы не дать автору его
  * исправить. Правило валидации о ней уже говорит (ED-8).
  */
-export const renamePrefabPairOperation: AuthoringOperation = {
+const renamePrefabPairOperation: AuthoringOperation = {
   id: PAIR_OPERATIONS.rename,
   descriptionKey: 'ui.operation.objects.prefab.rename',
   params: { document: DOCUMENT, record: RECORD, to: RENAME_TO, visuals: VISUALS, references: REFERENCES },
@@ -410,7 +409,7 @@ export const renamePrefabPairOperation: AuthoringOperation = {
  * существовала. Молча вычистить её значило бы удалить работу автора без его
  * ведома, а решение «удалить размещения или переназначить их» принадлежит ему.
  */
-export const deletePrefabPairOperation: AuthoringOperation = {
+const deletePrefabPairOperation: AuthoringOperation = {
   id: PAIR_OPERATIONS.delete,
   descriptionKey: 'ui.operation.objects.prefab.delete',
   params: { document: DOCUMENT, record: RECORD, visuals: VISUALS },
@@ -436,12 +435,6 @@ export const PAIR_AUTHORING_OPERATIONS: readonly AuthoringOperation[] = Object.f
   renamePrefabPairOperation,
   deletePrefabPairOperation,
 ]);
-
-/** Ключи записей манифеста — вторая половина пары так, как её видит область. */
-export function manifestEntryNames(visuals: JsonValue | undefined): readonly string[] {
-  const entities = getAtPath(visuals ?? null, MANIFEST_ENTITIES);
-  return isJsonObject(entities) ? Object.keys(entities) : [];
-}
 
 /**
  * Регистрация вкладом (ED-25): набор операций приносит тот, кто собирает

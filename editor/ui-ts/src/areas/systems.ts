@@ -113,7 +113,7 @@ export const SYSTEM_DOCUMENT_KIND: DocumentKind = 'system';
 export const SYSTEM_LISTS: readonly JsonPath[] = Object.freeze([SYSTEM_LIST]);
 
 /** Три блока триггера ED-4: между ними и переключается раскладка области. */
-export type TriggerBlock = 'event' | 'condition' | 'actions';
+type TriggerBlock = 'event' | 'condition' | 'actions';
 
 /**
  * Раскладка клавиш области (ED-32) — данные вклада. Перечень один: по нему

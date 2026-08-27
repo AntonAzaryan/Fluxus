@@ -54,8 +54,8 @@ import { jsonSchemaFields } from './sceneSchema.js';
 export const COMPONENT_LIST: JsonPath = Object.freeze(['components']);
 
 /** Ключи записи схемы (ECS-3): состав полей и значения по умолчанию. */
-export const FIELDS_KEY = 'fields';
-export const DEFAULTS_KEY = 'defaults';
+const FIELDS_KEY = 'fields';
+const DEFAULTS_KEY = 'defaults';
 
 /** Корень путей описаний полей формата — тот же, что у отчёта ресурсов (ED-28). */
 const SCHEMA_KIND = 'schema';
@@ -375,7 +375,7 @@ function requireText(operationId: string, param: string, value: string): string 
  * состав ядро на загрузке отвергнет, и это видимое состояние — находка ED-8, а
  * не выдуманное редактором поле, которого автор не заводил.
  */
-export const createComponentOperation: AuthoringOperation = {
+const createComponentOperation: AuthoringOperation = {
   id: SCHEMA_OPERATIONS.create,
   descriptionKey: 'ui.operation.objects.component.create',
   params: { document: DOCUMENT, list: LIST, name: COMPONENT },
@@ -395,7 +395,7 @@ export const createComponentOperation: AuthoringOperation = {
  * Занятое имя — отказ: «добавить» и «сменить тип» это два разных действия, и
  * второе делает строка инспектора базовой операцией.
  */
-export const addFieldOperation: AuthoringOperation = {
+const addFieldOperation: AuthoringOperation = {
   id: SCHEMA_OPERATIONS.addField,
   descriptionKey: 'ui.operation.objects.component.addField',
   params: { document: DOCUMENT, record: RECORD, field: FIELD, type: FIELD_TYPE },
@@ -432,7 +432,7 @@ export const addFieldOperation: AuthoringOperation = {
  * ядро отвергает на загрузке. «Снять поле» — одно действие автора, значит одна
  * запись истории (ED-18).
  */
-export const removeFieldOperation: AuthoringOperation = {
+const removeFieldOperation: AuthoringOperation = {
   id: SCHEMA_OPERATIONS.removeField,
   descriptionKey: 'ui.operation.objects.component.removeField',
   params: { document: DOCUMENT, record: RECORD, field: FIELD },

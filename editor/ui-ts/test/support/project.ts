@@ -26,7 +26,7 @@ import type { SceneOverlay, ScenePick } from '../../src/areas/sceneInteraction.j
  * ядра полем поворота: иначе «редактор берёт имена из настройки проекта» было бы
  * проверено на настройке, совпадающей с умолчанием, то есть не проверено.
  */
-export const FIXTURE_POSITION: PositionBinding = {
+const FIXTURE_POSITION: PositionBinding = {
   component: 'Position',
   x: 'x',
   y: 'y',
@@ -135,13 +135,6 @@ export function fixtureHostWithLayer(
     },
   });
 }
-
-/**
- * Попадание, которое дубль вьюпорта отдаёт по точке экрана. Тест раскладывает
- * экран на попадания сам: настоящий picking считает по нарисованному (REND-15),
- * а нарисованного в headless-прогоне нет.
- */
-export type FakeHits = ReadonlyMap<string, ScenePick>;
 
 /** Дубль вьюпорта: помнит поданное, вместо того чтобы это рисовать. */
 export interface FakeStage extends SceneStage {

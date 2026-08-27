@@ -148,8 +148,8 @@ const NO_PROJECT: SceneProjectIds = { config: '', visuals: '' };
  * складываются из наборов всех: подсветка выделения не гаснет оттого, что автор
  * взял кисть.
  */
-export const SCENE_TOOLS = ['pointer', 'terrain', 'curvature'] as const;
-export type SceneToolId = (typeof SCENE_TOOLS)[number];
+const SCENE_TOOLS = ['pointer', 'terrain', 'curvature'] as const;
+type SceneToolId = (typeof SCENE_TOOLS)[number];
 
 /** Подписи инструментов и режимов кисти — ключи ресурсов (ED-27). */
 const TOOL_LABELS: Readonly<Record<SceneToolId, string>> = {
@@ -245,7 +245,7 @@ export interface SceneStageHooks {
 }
 
 /** Чем собирается вьюпорт. */
-export type SceneStageFactory = (
+type SceneStageFactory = (
   project: SceneProject,
   host: EnvironmentHost,
   hooks: SceneStageHooks,

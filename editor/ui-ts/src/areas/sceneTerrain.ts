@@ -74,9 +74,9 @@ export const TERRAIN_OPERATIONS = {
 } as const;
 
 /** Имена карт внутри ассетов (TERR-2, ASSET-7) — поля формата, а не выдумка кисти. */
-export const LEVEL_MAP = 'levels';
-export const FLAG_MAP = 'flags';
-export const OFFSET_MAP = 'rows';
+const LEVEL_MAP = 'levels';
+const FLAG_MAP = 'flags';
+const OFFSET_MAP = 'rows';
 
 /** Наибольший выразимый уровень (TERR-3) — ответ ядра, а не число редактора. */
 export const MAX_LEVEL = TERRAIN_LEVEL_MAX;
@@ -91,11 +91,7 @@ export const MAX_LEVEL = TERRAIN_LEVEL_MAX;
  * брали его у соседа-вклада, а не у ядра напрямую: место, где живёт раскладка
  * операций террейна редактора, — одно, и это оно.
  */
-export { TERRAIN_CELL_KINDS };
 export type { TerrainCellKind };
-
-/** Переизлучение знаменателя решётки (ASSET-7) для панелей и тестов кисти. */
-export { CURVATURE_SCALE };
 
 /**
  * Палитра смещений панели кисти — UI-подборка, а не диапазон формата: формат
@@ -181,7 +177,7 @@ function paintCell(
  * результате программной мутации». Проверяет его сама запись ядра — отказ
  * приходит из неё значением `null`, и операция только объясняет его автору.
  */
-export const setLevelOperation: AuthoringOperation = {
+const setLevelOperation: AuthoringOperation = {
   id: TERRAIN_OPERATIONS.level,
   descriptionKey: 'ui.operation.scene.terrain.level',
   params: { document: DOCUMENT, path: ASSET_PATH, cellX: CELL_X, cellY: CELL_Y, level: LEVEL },
@@ -205,7 +201,7 @@ export const setLevelOperation: AuthoringOperation = {
  * касается — снятие пола «уровни вокруг не меняет» потому, что менять их этой
  * операцией нечем.
  */
-export const setCellKindOperation: AuthoringOperation = {
+const setCellKindOperation: AuthoringOperation = {
   id: TERRAIN_OPERATIONS.cell,
   descriptionKey: 'ui.operation.scene.terrain.cell',
   params: { document: DOCUMENT, path: ASSET_PATH, cellX: CELL_X, cellY: CELL_Y, kind: KIND },
@@ -232,7 +228,7 @@ export const setCellKindOperation: AuthoringOperation = {
  * Ряд узлов — массив чисел, правка целится в один узел: в диффе — одна строка
  * ряда, а не вся карта (ED-21).
  */
-export const setCurvatureOperation: AuthoringOperation = {
+const setCurvatureOperation: AuthoringOperation = {
   id: TERRAIN_OPERATIONS.curvature,
   descriptionKey: 'ui.operation.scene.curvature.offset',
   params: { document: DOCUMENT, path: ASSET_PATH, nodeX: NODE_X, nodeY: NODE_Y, offset: OFFSET },

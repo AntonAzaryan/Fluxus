@@ -69,8 +69,6 @@ import {
   type OperationRegistry,
 } from '@fluxus/editor-core';
 import { DECORATION_FIELDS, type PositionBinding } from './sceneDocuments.js';
-
-export { DECORATION_FIELDS };
 import { OVERRIDES_KEY, quantized, readBinding } from './scenePlacement.js';
 
 /** Идентификаторы операций слоя декораций. Удаление — базовая операция ядра. */
@@ -192,7 +190,7 @@ function requirePositiveScale(operationId: string, value: number): number {
  * ноль (PRES-2), и записанный явно ноль был бы полем, ничего не сообщающим,
  * зато видимым в диффе каждой поставленной декорации.
  */
-export const addDecorationOperation: AuthoringOperation = {
+const addDecorationOperation: AuthoringOperation = {
   id: DECORATION_OPERATIONS.add,
   descriptionKey: 'ui.operation.scene.decoration.add',
   params: { document: DOCUMENT, list: LIST, visual: VISUAL, x: X, y: Y, turns: OPTIONAL_TURNS },
@@ -215,7 +213,7 @@ export const addDecorationOperation: AuthoringOperation = {
 };
 
 /** Масштаб декорации (PRES-2): положительный множитель поверх масштаба вида. */
-export const scaleDecorationOperation: AuthoringOperation = {
+const scaleDecorationOperation: AuthoringOperation = {
   id: DECORATION_OPERATIONS.scale,
   descriptionKey: 'ui.operation.scene.decoration.scale',
   params: { document: DOCUMENT, record: RECORD, scale: SCALE },
@@ -229,11 +227,6 @@ export const scaleDecorationOperation: AuthoringOperation = {
     return undefined;
   },
 };
-
-/** Поле записи, которое читается как строка; пустая строка полем не считается. */
-function readString(value: unknown): string | null {
-  return typeof value === 'string' && value !== '' ? value : null;
-}
 
 /** Число записи; нечисло — значение по умолчанию формата. */
 function readNumber(value: unknown, fallback: number): number {
@@ -264,7 +257,7 @@ function overridesOf(entries: readonly [string, string, number][]): JsonObject {
  * пространстве (ASSET-9), и вид, которым декорация была нарисована, остаётся
  * тем же. Переезжает объект, а не его описание.
  */
-export const decorationToPropOperation: AuthoringOperation = {
+const decorationToPropOperation: AuthoringOperation = {
   id: DECORATION_OPERATIONS.toProp,
   descriptionKey: 'ui.operation.scene.decoration.toProp',
   params: {
@@ -324,7 +317,7 @@ export const decorationToPropOperation: AuthoringOperation = {
  * обещать: обещание держалось бы на хранении неквантованного значения где-то
  * помимо документов пары.
  */
-export const propToDecorationOperation: AuthoringOperation = {
+const propToDecorationOperation: AuthoringOperation = {
   id: DECORATION_OPERATIONS.fromProp,
   descriptionKey: 'ui.operation.scene.decoration.fromProp',
   params: {
@@ -412,9 +405,4 @@ export const DECORATION_AUTHORING_OPERATIONS: readonly AuthoringOperation[] = Ob
 export function registerDecorationOperations(registry: OperationRegistry): OperationRegistry {
   for (const operation of DECORATION_AUTHORING_OPERATIONS) registry.register(operation);
   return registry;
-}
-
-/** Ключ вида, читаемый из значения записи, — общий помощник интерфейса. */
-export function visualOfRecord(entry: JsonValue | undefined): string | null {
-  return isJsonObject(entry) ? readString(entry[DECORATION_FIELDS.visual]) : null;
 }
