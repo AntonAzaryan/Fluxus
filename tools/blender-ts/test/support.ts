@@ -40,7 +40,7 @@ export const COMPONENTS: readonly ComponentSchema[] = [
   { name: 'Locomotion', fields: { maxSpeed: 'fixed' } },
 ];
 
-export const PREFABS: readonly PrefabDef[] = [
+const PREFABS: readonly PrefabDef[] = [
   {
     name: 'Hero',
     components: {

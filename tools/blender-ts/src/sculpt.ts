@@ -39,17 +39,17 @@ import { GltfParseError, readMeshGeometry, type GltfDocument } from './gltf.js';
 import { worldPoint, type SourceObject } from './normalize.js';
 
 /** Семантическое свойство скалпт-поверхности (BLND-3, BLND-13). */
-export const SCULPT_KEY = 'sculpt';
+const SCULPT_KEY = 'sculpt';
 
 /**
  * Custom property порога обрыва на sculpt-объекте (BLND-13): скачок высоты на
  * границе клеток НЕ НИЖЕ порога — обрыв, ниже — непрерывный склон и рампа.
  * Единица — шаг высоты (уровень). Число автора, а не константа импортёра.
  */
-export const CLIFF_JUMP_KEY = 'cliffJump';
+const CLIFF_JUMP_KEY = 'cliffJump';
 
 /** Умолчание порога обрыва — пол-уровня (CONVENTIONS.md, «Sculpt-объекты»). */
-export const DEFAULT_CLIFF_JUMP = 0.5;
+const DEFAULT_CLIFF_JUMP = 0.5;
 
 /**
  * Отступ выборки от края арены и от границы клеток — в долях клетки. Крайняя

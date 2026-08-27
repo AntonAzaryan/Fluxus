@@ -29,12 +29,12 @@ export function importResources(locale: string): StringResources {
  * Находка разбора источника. Адрес — имя объекта Blender: ровно то, что автор
  * видит в outliner'е и по чему находит правку (BLND-6).
  */
-export function formatFinding(finding: Finding): string {
+function formatFinding(finding: Finding): string {
   return `  ${finding.severity === 'error' ? 'ошибка' : 'предупреждение'} — ${finding.object}: ${finding.message}`;
 }
 
 /** Находка валидации: та же строка ресурса, что увидел бы автор в редакторе (ED-28). */
-export function formatBlocking(issue: ValidationIssue, resources: StringResources): string {
+function formatBlocking(issue: ValidationIssue, resources: StringResources): string {
   return `  ${issue.documentId}: ${formatIssue(issue, resources)}`;
 }
 

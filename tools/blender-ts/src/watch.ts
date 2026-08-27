@@ -77,7 +77,7 @@ export interface ImportCycleOptions {
 }
 
 /** Чем кончился один прогон. `result === null` — до импорта дело не дошло. */
-export interface CycleOutcome {
+interface CycleOutcome {
   /** Порядковый номер прогона, начиная с 1: по нему видно, что цикл жив. */
   readonly index: number;
   readonly ok: boolean;
@@ -188,7 +188,7 @@ export interface WatchTimers {
   delay(ms: number, run: () => void): () => void;
 }
 
-export const REAL_TIMERS: WatchTimers = {
+const REAL_TIMERS: WatchTimers = {
   delay(ms, run) {
     const handle = setTimeout(run, ms);
     return () => {
@@ -297,7 +297,7 @@ export function createWatchTrigger(options: WatchTriggerOptions): WatchTrigger {
 
 // ------------------------------------------------------------- наблюдение
 
-export interface SourceWatchOptions {
+interface SourceWatchOptions {
   /** Абсолютный путь наблюдаемого файла экспорта. */
   readonly file: string;
   /** Файл изменился. Зовётся чаще, чем случаются правки автора: дебаунс — снаружи. */
@@ -331,7 +331,7 @@ async function stamp(file: string): Promise<string> {
   }
 }
 
-export function watchSourceFile(options: SourceWatchOptions): () => void {
+function watchSourceFile(options: SourceWatchOptions): () => void {
   const directory = dirname(options.file);
   const name = basename(options.file);
   const pollMs = options.pollMs ?? 1000;

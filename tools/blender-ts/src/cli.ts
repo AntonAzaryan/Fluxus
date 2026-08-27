@@ -67,7 +67,7 @@ const USAGE = [
  * загрузчика ассетов ID документа есть путь ОТ КОРНЯ (ASSET-2), и файл снаружи
  * дерева документом не является.
  */
-export function contentPathOf(root: string, argument: string): ContentPath {
+function contentPathOf(root: string, argument: string): ContentPath {
   const absolute = resolve(argument);
   const base = resolve(root);
   // Разделитель — платформенный: на Windows `resolve` отдаёт пути с `\`, и
@@ -170,7 +170,7 @@ export function cliValidationRules(): ContributionReader<ValidationRule> {
  * нет, читатель отличить от «источник его не даёт» не сможет. Отсутствие слота
  * при этом значимо и здесь: ключа нет ровно тогда, когда ассет не переписывается.
  */
-export function resultJson(result: ImportResult): string {
+function resultJson(result: ImportResult): string {
   const { terrain, curvature } = result.layer;
   return JSON.stringify(
     {
