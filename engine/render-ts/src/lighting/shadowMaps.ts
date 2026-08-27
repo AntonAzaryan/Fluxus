@@ -107,7 +107,7 @@ export function applyShadowFlags(root: THREE.Object3D, cast: boolean, receive: b
  * three по изменившемуся `mapSize` не пересоздаёт, поэтому прежняя
  * освобождается здесь вместе с её текстурой глубины.
  */
-export function resizeShadowMap(light: THREE.DirectionalLight, size: number): void {
+function resizeShadowMap(light: THREE.DirectionalLight, size: number): void {
   const side = Math.max(1, Math.round(size));
   if (light.shadow.mapSize.x === side && light.shadow.mapSize.y === side) return;
   light.shadow.mapSize.set(side, side);

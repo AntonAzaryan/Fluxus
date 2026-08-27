@@ -26,7 +26,7 @@ import type { VisualTier } from '@fluxus/assets';
  *   существует вовсе, и ждать нечего: сокет требует детального яруса, а запись
  *   получает предупреждение один раз и позицию сущности.
  */
-export interface SocketInstance {
+interface SocketInstance {
   readonly tier: VisualTier;
   readonly model: { readonly root: THREE.Object3D } | null;
 }

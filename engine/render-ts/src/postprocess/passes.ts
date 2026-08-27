@@ -49,7 +49,7 @@ export function toneMappingFunction(operator: ToneMappingOperator): string | nul
 }
 
 /** Полноэкранный квад 2×2 в NDC, вершины насквозь — как у пост-прохода тумана. */
-export const FULLSCREEN_VERTEX = `
+const FULLSCREEN_VERTEX = `
 varying vec2 vUv;
 void main() {
   vUv = uv;
@@ -67,7 +67,7 @@ void main() {
  * превышения, а не срезом: тексель чуть ярче порога входит в свечение чуть-чуть,
  * и кромка светящегося тела не режется ступенью.
  */
-export const BLOOM_THRESHOLD_FRAGMENT = `
+const BLOOM_THRESHOLD_FRAGMENT = `
 precision highp float;
 varying vec2 vUv;
 uniform sampler2D tScene;
@@ -87,7 +87,7 @@ void main() {
  * ядра, а самой пирамидой: широкий ореол собирается из мелких ярусов проходом
  * сведения, а не двадцатью тапами на каждом.
  */
-export const BLOOM_DOWNSAMPLE_FRAGMENT = `
+const BLOOM_DOWNSAMPLE_FRAGMENT = `
 precision highp float;
 varying vec2 vUv;
 uniform sampler2D tSource;

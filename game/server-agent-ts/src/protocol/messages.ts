@@ -207,7 +207,7 @@ export type RefusalReason = (typeof REFUSAL_REASONS)[number];
 
 // -------------------------------------------------------- клиент → агент
 
-export interface HelloRequest {
+interface HelloRequest {
   readonly t: 'hello';
   readonly protocol: number;
   /** Долгоживущий токен (SRV-3); пустая строка — токена нет. */

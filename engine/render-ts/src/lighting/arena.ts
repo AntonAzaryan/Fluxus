@@ -16,7 +16,7 @@ import { FIXED_ONE, type TerrainGrid } from '@fluxus/core';
  * тесты): фрустумы теневых камер обтягивать нечего, и берётся величина порядка
  * демо-арены — тени тогда есть, но качество их подсистеме не обещано.
  */
-export const DEFAULT_ARENA_RADIUS = 32;
+const DEFAULT_ARENA_RADIUS = 32;
 
 /** Границы арены, по которым обтянуты теневые камеры. */
 export interface ArenaExtent {

@@ -189,7 +189,7 @@ export function writePid(file: string, pid: number): void {
 }
 
 /** Запись pid-файла: pid и момент старта; `pid = 0` — файла нет или он битый. */
-export function readPidRecord(file: string): PidRecord {
+function readPidRecord(file: string): PidRecord {
   try {
     const parts = readFileSync(file, 'utf8').trim().split(/\s+/);
     const pid = Number(parts[0]);

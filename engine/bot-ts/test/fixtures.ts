@@ -161,7 +161,7 @@ export function duelScene(arena: ArenaSpec = DEFAULT_ARENA): SceneDef {
  * противник покидает персональный снапшот за десяток тиков, и «враг в тумане»
  * (BOT-3) наблюдается внутри короткого матча.
  */
-export function fogScene(visionRadius = 1): SceneDef {
+function fogScene(visionRadius = 1): SceneDef {
   const scene = duelScene();
   const hero = scene.prefabs![0]!;
   return {
@@ -236,7 +236,7 @@ export function fogConfig(overrides: Partial<MatchConfig> = {}, visionRadius = 1
  * платформе обязано ронять эту фикстуру, а не тихо оставлять `view.slots`
  * пустым.
  */
-export function slotScene(): SceneDef {
+function slotScene(): SceneDef {
   const scene = duelScene();
   return {
     ...scene,
@@ -363,7 +363,7 @@ export function manualSchedule(): {
   };
 }
 
-export interface Clock {
+interface Clock {
   ms: number;
 }
 

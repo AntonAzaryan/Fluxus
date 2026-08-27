@@ -24,7 +24,7 @@ export interface TouchZone {
   readonly height: number;
 }
 
-export interface TouchStickConfig {
+interface TouchStickConfig {
   readonly zone: TouchZone;
   /** Полный ход стика в долях меньшей стороны вьюпорта. */
   readonly radius: number;
@@ -44,7 +44,7 @@ export interface TouchAimStickConfig extends TouchStickConfig {
   readonly aimReach?: number;
 }
 
-export interface TouchButtonConfig {
+interface TouchButtonConfig {
   readonly zone: TouchZone;
   readonly action: string;
 }

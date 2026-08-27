@@ -22,10 +22,10 @@ import { BENCH_STAGES, type BenchStage, type BenchPercentiles, type BenchSummary
 /** Ключ бюджета: кадр целиком либо одна из стадий конвейера (PERF-2). */
 export const BENCH_BUDGET_KEYS = ['frame', ...BENCH_STAGES] as const;
 
-export type BenchBudgetKey = (typeof BENCH_BUDGET_KEYS)[number];
+type BenchBudgetKey = (typeof BENCH_BUDGET_KEYS)[number];
 
 /** Бюджет одной величины в миллисекундах: минимум p50 и p99 (PERF-1). */
-export interface BenchBudget {
+interface BenchBudget {
   readonly p50: number;
   readonly p99: number;
 }

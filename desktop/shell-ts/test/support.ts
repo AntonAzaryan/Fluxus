@@ -38,7 +38,7 @@ export async function readText(root: string, path: string): Promise<string | und
 }
 
 /** Содержимое файла, которого странице видеть не положено. */
-export const OUTSIDE_SECRET = 'СЕКРЕТ ВНЕ КОРНЯ';
+const OUTSIDE_SECRET = 'СЕКРЕТ ВНЕ КОРНЯ';
 
 /**
  * Ссылка на КАТАЛОГ. На Windows обычная символическая ссылка требует

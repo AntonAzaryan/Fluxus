@@ -33,5 +33,3 @@ export const CHANNELS = {
   serviceStop: 'fluxus:service-stop',
   serviceState: 'fluxus:service-state',
 } as const;
-
-export type ChannelName = (typeof CHANNELS)[keyof typeof CHANNELS];

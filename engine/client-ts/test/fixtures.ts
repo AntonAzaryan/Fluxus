@@ -25,7 +25,6 @@ import type { ShellPort } from '../src/index.js';
 export const PLAYER_ID = 'p1';
 export const TICK_SECONDS = 0.05;
 export const STEP: number = fixed.fromFloat(0.1);
-export const CAST_BUTTON = 1;
 
 /** Сцена: герой с вводом, JSON-система движения, TS-системы каста и пола. */
 export function sceneDef(): SceneDef {

@@ -315,7 +315,7 @@ const spawnBuff = (target: string, source: string, buffId: number): Record<strin
  * уходящий вправо герой покидает обзор противника за десяток тиков, и «ушёл в
  * туман» наблюдается внутри короткого матча.
  */
-export function fogScene(): SceneDef {
+function fogScene(): SceneDef {
   const scene = duelScene();
   const hero = scene.prefabs![0]!;
   return {
@@ -361,7 +361,7 @@ export function fogScene(): SceneDef {
  * от длины прогона не зависит. Слоты выдаёт обычная система сцены (design
  * Decision 14), а не расстановка: `owner` заранее неизвестен.
  */
-export function abilityFogScene(): SceneDef {
+function abilityFogScene(): SceneDef {
   const scene = fogScene();
   const ownerField = (component: string, field: string): Record<string, unknown> => ({
     getComponent: [{ var: 'owner' }, component, field],

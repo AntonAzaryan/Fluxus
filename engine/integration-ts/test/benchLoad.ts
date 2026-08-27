@@ -209,7 +209,7 @@ export function playRecording(def: ScenarioDef, hooks: RecordingHooks = {}): voi
  * считает проходы, ничего не рисуя. Вторая бухгалтерия к счётчику подсистемы:
  * тест сверяет её с `fogRenderPasses`.
  */
-export class RendererSpy {
+class RendererSpy {
   renders = 0;
   targets = 0;
   render(): void {
