@@ -131,7 +131,7 @@
         "shallowColor": "#5fbfc9",
         "deepColor": "#14454f",
         "maxDepth": 0.1,
-        "banding": 3,
+        "banding": 0,
         "foam": { "width": 0.025, "color": "#dff3f7", "hardness": 0.7 },
         "detail": {
           "source": "textured",

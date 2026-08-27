@@ -11,6 +11,7 @@
  */
 import { describe, expect, it } from 'vitest';
 import * as THREE from 'three';
+import { LOCOMOTION_AIRBORNE } from '@fluxus/core';
 import {
   validateCurvatureMap,
   validatePresentationScene,
@@ -707,6 +708,29 @@ describe('REND-36: рябь — производная presentation-состоя
     const sources = field.update(view, 1, 0.016, rippleOptions());
     expect(sources.map((source) => source.id)).toEqual([1]);
     expect(sources[0]!.amplitude).toBeGreaterThan(0);
+  });
+
+  it('сущность в воздухе рябь не поднимает: прыжок и полёт идут над водой', () => {
+    // Прыжок — манёвр `airborne` (LOC-3), полёт отброса — полётная фаза
+    // (REND-12): оба над поверхностью, и колец вдоль линии полёта нет (REND-36).
+    const field = new WaterRippleField();
+    const jumper = { ...walker(1, 1, 1, 0.2), motion: LOCOMOTION_AIRBORNE };
+    const thrown = { ...walker(2, 2, 2, 0.2), flightPhase: 0.5 };
+    const sources = field.update(makeTickView([jumper, thrown, walker(3, 3, 3, 0.2)]), 1, 0.016, rippleOptions());
+    expect(sources.map((source) => source.id)).toEqual([3]);
+  });
+
+  it('приземление начинает кольцо заново: возраст не переживает полёт', () => {
+    const field = new WaterRippleField();
+    // Шла по воде — возраст накопился.
+    field.update(makeTickView([walker(1, 1, 1, 0.2)]), 1, 0.5, rippleOptions());
+    expect(field.sources[0]!.age).toBeCloseTo(0.5, 6);
+    // Прыгнула — источника нет, возраст снят prune'ом.
+    const airborne = { ...walker(1, 1, 1, 0.2), motion: LOCOMOTION_AIRBORNE };
+    expect(field.update(makeTickView([airborne]), 1, 0.5, rippleOptions())).toHaveLength(0);
+    // Приземлилась и идёт дальше — кольцо новое, а не докрученное до 1.5.
+    field.update(makeTickView([walker(1, 1, 1, 0.2)]), 1, 0.5, rippleOptions());
+    expect(field.sources[0]!.age).toBeCloseTo(0.5, 6);
   });
 
   it('два прогона над одним состоянием дают один набор, переполнение не мигает', () => {
