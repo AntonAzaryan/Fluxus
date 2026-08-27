@@ -26,7 +26,8 @@ import { lengthOf } from '../../math/vector.js';
 import { NpcGrid } from './grid.js';
 import { NpcRoutes } from './routes.js';
 import { isDead, livingAgents, posX, posY } from './runtime.js';
-import { NPC_ACTION_NONE, NPC_AGENT_COMPONENT, NPC_ROUTE_COMPONENT } from './components.js';
+import { NPC_ACTION_NONE, NPC_ROUTE_COMPONENT } from './components.js';
+import { resolveNpcHandles, type NpcHandles } from './handles.js';
 import { EXEC_FOLLOW_ROUTE, EXEC_SEEK_TARGET, type CompiledBehavior, type NpcCatalog } from './model.js';
 import {
   FIXED_ONE,
@@ -74,6 +75,8 @@ export class NpcMovementSystem implements System {
   /** Направление шага текущего агента: единичный вектор либо ноль. */
   private dirX: Fixed = 0;
   private dirY: Fixed = 0;
+  /** Handle платформы (SYS-10): один раз на первом входе, после раннего выхода. */
+  private handles: NpcHandles | undefined;
 
   constructor(catalog: NpcCatalog) {
     this.catalog = catalog;
@@ -91,18 +94,19 @@ export class NpcMovementSystem implements System {
     const agents = ctx.query(this.spec);
     if (agents.length === 0) return;
     const bindings = this.catalog.bindings;
-    this.routes.rebuild(ctx, bindings.position);
+    const handles = (this.handles ??= resolveNpcHandles(ctx, bindings));
+    this.routes.rebuild(ctx, bindings.position, handles);
     this.grid.begin(agents.length);
     for (let slot = 0; slot < agents.length; slot++) {
       const entity = agents[slot]!;
-      this.grid.add(slot, posX(ctx, bindings, entity), posY(ctx, bindings, entity));
+      this.grid.add(slot, posX(ctx, handles, entity), posY(ctx, handles, entity));
     }
 
     for (let slot = 0; slot < agents.length; slot++) {
       const entity = agents[slot]!;
-      const behavior = this.catalog.behaviors[ctx.get(entity, NPC_AGENT_COMPONENT, 'behavior')];
+      const behavior = this.catalog.behaviors[ctx.getByHandle(entity, handles.agentBehavior)];
       if (behavior === undefined) continue;
-      this.desired(ctx, behavior, entity);
+      this.desired(ctx, handles, behavior, entity);
       let vx = mul(this.dirX, behavior.speed);
       let vy = mul(this.dirY, behavior.speed);
       this.separation(behavior, slot);
@@ -127,15 +131,20 @@ export class NpcMovementSystem implements System {
   }
 
   /** Направление движения принятого решения (NPC-4). */
-  private desired(ctx: SystemContext, behavior: CompiledBehavior, entity: EntityId): void {
+  private desired(
+    ctx: SystemContext,
+    handles: NpcHandles,
+    behavior: CompiledBehavior,
+    entity: EntityId,
+  ): void {
     this.dirX = 0;
     this.dirY = 0;
-    const action = ctx.get(entity, NPC_AGENT_COMPONENT, 'action');
+    const action = ctx.getByHandle(entity, handles.agentAction);
     if (action === NPC_ACTION_NONE) return;
-    const state = behavior.states[ctx.get(entity, NPC_AGENT_COMPONENT, 'state')];
+    const state = behavior.states[ctx.getByHandle(entity, handles.agentState)];
     const executor = state?.actions[action]?.executor;
-    if (executor === EXEC_FOLLOW_ROUTE) this.followRoute(ctx, behavior, entity);
-    else if (executor === EXEC_SEEK_TARGET) this.seekTarget(ctx, behavior, entity);
+    if (executor === EXEC_FOLLOW_ROUTE) this.followRoute(ctx, handles, behavior, entity);
+    else if (executor === EXEC_SEEK_TARGET) this.seekTarget(ctx, handles, behavior, entity);
     // `hold` и `cast` стоят на месте: идущий каст двигать себя не должен, а
     // «атака в контакте» — это остановка, а не отдельный исполнитель.
   }
@@ -145,31 +154,39 @@ export class NpcMovementSystem implements System {
    * достижении. Прогресс живёт в компоненте агента, то есть снапшотится и
    * откатывается вместе с миром (SNAP-1).
    */
-  private followRoute(ctx: SystemContext, behavior: CompiledBehavior, entity: EntityId): void {
-    if (!ctx.has(entity, NPC_ROUTE_COMPONENT)) return;
-    const bindings = this.catalog.bindings;
-    const route = ctx.get(entity, NPC_ROUTE_COMPONENT, 'route');
-    let index = ctx.get(entity, NPC_ROUTE_COMPONENT, 'index');
+  private followRoute(
+    ctx: SystemContext,
+    handles: NpcHandles,
+    behavior: CompiledBehavior,
+    entity: EntityId,
+  ): void {
+    if (!ctx.hasByHandle(entity, handles.route)) return;
+    const route = ctx.getByHandle(entity, handles.routeRoute);
+    let index = ctx.getByHandle(entity, handles.routeIndex);
     let point = this.routes.at(route, index);
     if (point === NO_ENTITY) return;
-    const x = posX(ctx, bindings, entity);
-    const y = posY(ctx, bindings, entity);
-    if (distSqLe(posX(ctx, bindings, point) - x, posY(ctx, bindings, point) - y, behavior.arrive)) {
+    const x = posX(ctx, handles, entity);
+    const y = posY(ctx, handles, entity);
+    if (distSqLe(posX(ctx, handles, point) - x, posY(ctx, handles, point) - y, behavior.arrive)) {
       index += 1;
       ctx.commands.setField(entity, NPC_ROUTE_COMPONENT, 'index', index);
       point = this.routes.at(route, index);
       if (point === NO_ENTITY) return;
     }
-    this.normalize(posX(ctx, bindings, point) - x, posY(ctx, bindings, point) - y);
+    this.normalize(posX(ctx, handles, point) - x, posY(ctx, handles, point) - y);
   }
 
   /** Сближение с целью; в пределах дистанции контакта агент стоит (NPC-4). */
-  private seekTarget(ctx: SystemContext, behavior: CompiledBehavior, entity: EntityId): void {
-    const bindings = this.catalog.bindings;
-    const target = ctx.get(entity, NPC_AGENT_COMPONENT, 'target');
-    if (target === NO_ENTITY || !ctx.isAlive(target) || isDead(ctx, bindings, target)) return;
-    const dx = posX(ctx, bindings, target) - posX(ctx, bindings, entity);
-    const dy = posY(ctx, bindings, target) - posY(ctx, bindings, entity);
+  private seekTarget(
+    ctx: SystemContext,
+    handles: NpcHandles,
+    behavior: CompiledBehavior,
+    entity: EntityId,
+  ): void {
+    const target = ctx.getByHandle(entity, handles.agentTarget);
+    if (target === NO_ENTITY || !ctx.isAlive(target) || isDead(ctx, handles, target)) return;
+    const dx = posX(ctx, handles, target) - posX(ctx, handles, entity);
+    const dy = posY(ctx, handles, target) - posY(ctx, handles, entity);
     if (distSqLe(dx, dy, behavior.attack)) return;
     this.normalize(dx, dy);
   }

@@ -19,7 +19,15 @@
  */
 import * as fixed from '../math/fixed.js';
 import { execute, systemError, TWEEN_COMPONENT, type Action } from '../dsl/actions.js';
-import { FIXED_ONE, type ComponentSchema, type EntityId, type Fixed, type System, type SystemContext } from '../types.js';
+import {
+  FIXED_ONE,
+  type ComponentSchema,
+  type EntityId,
+  type FieldHandle,
+  type Fixed,
+  type System,
+  type SystemContext,
+} from '../types.js';
 
 export { TWEEN_COMPONENT };
 
@@ -104,11 +112,42 @@ function parseDef(def: TweenDef, index: number): ParsedDef {
   return { component: parts[0]!, field: parts[1]!, onComplete: def.onComplete ?? NO_ACTIONS };
 }
 
+/**
+ * Handle полей твина (`data-driven-systems` SYS-10): раскладка `Tween` —
+ * контракт системы (TWEEN-1), поэтому все семь полей разрешаются разом, один
+ * раз, на первом входе. Целевое поле твина (`def.component`/`def.field`) сюда
+ * не входит: в него только ПИШУТ, а адрес команды — имя (CMD-1).
+ */
+interface TweenHandles {
+  readonly def: FieldHandle;
+  readonly easing: FieldHandle;
+  readonly duration: FieldHandle;
+  readonly from: FieldHandle;
+  readonly to: FieldHandle;
+  readonly ignoreTimeScale: FieldHandle;
+  readonly elapsed: FieldHandle;
+}
+
+function resolveHandles(ctx: SystemContext): TweenHandles {
+  const field = (name: string): FieldHandle => ctx.resolveField(TWEEN_COMPONENT, name);
+  return {
+    def: field('def'),
+    easing: field('easing'),
+    duration: field('duration'),
+    from: field('from'),
+    to: field('to'),
+    ignoreTimeScale: field('ignoreTimeScale'),
+    elapsed: field('elapsed'),
+  };
+}
+
 export class TweenSystem implements System {
   readonly name: string;
   readonly order = ANCHOR_ORDER;
   private readonly globalDelta: Fixed;
   private readonly defs: readonly ParsedDef[];
+  /** Разрешаются на первом входе, ПОСЛЕ раннего выхода (SYS-10). */
+  private handles: TweenHandles | undefined;
 
   constructor(defs: readonly TweenDef[], options: TweenSystemOptions = {}) {
     this.name = options.name ?? 'Tween';
@@ -119,32 +158,35 @@ export class TweenSystem implements System {
   }
 
   run(ctx: SystemContext): void {
-    for (const entity of ctx.query({ all: [TWEEN_COMPONENT] })) {
-      const def = this.defs[ctx.get(entity, TWEEN_COMPONENT, 'def')];
+    const entities = ctx.query({ all: [TWEEN_COMPONENT] });
+    if (entities.length === 0) return;
+    const h = (this.handles ??= resolveHandles(ctx));
+    for (const entity of entities) {
+      const def = this.defs[ctx.getByHandle(entity, h.def)];
       if (def === undefined) {
         throw new Error(
-          `TweenSystem: сущность ${entity} ссылается на определение ${ctx.get(entity, TWEEN_COMPONENT, 'def')}, ` +
+          `TweenSystem: сущность ${entity} ссылается на определение ${ctx.getByHandle(entity, h.def)}, ` +
             `в таблице их ${this.defs.length}`,
         );
       }
-      this.step(ctx, entity, def);
+      this.step(ctx, h, entity, def);
     }
   }
 
-  private step(ctx: SystemContext, entity: EntityId, def: ParsedDef): void {
-    const easing = ctx.get(entity, TWEEN_COMPONENT, 'easing');
+  private step(ctx: SystemContext, h: TweenHandles, entity: EntityId, def: ParsedDef): void {
+    const easing = ctx.getByHandle(entity, h.easing);
     const curve = EASINGS[easing];
     if (curve === undefined) throw new Error(`TweenSystem: неизвестный easing ${easing} (TWEEN-2)`);
 
-    const duration = ctx.get(entity, TWEEN_COMPONENT, 'duration');
-    const from = ctx.get(entity, TWEEN_COMPONENT, 'from');
-    const to = ctx.get(entity, TWEEN_COMPONENT, 'to');
+    const duration = ctx.getByHandle(entity, h.duration);
+    const from = ctx.getByHandle(entity, h.from);
+    const to = ctx.getByHandle(entity, h.to);
     // TWEEN-7: флаг выбирает ось времени, глобальную или личную (TIME-3).
     const delta =
-      ctx.get(entity, TWEEN_COMPONENT, 'ignoreTimeScale') !== 0
+      ctx.getByHandle(entity, h.ignoreTimeScale) !== 0
         ? this.globalDelta
         : ctx.getEffectiveDelta(entity, this.globalDelta);
-    const elapsed = fixed.add(ctx.get(entity, TWEEN_COMPONENT, 'elapsed'), delta);
+    const elapsed = fixed.add(ctx.getByHandle(entity, h.elapsed), delta);
 
     // Проверка до деления: при `elapsed >= duration` частное вылетело бы за i32
     // на коротких длительностях, а результат всё равно был бы обрезан в 1.0.

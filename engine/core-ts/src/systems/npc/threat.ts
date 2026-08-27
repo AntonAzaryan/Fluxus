@@ -19,6 +19,7 @@
  */
 import { mul } from '../../math/fixed.js';
 import { NPC_AGENT_COMPONENT, NPC_THREAT_COMPONENT } from './components.js';
+import { resolveNpcHandles, type NpcHandles } from './handles.js';
 import { threatAdd, threatDecay, threatOf } from './runtime.js';
 import type { CompiledThreatSource, NpcCatalog } from './model.js';
 import {
@@ -54,6 +55,8 @@ export class NpcThreatSystem implements System {
   private readonly spec: QuerySpec = { all: [NPC_AGENT_COMPONENT, NPC_THREAT_COMPONENT] };
   /** Тип события → объявившие его источники. Строится один раз, на загрузке. */
   private readonly byType = new Map<string, DeclaredSource[]>();
+  /** Handle платформы (SYS-10): один раз на первом входе, после раннего выхода. */
+  private handles: NpcHandles | undefined;
 
   constructor(catalog: NpcCatalog) {
     this.catalog = catalog;
@@ -70,19 +73,20 @@ export class NpcThreatSystem implements System {
   run(ctx: SystemContext): void {
     const agents = ctx.query(this.spec);
     if (agents.length === 0) return;
+    const handles = (this.handles ??= resolveNpcHandles(ctx, this.catalog.bindings));
     for (const entity of agents) {
-      const behavior = this.catalog.behaviors[ctx.get(entity, NPC_AGENT_COMPONENT, 'behavior')];
+      const behavior = this.catalog.behaviors[ctx.getByHandle(entity, handles.agentBehavior)];
       if (behavior === undefined || behavior.decayPerTick === FIXED_ONE) continue;
-      threatDecay(ctx, entity, behavior.decayPerTick);
+      threatDecay(ctx, handles, entity, behavior.decayPerTick);
     }
     if (this.byType.size === 0) return;
     for (let index = 0; index < ctx.events.length; index++) {
-      this.credit(ctx, index);
+      this.credit(ctx, handles, index);
     }
   }
 
   /** Начисление по одному событию тика: адресат, источник и величина — поля документа. */
-  private credit(ctx: SystemContext, index: number): void {
+  private credit(ctx: SystemContext, handles: NpcHandles, index: number): void {
     const event = ctx.events.at(index);
     const declared = this.byType.get(event.type);
     if (declared === undefined) return;
@@ -92,15 +96,15 @@ export class NpcThreatSystem implements System {
       // Оба компонента, а не один: чтение поля тотально (ECS-7), и сущность с
       // одной лишь threat-таблицей прочла бы нулевой `behavior` и копила бы
       // угрозу по правилам ЧУЖОГО документа.
-      if (!ctx.has(victim, NPC_THREAT_COMPONENT) || !ctx.has(victim, NPC_AGENT_COMPONENT)) continue;
+      if (!ctx.hasByHandle(victim, handles.threat) || !ctx.hasByHandle(victim, handles.agent)) continue;
       // Источник засчитывается только тому, чей ДОКУМЕНТ его объявил: два
       // документа вправе называть разные события угрозой, и чужое правило
       // применяться к агенту не должно.
-      if (ctx.get(victim, NPC_AGENT_COMPONENT, 'behavior') !== entry.behavior) continue;
+      if (ctx.getByHandle(victim, handles.agentBehavior) !== entry.behavior) continue;
       const from = event.data[entry.source.sourceField];
       if (from === undefined) continue;
-      threatAdd(ctx, victim, from, NpcThreatSystem.amount(entry.source, event.data));
-      this.provoke(ctx, victim, from, entry.switchMargin);
+      threatAdd(ctx, handles, victim, from, NpcThreatSystem.amount(entry.source, event.data));
+      this.provoke(ctx, handles, victim, from, entry.switchMargin);
     }
   }
 
@@ -143,14 +147,15 @@ export class NpcThreatSystem implements System {
    */
   private provoke(
     ctx: SystemContext,
+    handles: NpcHandles,
     entity: EntityId,
     from: EntityId,
     switchMargin: number,
   ): void {
-    const target = ctx.get(entity, NPC_AGENT_COMPONENT, 'target');
+    const target = ctx.getByHandle(entity, handles.agentTarget);
     if (from === target || from === NO_ENTITY) return;
-    const held = target === NO_ENTITY ? 0 : threatOf(ctx, entity, target);
-    if (threatOf(ctx, entity, from) <= held + mul(held, switchMargin)) return;
+    const held = target === NO_ENTITY ? 0 : threatOf(ctx, handles, entity, target);
+    if (threatOf(ctx, handles, entity, from) <= held + mul(held, switchMargin)) return;
     ctx.commands.setField(entity, NPC_AGENT_COMPONENT, 'decidedTick', -1);
   }
 }

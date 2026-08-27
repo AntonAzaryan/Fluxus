@@ -225,6 +225,25 @@ export type FieldArray = Int32Array | Float64Array;
 /** SoA-хранилище компонента: поле → TypedArray, индексируемый по index сущности (ECS-1). */
 export type ComponentStore = Readonly<Record<string, FieldArray>>;
 
+/**
+ * Непрозрачные ссылки на компонент и на его поле (`data-driven-systems` SYS-10)
+ * — результат разрешения строковых имён (`resolveComponent`, `resolveField`).
+ *
+ * Внутри числовой адрес в таблицах мира, и содержимое его не нормируется:
+ * потребитель handle не читает, не арифметизирует и не сериализует. Ссылкой на
+ * колонку хранилища handle не является и быть не может — хранилище растёт
+ * спавном и подменяется целиком на перемотке (`snapshot-rewind`), а
+ * ЗАПИСЫВАЕМАЯ ссылка на колонку была бы ровно тем каналом мутаций мимо
+ * Command Buffer, который TICK-3 объявляет несуществующим.
+ *
+ * Брендированное число, как `WorldState` — брендированный объект: наружу уходит
+ * `number`, но подставить в `getByHandle` произвольное число нельзя, не написав
+ * утверждения о типе.
+ */
+export type ComponentHandle = number & { readonly __brand: 'ComponentHandle' };
+
+export type FieldHandle = number & { readonly __brand: 'FieldHandle' };
+
 /** Имя компонента позиции — единственная конвенция, на которую опирается `withinRadius`. */
 export const POSITION_COMPONENT = 'Position';
 
@@ -466,6 +485,20 @@ export interface SystemContext {
   readonly query: (spec: QuerySpec) => Float64Array;
   readonly get: (entity: EntityId, component: string, field: string) => number;
   readonly has: (entity: EntityId, component: string) => boolean;
+  /**
+   * Разрешение имени в handle (SYS-10): зовётся при конструировании системы или
+   * на первом её входе, ОДИН раз на имя, а не на сущность внутри обхода.
+   * Неизвестное имя — ошибка немедленно, с именем в тексте.
+   */
+  readonly resolveField: (component: string, field: string) => FieldHandle;
+  readonly resolveComponent: (component: string) => ComponentHandle;
+  /**
+   * Чтение без строкового поиска (SYS-10): побитово то же, что `get`/`has` тех
+   * же имён, включая тотальность ECS-7 и окно видимости CMD-5. Канала ЗАПИСИ по
+   * handle нет и не будет — мутации идут Command Buffer'ом (CMD-1, TICK-3).
+   */
+  readonly getByHandle: (entity: EntityId, handle: FieldHandle) => number;
+  readonly hasByHandle: (entity: EntityId, handle: ComponentHandle) => boolean;
   readonly isAlive: (entity: EntityId) => boolean;
   readonly commands: CommandBuffer;
   /** Публикация и чтение шины тика (EVT-2): система видит события систем с меньшим `order`. */

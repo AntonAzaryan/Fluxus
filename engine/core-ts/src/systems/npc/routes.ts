@@ -20,6 +20,7 @@
  * открытую адресацию — по профилю на реальной сцене, а не по вкусу.
  */
 import { WAYPOINT_COMPONENT } from './components.js';
+import type { NpcHandles } from './handles.js';
 import { NO_ENTITY, type EntityId, type QuerySpec, type SystemContext } from '../../types.js';
 
 /**
@@ -33,12 +34,12 @@ export class NpcRoutes {
   private spec: QuerySpec | undefined;
 
   /** Снимает точки маршрутов текущего мира. */
-  rebuild(ctx: SystemContext, position: string): void {
+  rebuild(ctx: SystemContext, position: string, handles: NpcHandles): void {
     this.spec ??= { all: [WAYPOINT_COMPONENT, position] };
     this.points.clear();
     for (const entity of ctx.query(this.spec)) {
-      const route = ctx.get(entity, WAYPOINT_COMPONENT, 'route');
-      const index = ctx.get(entity, WAYPOINT_COMPONENT, 'index');
+      const route = ctx.getByHandle(entity, handles.waypointRoute);
+      const index = ctx.getByHandle(entity, handles.waypointIndex);
       // Две точки на одном номере — опечатка расстановки; побеждает первая по
       // порядку обхода (QUERY-2), то есть исход остаётся детерминированным.
       const key = route * ROUTE_STRIDE + index;

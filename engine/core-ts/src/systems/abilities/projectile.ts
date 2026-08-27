@@ -14,6 +14,7 @@
 import { distSqLe } from '../../math/fixed.js';
 import { execute, systemError, type Action } from '../../dsl/actions.js';
 import { ABILITY_PROJECTILE_COMPONENT } from './components.js';
+import { resolveProjectileHandles, type ProjectileHandles } from './handles.js';
 import { positionOf, type ExprVarsRecord } from './runtime.js';
 import type { AbilityCatalog, CompiledAbility } from './model.js';
 import { NO_ENTITY, type EntityId, type QuerySpec, type System, type SystemContext } from '../../types.js';
@@ -32,6 +33,8 @@ export class ProjectileSystem implements System {
   private readonly spec: QuerySpec = { all: [ABILITY_PROJECTILE_COMPONENT] };
   /** Переиспользуемая область видимости списков доставки (ABIL-10). */
   private readonly vars: ExprVarsRecord = { self: 0, owner: 0, other: 0, event: 0 };
+  /** Handle полей снаряда (SYS-10): один раз, на первом входе, после раннего выхода. */
+  private handles: ProjectileHandles | undefined;
 
   constructor(catalog: AbilityCatalog) {
     this.catalog = catalog;
@@ -39,8 +42,12 @@ export class ProjectileSystem implements System {
 
   run(ctx: SystemContext): void {
     const published = ctx.events.length;
-    for (const projectile of ctx.query(this.spec)) {
-      const index = ctx.get(projectile, ABILITY_PROJECTILE_COMPONENT, 'abilityId');
+    const projectiles = ctx.query(this.spec);
+    if (projectiles.length === 0) return;
+    // Handle полей снаряда (SYS-10): один раз, на первом входе, после раннего выхода.
+    const h = (this.handles ??= resolveProjectileHandles(ctx));
+    for (const projectile of projectiles) {
+      const index = ctx.getByHandle(projectile, h.abilityId);
       const ability = this.catalog.abilities[index];
       if (ability === undefined) {
         throw new Error(
@@ -48,9 +55,9 @@ export class ProjectileSystem implements System {
             `в таблице их ${this.catalog.abilities.length}`,
         );
       }
-      const owner = ctx.get(projectile, ABILITY_PROJECTILE_COMPONENT, 'owner');
+      const owner = ctx.getByHandle(projectile, h.owner);
       this.hits(ctx, projectile, owner, ability, published);
-      this.exhaustion(ctx, projectile, owner, ability);
+      this.exhaustion(ctx, h, projectile, owner, ability);
     }
   }
 
@@ -92,26 +99,27 @@ export class ProjectileSystem implements System {
    */
   private exhaustion(
     ctx: SystemContext,
+    h: ProjectileHandles,
     projectile: EntityId,
     owner: EntityId,
     ability: CompiledAbility,
   ): void {
     let faded = false;
-    const ticksLeft = ctx.get(projectile, ABILITY_PROJECTILE_COMPONENT, 'ticksLeft');
+    const ticksLeft = ctx.getByHandle(projectile, h.ticksLeft);
     if (ticksLeft > 0) {
       ctx.commands.setField(projectile, ABILITY_PROJECTILE_COMPONENT, 'ticksLeft', ticksLeft - 1);
       faded = ticksLeft === 1;
     }
     if (!faded) {
-      const range = ctx.get(projectile, ABILITY_PROJECTILE_COMPONENT, 'range');
+      const range = ctx.getByHandle(projectile, h.range);
       if (range > 0) {
         const dx = ctx.math.sub(
           positionOf(ctx, projectile, 'x'),
-          ctx.get(projectile, ABILITY_PROJECTILE_COMPONENT, 'originX'),
+          ctx.getByHandle(projectile, h.originX),
         );
         const dy = ctx.math.sub(
           positionOf(ctx, projectile, 'y'),
-          ctx.get(projectile, ABILITY_PROJECTILE_COMPONENT, 'originY'),
+          ctx.getByHandle(projectile, h.originY),
         );
         faded = !distSqLe(dx, dy, range);
       }

@@ -21,6 +21,7 @@ import {
   NPC_WAVE_DONE,
   NPC_WAVE_UNARMED,
 } from './components.js';
+import { resolveNpcHandles, type NpcHandles } from './handles.js';
 import { NpcRoutes } from './routes.js';
 import { livingAgents, posX, posY } from './runtime.js';
 import type { NpcCatalog, NpcWaveDef, NpcWavesDef } from './model.js';
@@ -43,6 +44,8 @@ export class NpcDirectorSystem implements System {
   private readonly routes = new NpcRoutes();
   private readonly spec: QuerySpec = { all: [NPC_DIRECTOR_COMPONENT] };
   private readonly agentSpec: QuerySpec;
+  /** Handle платформы (SYS-10): один раз на первом входе, после раннего выхода. */
+  private handles: NpcHandles | undefined;
 
   constructor(catalog: NpcCatalog) {
     this.catalog = catalog;
@@ -58,24 +61,25 @@ export class NpcDirectorSystem implements System {
     if (waves === undefined) return;
     const directors = ctx.query(this.spec);
     if (directors.length === 0) return;
-    this.routes.rebuild(ctx, this.catalog.bindings.position);
+    const handles = (this.handles ??= resolveNpcHandles(ctx, this.catalog.bindings));
+    this.routes.rebuild(ctx, this.catalog.bindings.position, handles);
     // Живые агенты считаются ОДИН раз на тик: предел общий, и пересчитывать его
     // на каждого режиссёра значило бы платить за один и тот же ответ дважды.
     // Мёртвых выборка не содержит по построению спецификации запроса.
     let active = ctx.query(this.agentSpec).length;
 
     for (const director of directors) {
-      const index = ctx.get(director, NPC_DIRECTOR_COMPONENT, 'wave');
+      const index = ctx.getByHandle(director, handles.directorWave);
       if (index === NPC_WAVE_DONE || index < 0 || index >= waves.entries.length) continue;
       const wave = waves.entries[index]!;
-      const released = ctx.get(director, NPC_DIRECTOR_COMPONENT, 'released');
+      const released = ctx.getByHandle(director, handles.directorReleased);
       if (released === NPC_WAVE_UNARMED) {
         // Пауза перед первым бойцом волны — её собственное число таблицы.
         ctx.commands.setField(director, NPC_DIRECTOR_COMPONENT, 'released', 0);
         ctx.commands.setField(director, NPC_DIRECTOR_COMPONENT, 'timer', wave.delayTicks);
         continue;
       }
-      const timer = ctx.get(director, NPC_DIRECTOR_COMPONENT, 'timer');
+      const timer = ctx.getByHandle(director, handles.directorTimer);
       if (timer > 0) {
         ctx.commands.setField(director, NPC_DIRECTOR_COMPONENT, 'timer', timer - 1);
         continue;
@@ -92,7 +96,7 @@ export class NpcDirectorSystem implements System {
         // волна не должна худеть от того, что предыдущая ещё жива (NPC-8).
         continue;
       }
-      this.release(ctx, wave);
+      this.release(ctx, handles, wave);
       active++;
       ctx.commands.setField(director, NPC_DIRECTOR_COMPONENT, 'released', released + 1);
       ctx.commands.setField(director, NPC_DIRECTOR_COMPONENT, 'timer', wave.spacingTicks);
@@ -100,15 +104,15 @@ export class NpcDirectorSystem implements System {
   }
 
   /** Выпуск одного бойца волны: префаб таблицы плюс поля агента и маршрута (CMD-6). */
-  private release(ctx: SystemContext, wave: NpcWaveDef): void {
+  private release(ctx: SystemContext, handles: NpcHandles, wave: NpcWaveDef): void {
     const bindings = this.catalog.bindings;
     let x = wave.x ?? 0;
     let y = wave.y ?? 0;
     if (wave.route !== undefined) {
       const start = this.routes.at(wave.route, 0);
       if (start !== NO_ENTITY) {
-        x = posX(ctx, bindings, start);
-        y = posY(ctx, bindings, start);
+        x = posX(ctx, handles, start);
+        y = posY(ctx, handles, start);
       }
     }
     const overrides: FieldOverrides = {

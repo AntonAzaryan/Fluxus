@@ -29,7 +29,6 @@ import {
   SHAPE_CIRCLE,
   type Blocker,
   type Bounds,
-  type Collider,
   type Move,
   type MutableCollider,
   type StaticCollider,
@@ -44,6 +43,13 @@ import {
   type LevelSource,
   type PhysicsDeps,
 } from './columnModel.js';
+import {
+  colliderByHandle,
+  colliderOf,
+  resolvePhysicsHandles,
+  type FieldReader,
+  type PhysicsHandles,
+} from './colliderRead.js';
 import { PhysicsWorld } from './broadPhase.js';
 import { countCostBroadPhase, countCostRaycast } from '../debug.js';
 import { componentSchema, getField, hasComponent } from '../ecs/world.js';
@@ -137,39 +143,6 @@ export function staticsFromTerrain(
     levelPos: edge.levelPos,
   }));
 }
-
-// ------------------------------------------------------------- коллайдеры ECS
-
-/**
- * ponytail: коллайдер выдаётся новым объектом на каждый вызов. Горячий обход
- * кандидатов блокировки от этого уже избавлен готовым буфером (`colliderInto`
- * ниже); остались места, где буфера пока нет, — движущийся раз на тик и
- * КАЖДОЕ препятствие на sensor-проверке. Второй буфер на `PhysicsSystem`
- * закрывает и их — когда профиль на реальной сцене покажет эти аллокации.
- */
-function colliderOf(read: FieldReader, entity: EntityId, component: string): Collider {
-  const collider: MutableCollider = { halfX: 0, halfY: 0, shape: 0, radius: 0 };
-  colliderInto(read, entity, component, collider);
-  return collider;
-}
-
-/** Тот же разбор в готовый буфер: обход кандидатов не аллоцирует (PHYS-5). */
-function colliderInto(
-  read: FieldReader,
-  entity: EntityId,
-  component: string,
-  out: MutableCollider,
-): void {
-  const shape = read(entity, component, 'shape');
-  const radius = read(entity, component, 'radius');
-  out.shape = shape;
-  out.radius = radius;
-  // У круга огибающая — квадрат по радиусу: полуоси коллайдера не читаются.
-  out.halfX = shape === SHAPE_CIRCLE ? radius : read(entity, component, 'halfX');
-  out.halfY = shape === SHAPE_CIRCLE ? radius : read(entity, component, 'halfY');
-}
-
-type FieldReader = (entity: EntityId, component: string, field: string) => number;
 
 // ------------------------------------------------ колоночная модель (PHYS-14)
 
@@ -276,6 +249,15 @@ export class PhysicsSystem implements System {
    */
   private moverLevel = 0;
   private moverHeight = 0;
+  /** Разрешаются на первом входе, ПОСЛЕ раннего выхода (SYS-10). */
+  private handles: PhysicsHandles | undefined;
+  /** Коллайдер движущегося: тот же приём буфера, что у кандидата. */
+  private readonly moverCollider: MutableCollider = {
+    halfX: 0,
+    halfY: 0,
+    shape: SHAPE_AABB,
+    radius: 0,
+  };
 
   constructor(physicsWorld: PhysicsWorld, options: PhysicsOptions = {}, deps: PhysicsDeps = {}) {
     this.physicsWorld = physicsWorld;
@@ -289,6 +271,7 @@ export class PhysicsSystem implements System {
       all: [POSITION_COMPONENT, this.colliderComponent, this.velocityComponent],
     });
     if (movers.length === 0) return;
+    const h = (this.handles ??= resolvePhysicsHandles(ctx, this.colliderComponent, this.velocityComponent, this.heightGate));
 
     // Препятствия — все носители коллайдера: участие в блокировке и в сенсорах
     // решают маски на narrow-phase (PHYS-2), а не тег на запросе.
@@ -304,17 +287,18 @@ export class PhysicsSystem implements System {
     const resolved = new Map<EntityId, Vec2>();
     const positionOf = (entity: EntityId): Vec2 =>
       resolved.get(entity) ?? {
-        x: ctx.get(entity, POSITION_COMPONENT, 'x'),
-        y: ctx.get(entity, POSITION_COMPONENT, 'y'),
+        x: ctx.getByHandle(entity, h.posX),
+        y: ctx.getByHandle(entity, h.posY),
       };
 
-    this.cacheLevels(ctx, obstacles);
+    this.cacheLevels(ctx, h, obstacles);
 
     for (const mover of movers) {
-      const collider = colliderOf(ctx.get, mover, this.colliderComponent);
-      const blockMask = ctx.get(mover, this.colliderComponent, 'blockMask');
-      const hitMask = ctx.get(mover, this.colliderComponent, 'hitMask');
-      const cliffRise = ctx.get(mover, this.colliderComponent, 'cliffRise');
+      const collider = this.moverCollider;
+      colliderByHandle(ctx, mover, h, collider);
+      const blockMask = ctx.getByHandle(mover, h.blockMask);
+      const hitMask = ctx.getByHandle(mover, h.hitMask);
+      const cliffRise = ctx.getByHandle(mover, h.cliffRise);
       // Множитель шага — один на сущность и тик (TIME-3): обе оси одного хода
       // обязаны замедляться одинаково.
       const scale = ctx.getEffectiveDelta(mover, FIXED_ONE);
@@ -331,16 +315,17 @@ export class PhysicsSystem implements System {
       // проверка всё равно считает заново — по разрешённому состоянию. Сквозной
       // снаряд (`blockMask = 0`, `hitMask ≠ 0`) — ровно тот случай, ради
       // которого писался гейт, и мёртвого `levelAt` на тик он платить не должен.
-      this.moverHeight = this.heightGate
-        ? ctx.get(mover, this.colliderComponent, COLLIDER_HEIGHT_FIELD)
-        : 0;
+      this.moverHeight = h.height === undefined ? 0 : ctx.getByHandle(mover, h.height);
       this.moverLevel =
         this.moverHeight > 0 && blockMask !== 0
           ? effectiveLevel(ctx, this.probe, mover, from.x, from.y)
           : 0;
 
       for (const axis of ['x', 'y'] as const) {
-        const step = fixed.mul(ctx.get(mover, this.velocityComponent, axis), scale);
+        const step = fixed.mul(
+          ctx.getByHandle(mover, axis === 'x' ? h.velocityX : h.velocityY),
+          scale,
+        );
         if (step === 0) continue;
         const nextX = axis === 'x' ? fixed.add(x, step) : x;
         const nextY = axis === 'y' ? fixed.add(y, step) : y;
@@ -364,7 +349,7 @@ export class PhysicsSystem implements System {
             centerX: x,
             centerY: y,
           };
-          if (this.nearestBlocker(ctx, move, mover, obstacles, resolved, blockMask, cliffRise)) {
+          if (this.nearestBlocker(ctx, h, move, mover, obstacles, resolved, blockMask, cliffRise)) {
             // Нормаль поверхности в точке контакта (PHYS-9); осевая против
             // движения — её фолбэк и полный ответ для пары прямоугольников.
             // Политике (отскок, кнокбэк, урон о стену) нужна сторона удара, а
@@ -420,14 +405,14 @@ export class PhysicsSystem implements System {
           const other = obstacles[index]!;
           if (other === mover) continue;
           pairs++;
-          if ((ctx.get(other, this.colliderComponent, 'layer') & hitMask) === 0) continue;
+          if ((ctx.getByHandle(other, h.layer) & hitMask) === 0) continue;
           // Колоночный гейт (PHYS-14) — второе условие рядом с маской, и оно
           // независимо от неё: маска выражает отношение слоёв, полоса —
           // совместность по высоте.
-          if (!this.bandsMeetWithMover(ctx, other, index)) continue;
+          if (!this.bandsMeetWithMover(ctx, h, other, index)) continue;
           const position = positionOf(other);
-          const otherCollider = colliderOf(ctx.get, other, this.colliderComponent);
-          if (overlaps(executed, boundsAt(position.x, position.y, otherCollider))) {
+          colliderByHandle(ctx, other, h, this.candidateCollider);
+          if (overlaps(executed, boundsAt(position.x, position.y, this.candidateCollider))) {
             ctx.events.emit(OVERLAP_EVENT, { entity: mover, other });
           }
         }
@@ -456,6 +441,7 @@ export class PhysicsSystem implements System {
    */
   private nearestBlocker(
     ctx: SystemContext,
+    h: PhysicsHandles,
     move: Move,
     mover: EntityId,
     obstacles: Float64Array,
@@ -489,17 +475,17 @@ export class PhysicsSystem implements System {
       const other = obstacles[index]!;
       if (other === mover) continue;
       pairs++;
-      if ((ctx.get(other, this.colliderComponent, 'layer') & blockMask) === 0) continue;
+      if ((ctx.getByHandle(other, h.layer) & blockMask) === 0) continue;
       // Колоночный гейт (PHYS-14) — второе условие рядом с маской: пара без
       // общего уровня хода не блокирует и события `Collision` не даёт.
-      if (!this.bandsMeetWithMover(ctx, other, index)) continue;
+      if (!this.bandsMeetWithMover(ctx, h, other, index)) continue;
       // Позиция читается без объекта-обёртки: уже разрешённый сосед отдаёт
       // свою (Command Buffer вливается только в конце системы), остальные —
       // живое поле мира.
       const position = resolved.get(other);
-      const px = position?.x ?? ctx.get(other, POSITION_COMPONENT, 'x');
-      const py = position?.y ?? ctx.get(other, POSITION_COMPONENT, 'y');
-      colliderInto(ctx.get, other, this.colliderComponent, this.candidateCollider);
+      const px = position?.x ?? ctx.getByHandle(other, h.posX);
+      const py = position?.y ?? ctx.getByHandle(other, h.posY);
+      colliderByHandle(ctx, other, h, this.candidateCollider);
       boundsInto(this.candidateBounds, px, py, this.candidateCollider);
       if (!blocks(move, this.candidateBounds)) continue;
       const distanceSq = closestDistanceSq(this.candidateBounds, move.centerX, move.centerY);
@@ -526,7 +512,7 @@ export class PhysicsSystem implements System {
    * Гейт выключен (поля высоты в схеме нет) — цикла нет вовсе: сцена, не
    * знающая о высотах, не платит за колоночную модель ничем.
    */
-  private cacheLevels(ctx: SystemContext, obstacles: Float64Array): void {
+  private cacheLevels(ctx: SystemContext, h: PhysicsHandles, obstacles: Float64Array): void {
     if (!this.heightGate) return;
     // Скретч растёт вместе со сценой и переживает тики: перевыделение — только
     // при росте, а не на каждом тике (дисциплина аллокаций).
@@ -537,8 +523,8 @@ export class PhysicsSystem implements System {
         ctx,
         this.probe,
         other,
-        ctx.get(other, POSITION_COMPONENT, 'x'),
-        ctx.get(other, POSITION_COMPONENT, 'y'),
+        ctx.getByHandle(other, h.posX),
+        ctx.getByHandle(other, h.posY),
       );
     }
   }
@@ -548,9 +534,14 @@ export class PhysicsSystem implements System {
    * Полоса движущегося не ограничена — пара проходит, и поля высоты препятствия
    * не читается вовсе: при выключенном гейте его в схеме нет.
    */
-  private bandsMeetWithMover(ctx: SystemContext, other: EntityId, index: number): boolean {
-    if (this.moverHeight <= 0) return true;
-    const height = ctx.get(other, this.colliderComponent, COLLIDER_HEIGHT_FIELD);
+  private bandsMeetWithMover(
+    ctx: SystemContext,
+    h: PhysicsHandles,
+    other: EntityId,
+    index: number,
+  ): boolean {
+    if (this.moverHeight <= 0 || h.height === undefined) return true;
+    const height = ctx.getByHandle(other, h.height);
     return bandsMeet(this.moverLevel, this.moverHeight, this.levels[index]!, height);
   }
 }
