@@ -88,6 +88,7 @@ import {
   ACTION_BITS,
   CHARGE_PREVIEW_MIN_TICKS,
   PREVIEW_SLOTS,
+  DEAD_COMPONENT,
   RESPAWN_EVENT,
   STATE_COMPONENTS,
   STATS,
@@ -1316,6 +1317,14 @@ async function main(): Promise<void> {
         camera,
         shadows: lighting,
         reviveEvent: RESPAWN_EVENT,
+        // Фиксация клипа смерти следует ДОСТАВЛЕННОМУ состоянию (REND-4):
+        // одного имени события возрождения сцене мало — возрождений в ней два
+        // (`Respawn` героя и `BossRespawn` босса), а труп, вернувшийся из
+        // тумана, событием не чинится вовсе (FOW-8): `EntityDied` в прошлом не
+        // переигрывается (OBS-5). Список состояний — тот же, что у Extractor'а
+        // и оболочек: по нему подсистема находит бит маркера.
+        stateComponents: STATE_COMPONENTS,
+        deadState: DEAD_COMPONENT,
         // Fade «ушла в туман ≠ умерла» (FOW-8, design D7): длительность — из
         // той же секции `fog`, что у подсистемы тумана (FOW-10). Сцена без
         // тумана опции не получает, и исчезновение убирает инстанс сразу.

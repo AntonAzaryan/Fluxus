@@ -43,7 +43,12 @@ function plainManifest(): VisualManifest {
 
 function makeRig(
   manifest: VisualManifest = makeManifest(),
-  options: { readonly reviveEvent?: string; readonly fadeSeconds?: number } = {},
+  options: {
+    readonly reviveEvent?: string;
+    readonly fadeSeconds?: number;
+    readonly stateComponents?: readonly string[];
+    readonly deadState?: string;
+  } = {},
 ): {
   subsystem: ModelsSubsystem;
   ctx: RenderContext;
@@ -757,5 +762,141 @@ describe('FOW-8: кэш fade-копий материалов', () => {
     // одного на другом, поэтому копия выдаётся на меш каждого.
     expect(first).not.toBe(second);
     expect(first.opacity).toBeLessThan(second.opacity);
+  });
+});
+
+/**
+ * Фиксация клипа смерти следует ДОСТАВЛЕННОМУ состоянию (REND-4, FOW-8).
+ * Событие живёт один тик, инстанс — сколько угодно: труп, ушедший в туман и
+ * вернувшийся, создаётся заново и о `EntityDied` узнать не может (OBS-5), а
+ * сцена с двумя видами возрождения не описывается одним именем события.
+ */
+describe('состояние смерти из доставки (REND-4, FOW-8)', () => {
+  /** Сборка, назвавшая состояние смерти: бит 0 словаря — `Dead`. */
+  const DEAD_BIT = 1;
+  function deadRig(): ReturnType<typeof makeRig> {
+    return makeRig(makeManifest(), { stateComponents: ['Dead'], deadState: 'Dead' });
+  }
+
+  it('появившийся мёртвым встаёт трупом, не разыгрывая гибель заново', () => {
+    const { subsystem, assets } = deadRig();
+    // Первая доставка, в которой сущность видна, уже называет её мёртвой:
+    // умерла она в тумане, и события её гибели этот клиент не получал.
+    subsystem.syncTick(makeTickView([makeEntityView(1, { states: DEAD_BIT })]));
+    assets.resolve('model', MODEL_ID, makeModel());
+
+    const controller = subsystem.instanceFor(1)!.controller!;
+    expect(controller.isDead).toBe(true);
+    expect(controller.currentClipName).toBe('Death');
+  });
+
+  it('гибель НА ГЛАЗАХ по-прежнему играет клип событием, а не состоянием', () => {
+    const { subsystem, assets } = deadRig();
+    subsystem.syncTick(makeTickView([makeEntityView(1)]));
+    assets.resolve('model', MODEL_ID, makeModel());
+    const controller = subsystem.instanceFor(1)!.controller!;
+    controller.setState('move');
+
+    // На тике гибели маркер в мире уже стоит, и состояние приезжает вместе с
+    // событием. Фиксируй подсистема по состоянию всякий инстанс — событие
+    // застало бы контроллер уже мёртвым, и клип смерти не сыграл бы вовсе.
+    subsystem.syncTick(
+      makeTickView([makeEntityView(1, { states: DEAD_BIT })], {
+        freshEvents: true,
+        events: [{ type: 'EntityDied', data: { entity: 1 } }],
+      }),
+    );
+
+    expect(controller.isDead).toBe(true);
+    expect(controller.currentClipName).toBe('Death');
+    // Клип именно ИГРАЕТ, а не стоит на конце: фаза ещё не дошла до края.
+    subsystem.updateFrame(0.1, 1);
+    expect(controller.currentClipName).toBe('Death');
+  });
+
+  it('снятый маркер поднимает модель, каким бы событием сцена ни возрождала', () => {
+    // Сборка НЕ называет события возрождения вовсе — так и живёт сцена, у
+    // которой возрождений несколько, а имя в опции одно.
+    const { subsystem, assets } = deadRig();
+    subsystem.syncTick(makeTickView([makeEntityView(1)]));
+    assets.resolve('model', MODEL_ID, makeModel());
+    const controller = subsystem.instanceFor(1)!.controller!;
+    subsystem.syncTick(
+      makeTickView([makeEntityView(1, { states: DEAD_BIT })], {
+        freshEvents: true,
+        events: [{ type: 'EntityDied', data: { entity: 1 } }],
+      }),
+    );
+    expect(controller.isDead).toBe(true);
+
+    // Возрождение сцены: тот же идентификатор теряет маркер, мир непрерывен.
+    subsystem.syncTick(makeTickView([makeEntityView(1, { moving: true })]));
+
+    expect(controller.isDead).toBe(false);
+    expect(controller.currentClipName).toBe('Walk Fast');
+  });
+
+  it('вернувшийся из тумана труп — труп: инстанс новый, события не было', () => {
+    const { subsystem, assets } = makeRig(makeManifest(), {
+      fadeSeconds: 0.2,
+      stateComponents: ['Dead'],
+      deadState: 'Dead',
+    });
+    subsystem.syncTick(makeTickView([makeEntityView(1)]));
+    assets.resolve('model', MODEL_ID, makeModel());
+    subsystem.syncTick(
+      makeTickView([makeEntityView(1, { states: DEAD_BIT })], {
+        freshEvents: true,
+        events: [{ type: 'EntityDied', data: { entity: 1 } }],
+      }),
+    );
+    const first = subsystem.instanceFor(1)!;
+    expect(first.controller!.isDead).toBe(true);
+
+    // Труп ушёл в туман: без события смерти на ЭТОМ тике инстанс доживает
+    // fade-out (FOW-8) и снимается по его концу.
+    subsystem.syncTick(makeTickView([]));
+    subsystem.updateFrame(1, 1);
+    expect(subsystem.instanceFor(1)).toBeNull();
+
+    // И вернулся — всё ещё мёртвым. Инстанс новый, `EntityDied` в прошлом не
+    // переигрывается: единственный источник правды — доставленное состояние.
+    subsystem.syncTick(makeTickView([makeEntityView(1, { states: DEAD_BIT })]));
+    const second = subsystem.instanceFor(1)!;
+    expect(second).not.toBe(first);
+    expect(second.controller!.isDead).toBe(true);
+    expect(second.controller!.currentClipName).toBe('Death');
+  });
+
+  it('без названного состояния поведение прежнее: только событие и возрождение', () => {
+    const { subsystem, assets } = makeRig(makeManifest(), { fadeSeconds: 0.2 });
+    subsystem.syncTick(makeTickView([makeEntityView(1)]));
+    assets.resolve('model', MODEL_ID, makeModel());
+    subsystem.syncTick(
+      makeTickView([makeEntityView(1, { states: DEAD_BIT })], {
+        freshEvents: true,
+        events: [{ type: 'EntityDied', data: { entity: 1 } }],
+      }),
+    );
+    subsystem.syncTick(makeTickView([]));
+    subsystem.updateFrame(1, 1);
+
+    // Тот же бит состояния, но сборка его не назвала — подсистема о нём не
+    // знает, и вернувшийся инстанс встаёт живым, как и до этой правки.
+    subsystem.syncTick(makeTickView([makeEntityView(1, { states: DEAD_BIT })]));
+    expect(subsystem.instanceFor(1)!.controller!.isDead).toBe(false);
+  });
+
+  it('имя состояния вне словаря сборки — предупреждение один раз, путь прежний', () => {
+    const { subsystem, assets, warnings } = makeRig(makeManifest(), {
+      stateComponents: ['Shielded'],
+      deadState: 'Dead',
+    });
+    subsystem.syncTick(makeTickView([makeEntityView(1, { states: DEAD_BIT })]));
+    assets.resolve('model', MODEL_ID, makeModel());
+    subsystem.syncTick(makeTickView([makeEntityView(1, { states: DEAD_BIT })]));
+
+    expect(subsystem.instanceFor(1)!.controller!.isDead).toBe(false);
+    expect(warnings.filter((message) => message.includes('состояние смерти'))).toHaveLength(1);
   });
 });

@@ -83,7 +83,7 @@
         "Position": { "x": 557056, "y": 1605632 },
         "Velocity": { "x": 0, "y": 0 },
         "Collider": {
-          "blockMask": 1,
+          "blockMask": 9,
           "cliffRise": 0,
           "halfX": 19661,
           "halfY": 19661,
@@ -125,7 +125,7 @@
           "cliffRise": -1,
           "halfX": 9830,
           "halfY": 9830,
-          "hitMask": 2,
+          "hitMask": 10,
           "layer": 4,
           "radius": 9830,
           "shape": 0
@@ -147,7 +147,7 @@
           "cliffRise": -1,
           "halfX": 19661,
           "halfY": 19661,
-          "hitMask": 2,
+          "hitMask": 10,
           "layer": 4,
           "radius": 19661,
           "shape": 0
@@ -234,12 +234,12 @@
         "Position": { "x": 1572864, "y": 1572864 },
         "Velocity": { "x": 0, "y": 0 },
         "Collider": {
-          "blockMask": 1,
+          "blockMask": 3,
           "cliffRise": 0,
           "halfX": 39321,
           "halfY": 39321,
           "hitMask": 0,
-          "layer": 2,
+          "layer": 8,
           "radius": 39321,
           "shape": 0
         },
@@ -266,6 +266,13 @@
       "components": {
         "AbilitySlot": { "abilityId": 9, "slotIndex": 1 },
         "AbilityCooldown": { "remaining": 0, "total": 0 }
+      }
+    },
+    {
+      "name": "SlotBossRepel",
+      "components": {
+        "AbilitySlot": { "abilityId": 10, "slotIndex": 2 },
+        "AbilityCooldown": { "remaining": 0, "total": 90 }
       }
     }
   ],
@@ -367,10 +374,61 @@
           }
         },
         {
+          "spawnEntity": {
+            "prefab": "SlotBossRepel",
+            "overrides": { "AbilitySlot": { "owner": { "var": "b" } } }
+          }
+        },
+        {
           "addComponent": {
             "entity": { "var": "b" },
             "component": "Granted",
             "values": { "atTick": { "tick": [] } }
+          }
+        }
+      ]
+    },
+    {
+      "name": "BossProximity",
+      "order": -792,
+      "query": { "all": ["NpcAgent", "Position", "Health"], "not": ["Dead"] },
+      "as": "b",
+      "do": [
+        {
+          "forEach": {
+            "query": {
+              "all": ["Health", "Player", "Position"],
+              "not": ["Dead"],
+              "withinRadius": {
+                "center": {
+                  "vec": [
+                    { "getComponent": [{ "var": "b" }, "Position", "x"] },
+                    { "getComponent": [{ "var": "b" }, "Position", "y"] }
+                  ]
+                },
+                "radius": 98304
+              }
+            },
+            "as": "v",
+            "do": [
+              {
+                "if": {
+                  "cond": { "!=": [{ "var": "v" }, { "var": "b" }] },
+                  "then": [
+                    {
+                      "emitEvent": {
+                        "type": "BossRepel",
+                        "data": {
+                          "caster": { "var": "b" },
+                          "target": { "var": "v" },
+                          "tick": { "tick": [] }
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            ]
           }
         }
       ]
@@ -1401,7 +1459,7 @@
                 "modifyComponent": {
                   "entity": { "var": "e" },
                   "component": "Collider",
-                  "values": { "layer": 2 }
+                  "values": { "layer": 8 }
                 }
               },
               {
@@ -1750,7 +1808,12 @@
                     "then": [
                       {
                         "if": {
-                          "cond": { "hasComponent": [{ "var": "other" }, "Health"] },
+                          "cond": {
+                            "and": [
+                              { "hasComponent": [{ "var": "other" }, "Health"] },
+                              { "!": [{ "hasComponent": [{ "var": "other" }, "Dead"] }] }
+                            ]
+                          },
                           "then": [
                             {
                               "if": {
@@ -2618,6 +2681,135 @@
               "x": { "getComponent": [{ "var": "owner" }, "Position", "x"] },
               "y": { "getComponent": [{ "var": "owner" }, "Position", "y"] }
             }
+          }
+        }
+      ]
+    },
+    {
+      "id": "bossRepel",
+      "trigger": { "event": { "type": "BossRepel", "as": "ask" } },
+      "condition": {
+        "and": [
+          { "!": [{ "hasComponent": [{ "var": "owner" }, "Dead"] }] },
+          { "==": [{ "eventField": [{ "var": "ask" }, "caster"] }, { "var": "owner" }] }
+        ]
+      },
+      "cooldownTicks": 90,
+      "effects": [
+        {
+          "let": {
+            "bindings": {
+              "victim": { "eventField": [{ "var": "ask" }, "target"] },
+              "at": {
+                "vec": [
+                  { "getComponent": [{ "var": "owner" }, "Position", "x"] },
+                  { "getComponent": [{ "var": "owner" }, "Position", "y"] }
+                ]
+              }
+            },
+            "do": [
+              {
+                "if": {
+                  "cond": {
+                    "and": [
+                      { ">=": [{ "var": "victim" }, 0] },
+                      { "isAlive": [{ "var": "victim" }] },
+                      { "!=": [{ "var": "victim" }, { "var": "owner" }] },
+                      { "!": [{ "hasComponent": [{ "var": "victim" }, "Dead"] }] }
+                    ]
+                  },
+                  "then": [
+                    {
+                      "let": {
+                        "bindings": {
+                          "push": {
+                            "vec.normalize": [
+                              {
+                                "vec.sub": [
+                                  {
+                                    "vec": [
+                                      { "getComponent": [{ "var": "victim" }, "Position", "x"] },
+                                      { "getComponent": [{ "var": "victim" }, "Position", "y"] }
+                                    ]
+                                  },
+                                  { "var": "at" }
+                                ]
+                              }
+                            ]
+                          }
+                        },
+                        "do": [
+                          {
+                            "emitEvent": {
+                              "type": "Damage",
+                              "data": {
+                                "amount": 250,
+                                "entity": { "var": "victim" },
+                                "source": { "var": "owner" }
+                              }
+                            }
+                          },
+                          {
+                            "emitEvent": {
+                              "type": "HeroHit",
+                              "data": {
+                                "entity": { "var": "victim" },
+                                "x": { "getComponent": [{ "var": "victim" }, "Position", "x"] },
+                                "y": { "getComponent": [{ "var": "victim" }, "Position", "y"] }
+                              }
+                            }
+                          },
+                          {
+                            "if": {
+                              "cond": {
+                                "and": [
+                                  { "hasComponent": [{ "var": "victim" }, "Locomotion"] },
+                                  { "hasComponent": [{ "var": "victim" }, "LocomotionState"] }
+                                ]
+                              },
+                              "then": [
+                                {
+                                  "modifyComponent": {
+                                    "entity": { "var": "victim" },
+                                    "component": "LocomotionState",
+                                    "values": {
+                                      "state": 1,
+                                      "dirX": { "vec.x": [{ "var": "push" }] },
+                                      "dirY": { "vec.y": [{ "var": "push" }] },
+                                      "ticksLeft": {
+                                        "getComponent": [
+                                          { "var": "victim" },
+                                          "Locomotion",
+                                          "dodgeTicks"
+                                        ]
+                                      }
+                                    }
+                                  }
+                                }
+                              ]
+                            }
+                          },
+                          {
+                            "emitEvent": {
+                              "type": "BossRepelLanded",
+                              "data": {
+                                "dirX": { "vec.x": [{ "var": "push" }] },
+                                "dirY": { "vec.y": [{ "var": "push" }] },
+                                "entity": { "var": "owner" },
+                                "target": { "var": "victim" },
+                                "tick": { "tick": [] },
+                                "x": { "vec.x": [{ "var": "at" }] },
+                                "y": { "vec.y": [{ "var": "at" }] }
+                              }
+                            }
+                          }
+                        ]
+                      }
+                    }
+                  ]
+                }
+              }
+            ]
           }
         }
       ]
