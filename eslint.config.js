@@ -100,6 +100,26 @@ export default defineConfig([
       /** Брошенный промис в тике — то, что тесты не видят, а рантайм проглотит. */
       '@typescript-eslint/no-floating-promises': 'error',
       /**
+       * Число в шаблонной строке — однозначно и безопасно: `${tick}` читается
+       * лучше, чем `${String(tick)}`, а диагностики и сообщения об ошибках в
+       * репозитории состоят из чисел. Это дефолт самого typescript-eslint;
+       * strict-type-checked ужесточает его до запрета, и ужесточение мы
+       * снимаем осознанно. Остальные типы (boolean, nullish, RegExp, enum)
+       * правило по-прежнему ловит — там неявное приведение действительно
+       * скрывает дефект (`${undefined}` в пути к ассету).
+       */
+      '@typescript-eslint/restrict-template-expressions': [
+        'error',
+        {
+          allowNumber: true,
+          allowAny: false,
+          allowBoolean: false,
+          allowNullish: false,
+          allowRegExp: false,
+          allowNever: false,
+        },
+      ],
+      /**
        * Метрики размера: файл, вложенность, когнитивная сложность. Не «стиль»,
        * а ранний сигнал, что модуль пора делить, — до того, как это станет
        * видно только по больному диффу.
@@ -136,16 +156,13 @@ export default defineConfig([
     },
   },
 
-  // TODO baseline: правила с массовыми существующими нарушениями временно
-  // выключены вместо сотен точечных disable-комментариев. Счётчики и порядок
-  // разгребания — в `LINT_BASELINE.md`; включать обратно по одному, начиная
-  // с `sonarjs/cognitive-complexity`.
+  // TODO baseline: правило с массовыми существующими нарушениями временно
+  // выключено вместо сотен точечных disable-комментариев. Счётчик и методика
+  // замера — в `LINT_BASELINE.md`.
   {
     files: ['**/*.ts'],
     rules: {
-      '@typescript-eslint/restrict-template-expressions': 'off',
       '@typescript-eslint/no-non-null-assertion': 'off',
-      'sonarjs/cognitive-complexity': 'off',
     },
   },
 
