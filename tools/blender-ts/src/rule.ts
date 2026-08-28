@@ -62,7 +62,15 @@ import {
 } from '@fluxus/editor-core';
 import { presentationPathOf } from '@fluxus/assets';
 import { parseGltf, type GltfDocument } from './gltf.js';
-import { generateSpatialLayer, hasErrors, type SpatialLayer, type SpatialLayerContext } from './layer.js';
+import {
+  generateSpatialLayer,
+  hasErrors,
+  type CurvatureMap,
+  type Finding,
+  type SpatialLayer,
+  type SpatialLayerContext,
+  type TerrainMaps,
+} from './layer.js';
 import { generateCellLayer, withCellLayer } from './maps.js';
 import { normalizeDocument, type SourceObject } from './normalize.js';
 import { DEFAULT_DECORATIONS_PATH, DEFAULT_INITIAL_PATH, DEFAULT_TERRAIN_PATH } from './operation.js';
@@ -138,9 +146,8 @@ const UNKNOWN: SourceState = Object.freeze({ status: 'unknown' });
 /** FNV-1a по байтам: отпечаток нужен для сравнения «те же байты?», а не для криптографии. */
 function fingerprintOf(bytes: Uint8Array): string {
   let hash = 0x811c9dc5;
-  // eslint-disable-next-line @typescript-eslint/prefer-for-of -- baseline
-  for (let i = 0; i < bytes.length; i++) {
-    hash ^= bytes[i]!;
+  for (const byte of bytes) {
+    hash ^= byte;
     hash = Math.imul(hash, 0x01000193) >>> 0;
   }
   return `${bytes.length}:${hash.toString(16)}`;
@@ -279,35 +286,8 @@ export function spatialLayerSyncRule(options: SpatialLayerSyncOptions): Validati
     severity: 'warning',
     check(run) {
       const state = options.sources.stateOf(run.document.id);
-      // Сцена без источника живёт как прежде: редактор и ручная правка —
-      // полноправные авторы её слоя, и предупреждения нет (BLND-2).
-      if (state.status === 'none') return;
-      if (state.status === 'unknown') {
-        // Сверки не было ни одной: у собирающего редактора обязанность
-        // обновить кэш до прогона, и невыполненная она обязана быть видимой.
-        // Молчание здесь означало бы «слой сошёлся», чего никто не проверял.
-        run.report({
-          path: [],
-          expected: {
-            kind: 'accepted',
-            by: SPATIAL_LAYER_SYNC_RULE,
-            detail: 'состояние источника не прочитано ни разу',
-          },
-          code: SOURCE_UNREAD,
-          params: { scene: run.document.id },
-        });
-        return;
-      }
-      if (state.status === 'unavailable' || state.status === 'rejected') {
-        run.report({
-          path: [],
-          expected: { kind: 'accepted', by: SPATIAL_LAYER_SYNC_RULE, detail: state.reason },
-          code: state.status === 'unavailable' ? SOURCE_UNREADABLE : SOURCE_REJECTED,
-          // Причина — параметром, а не через `{received}`: полученным значением
-          // на пустом пути является весь документ, и подставить его в текст
-          // значило бы показать автору файл вместо причины.
-          params: { source: state.path, reason: state.reason },
-        });
+      if (state.status !== 'ready') {
+        reportSourceState(run, state);
         return;
       }
 
@@ -322,23 +302,7 @@ export function spatialLayerSyncRule(options: SpatialLayerSyncOptions): Validati
         generateCellLayer(state.document, state.objects, context),
       );
       if (hasErrors(layer.findings)) {
-        // Импорт этот источник отверг бы (BLND-6): сравнивать документы не с
-        // чем, и молчать об этом нельзя — «расхождения нет» здесь было бы
-        // неправдой.
-        const errors = layer.findings.filter((finding) => finding.severity === 'error');
-        run.report({
-          path: [],
-          expected: {
-            kind: 'accepted',
-            by: SPATIAL_LAYER_SYNC_RULE,
-            detail: errors.map((finding) => `${finding.object}: ${finding.message}`).join('; '),
-          },
-          code: SOURCE_REJECTED,
-          params: {
-            source: state.path,
-            reason: errors.map((finding) => `${finding.object}: ${finding.message}`).join('; '),
-          },
-        });
+        reportRejectedSource(run, layer.findings, state.path);
         return;
       }
 
@@ -350,62 +314,8 @@ export function spatialLayerSyncRule(options: SpatialLayerSyncOptions): Validati
         source: state.path,
         slot: 'initial',
       });
-
-      // Карты ассета террейна лежат тем же документом (TERR-2 — полем конфига у
-      // этого проекта), поэтому сверяются здесь же и рядами: ряд — единица
-      // формата (TERR-3), и адрес расхождения обязан называть ряд, а не файл.
-      const terrain = layer.terrain;
-      if (terrain !== undefined) {
-        for (const [key, rows] of [
-          ['levels', terrain.levels],
-          ['flags', terrain.flags],
-        ] as const) {
-          compare(run, {
-            documentId: run.document.id,
-            value: run.document.value,
-            path: [...terrainPath, key],
-            expected: [...rows],
-            source: state.path,
-            slot: `terrain.${key}`,
-          });
-        }
-      }
-
-      // Карта кривизны — отдельный документ, адрес которому даёт манифест
-      // (ASSET-7). Не открыт — правило о нём молчит, как и о парном документе.
-      const curvature = layer.curvature;
-      const curvatureId = context.curvatureMap;
-      if (curvature !== undefined && curvatureId != null) {
-        const document = run.documentsOfKind(kinds.curvature).find((entry) => entry.id === curvatureId);
-        if (document !== undefined) {
-          const value = run.valueOf(document.id);
-          // Размеры и ряды — по отдельности, ровно теми адресами, которыми их
-          // пишет операция импорта: сверка документа целиком краснела бы от
-          // порядка ключей, которого импорт не меняет (ED-21).
-          for (const [key, wanted] of [
-            ['width', curvature.width],
-            ['height', curvature.height],
-          ] as const) {
-            const actual = getAtPath(value ?? null, [key]);
-            if (sameJson(actual, wanted)) continue;
-            run.report({
-              documentId: document.id,
-              path: [key],
-              expected: { kind: 'oneOf', values: [wanted] },
-              code: LAYER_DIVERGED,
-              params: { slot: `curvature.${key}`, source: state.path },
-            });
-          }
-          compare(run, {
-            documentId: document.id,
-            value,
-            path: ['rows'],
-            expected: [...curvature.rows],
-            source: state.path,
-            slot: 'curvature.rows',
-          });
-        }
-      }
+      compareTerrain(run, layer.terrain, terrainPath, state.path);
+      compareCurvature(run, kinds.curvature, layer.curvature, context.curvatureMap, state.path);
 
       // Вторая сторона — парный документ (PRES-1), найденный правилом имени.
       // Не открыт ни один — правило о нём молчит: незагруженный документ не есть
@@ -422,6 +332,126 @@ export function spatialLayerSyncRule(options: SpatialLayerSyncOptions): Validati
       });
     },
   };
+}
+
+/** Состояние источника, при котором сверять нечего: каждое со своей находкой. */
+type UnreadySource = Exclude<SourceState, { readonly status: 'ready' }>;
+
+/** Находка о состоянии источника — ни одного молчаливого ответа (см. шапку). */
+function reportSourceState(run: ValidationRun, state: UnreadySource): void {
+  // Сцена без источника живёт как прежде: редактор и ручная правка —
+  // полноправные авторы её слоя, и предупреждения нет (BLND-2).
+  if (state.status === 'none') return;
+  if (state.status === 'unknown') {
+    // Сверки не было ни одной: у собирающего редактора обязанность
+    // обновить кэш до прогона, и невыполненная она обязана быть видимой.
+    // Молчание здесь означало бы «слой сошёлся», чего никто не проверял.
+    run.report({
+      path: [],
+      expected: {
+        kind: 'accepted',
+        by: SPATIAL_LAYER_SYNC_RULE,
+        detail: 'состояние источника не прочитано ни разу',
+      },
+      code: SOURCE_UNREAD,
+      params: { scene: run.document.id },
+    });
+    return;
+  }
+  run.report({
+    path: [],
+    expected: { kind: 'accepted', by: SPATIAL_LAYER_SYNC_RULE, detail: state.reason },
+    code: state.status === 'unavailable' ? SOURCE_UNREADABLE : SOURCE_REJECTED,
+    // Причина — параметром, а не через `{received}`: полученным значением
+    // на пустом пути является весь документ, и подставить его в текст
+    // значило бы показать автору файл вместо причины.
+    params: { source: state.path, reason: state.reason },
+  });
+}
+
+/**
+ * Импорт этот источник отверг бы (BLND-6): сравнивать документы не с чем, и
+ * молчать об этом нельзя — «расхождения нет» здесь было бы неправдой.
+ */
+function reportRejectedSource(run: ValidationRun, findings: readonly Finding[], source: ContentPath): void {
+  const reason = findings
+    .filter((finding) => finding.severity === 'error')
+    .map((finding) => `${finding.object}: ${finding.message}`)
+    .join('; ');
+  run.report({
+    path: [],
+    expected: { kind: 'accepted', by: SPATIAL_LAYER_SYNC_RULE, detail: reason },
+    code: SOURCE_REJECTED,
+    params: { source, reason },
+  });
+}
+
+/**
+ * Карты ассета террейна лежат тем же документом (TERR-2 — полем конфига у этого
+ * проекта), поэтому сверяются рядами: ряд — единица формата (TERR-3), и адрес
+ * расхождения обязан называть ряд, а не файл.
+ */
+function compareTerrain(
+  run: ValidationRun,
+  terrain: TerrainMaps | undefined,
+  terrainPath: JsonPath,
+  source: ContentPath,
+): void {
+  if (terrain === undefined) return;
+  for (const [key, rows] of [
+    ['levels', terrain.levels],
+    ['flags', terrain.flags],
+  ] as const) {
+    compare(run, {
+      documentId: run.document.id,
+      value: run.document.value,
+      path: [...terrainPath, key],
+      expected: [...rows],
+      source,
+      slot: `terrain.${key}`,
+    });
+  }
+}
+
+/**
+ * Карта кривизны — отдельный документ, адрес которому даёт манифест (ASSET-7).
+ * Не открыт — правило о нём молчит, как и о парном документе.
+ */
+function compareCurvature(
+  run: ValidationRun,
+  kind: DocumentKind,
+  curvature: CurvatureMap | undefined,
+  curvatureId: string | null | undefined,
+  source: ContentPath,
+): void {
+  if (curvature === undefined || curvatureId == null) return;
+  const document = run.documentsOfKind(kind).find((entry) => entry.id === curvatureId);
+  if (document === undefined) return;
+  const value = run.valueOf(document.id);
+  // Размеры и ряды — по отдельности, ровно теми адресами, которыми их пишет
+  // операция импорта: сверка документа целиком краснела бы от порядка ключей,
+  // которого импорт не меняет (ED-21).
+  for (const [key, wanted] of [
+    ['width', curvature.width],
+    ['height', curvature.height],
+  ] as const) {
+    if (sameJson(getAtPath(value ?? null, [key]), wanted)) continue;
+    run.report({
+      documentId: document.id,
+      path: [key],
+      expected: { kind: 'oneOf', values: [wanted] },
+      code: LAYER_DIVERGED,
+      params: { slot: `curvature.${key}`, source },
+    });
+  }
+  compare(run, {
+    documentId: document.id,
+    value,
+    path: ['rows'],
+    expected: [...curvature.rows],
+    source,
+    slot: 'curvature.rows',
+  });
 }
 
 /** Контекст проверки источника — по текущему состоянию документов сессии (ED-15). */

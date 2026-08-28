@@ -48,7 +48,13 @@ import {
   type JsonValue,
   type PositionBinding,
 } from '@fluxus/editor-core';
-import { SKIN_KEY, WALKABLE_KEY, type SourceObject } from './normalize.js';
+import {
+  SKIN_KEY,
+  WALKABLE_KEY,
+  singleSemanticOf,
+  type SemanticKind,
+  type SourceObject,
+} from './normalize.js';
 
 /**
  * Привязка позиции и поворота (ED-16) — общая с расстановкой редактора и потому
@@ -175,6 +181,15 @@ export function compareObjectNames(a: string, b: string): number {
   return a < b ? -1 : a > b ? 1 : 0;
 }
 
+/**
+ * Порядок объектов источника — лексикографический по имени (BLND-4). Один
+ * компаратор на пакет: слой размещений, выбор grid-объекта и отбор скалпта
+ * упорядочиваются ОДИНАКОВО, иначе сообщения зависели бы от того, кто сортирует.
+ */
+export function byObjectName(a: SourceObject, b: SourceObject): number {
+  return compareObjectNames(a.name, b.name);
+}
+
 interface Sink {
   readonly findings: Finding[];
   failed: boolean;
@@ -244,8 +259,8 @@ function fieldValue(
 function isBoundField(binding: PositionBinding, component: string, field: string): boolean {
   if (component === binding.component && (field === binding.x || field === binding.y)) return true;
   const rotation = binding.rotation;
-  // eslint-disable-next-line @typescript-eslint/prefer-optional-chain -- baseline
-  return rotation !== undefined && component === rotation.component && field === rotation.field;
+  if (rotation === undefined) return false;
+  return component === rotation.component && field === rotation.field;
 }
 
 /** Переопределения записи расстановки: «компонент → поле → значение» (CMD-6). */
@@ -256,19 +271,97 @@ function put(overrides: Overrides, component: string, field: string, value: numb
   target[field] = value;
 }
 
+/** Пары «ключ — значение» в лексикографическом порядке ключа (BLND-4). */
+function sortedEntries<T>(source: Readonly<Record<string, T>>): readonly (readonly [string, T])[] {
+  return Object.entries(source).sort(([a], [b]) => compareObjectNames(a, b));
+}
+
 /** Ключи объекта в лексикографическом порядке — дифф не зависит от порядка обхода. */
 function sortedObject(source: Readonly<Record<string, number>>): JsonObject {
   const out: Record<string, JsonValue> = {};
-  for (const key of Object.keys(source).sort(compareObjectNames)) out[key] = source[key]!;
+  for (const [key, value] of sortedEntries(source)) out[key] = value;
   return out;
 }
 
 function sortedOverrides(overrides: Overrides): JsonObject {
   const out: Record<string, JsonValue> = {};
-  for (const component of Object.keys(overrides).sort(compareObjectNames)) {
-    out[component] = sortedObject(overrides[component]!);
-  }
+  for (const [component, fields] of sortedEntries(overrides)) out[component] = sortedObject(fields);
   return out;
+}
+
+/**
+ * Куда и чем пишется переопределение поля: адрес находки, схемы сцены, состав
+ * prefab'а и накопитель. Собирается один раз на объект — проверки полей ходят
+ * по нему, а не по замыканию (`placementRecord`).
+ */
+interface FieldTarget {
+  readonly sink: Sink;
+  /** Имя объекта Blender — адрес находки (BLND-6). */
+  readonly object: string;
+  readonly schemas: ReadonlyMap<string, ComponentSchema>;
+  /** Prefab записи; `undefined` — конфиг сцены prefab'ов не объявляет вовсе. */
+  readonly prefab: PrefabDef | undefined;
+  readonly prefabName: string;
+  readonly overrides: Overrides;
+}
+
+/**
+ * Переопределение одного поля компонента: схема (ECS-3), состав prefab'а
+ * (CMD-6) и представление типа (SER-8) проверяются здесь и только здесь.
+ */
+function writeField(target: FieldTarget, component: string, field: string, raw: number): void {
+  const { sink, object, prefab } = target;
+  const schema = target.schemas.get(component);
+  if (schema === undefined) {
+    error(sink, object, `компонент "${component}" не объявлен схемами сцены (ECS-3)`);
+    return;
+  }
+  const type = schema.fields[field];
+  if (type === undefined) {
+    error(sink, object, `поле "${field}" не объявлено схемой компонента "${component}" (ECS-3)`);
+    return;
+  }
+  if (prefab !== undefined && prefab.components[component] === undefined) {
+    error(sink, object, `компонент "${component}" не входит в состав prefab'а "${target.prefabName}" (CMD-6)`);
+    return;
+  }
+  const value = fieldValue(sink, object, component, field, type, raw);
+  if (value !== null) put(target.overrides, component, field, value);
+}
+
+/** Булев custom property — числом 0/1: поле компонента числовое (ECS-3). */
+function numericExtra(raw: number | boolean): number {
+  return typeof raw === 'boolean' ? (raw ? 1 : 0) : raw;
+}
+
+/**
+ * Переопределения из custom properties вида `<Компонент>.<поле>` (BLND-3).
+ * Порядок — лексикографический по ключу: находки не зависят от порядка, в
+ * котором свойства пришли из glTF (BLND-4).
+ */
+function writeExtraFields(target: FieldTarget, source: SourceObject, binding: PositionBinding): void {
+  for (const [key, raw] of sortedEntries(source.extras)) {
+    const separator = key.indexOf(FIELD_SEPARATOR);
+    if (separator <= 0 || separator === key.length - 1) continue;
+    const component = key.slice(0, separator);
+    const field = key.slice(separator + 1);
+    if (isBoundField(binding, component, field)) {
+      // Позиция и курс берутся ИЗ ТРАНСФОРМА (BLND-3), и молчаливо предпочесть
+      // одно из двух значений импортёр не вправе: автор двигал бы объект в
+      // Blender, а в кадре ничего бы не менялось.
+      error(
+        target.sink,
+        target.object,
+        `"${key}": позиция и курс берутся из трансформа объекта (BLND-3), а не из custom property`,
+      );
+      continue;
+    }
+    if (typeof raw === 'string') {
+      error(target.sink, target.object, `"${key}": значение поля компонента — число, а не строка "${raw}"`);
+      continue;
+    }
+    writeField(target, component, field, numericExtra(raw));
+  }
 }
 
 /**
@@ -296,33 +389,16 @@ function placementRecord(
   }
 
   const overrides: Overrides = {};
-  const write = (component: string, field: string, raw: number): void => {
-    const schema = schemas.get(component);
-    if (schema === undefined) {
-      error(sink, source.name, `компонент "${component}" не объявлен схемами сцены (ECS-3)`);
-      return;
-    }
-    const type = schema.fields[field];
-    if (type === undefined) {
-      error(sink, source.name, `поле "${field}" не объявлено схемой компонента "${component}" (ECS-3)`);
-      return;
-    }
-    if (prefab !== undefined && prefab.components[component] === undefined) {
-      error(sink, source.name, `компонент "${component}" не входит в состав prefab'а "${name}" (CMD-6)`);
-      return;
-    }
-    const value = fieldValue(sink, source.name, component, field, type, raw);
-    if (value !== null) put(overrides, component, field, value);
-  };
+  const target: FieldTarget = { sink, object: source.name, schemas, prefab, prefabName: name, overrides };
 
-  write(binding.component, binding.x, source.x);
-  write(binding.component, binding.y, source.y);
+  writeField(target, binding.component, binding.x, source.x);
+  writeField(target, binding.component, binding.y, source.y);
   if (binding.rotation !== undefined) {
     // Та же свёртка полного оборота, что у записи decoration: курс 1.0 в
     // Q16.16 квантовался бы в FIXED_ONE — а полный оборот есть тот же курс,
     // что 0, и в переопределение обязан уехать 0, а не 65536 (BLND-4).
     const turn = quantizedFixed(source.yaw);
-    write(binding.rotation.component, binding.rotation.field, turn === FIXED_ONE ? 0 : source.yaw);
+    writeField(target, binding.rotation.component, binding.rotation.field, turn === FIXED_ONE ? 0 : source.yaw);
     // Зеркало курсом не выражается: разложение зеркального трансформа отдаёт
     // курс, отличающийся на пол-оборота (BLND-3). Позиции это не касается,
     // поэтому у сцены без поворота и предупреждения нет.
@@ -331,60 +407,21 @@ function placementRecord(
     }
   }
 
-  for (const key of Object.keys(source.extras).sort(compareObjectNames)) {
-    const separator = key.indexOf(FIELD_SEPARATOR);
-    if (separator <= 0 || separator === key.length - 1) continue;
-    const component = key.slice(0, separator);
-    const field = key.slice(separator + 1);
-    if (isBoundField(binding, component, field)) {
-      // Позиция и курс берутся ИЗ ТРАНСФОРМА (BLND-3), и молчаливо предпочесть
-      // одно из двух значений импортёр не вправе: автор двигал бы объект в
-      // Blender, а в кадре ничего бы не менялось.
-      error(
-        sink,
-        source.name,
-        `"${key}": позиция и курс берутся из трансформа объекта (BLND-3), а не из custom property`,
-      );
-      continue;
-    }
-    const raw = source.extras[key];
-    if (typeof raw === 'string') {
-      error(sink, source.name, `"${key}": значение поля компонента — число, а не строка "${raw}"`);
-      continue;
-    }
-    write(component, field, typeof raw === 'boolean' ? (raw ? 1 : 0) : (raw!));
-  }
+  writeExtraFields(target, source, binding);
 
   return { prefab: name, overrides: sortedOverrides(overrides) };
 }
 
-/**
- * Запись decoration из объекта с `visual` (BLND-3, PRES-2). Состав записи
- * закрыт, и полей сверх него импорт не пишет; умолчания (`yaw` 0, `scale` 1) не
- * записываются вовсе — отсутствующее и равное умолчанию в формате неразличимы,
- * а лишний ключ был бы шумом в диффе.
- */
-function decorationRecord(sink: Sink, source: SourceObject, context: SpatialLayerContext): JsonObject | null {
-  const key = source.semanticValue;
-  if (key === '') {
-    error(sink, source.name, 'свойство "visual" — непустая строка с ключом манифеста (PRES-2)');
-    return null;
-  }
-  const visuals = context.visuals;
-  // Пространство визуальных ключей одно, а родов записи два (ASSET-9,
-  // ASSET-14): модельный вид рисует подсистема моделей, эмиттерный (факел,
-  // костёр) — подсистема частиц (`rendering` REND-24). Размещение ссылается на
-  // оба одним и тем же полем `visual`, поэтому «ключ разрешается» здесь значит
-  // «разрешается хоть одним из двух»: проверять только модельный род означало
-  // бы ругаться на каждый импортированный из Blender факел.
-  const resolved =
-    visuals == null ? undefined : (resolveVisual(visuals, key) ?? resolveVisualEmitter(visuals, key));
-  if (visuals != null && resolved === undefined) {
-    // Предупреждение, а не отказ (BLND-6): в рантайме такая запись даёт
-    // заглушку (PRES-2), и чинится она правкой манифеста — отказ запер бы автора.
-    warning(sink, source.name, `ключ "${key}" не разрешается в запись манифеста визуалов (ASSET-9)`);
-  }
+/** Позиция, курс и масштаб записи decoration в шаге PRES-3; `null` — отказ. */
+interface DecorationGeometry {
+  readonly x: number;
+  readonly y: number;
+  readonly yaw: number;
+  readonly scale: number;
+}
 
+/** Квантование величин записи decoration (PRES-3) и находки о том, что формат не выражает. */
+function decorationGeometry(sink: Sink, source: SourceObject): DecorationGeometry | null {
   const x = quantizeDecorationLength(source.x);
   const y = quantizeDecorationLength(source.y);
   // Курс — величина по модулю оборота, и сворачивается он ПОСЛЕ квантования:
@@ -415,19 +452,34 @@ function decorationRecord(sink: Sink, source: SourceObject, context: SpatialLaye
       'трансформ зеркальный; запись decoration зеркала не выражает — в документ уходит курс без него (PRES-2)',
     );
   }
+  return { x, y, yaw, scale };
+}
 
+/**
+ * Имя скина записи decoration (PRES-2). Пустая строка — скина нет: отсутствующее
+ * и пустое в документе неразличимы, и ключ не пишется ни в том, ни в другом
+ * случае. `null` — значение не строка, то есть отказ (находка записана).
+ */
+function decorationSkin(sink: Sink, source: SourceObject): string | null {
   const skin = source.extras[SKIN_KEY];
-  if (skin !== undefined && typeof skin !== 'string') {
+  if (skin === undefined) return '';
+  if (typeof skin !== 'string') {
     error(sink, source.name, `"${SKIN_KEY}": имя скина — строка (PRES-2)`);
     return null;
   }
+  return skin;
+}
 
-  // Флаг walkable-поверхности (BLND-3): значение — булево, но целые 0/1
-  // принимаются как булево — булев custom property разными версиями экспорта
-  // приезжает то bool'ом, то int'ом. Прочее не угадывается: «"yes"» могло бы
-  // значить что угодно, и отказ называет объект (BLND-6).
+/**
+ * Флаг walkable-поверхности (BLND-3): значение — булево, но целые 0/1
+ * принимаются как булево — булев custom property разными версиями экспорта
+ * приезжает то bool'ом, то int'ом. Прочее не угадывается: «"yes"» могло бы
+ * значить что угодно, и отказ (`null`) называет объект (BLND-6).
+ */
+function decorationWalkable(sink: Sink, source: SourceObject): boolean | null {
   const walkable = source.extras[WALKABLE_KEY];
-  if (walkable !== undefined && walkable !== true && walkable !== false && walkable !== 0 && walkable !== 1) {
+  if (walkable === undefined) return false;
+  if (walkable !== true && walkable !== false && walkable !== 0 && walkable !== 1) {
     error(
       sink,
       source.name,
@@ -435,17 +487,95 @@ function decorationRecord(sink: Sink, source: SourceObject, context: SpatialLaye
     );
     return null;
   }
+  return walkable === true || walkable === 1;
+}
+
+/**
+ * Запись decoration из объекта с `visual` (BLND-3, PRES-2). Состав записи
+ * закрыт, и полей сверх него импорт не пишет; умолчания (`yaw` 0, `scale` 1) не
+ * записываются вовсе — отсутствующее и равное умолчанию в формате неразличимы,
+ * а лишний ключ был бы шумом в диффе.
+ */
+function decorationRecord(sink: Sink, source: SourceObject, context: SpatialLayerContext): JsonObject | null {
+  const key = source.semanticValue;
+  if (key === '') {
+    error(sink, source.name, 'свойство "visual" — непустая строка с ключом манифеста (PRES-2)');
+    return null;
+  }
+  const visuals = context.visuals;
+  // Пространство визуальных ключей одно, а родов записи два (ASSET-9,
+  // ASSET-14): модельный вид рисует подсистема моделей, эмиттерный (факел,
+  // костёр) — подсистема частиц (`rendering` REND-24). Размещение ссылается на
+  // оба одним и тем же полем `visual`, поэтому «ключ разрешается» здесь значит
+  // «разрешается хоть одним из двух»: проверять только модельный род означало
+  // бы ругаться на каждый импортированный из Blender факел.
+  const resolved =
+    visuals == null ? undefined : (resolveVisual(visuals, key) ?? resolveVisualEmitter(visuals, key));
+  if (visuals != null && resolved === undefined) {
+    // Предупреждение, а не отказ (BLND-6): в рантайме такая запись даёт
+    // заглушку (PRES-2), и чинится она правкой манифеста — отказ запер бы автора.
+    warning(sink, source.name, `ключ "${key}" не разрешается в запись манифеста визуалов (ASSET-9)`);
+  }
+
+  const geometry = decorationGeometry(sink, source);
+  if (geometry === null) return null;
+  const skin = decorationSkin(sink, source);
+  if (skin === null) return null;
+  const walkable = decorationWalkable(sink, source);
+  if (walkable === null) return null;
 
   // Порядок ключей — порядок состава записи в PRES-2: сохранение канонично, но
   // ключи оно не переставляет (ED-21), и порядок задаёт тот, кто записи строит.
-  const record: Record<string, JsonValue> = { visual: key, x, y };
-  if (yaw !== 0) record.yaw = yaw;
-  if (scale !== 1) record.scale = scale;
-  if (skin !== undefined && skin !== '') record.skin = skin;
+  const record: Record<string, JsonValue> = { visual: key, x: geometry.x, y: geometry.y };
+  if (geometry.yaw !== 0) record.yaw = geometry.yaw;
+  if (geometry.scale !== 1) record.scale = geometry.scale;
+  if (skin !== '') record.skin = skin;
   // `false`/`0` не пишутся вовсе: отсутствующее и ложное в документе
   // неразличимы (PRES-2) — тот же довод, что у умолчаний `yaw` и `scale` выше.
-  if (walkable === true || walkable === 1) record.walkable = true;
+  if (walkable) record.walkable = true;
   return record;
+}
+
+/**
+ * Находки о самих объектах источника: повторившееся имя (имена объектов Blender
+ * уникальны принудительно, и совпадение означает источник не из Blender —
+ * порядок записей от него уже не функция, BLND-4) и несколько семантических
+ * свойств (размещение принадлежит одному слою, BLND-3).
+ */
+function reportObjectConflicts(sink: Sink, ordered: readonly SourceObject[]): void {
+  const seen = new Set<string>();
+  for (const object of ordered) {
+    if (seen.has(object.name)) {
+      error(sink, object.name, 'имя объекта встречается дважды — порядок записей перестал быть однозначным (BLND-4)');
+    }
+    seen.add(object.name);
+    if (object.semantics.length > 1) {
+      error(
+        sink,
+        object.name,
+        `семантических свойств несколько (${object.semantics.join(', ')}) — размещение принадлежит одному слою (BLND-3)`,
+      );
+    }
+  }
+}
+
+/**
+ * `walkable` — поле записи decoration (PRES-2): сим-слой и клеточные слои его
+ * не несут, а молча отброшенный флаг оставил бы автора гадать, почему юнит
+ * проваливается сквозь меш (BLND-3, BLND-6).
+ */
+function reportStrayWalkable(sink: Sink, object: SourceObject, kind: SemanticKind): void {
+  if (kind === 'visual' || object.extras[WALKABLE_KEY] === undefined) return;
+  error(
+    sink,
+    object.name,
+    `"${WALKABLE_KEY}" — поле записи decoration (PRES-2): на объекте со свойством "${kind}" его не бывает (BLND-3)`,
+  );
+}
+
+/** Запись, которую построить не удалось, в слой не попадает — разбор продолжается (BLND-6). */
+function pushRecord(into: JsonObject[], record: JsonObject | null): void {
+  if (record !== null) into.push(record);
 }
 
 /**
@@ -462,51 +592,20 @@ export function generateSpatialLayer(
   const schemas = new Map(context.components.map((schema) => [schema.name, schema]));
   const prefabs = context.prefabs === undefined ? null : new Map(context.prefabs.map((def) => [def.name, def]));
 
-  const semantic = objects.filter((object) => object.semantics.length > 0);
-  const ordered = [...semantic].sort((a, b) => compareObjectNames(a.name, b.name));
-
-  const seen = new Set<string>();
-  for (const object of ordered) {
-    if (seen.has(object.name)) {
-      // Имена объектов Blender уникальны принудительно; совпадение означает
-      // источник не из Blender, и порядок записей от него уже не функция
-      // (BLND-4).
-      error(sink, object.name, 'имя объекта встречается дважды — порядок записей перестал быть однозначным (BLND-4)');
-    }
-    seen.add(object.name);
-    if (object.semantics.length > 1) {
-      error(
-        sink,
-        object.name,
-        `семантических свойств несколько (${object.semantics.join(', ')}) — размещение принадлежит одному слою (BLND-3)`,
-      );
-    }
-  }
+  const ordered = objects.filter((object) => object.semantics.length > 0).sort(byObjectName);
+  reportObjectConflicts(sink, ordered);
 
   const initial: JsonObject[] = [];
   const decorations: JsonObject[] = [];
   for (const object of ordered) {
-    if (object.semantics.length !== 1) continue;
-    const kind = object.semantics[0];
-    if (kind !== 'visual' && object.extras[WALKABLE_KEY] !== undefined) {
-      // `walkable` — поле записи decoration (PRES-2): сим-слой и клеточные
-      // слои его не несут, а молча отброшенный флаг оставил бы автора гадать,
-      // почему юнит проваливается сквозь меш (BLND-3, BLND-6).
-      error(
-        sink,
-        object.name,
-        `"${WALKABLE_KEY}" — поле записи decoration (PRES-2): на объекте со свойством "${kind}" его не бывает (BLND-3)`,
-      );
-    }
-    if (kind === 'prefab') {
-      const record = placementRecord(sink, object, binding, schemas, prefabs);
-      if (record !== null) initial.push(record);
-    } else if (kind === 'visual') {
-      const record = decorationRecord(sink, object, context);
-      if (record !== null) decorations.push(record);
-    }
-    // `terrain` и `curvature` — клеточные данные (BLND-9, BLND-10): в слой
-    // размещений они не попадают, и вспомогательными объектами не являются.
+    const kind = singleSemanticOf(object);
+    if (kind === undefined) continue;
+    reportStrayWalkable(sink, object, kind);
+    // `terrain`, `curvature` и `sculpt` — клеточные данные (BLND-9, BLND-10,
+    // BLND-13): в слой размещений они не попадают, и вспомогательными
+    // объектами не являются.
+    if (kind === 'prefab') pushRecord(initial, placementRecord(sink, object, binding, schemas, prefabs));
+    else if (kind === 'visual') pushRecord(decorations, decorationRecord(sink, object, context));
   }
 
   return { initial, decorations, findings: sink.findings };

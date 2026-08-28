@@ -136,15 +136,16 @@ export function createImportCycle(options: ImportCycleOptions): ImportCycle {
       } catch (error) {
         // Источник исчез посреди записи, не разбирается, сцены рядом нет:
         // всё это — обычный отказ цикла, а не конец watch-режима.
+        const refusal = message(error);
         const outcome: CycleOutcome = {
           index,
           ok: false,
           result: null,
-          refusal: message(error),
+          refusal,
           written: [],
         };
         last = outcome;
-        io.err(`импорт ${index}: ${outcome.refusal}`);
+        io.err(`импорт ${index}: ${refusal}`);
         keeping();
         return outcome;
       }
@@ -242,12 +243,21 @@ export function createWatchTrigger(options: WatchTriggerOptions): WatchTrigger {
   let again = false;
   let closed = false;
 
+  /**
+   * Один прогон и ответ «пришло ли событие, пока он шёл». Флаг снимается ДО
+   * прогона и поднимается из `fire()` — то есть меняется он не здесь, и вернуть
+   * его значением честнее, чем прочесть после `await`.
+   */
+  const runOnce = async (): Promise<boolean> => {
+    again = false;
+    await options.cycle();
+    return again;
+  };
+
   const pump = async (): Promise<void> => {
     while (!closed) {
-      again = false;
-      await options.cycle();
-      // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- baseline
-      if (!again) return;
+      const pending = await runOnce();
+      if (!pending) return;
     }
   };
 
@@ -366,8 +376,7 @@ function watchSourceFile(options: SourceWatchOptions): () => void {
     // Отказ наблюдения watch переживает — остаётся опрос, — а падение процесса
     // не переживает никто.
     const watcher = watchFs(canonical(directory), (_event, filename) => {
-      // eslint-disable-next-line @typescript-eslint/no-unnecessary-type-conversion -- baseline
-      if (filename === null || basename(String(filename)) === name) announce();
+      if (filename === null || basename(filename) === name) announce();
     });
     watcher.on('error', (error: unknown) => {
       report(`наблюдение за "${directory}" сорвалось: ${message(error)}; остаётся опрос`);

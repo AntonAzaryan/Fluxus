@@ -196,6 +196,86 @@ export function contextOf(
   );
 }
 
+/**
+ * Конфиг сцены. Записи расстановки адресуются дескрипторами сессии (ED-29): без
+ * отслеживаемого списка операция импорта не нашла бы, что переписывать.
+ */
+async function openScene(
+  session: EditorSession,
+  host: ContentTreeHost,
+  sceneId: DocumentId,
+  kind: DocumentKind,
+  initialPath: JsonPath,
+): Promise<void> {
+  if (session.isOpen(sceneId)) return;
+  await openDocumentFromHost(session, host, { id: sceneId, kind, lists: [initialPath] });
+}
+
+/**
+ * Парный presentation-документ (PRES-1) — открывается ВСЕГДА, в том числе когда
+ * файла в дереве нет: он тогда открывается пустым, а на диск уходит только с
+ * содержимым (ED-21). Иначе первый же импорт сцены, у которой декораций ещё не
+ * было, писать их было бы некуда.
+ */
+async function openPresentation(
+  session: EditorSession,
+  host: ContentTreeHost,
+  presentationId: DocumentId,
+  kind: DocumentKind,
+  decorationsPath: JsonPath,
+): Promise<void> {
+  if (session.isOpen(presentationId)) return;
+  const opening = { id: presentationId, kind, lists: [decorationsPath] };
+  if ((await host.stat(presentationId))?.kind === 'file') {
+    await openDocumentFromHost(session, host, opening);
+    return;
+  }
+  session.openDocument({ ...opening, value: EMPTY_PRESENTATION });
+}
+
+/**
+ * Манифест визуалов (ASSET-9). `null` — его не назвали либо его нет в дереве:
+ * ссылки `visual` тогда не проверяются вовсе, и это не то же самое, что
+ * отсутствие в нём ключа.
+ */
+async function openManifest(
+  session: EditorSession,
+  host: ContentTreeHost,
+  manifestId: DocumentId | null,
+  kind: DocumentKind,
+): Promise<DocumentId | null> {
+  if (manifestId === null) return null;
+  if (session.isOpen(manifestId)) return manifestId;
+  if ((await host.stat(manifestId))?.kind !== 'file') return null;
+  await openDocumentFromHost(session, host, { id: manifestId, kind });
+  return manifestId;
+}
+
+/**
+ * Документ карты кривизны открывается только под слой, который источник
+ * действительно даёт (BLND-2): у сцены без curvature-объекта карта остаётся
+ * за кистью редактора и руками, и импорт её не читает и не пишет.
+ */
+async function openCurvature(
+  session: EditorSession,
+  host: ContentTreeHost,
+  curvatureId: string | null | undefined,
+  wanted: boolean,
+  kind: DocumentKind,
+): Promise<DocumentId | null> {
+  if (!wanted || curvatureId == null) return null;
+  if (session.isOpen(curvatureId)) return curvatureId;
+  const opening = { id: curvatureId, kind };
+  if ((await host.stat(curvatureId))?.kind === 'file') {
+    await openDocumentFromHost(session, host, opening);
+  } else {
+    // Карты ещё нет в дереве: первый импорт создаёт её так же, как первый
+    // импорт создаёт парный presentation-документ (PRES-1, ED-21).
+    session.openDocument({ ...opening, value: {} });
+  }
+  return curvatureId;
+}
+
 export async function openImportTarget(
   session: EditorSession,
   host: ContentTreeHost,
@@ -209,54 +289,18 @@ export async function openImportTarget(
   const presentationId = presentationPathOf(sceneId);
   const manifestId = input.manifest === null ? null : (input.manifest ?? DEFAULT_MANIFEST_PATH);
 
-  if (!session.isOpen(sceneId)) {
-    // Записи расстановки адресуются дескрипторами сессии (ED-29): без
-    // отслеживаемого списка операция импорта не нашла бы, что переписывать.
-    await openDocumentFromHost(session, host, {
-      id: sceneId,
-      kind: kinds.scene,
-      lists: [initialPath],
-    });
-  }
+  await openScene(session, host, sceneId, kinds.scene, initialPath);
+  await openPresentation(session, host, presentationId, kinds.presentation, decorationsPath);
+  const openedManifest = await openManifest(session, host, manifestId, kinds.manifest);
 
-  if (!session.isOpen(presentationId)) {
-    const opening = { id: presentationId, kind: kinds.presentation, lists: [decorationsPath] };
-    if ((await host.stat(presentationId))?.kind === 'file') {
-      await openDocumentFromHost(session, host, opening);
-    } else {
-      session.openDocument({ ...opening, value: EMPTY_PRESENTATION });
-    }
-  }
-
-  let openedManifest: DocumentId | null = null;
-  if (manifestId !== null) {
-    if (session.isOpen(manifestId)) openedManifest = manifestId;
-    else if ((await host.stat(manifestId))?.kind === 'file') {
-      await openDocumentFromHost(session, host, { id: manifestId, kind: kinds.manifest });
-      openedManifest = manifestId;
-    }
-  }
-
-  const target = { sceneId, manifestId: openedManifest };
-  const context = contextOf(session, target, input.binding, terrainPath);
-
-  // Документ карты кривизны открывается только под слой, который источник
-  // действительно даёт (BLND-2): у сцены без curvature-объекта карта остаётся
-  // за кистью редактора и руками, и импорт её не читает и не пишет.
-  let curvatureId: DocumentId | null = null;
-  if (input.slots?.curvature === true && context.curvatureMap != null) {
-    curvatureId = context.curvatureMap;
-    if (!session.isOpen(curvatureId)) {
-      const opening = { id: curvatureId, kind: kinds.curvature };
-      if ((await host.stat(curvatureId))?.kind === 'file') {
-        await openDocumentFromHost(session, host, opening);
-      } else {
-        // Карты ещё нет в дереве: первый импорт создаёт её так же, как первый
-        // импорт создаёт парный presentation-документ (PRES-1, ED-21).
-        session.openDocument({ ...opening, value: {} });
-      }
-    }
-  }
+  const context = contextOf(session, { sceneId, manifestId: openedManifest }, input.binding, terrainPath);
+  const curvatureId = await openCurvature(
+    session,
+    host,
+    context.curvatureMap,
+    input.slots?.curvature === true,
+    kinds.curvature,
+  );
 
   return {
     sceneId,

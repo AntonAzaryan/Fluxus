@@ -109,12 +109,11 @@ export {
   DEFAULT_INITIAL_PATH,
   DEFAULT_TERRAIN_PATH,
   IMPORT_SPATIAL_LAYER,
-  importParams,
   importSpatialLayerOperation,
   registerBlenderOperations,
-  spatialLayerParam,
 } from './operation.js';
 export type { SlotChange } from './operation.js';
+export { importParams, spatialLayerParam } from './layerParam.js';
 
 export {
   DEFAULT_IMPORT_KINDS,

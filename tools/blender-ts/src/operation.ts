@@ -57,6 +57,12 @@
  * то же самое со своей стороны — упавшее применение откатывается целиком, — но
  * операция, целостность которой держится на чужом откате, целостна лишь до
  * первого вызывающего, который его не сделает.
+ *
+ * ## Что лежит рядом
+ *
+ * Слой как ПАРАМЕТР — сборка и разбор JSON, перечень слотов и форма карт — в
+ * `layerParam.ts`: это одна граница на две стороны (ED-29), и держать её в
+ * одном месте важнее, чем держать рядом с записью. Здесь остаётся запись.
  */
 import {
   OperationError,
@@ -72,7 +78,19 @@ import {
   type OperationParamSpec,
   type OperationRegistry,
 } from '@fluxus/editor-core';
-import { hasErrors, type Finding, type SpatialLayer } from './layer.js';
+import {
+  FLAG_MAP,
+  LEVEL_MAP,
+  OFFSET_MAP,
+  assertKnownSlots,
+  assertLayerAccepted,
+  readCurvatureSlot,
+  readFindings,
+  readRecords,
+  readTerrainSlot,
+  type CurvatureSlot,
+  type TerrainSlot,
+} from './layerParam.js';
 
 /** Идентификатор операции: по нему её зовут и из редактора, и из командной строки. */
 export const IMPORT_SPATIAL_LAYER = 'blender.importSpatialLayer';
@@ -89,20 +107,6 @@ export const DEFAULT_DECORATIONS_PATH: JsonPath = Object.freeze(['decorations'])
  * лежать вправе, и тогда адрес приносит вызывающий (ED-25).
  */
 export const DEFAULT_TERRAIN_PATH: JsonPath = Object.freeze(['terrain']);
-
-/** Имена карт внутри ассетов — поля формата (TERR-3, ASSET-7), а не выдумка операции. */
-const LEVEL_MAP = 'levels';
-const FLAG_MAP = 'flags';
-const OFFSET_MAP = 'rows';
-
-/** Ключи слоя, которые операция умеет писать. Перечень закрыт: ключ вне его — отказ. */
-const KNOWN_SLOTS: readonly string[] = Object.freeze([
-  'initial',
-  'decorations',
-  'terrain',
-  'curvature',
-  'findings',
-]);
 
 const SCENE: OperationParamSpec = {
   type: 'document',
@@ -147,56 +151,6 @@ export interface SlotChange {
 
 const NOTHING: SlotChange = Object.freeze({ set: 0, appended: 0, removed: 0 });
 
-/**
- * Слой как параметр операции. Значения параметров — JSON и только JSON (ED-29:
- * вызов без интерфейса приходит из чужих рук), поэтому перекладка явная, а не
- * приведение типа: `Finding` — интерфейс, а не запись JSON, и совпадение их
- * форм сегодня ничего не обещает завтра.
- */
-export function spatialLayerParam(layer: SpatialLayer): JsonValue {
-  const terrain = layer.terrain;
-  const curvature = layer.curvature;
-  return {
-    initial: layer.initial.map((record) => record as JsonValue),
-    decorations: layer.decorations.map((record) => record as JsonValue),
-    // Слота, которого источник не дал, в параметре нет вовсе: ассет тогда не
-    // переписывается (BLND-2), и пустой слот сказал бы обратное.
-    ...(terrain === undefined ? {} : { terrain: { levels: [...terrain.levels], flags: [...terrain.flags] } }),
-    ...(curvature === undefined
-      ? {}
-      : { curvature: { width: curvature.width, height: curvature.height, rows: [...curvature.rows] } }),
-    findings: layer.findings.map(
-      (finding): JsonValue => ({
-        severity: finding.severity,
-        object: finding.object,
-        message: finding.message,
-      }),
-    ),
-  };
-}
-
-/** Параметры вызова операции целиком — чтобы обе стороны BLND-5 собирали их одинаково. */
-export function importParams(input: {
-  readonly scene: DocumentId;
-  readonly presentation?: DocumentId;
-  /** Документ карты кривизны (ASSET-7); его адрес называет манифест. */
-  readonly curvature?: DocumentId | null;
-  readonly layer: SpatialLayer;
-  readonly initialPath?: JsonPath;
-  readonly decorationsPath?: JsonPath;
-  readonly terrainPath?: JsonPath;
-}): OperationParams {
-  return {
-    scene: input.scene,
-    ...(input.presentation === undefined ? {} : { presentation: input.presentation }),
-    ...(input.curvature === undefined || input.curvature === null ? {} : { curvature: input.curvature }),
-    layer: spatialLayerParam(input.layer),
-    ...(input.initialPath === undefined ? {} : { initialPath: [...input.initialPath] }),
-    ...(input.decorationsPath === undefined ? {} : { decorationsPath: [...input.decorationsPath] }),
-    ...(input.terrainPath === undefined ? {} : { terrainPath: [...input.terrainPath] }),
-  };
-}
-
 /** Равенство значений JSON: правка, ничего не меняющая, правкой быть не должна. */
 function sameJson(a: JsonValue | undefined, b: JsonValue | undefined): boolean {
   if (a === b) return true;
@@ -211,113 +165,6 @@ function sameJson(a: JsonValue | undefined, b: JsonValue | undefined): boolean {
     return keys.every((key, index) => Object.keys(b)[index] === key && sameJson(a[key], b[key]));
   }
   return false;
-}
-
-function readRecords(id: string, layer: JsonObject, slot: string): readonly JsonObject[] {
-  const value = layer[slot];
-  if (value === undefined) return [];
-  if (!isJsonArray(value)) {
-    throw new OperationError(id, `параметр "layer": "${slot}" — список записей`, {
-      param: 'layer',
-      received: value,
-    });
-  }
-  return value.map((record, index) => {
-    if (!isJsonObject(record)) {
-      throw new OperationError(id, `параметр "layer": запись ${slot}[${index}] — объект`, {
-        param: 'layer',
-        received: record,
-      });
-    }
-    return record;
-  });
-}
-
-/**
- * Находки слоя из параметра. Читаются целиком, а не «есть ли ошибки»: отказ
- * обязан назвать объект Blender, который автор видит в outliner (BLND-6), — путь
- * в документе этого не заменяет, а у отвергнутого импорта пути ещё и нет.
- */
-function readFindings(id: string, layer: JsonObject): readonly Finding[] {
-  const value = layer.findings;
-  if (value === undefined) return [];
-  if (!isJsonArray(value)) {
-    throw new OperationError(id, 'параметр "layer": "findings" — список находок', {
-      param: 'layer',
-      received: value,
-    });
-  }
-  return value.map((entry): Finding => {
-    const severity = isJsonObject(entry) ? entry.severity : undefined;
-    const object = isJsonObject(entry) ? entry.object : undefined;
-    const message = isJsonObject(entry) ? entry.message : undefined;
-    if ((severity !== 'error' && severity !== 'warning') || typeof object !== 'string' || typeof message !== 'string') {
-      throw new OperationError(id, 'параметр "layer": находка — severity, object и message', {
-        param: 'layer',
-        received: entry,
-      });
-    }
-    return { severity, object, message };
-  });
-}
-
-/** Карта ассета террейна — массив строк, по одной на ряд сетки (TERR-3). */
-function readMap(id: string, slot: JsonObject, where: string, key: string): readonly string[] {
-  const value = slot[key];
-  if (!isJsonArray(value) || !value.every((row): row is string => typeof row === 'string')) {
-    throw new OperationError(id, `параметр "layer": "${where}.${key}" — карта строками, по одной на ряд`, {
-      param: 'layer',
-      received: value ?? null,
-    });
-  }
-  return value;
-}
-
-/** Карта кривизны — числовые ряды узлов (ASSET-7): целые множители решётки. */
-function readNodeRows(
-  id: string,
-  slot: JsonObject,
-  where: string,
-  key: string,
-): readonly (readonly number[])[] {
-  const value = slot[key];
-  if (
-    !isJsonArray(value) ||
-    !value.every(
-      (row): row is number[] =>
-        Array.isArray(row) && row.every((node) => typeof node === 'number' && Number.isSafeInteger(node)),
-    )
-  ) {
-    throw new OperationError(
-      id,
-      `параметр "layer": "${where}.${key}" — числовые ряды узлов, по одному на узловую линию`,
-      { param: 'layer', received: value ?? null },
-    );
-  }
-  return value;
-}
-
-function readNumber(id: string, slot: JsonObject, where: string, key: string): number {
-  const value = slot[key];
-  if (typeof value !== 'number' || !Number.isInteger(value)) {
-    throw new OperationError(id, `параметр "layer": "${where}.${key}" — целое число`, {
-      param: 'layer',
-      received: value ?? null,
-    });
-  }
-  return value;
-}
-
-function readSlotObject(id: string, layer: JsonObject, slot: string): JsonObject | null {
-  const value = layer[slot];
-  if (value === undefined) return null;
-  if (!isJsonObject(value)) {
-    throw new OperationError(id, `параметр "layer": слот "${slot}" — объект`, {
-      param: 'layer',
-      received: value,
-    });
-  }
-  return value;
 }
 
 /**
@@ -343,8 +190,8 @@ function writeMap(
     return { set: rows.length, appended: 0, removed: 0 };
   }
   let set = 0;
-  for (let y = 0; y < rows.length; y++) {
-    const wanted = rowValue(rows[y]!);
+  for (const [y, row] of rows.entries()) {
+    const wanted = rowValue(row);
     if (sameJson(existing[y] ?? null, wanted)) continue;
     ctx.setValue(documentId, [...path, y], wanted);
     set++;
@@ -359,11 +206,6 @@ function writeScalar(ctx: OperationContext, documentId: DocumentId, path: JsonPa
   return 1;
 }
 
-/** Адрес находки — имя объекта Blender; пустое имя значит «находка не об объекте». */
-function addressed(finding: Finding): string {
-  return finding.object === '' ? finding.message : `${finding.object}: ${finding.message}`;
-}
-
 /**
  * Переписывает записи одного слота. Возвращает то, что тронуто, — по этому
  * счёту вызывающий и отличает «импорт ничего не изменил» от «импорт прошёл».
@@ -376,30 +218,53 @@ function writeSlot(
 ): SlotChange {
   const existing = ctx.records(documentId, list);
   let set = 0;
-  let removed = 0;
-  let appended = 0;
 
   const shared = Math.min(existing.length, records.length);
   for (let index = 0; index < shared; index++) {
+    // Индекс меньше длины ОБОИХ списков: и дескриптор, и запись на месте.
     const descriptor = existing[index]!;
+    const record = records[index]!;
     const where = ctx.locate(documentId, descriptor);
-    if (sameJson(ctx.readAt(documentId, where.path), records[index])) continue;
+    if (sameJson(ctx.readAt(documentId, where.path), record)) continue;
     // Путь внутри записи пуст: правится сама запись, а её дескриптор переживает
     // правку — инстанс вьюпорта не пересоздаётся от смены позиции (REND-11).
-    ctx.setRecordValue(documentId, descriptor, [], records[index]!);
+    ctx.setRecordValue(documentId, descriptor, [], record);
     set++;
   }
   // С хвоста: удаление сдвигает индексы следующих, и снятие с конца оставляет
   // адреса ещё не тронутых записей на месте.
-  for (let index = existing.length - 1; index >= records.length; index--) {
-    ctx.removeRecord(documentId, existing[index]!);
-    removed++;
-  }
-  for (let index = existing.length; index < records.length; index++) {
-    ctx.appendRecord(documentId, list, records[index]!);
-    appended++;
-  }
-  return { set, appended, removed };
+  const dropped = existing.slice(records.length).reverse();
+  for (const descriptor of dropped) ctx.removeRecord(documentId, descriptor);
+  const added = records.slice(existing.length);
+  for (const record of added) ctx.appendRecord(documentId, list, record);
+  return { set, appended: added.length, removed: dropped.length };
+}
+
+/** Карты ассета террейна — рядами по адресам самого ассета (BLND-9, TERR-3). */
+function writeTerrainMaps(
+  ctx: OperationContext,
+  scene: DocumentId,
+  terrainPath: JsonPath,
+  terrain: TerrainSlot,
+): JsonValue {
+  return {
+    levels: { ...writeMap(ctx, scene, [...terrainPath, LEVEL_MAP], terrain.levels) },
+    flags: { ...writeMap(ctx, scene, [...terrainPath, FLAG_MAP], terrain.flags) },
+  };
+}
+
+/** Документ карты кривизны: и размеры, и ряды — только при расхождении (ASSET-7). */
+function writeCurvatureDocument(
+  ctx: OperationContext,
+  documentId: DocumentId,
+  curvature: CurvatureSlot,
+): JsonValue {
+  return {
+    size:
+      writeScalar(ctx, documentId, ['width'], curvature.width) +
+      writeScalar(ctx, documentId, ['height'], curvature.height),
+    rows: { ...writeMap(ctx, documentId, [OFFSET_MAP], curvature.rows) },
+  };
 }
 
 /*
@@ -440,44 +305,15 @@ export const importSpatialLayerOperation: AuthoringOperation = {
         received: layer ?? null,
       });
     }
-    for (const slot of Object.keys(layer)) {
-      if (KNOWN_SLOTS.includes(slot)) continue;
-      throw new OperationError(
-        id,
-        `параметр "layer": слот "${slot}" этой операцией не пишется — молча пропустить его нельзя (BLND-2)`,
-        { param: 'layer', received: slot },
-      );
-    }
+    assertKnownSlots(id, layer);
 
     // Всё, что может отказать, отказывает ДО первой записи (BLND-6).
     const findings = readFindings(id, layer);
     const initial = readRecords(id, layer, 'initial');
     const decorations = readRecords(id, layer, 'decorations');
-    const terrainSlot = readSlotObject(id, layer, 'terrain');
-    const terrain =
-      terrainSlot === null
-        ? null
-        : {
-            levels: readMap(id, terrainSlot, 'terrain', LEVEL_MAP),
-            flags: readMap(id, terrainSlot, 'terrain', FLAG_MAP),
-          };
-    const curvatureSlot = readSlotObject(id, layer, 'curvature');
-    const curvature =
-      curvatureSlot === null
-        ? null
-        : {
-            width: readNumber(id, curvatureSlot, 'curvature', 'width'),
-            height: readNumber(id, curvatureSlot, 'curvature', 'height'),
-            rows: readNodeRows(id, curvatureSlot, 'curvature', OFFSET_MAP),
-          };
-    if (hasErrors(findings)) {
-      const errors = findings.filter((finding) => finding.severity === 'error');
-      throw new OperationError(
-        id,
-        `источник не прошёл проверку, на диск не записано ничего (BLND-6): ${errors.map(addressed).join('; ')}`,
-        { param: 'layer' },
-      );
-    }
+    const terrain = readTerrainSlot(id, layer);
+    const curvature = readCurvatureSlot(id, layer);
+    assertLayerAccepted(id, findings);
 
     const scene = asDocument(params, 'scene');
     const presentation = params.presentation === undefined ? null : asDocument(params, 'presentation');
@@ -521,23 +357,12 @@ export const importSpatialLayerOperation: AuthoringOperation = {
 
     // Ассеты — той же записью и в том же вызове: атомарность BLND-6 распространена
     // на все производные данные, и «расстановка записана, террейн нет» не бывает.
-    const terrainPath = optionalPath(params, 'terrainPath', DEFAULT_TERRAIN_PATH);
     const terrainChange =
       terrain === null
         ? null
-        : {
-            levels: { ...writeMap(ctx, scene, [...terrainPath, LEVEL_MAP], terrain.levels) },
-            flags: { ...writeMap(ctx, scene, [...terrainPath, FLAG_MAP], terrain.flags) },
-          };
+        : writeTerrainMaps(ctx, scene, optionalPath(params, 'terrainPath', DEFAULT_TERRAIN_PATH), terrain);
     const curvatureChange =
-      curvature === null || curvatureId === null
-        ? null
-        : {
-            size:
-              writeScalar(ctx, curvatureId, ['width'], curvature.width) +
-              writeScalar(ctx, curvatureId, ['height'], curvature.height),
-            rows: { ...writeMap(ctx, curvatureId, [OFFSET_MAP], curvature.rows) },
-          };
+      curvature === null || curvatureId === null ? null : writeCurvatureDocument(ctx, curvatureId, curvature);
 
     return {
       initial: { ...initialChange },

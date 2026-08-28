@@ -73,7 +73,13 @@ export interface GltfPrimitive {
 
 export interface GltfMesh {
   readonly name?: string;
-  readonly primitives: readonly GltfPrimitive[];
+  /**
+   * Форматом поле обязательно, а типом — нет: документ приезжает разбором
+   * чужого JSON, и «меш без примитивов» здесь означает не невозможное, а
+   * сломанный экспорт. Тип честнее обещания формата — как и у `nodes`,
+   * `meshes`, `accessors` документа.
+   */
+  readonly primitives?: readonly GltfPrimitive[];
 }
 
 export interface GltfScene {
@@ -333,7 +339,6 @@ export function meshPositions(document: GltfDocument, mesh: number): readonly (r
   const def = document.json.meshes?.[mesh];
   if (def === undefined) throw new GltfParseError(`glTF: меш #${mesh} не объявлен`);
   const rows: (readonly number[])[] = [];
-  // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- baseline
   for (const primitive of def.primitives ?? []) {
     const accessor = primitive.attributes.POSITION;
     if (accessor === undefined) continue;
@@ -367,6 +372,50 @@ export interface MeshGeometry {
   readonly attributes: Readonly<Record<string, readonly number[] | null>>;
 }
 
+/**
+ * Значения запрошенных каналов ОДНОГО примитива — по одному на его вершину.
+ * Канала у примитива нет: его вершины получают `null` («значения не было»);
+ * нулём это станет только у канала, которого нет ни у одного примитива.
+ */
+function appendPrimitiveChannels(
+  document: GltfDocument,
+  mesh: number,
+  primitive: GltfPrimitive,
+  channels: ReadonlyMap<string, (number | null)[]>,
+  vertices: number,
+): void {
+  for (const [name, values] of channels) {
+    const index = primitive.attributes[name];
+    if (index === undefined) {
+      for (let i = 0; i < vertices; i++) values.push(null);
+      continue;
+    }
+    const read = readAccessor(document, index);
+    if (read.length !== vertices) {
+      throw new GltfParseError(
+        `glTF: меш #${mesh}: канал "${name}" даёт ${read.length} значений на ${vertices} вершин`,
+      );
+    }
+    for (const row of read) values.push(row[0] ?? 0);
+  }
+}
+
+/** Индексы треугольников примитива со сдвигом на уже прочитанные вершины. */
+function appendPrimitiveTriangles(
+  document: GltfDocument,
+  primitive: GltfPrimitive,
+  offset: number,
+  vertices: number,
+  triangles: number[],
+): void {
+  if (primitive.indices === undefined) {
+    // Неиндексированный примитив: вершины идут тройками — сами треугольники.
+    for (let i = 0; i < vertices; i++) triangles.push(offset + i);
+    return;
+  }
+  for (const row of readAccessor(document, primitive.indices)) triangles.push(offset + (row[0] ?? 0));
+}
+
 export function readMeshGeometry(
   document: GltfDocument,
   mesh: number,
@@ -376,10 +425,11 @@ export function readMeshGeometry(
   if (def === undefined) throw new GltfParseError(`glTF: меш #${mesh} не объявлен`);
   const positions: number[][] = [];
   const triangles: number[] = [];
+  // Порядок обхода каналов — порядок запроса: карта заведена под него один раз
+  // и дальше служит и перечнем каналов, и их накопителем.
   const channels = new Map<string, (number | null)[]>();
   for (const name of attributes) channels.set(name, []);
 
-  // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- baseline
   for (const primitive of def.primitives ?? []) {
     const mode = primitive.mode ?? MODE_TRIANGLES;
     if (mode !== MODE_TRIANGLES) {
@@ -392,38 +442,15 @@ export function readMeshGeometry(
     const offset = positions.length;
     const rows = readAccessor(document, accessor);
     for (const row of rows) positions.push([...row]);
-
-    for (const name of attributes) {
-      const values = channels.get(name)!;
-      const index = primitive.attributes[name];
-      if (index === undefined) {
-        // eslint-disable-next-line @typescript-eslint/prefer-for-of -- baseline
-        for (let i = 0; i < rows.length; i++) values.push(null);
-        continue;
-      }
-      const read = readAccessor(document, index);
-      if (read.length !== rows.length) {
-        throw new GltfParseError(
-          `glTF: меш #${mesh}: канал "${name}" даёт ${read.length} значений на ${rows.length} вершин`,
-        );
-      }
-      for (const row of read) values.push(row[0] ?? 0);
-    }
-
-    if (primitive.indices === undefined) {
-      // Неиндексированный примитив: вершины идут тройками — сами треугольники.
-      for (let i = 0; i < rows.length; i++) triangles.push(offset + i);
-    } else {
-      for (const row of readAccessor(document, primitive.indices)) triangles.push(offset + (row[0] ?? 0));
-    }
+    appendPrimitiveChannels(document, mesh, primitive, channels, rows.length);
+    appendPrimitiveTriangles(document, primitive, offset, rows.length, triangles);
   }
 
   if (triangles.length % 3 !== 0) {
     throw new GltfParseError(`glTF: меш #${mesh}: ${triangles.length} индексов вершин — не кратно трём`);
   }
   const out: Record<string, readonly number[] | null> = {};
-  for (const name of attributes) {
-    const values = channels.get(name)!;
+  for (const [name, values] of channels) {
     out[name] = values.every((value) => value === null) ? null : values.map((value) => value ?? 0);
   }
   return { positions, triangles, attributes: out };

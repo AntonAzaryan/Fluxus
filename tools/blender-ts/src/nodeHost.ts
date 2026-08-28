@@ -95,8 +95,9 @@ export function createNodeHost(options: NodeHostOptions): NodeHost {
       return out.sort((a, b) => compareContentNames(a.name, b.name));
     },
     watch() {
-      // eslint-disable-next-line @typescript-eslint/no-empty-function -- baseline
-      return () => {};
+      // Наблюдения за деревом у командной строки нет (ED-12): отписка ничего не
+      // отменяет — сказать это пустой функцией честнее, чем изобразить слежение.
+      return (): void => undefined;
     },
   };
 
@@ -112,13 +113,12 @@ export function createNodeHost(options: NodeHostOptions): NodeHost {
       chooseFile: () => Promise.resolve(undefined),
       chooseDirectory: () => Promise.resolve(undefined),
     },
+    // Окна у командной строки нет: заголовок и признак несохранённого идти
+    // некуда, а закрытия, о котором просят подтверждения, не бывает (ED-12).
     window: {
-      // eslint-disable-next-line @typescript-eslint/no-empty-function -- baseline
-      setTitle: () => {},
-      // eslint-disable-next-line @typescript-eslint/no-empty-function -- baseline
-      setUnsaved: () => {},
-      // eslint-disable-next-line @typescript-eslint/no-empty-function -- baseline
-      onCloseRequest: () => () => {},
+      setTitle: (): void => undefined,
+      setUnsaved: (): void => undefined,
+      onCloseRequest: () => (): void => undefined,
     },
   };
 }

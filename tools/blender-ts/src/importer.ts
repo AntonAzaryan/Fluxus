@@ -33,8 +33,9 @@ import {
 import { parseGltf, type GltfDocument } from './gltf.js';
 import { generateSpatialLayer, hasErrors, type Finding, type SpatialLayer } from './layer.js';
 import { generateCellLayer, withCellLayer } from './maps.js';
-import { normalizeDocument, type SourceObject } from './normalize.js';
-import { IMPORT_SPATIAL_LAYER, importParams, registerBlenderOperations } from './operation.js';
+import { hasSingleSemantic, normalizeDocument, type SemanticKind, type SourceObject } from './normalize.js';
+import { importParams } from './layerParam.js';
+import { IMPORT_SPATIAL_LAYER, registerBlenderOperations } from './operation.js';
 import { openImportTarget, type ImportKinds, type ImportSlots, type ImportTarget } from './project.js';
 import { scenePathOf } from './pairing.js';
 
@@ -120,8 +121,7 @@ async function readSource(
  * который импорт действительно перепишет (BLND-2).
  */
 function slotsOf(objects: readonly SourceObject[]): ImportSlots {
-  const has = (kind: string): boolean =>
-    objects.some((object) => object.semantics.length === 1 && object.semantics[0] === kind);
+  const has = (kind: SemanticKind): boolean => objects.some((object) => hasSingleSemantic(object, kind));
   // Скалпт-поверхность переписывает ОБА клеточных слоя (BLND-13).
   const sculpt = has('sculpt');
   return { terrain: sculpt || has('terrain'), curvature: sculpt || has('curvature') };

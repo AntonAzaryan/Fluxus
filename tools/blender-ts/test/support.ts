@@ -265,14 +265,12 @@ export interface GridObjectSpec {
 
 /** Карта уровней (TERR-3) → высоты клеток: один уровень — одна мировая единица. */
 export function levelHeights(rows: readonly string[]): number[][] {
-  // eslint-disable-next-line @typescript-eslint/no-misused-spread -- baseline
-  return rows.map((row) => [...row].map((char) => parseInt(char, 16)));
+  return rows.map((row) => Array.from(row, (char) => parseInt(char, 16)));
 }
 
 /** Ряды карты флагов (TERR-3) → значения канала: символ совпал — единица. */
 export function flagCells(rows: readonly string[], char: string): number[][] {
-  // eslint-disable-next-line @typescript-eslint/no-misused-spread -- baseline
-  return rows.map((row) => [...row].map((cell) => (cell === char ? 1 : 0)));
+  return rows.map((row) => Array.from(row, (cell) => (cell === char ? 1 : 0)));
 }
 
 /** Узловые ряды карты кривизны (ASSET-7) → высоты узлов: множитель 1/32 шага. */

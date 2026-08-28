@@ -35,8 +35,8 @@
  * попасть в центр клетки с точностью до четверти клетки — этого хватает, чтобы
  * поймать несведённый трансформ и не поймать шум.
  */
-import { GltfParseError, readMeshGeometry, type GltfDocument } from './gltf.js';
-import { worldPoint, type SourceObject } from './normalize.js';
+import { GltfParseError, readMeshGeometry, type GltfDocument, type MeshGeometry } from './gltf.js';
+import { worldPoint, type SourceObject, type WorldPoint } from './normalize.js';
 
 /**
  * Каналы клеточных атрибутов в экспорте glTF. Аддон держит их атрибутами на
@@ -79,6 +79,24 @@ const CENTER_TOLERANCE = 0.25;
 /** Сколько ошибок читатель называет, прежде чем замолчать: сломанная сетка их даёт по клетке. */
 const ERROR_LIMIT = 16;
 
+/** Сколько незакрытых адресов называет отказ покрытия: перечислять всю сетку незачем. */
+const MISSING_LIMIT = 4;
+
+/**
+ * Адреса первых незаполненных ячеек сетки — не больше `MISSING_LIMIT`. Обход
+ * общий у клеток и узлов: «сетка мельче ассета» ловится одинаково (TERR-2), и
+ * второе его написание разошлось бы с первым молча.
+ */
+function missingAddresses(filled: readonly unknown[], width: number, height: number): readonly string[] {
+  const missing: string[] = [];
+  for (let y = 0; y < height && missing.length < MISSING_LIMIT; y++) {
+    for (let x = 0; x < width && missing.length < MISSING_LIMIT; x++) {
+      if (filled[y * width + x] === null) missing.push(`(${x}, ${y})`);
+    }
+  }
+  return missing;
+}
+
 /**
  * Величина в сообщении. Позиции приезжают из float32, и «высота
  * 1.399999976158142» в отказе называет не то, что автор видит во вьюпорте
@@ -106,6 +124,73 @@ export interface NodeGrid {
 export interface NodeGridRead {
   readonly grid: NodeGrid | null;
   readonly errors: readonly string[];
+}
+
+/**
+ * Адрес узла, в который попадает вершина; `null` — вершина узел не адресует, и
+ * находка об этом уже записана (BLND-6).
+ */
+function nodeAddressOf(
+  fail: (message: string) => void,
+  index: number,
+  point: WorldPoint,
+  spec: CellGridSpec,
+  nodesX: number,
+  nodesY: number,
+): number | null {
+  if (!Number.isFinite(point.x) || !Number.isFinite(point.y) || !Number.isFinite(point.elevation)) {
+    fail(`вершина ${index}: координата не является конечным числом`);
+    return null;
+  }
+  const u = point.x / spec.cellSize;
+  const v = point.y / spec.cellSize;
+  const nx = Math.round(u);
+  const ny = Math.round(v);
+  if (Math.abs(u - nx) > CENTER_TOLERANCE || Math.abs(v - ny) > CENTER_TOLERANCE) {
+    fail(
+      `вершина (${formatHeight(point.x)}, ${formatHeight(point.y)}) не попадает в узел сетки: ` +
+        `сетка сдвинута либо её трансформ не применён (CONVENTIONS.md)`,
+    );
+    return null;
+  }
+  if (nx < 0 || ny < 0 || nx >= nodesX || ny >= nodesY) {
+    fail(`вершина адресует узел (${nx}, ${ny}) вне узловой сетки ${nodesX}×${nodesY} (TERR-2)`);
+    return null;
+  }
+  return ny * nodesX + nx;
+}
+
+/**
+ * Высоты узлов по вершинам меша: совпавшие в узле вершины обязаны согласиться с
+ * точностью `HEIGHT_EPSILON` — так переживается сварка вершин экспортёром.
+ * Заполняет `heights` на месте, находки уходят в `fail` (BLND-10).
+ */
+function fillNodeHeights(
+  fail: (message: string) => void,
+  geometry: MeshGeometry,
+  world: readonly number[],
+  spec: CellGridSpec,
+  nodesX: number,
+  nodesY: number,
+  heights: (number | null)[],
+): void {
+  for (const [index, position] of geometry.positions.entries()) {
+    const point = worldPoint(world, position);
+    const at = nodeAddressOf(fail, index, point, spec, nodesX, nodesY);
+    if (at === null) continue;
+    const known = heights[at];
+    if (known == null) {
+      heights[at] = point.elevation;
+      continue;
+    }
+    if (Math.abs(known - point.elevation) > HEIGHT_EPSILON) {
+      const nx = at % nodesX;
+      fail(
+        `узел (${nx}, ${(at - nx) / nodesX}): вершины узла лежат на разной высоте ` +
+          `(${formatHeight(known)} и ${formatHeight(point.elevation)})`,
+      );
+    }
+  }
 }
 
 /**
@@ -140,61 +225,198 @@ export function readNodeGrid(document: GltfDocument, object: SourceObject, spec:
 
   const nodesX = spec.width + 1;
   const nodesY = spec.height + 1;
-  const total = nodesX * nodesY;
-  const heights = new Array<number | null>(total).fill(null);
+  const heights = new Array<number | null>(nodesX * nodesY).fill(null);
+  fillNodeHeights(fail, geometry, object.world, spec, nodesX, nodesY, heights);
 
-  for (let index = 0; index < geometry.positions.length; index++) {
-    const point = worldPoint(object.world, geometry.positions[index]!);
-    if (![point.x, point.y, point.elevation].every((value) => Number.isFinite(value))) {
-      fail(`вершина ${index}: координата не является конечным числом`);
-      continue;
-    }
-    const u = point.x / spec.cellSize;
-    const v = point.y / spec.cellSize;
-    const nx = Math.round(u);
-    const ny = Math.round(v);
-    if (Math.abs(u - nx) > CENTER_TOLERANCE || Math.abs(v - ny) > CENTER_TOLERANCE) {
-      fail(
-        `вершина (${formatHeight(point.x)}, ${formatHeight(point.y)}) не попадает в узел сетки: ` +
-          `сетка сдвинута либо её трансформ не применён (CONVENTIONS.md)`,
-      );
-      continue;
-    }
-    if (nx < 0 || ny < 0 || nx >= nodesX || ny >= nodesY) {
-      fail(`вершина адресует узел (${nx}, ${ny}) вне узловой сетки ${nodesX}×${nodesY} (TERR-2)`);
-      continue;
-    }
-    const at = ny * nodesX + nx;
-    const known = heights[at];
-    if (known == null) {
-      heights[at] = point.elevation;
-      continue;
-    }
-    if (Math.abs(known - point.elevation) > HEIGHT_EPSILON) {
-      fail(
-        `узел (${nx}, ${ny}): вершины узла лежат на разной высоте ` +
-          `(${formatHeight(known)} и ${formatHeight(point.elevation)})`,
-      );
-    }
-  }
-
-  const missing: string[] = [];
-  for (let y = 0; y < nodesY && missing.length < 4; y++) {
-    for (let x = 0; x < nodesX && missing.length < 4; x++) {
-      if (heights[y * nodesX + x] === null) missing.push(`(${x}, ${y})`);
-    }
-  }
+  const missing = missingAddresses(heights, nodesX, nodesY);
   if (missing.length > 0) {
     fail(
       `узловая сетка не покрыта вершинами целиком: ${missing.length === 1 ? 'узел' : 'узлы'} ${missing.join(', ')}` +
-        `${missing.length === 4 ? ' и далее' : ''} — сетка мельче ассета ${nodesX}×${nodesY} (TERR-2)`,
+        `${missing.length === MISSING_LIMIT ? ' и далее' : ''} — сетка мельче ассета ${nodesX}×${nodesY} (TERR-2)`,
     );
   }
   if (errors.length > 0) return { grid: null, errors };
   return {
+    // Незаполненных узлов здесь уже нет: их назвала бы находка покрытия выше.
     grid: { width: spec.width, height: spec.height, heights: heights.map((value) => value!) },
     errors: [],
   };
+}
+
+/** Конечны ли плановые координаты точки; вертикаль проверяет `flatFace`. */
+function planarFinite(point: WorldPoint): boolean {
+  return Number.isFinite(point.x) && Number.isFinite(point.y);
+}
+
+/**
+ * Адрес клетки грани — по её ОХВАТЫВАЮЩЕМУ ПРЯМОУГОЛЬНИКУ (см. шапку модуля);
+ * `null` — грань клетку не адресует, и находка об этом уже записана (BLND-6).
+ */
+function cellAddressOf(
+  fail: (message: string) => void,
+  face: number,
+  a: WorldPoint,
+  b: WorldPoint,
+  c: WorldPoint,
+  spec: CellGridSpec,
+): number | null {
+  if (!planarFinite(a) || !planarFinite(b) || !planarFinite(c)) {
+    fail(`грань ${face}: координата вершины не является конечным числом`);
+    return null;
+  }
+  const centerX = (Math.min(a.x, b.x, c.x) + Math.max(a.x, b.x, c.x)) / 2;
+  const centerY = (Math.min(a.y, b.y, c.y) + Math.max(a.y, b.y, c.y)) / 2;
+  const u = centerX / spec.cellSize - 0.5;
+  const v = centerY / spec.cellSize - 0.5;
+  const x = Math.round(u);
+  const y = Math.round(v);
+  if (Math.abs(u - x) > CENTER_TOLERANCE || Math.abs(v - y) > CENTER_TOLERANCE) {
+    fail(
+      `грань ${face} с центром (${formatHeight(centerX)}, ${formatHeight(centerY)}) не попадает в центр ` +
+        `клетки: сетка сдвинута ` +
+        `либо её трансформ не применён (CONVENTIONS.md)`,
+    );
+    return null;
+  }
+  if (x < 0 || y < 0 || x >= spec.width || y >= spec.height) {
+    fail(`грань ${face} адресует клетку (${x}, ${y}) вне сетки ${spec.width}×${spec.height} (TERR-2)`);
+    return null;
+  }
+  return y * spec.width + x;
+}
+
+/** Совпала ли высота вершины с высотой грани — с точностью `HEIGHT_EPSILON`. */
+function sameElevation(first: number, value: number): boolean {
+  return Number.isFinite(value) && Math.abs(value - first) <= HEIGHT_EPSILON;
+}
+
+/**
+ * Высота клетки — единая у всех её вершин: наклонённая грань не разрешается в
+ * одно значение, и угадывать его импорт не вправе (BLND-9).
+ */
+function flatFace(a: WorldPoint, b: WorldPoint, c: WorldPoint): boolean {
+  const first = a.elevation;
+  if (!Number.isFinite(first)) return false;
+  return sameElevation(first, b.elevation) && sameElevation(first, c.elevation);
+}
+
+/**
+ * Значения каналов клетки — по первой вершине грани, но с проверкой единогласия
+ * ВСЕХ её вершин: значение пишет аддон всем четырём сразу, и расхождение
+ * означает правку мимо него. `null` — вершины разошлись, находка записана.
+ */
+function faceChannels(
+  fail: (message: string) => void,
+  geometry: MeshGeometry,
+  channels: readonly string[],
+  corners: readonly [number, number, number],
+  x: number,
+  y: number,
+): number[] | null {
+  const values = channels.map((name) => {
+    const channel = geometry.attributes[name];
+    if (channel === undefined || channel === null) return 0;
+    return channel[corners[0]] ?? 0;
+  });
+  for (const [index, name] of channels.entries()) {
+    const channel = geometry.attributes[name];
+    if (channel === undefined || channel === null) continue;
+    if (corners.every((corner) => (channel[corner] ?? 0) === values[index])) continue;
+    fail(`клетка (${x}, ${y}): канал "${name}" различается у вершин грани`);
+    return null;
+  }
+  return values;
+}
+
+/** Кладёт грань в её клетку; клетка, читанная другой гранью, обязана совпасть (BLND-9). */
+function putFace(
+  fail: (message: string) => void,
+  cells: (CellSlot | null)[],
+  at: number,
+  x: number,
+  y: number,
+  height: number,
+  values: number[],
+  channels: readonly string[],
+): void {
+  const known = cells[at];
+  if (known === null || known === undefined) {
+    cells[at] = { height, channels: values };
+    return;
+  }
+  if (Math.abs(known.height - height) > HEIGHT_EPSILON) {
+    fail(
+      `клетка (${x}, ${y}): грани клетки лежат на разной высоте ` +
+        `(${formatHeight(known.height)} и ${formatHeight(height)})`,
+    );
+    return;
+  }
+  for (const [index, name] of channels.entries()) {
+    if (known.channels[index] === values[index]) continue;
+    fail(`клетка (${x}, ${y}): канал "${name}" различается у граней клетки`);
+  }
+}
+
+/** Раскладывает грани меша по клеткам сетки; находки уходят в `fail` (BLND-9). */
+function fillCells(
+  fail: (message: string) => void,
+  geometry: MeshGeometry,
+  world: readonly WorldPoint[],
+  spec: CellGridSpec,
+  channels: readonly string[],
+  cells: (CellSlot | null)[],
+): void {
+  for (let face = 0; face * 3 < geometry.triangles.length; face++) {
+    // Длина списка индексов кратна трём — это проверяет разбор меша, поэтому
+    // все три угла грани в нём заведомо есть.
+    const corners: readonly [number, number, number] = [
+      geometry.triangles[face * 3]!,
+      geometry.triangles[face * 3 + 1]!,
+      geometry.triangles[face * 3 + 2]!,
+    ];
+    const a = world[corners[0]];
+    const b = world[corners[1]];
+    const c = world[corners[2]];
+    if (a === undefined || b === undefined || c === undefined) {
+      fail(`грань ${face} ссылается на вершину вне меша`);
+      continue;
+    }
+    const at = cellAddressOf(fail, face, a, b, c, spec);
+    if (at === null) continue;
+    const x = at % spec.width;
+    const y = (at - x) / spec.width;
+    if (!flatFace(a, b, c)) {
+      fail(`клетка (${x}, ${y}): вершины грани лежат на разной высоте — клетка не плоская`);
+      continue;
+    }
+    const values = faceChannels(fail, geometry, channels, corners, x, y);
+    if (values === null) continue;
+    putFace(fail, cells, at, x, y, a.elevation, values, channels);
+  }
+}
+
+/** Сетка из разложенных клеток: по одному значению высоты и канала на клетку. */
+function gridOfCells(
+  cells: readonly (CellSlot | null)[],
+  spec: CellGridSpec,
+  channels: readonly string[],
+): CellGrid {
+  const total = spec.width * spec.height;
+  const heights = new Array<number>(total);
+  const read: Record<string, number[]> = {};
+  const columns: number[][] = [];
+  for (const name of channels) {
+    const column = new Array<number>(total).fill(0);
+    read[name] = column;
+    columns.push(column);
+  }
+  for (let at = 0; at < total; at++) {
+    // Незаполненных клеток здесь уже нет: их назвала бы находка покрытия.
+    const cell = cells[at]!;
+    heights[at] = cell.height;
+    for (const [index, column] of columns.entries()) column[at] = cell.channels[index]!;
+  }
+  return { width: spec.width, height: spec.height, heights, channels: read };
 }
 
 /**
@@ -228,118 +450,17 @@ export function readCellGrid(
   }
 
   const { width, height } = spec;
-  const total = width * height;
-  const cells = new Array<CellSlot | null>(total).fill(null);
+  const cells = new Array<CellSlot | null>(width * height).fill(null);
   const world = geometry.positions.map((position) => worldPoint(object.world, position));
+  fillCells(fail, geometry, world, spec, channels, cells);
 
-  for (let face = 0; face * 3 < geometry.triangles.length; face++) {
-    const corners = [
-      geometry.triangles[face * 3]!,
-      geometry.triangles[face * 3 + 1]!,
-      geometry.triangles[face * 3 + 2]!,
-    ];
-    const points = corners.map((index) => world[index]);
-    if (points.some((point) => point === undefined)) {
-      fail(`грань ${face} ссылается на вершину вне меша`);
-      continue;
-    }
-    const xs = points.map((point) => point!.x);
-    const ys = points.map((point) => point!.y);
-    if ([...xs, ...ys].some((value) => !Number.isFinite(value))) {
-      fail(`грань ${face}: координата вершины не является конечным числом`);
-      continue;
-    }
-
-    // Охватывающий прямоугольник грани равен прямоугольнику клетки — см. шапку.
-    const centerX = (Math.min(...xs) + Math.max(...xs)) / 2;
-    const centerY = (Math.min(...ys) + Math.max(...ys)) / 2;
-    const u = centerX / spec.cellSize - 0.5;
-    const v = centerY / spec.cellSize - 0.5;
-    const x = Math.round(u);
-    const y = Math.round(v);
-    if (Math.abs(u - x) > CENTER_TOLERANCE || Math.abs(v - y) > CENTER_TOLERANCE) {
-      fail(
-        `грань ${face} с центром (${formatHeight(centerX)}, ${formatHeight(centerY)}) не попадает в центр ` +
-          `клетки: сетка сдвинута ` +
-          `либо её трансформ не применён (CONVENTIONS.md)`,
-      );
-      continue;
-    }
-    if (x < 0 || y < 0 || x >= width || y >= height) {
-      fail(`грань ${face} адресует клетку (${x}, ${y}) вне сетки ${width}×${height} (TERR-2)`);
-      continue;
-    }
-
-    // Высота клетки — единая у всех её вершин: наклонённая грань не разрешается
-    // в одно значение, и угадывать его импорт не вправе (BLND-9).
-    const elevations = corners.map((index) => world[index]!.elevation);
-    const first = elevations[0]!;
-    if (elevations.some((value) => !Number.isFinite(value) || Math.abs(value - first) > HEIGHT_EPSILON)) {
-      fail(`клетка (${x}, ${y}): вершины грани лежат на разной высоте — клетка не плоская`);
-      continue;
-    }
-
-    const values = channels.map((name) => {
-      const channel = geometry.attributes[name];
-      if (channel === undefined || channel === null) return 0;
-      return channel[corners[0]!] ?? 0;
-    });
-    // Единогласие каналов — по всем вершинам грани, а не по первой: значение
-    // пишет аддон всем четырём сразу, и расхождение означает правку мимо него.
-    let disagreed = false;
-    for (let c = 0; c < channels.length; c++) {
-      const channel = geometry.attributes[channels[c]!];
-      if (channel === undefined || channel === null) continue;
-      for (const index of corners) {
-        if ((channel[index] ?? 0) === values[c]) continue;
-        fail(`клетка (${x}, ${y}): канал "${channels[c]}" различается у вершин грани`);
-        disagreed = true;
-        break;
-      }
-      if (disagreed) break;
-    }
-    if (disagreed) continue;
-
-    const at = y * width + x;
-    const known = cells[at];
-    if (known === null || known === undefined) {
-      cells[at] = { height: first, channels: values };
-      continue;
-    }
-    if (Math.abs(known.height - first) > HEIGHT_EPSILON) {
-      fail(
-        `клетка (${x}, ${y}): грани клетки лежат на разной высоте ` +
-          `(${formatHeight(known.height)} и ${formatHeight(first)})`,
-      );
-      continue;
-    }
-    for (let c = 0; c < channels.length; c++) {
-      if (known.channels[c] === values[c]) continue;
-      fail(`клетка (${x}, ${y}): канал "${channels[c]}" различается у граней клетки`);
-    }
-  }
-
-  const missing: string[] = [];
-  for (let y = 0; y < height && missing.length < 4; y++) {
-    for (let x = 0; x < width && missing.length < 4; x++) {
-      if (cells[y * width + x] === null) missing.push(`(${x}, ${y})`);
-    }
-  }
+  const missing = missingAddresses(cells, width, height);
   if (missing.length > 0) {
     fail(
       `сетка не покрыта гранями целиком: клетк${missing.length === 1 ? 'а' : 'и'} ${missing.join(', ')}` +
-        `${missing.length === 4 ? ' и далее' : ''} — сетка мельче ассета ${width}×${height} (TERR-2)`,
+        `${missing.length === MISSING_LIMIT ? ' и далее' : ''} — сетка мельче ассета ${width}×${height} (TERR-2)`,
     );
   }
   if (errors.length > 0) return { grid: null, errors };
-
-  const heights = new Array<number>(total);
-  const read: Record<string, number[]> = {};
-  for (const name of channels) read[name] = new Array<number>(total).fill(0);
-  for (let at = 0; at < total; at++) {
-    const cell = cells[at]!;
-    heights[at] = cell.height;
-    for (let c = 0; c < channels.length; c++) read[channels[c]!]![at] = cell.channels[c]!;
-  }
-  return { grid: { width, height, heights, channels: read }, errors: [] };
+  return { grid: gridOfCells(cells, spec, channels), errors: [] };
 }

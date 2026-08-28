@@ -36,7 +36,8 @@ import type { TerrainGrid } from '@fluxus/core';
 import { cornerLevels } from '@fluxus/render/visualSurface';
 import type { CellGridSpec } from './cells.js';
 import { GltfParseError, readMeshGeometry, type GltfDocument } from './gltf.js';
-import { worldPoint, type SourceObject } from './normalize.js';
+import { byObjectName } from './layer.js';
+import { hasSingleSemantic, worldPoint, type SourceObject } from './normalize.js';
 
 /** Семантическое свойство скалпт-поверхности (BLND-3, BLND-13). */
 const SCULPT_KEY = 'sculpt';
@@ -75,9 +76,7 @@ const ERROR_LIMIT = 16;
 
 /** Sculpt-объекты источника в порядке имён (BLND-4). */
 export function sculptObjectsOf(objects: readonly SourceObject[]): readonly SourceObject[] {
-  return objects
-    .filter((object) => object.semantics.length === 1 && object.semantics[0] === SCULPT_KEY)
-    .sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
+  return objects.filter((object) => hasSingleSemantic(object, SCULPT_KEY)).sort(byObjectName);
 }
 
 /** Высота объединения скалпта в точке плана; `null` — геометрии над точкой нет. */
@@ -103,6 +102,143 @@ interface Triangle {
   readonly cz: number;
 }
 
+/** Почему по такой сетке скалпт разложить нельзя; `null` — сетка годна (TERR-2). */
+function specRefusal(spec: CellGridSpec): string | null {
+  if (!Number.isFinite(spec.cellSize) || spec.cellSize <= 0) {
+    return `размер клетки ${spec.cellSize} не положителен (TERR-2)`;
+  }
+  if (!Number.isInteger(spec.width) || !Number.isInteger(spec.height) || spec.width <= 0 || spec.height <= 0) {
+    // Ассет с нецелой или неположительной сеткой отвергает и ядро; здесь отказ
+    // нужен ДО раскладки по клеткам — иначе индекс корзины уехал бы за массив.
+    return `сетка ${spec.width}×${spec.height} не является целой положительной (TERR-2)`;
+  }
+  return null;
+}
+
+/** Индекс клетки, зажатый границами сетки: и по x, и по y — правило одно. */
+function clampIndex(value: number, size: number): number {
+  return Math.min(Math.max(value, 0), size - 1);
+}
+
+/**
+ * Треугольники одного sculpt-объекта в мировых величинах конвейера
+ * (`worldPoint` — то же соответствие осей, что у размещений). Находки уходят в
+ * `fail`; объект с нечисловой вершиной не даёт ни одного треугольника.
+ */
+function appendObjectTriangles(
+  document: GltfDocument,
+  object: SourceObject,
+  fail: (object: string, message: string) => void,
+  triangles: Triangle[],
+): void {
+  if (object.mesh === null) {
+    fail(object.name, 'объект без геометрии: скалпт-поверхность читается с меша (BLND-13)');
+    return;
+  }
+  let geometry;
+  try {
+    geometry = readMeshGeometry(document, object.mesh, []);
+  } catch (error) {
+    fail(object.name, error instanceof GltfParseError ? error.message : String(error));
+    return;
+  }
+  const world = geometry.positions.map((position) => worldPoint(object.world, position));
+  for (const point of world) {
+    if (Number.isFinite(point.x) && Number.isFinite(point.y) && Number.isFinite(point.elevation)) continue;
+    fail(object.name, 'координата вершины не является конечным числом');
+    return;
+  }
+  for (let face = 0; face * 3 < geometry.triangles.length; face++) {
+    // Длина списка индексов кратна трём — это проверяет разбор меша.
+    const a = world[geometry.triangles[face * 3]!];
+    const b = world[geometry.triangles[face * 3 + 1]!];
+    const c = world[geometry.triangles[face * 3 + 2]!];
+    if (a === undefined || b === undefined || c === undefined) {
+      fail(object.name, `грань ${face} ссылается на вершину вне меша`);
+      continue;
+    }
+    triangles.push({
+      ax: a.x,
+      ay: a.y,
+      az: a.elevation,
+      bx: b.x,
+      by: b.y,
+      bz: b.elevation,
+      cx: c.x,
+      cy: c.y,
+      cz: c.elevation,
+    });
+  }
+}
+
+/**
+ * Ускоряющая решётка: треугольник кладёт себя во все клетки своего bbox (с
+ * запасом на отступ выборок), выборка смотрит только клетку точки. Меняется от
+ * неё порядок ПРОВЕРОК, а не значения (BLND-4).
+ */
+function bucketTriangles(triangles: readonly Triangle[], spec: CellGridSpec): readonly (readonly number[])[] {
+  const { width, height, cellSize } = spec;
+  const margin = cellSize * EDGE_INSET_RATIO;
+  const buckets: number[][] = Array.from({ length: width * height }, () => []);
+  for (const [index, t] of triangles.entries()) {
+    const x0 = clampIndex(Math.floor((Math.min(t.ax, t.bx, t.cx) - margin) / cellSize), width);
+    const x1 = clampIndex(Math.floor((Math.max(t.ax, t.bx, t.cx) + margin) / cellSize), width);
+    const y0 = clampIndex(Math.floor((Math.min(t.ay, t.by, t.cy) - margin) / cellSize), height);
+    const y1 = clampIndex(Math.floor((Math.max(t.ay, t.by, t.cy) + margin) / cellSize), height);
+    for (let y = y0; y <= y1; y++) {
+      for (let x = x0; x <= x1; x++) buckets[y * width + x]!.push(index);
+    }
+  }
+  return buckets;
+}
+
+/**
+ * Высота вертикального пересечения луча `(x, y)` с треугольником; `null` — луч
+ * мимо его проекции либо треугольник в проекции вырожден (вертикальная стенка
+ * высоты поверхности не определяет).
+ */
+function intersectHeight(t: Triangle, x: number, y: number): number | null {
+  // Знаковые площади подтреугольников: точка внутри, когда все три одного
+  // знака (с допуском на float32); нулевая полная площадь — стенка.
+  const area = (t.bx - t.ax) * (t.cy - t.ay) - (t.by - t.ay) * (t.cx - t.ax);
+  const scale = Math.abs(area);
+  const tolerance =
+    BARYCENTRIC_TOLERANCE *
+    Math.max(1, Math.abs(t.ax), Math.abs(t.ay), Math.abs(t.bx), Math.abs(t.by), Math.abs(t.cx), Math.abs(t.cy)) ** 2;
+  if (scale <= tolerance) return null;
+  const wa = ((t.bx - x) * (t.cy - y) - (t.by - y) * (t.cx - x)) / area;
+  const wb = ((t.cx - x) * (t.ay - y) - (t.cy - y) * (t.ax - x)) / area;
+  const wc = 1 - wa - wb;
+  // Кламп сверху: у почти вырожденного треугольника `tolerance / scale`
+  // растёт без предела, и точка ВНЕ его проекции принималась бы с
+  // экстраполированной высотой.
+  const slack = Math.min(tolerance / scale, 1e-6);
+  if (wa < -slack || wb < -slack || wc < -slack) return null;
+  return wa * t.az + wb * t.bz + wc * t.cz;
+}
+
+/** Высота объединения в точке — максимум по пересечениям её клетки (BLND-13). */
+function createSampler(
+  triangles: readonly Triangle[],
+  buckets: readonly (readonly number[])[],
+  spec: CellGridSpec,
+): SculptSampler {
+  const { width, height, cellSize } = spec;
+  return {
+    heightAt(x: number, y: number): number | null {
+      const at = clampIndex(Math.floor(y / cellSize), height) * width + clampIndex(Math.floor(x / cellSize), width);
+      let best: number | null = null;
+      // Индекс зажат границами сетки, корзина по нему есть всегда.
+      for (const index of buckets[at]!) {
+        const elevation = intersectHeight(triangles[index]!, x, y);
+        if (elevation === null) continue;
+        if (best === null || elevation > best) best = elevation;
+      }
+      return best;
+    },
+  };
+}
+
 /**
  * Сэмплер объединения sculpt-объектов. Треугольники приводятся в мировые
  * величины конвейера (`worldPoint` — то же соответствие осей, что у размещений)
@@ -113,113 +249,20 @@ export function buildSculptSampler(
   objects: readonly SourceObject[],
   spec: CellGridSpec,
 ): SculptSamplerRead {
+  const refusal = specRefusal(spec);
+  if (refusal !== null) {
+    return { sampler: null, errors: [{ object: objects[0]?.name ?? '', message: refusal }] };
+  }
+
   const errors: { object: string; message: string }[] = [];
   const fail = (object: string, message: string): void => {
     if (errors.length < ERROR_LIMIT) errors.push({ object, message });
   };
-
-  if (!Number.isFinite(spec.cellSize) || spec.cellSize <= 0) {
-    return { sampler: null, errors: [{ object: objects[0]?.name ?? '', message: `размер клетки ${spec.cellSize} не положителен (TERR-2)` }] };
-  }
-  if (!Number.isInteger(spec.width) || !Number.isInteger(spec.height) || spec.width <= 0 || spec.height <= 0) {
-    // Ассет с нецелой или неположительной сеткой отвергает и ядро; здесь отказ
-    // нужен ДО раскладки по клеткам — иначе индекс корзины уехал бы за массив.
-    return {
-      sampler: null,
-      errors: [{ object: objects[0]?.name ?? '', message: `сетка ${spec.width}×${spec.height} не является целой положительной (TERR-2)` }],
-    };
-  }
-
   const triangles: Triangle[] = [];
-  for (const object of objects) {
-    if (object.mesh === null) {
-      fail(object.name, 'объект без геометрии: скалпт-поверхность читается с меша (BLND-13)');
-      continue;
-    }
-    let geometry;
-    try {
-      geometry = readMeshGeometry(document, object.mesh, []);
-    } catch (error) {
-      fail(object.name, error instanceof GltfParseError ? error.message : String(error));
-      continue;
-    }
-    const world = geometry.positions.map((position) => worldPoint(object.world, position));
-    let broken = false;
-    for (const point of world) {
-      if ([point.x, point.y, point.elevation].every((value) => Number.isFinite(value))) continue;
-      fail(object.name, 'координата вершины не является конечным числом');
-      broken = true;
-      break;
-    }
-    if (broken) continue;
-    for (let face = 0; face * 3 < geometry.triangles.length; face++) {
-      const a = world[geometry.triangles[face * 3]!];
-      const b = world[geometry.triangles[face * 3 + 1]!];
-      const c = world[geometry.triangles[face * 3 + 2]!];
-      if (a === undefined || b === undefined || c === undefined) {
-        fail(object.name, `грань ${face} ссылается на вершину вне меша`);
-        continue;
-      }
-      triangles.push({
-        ax: a.x,
-        ay: a.y,
-        az: a.elevation,
-        bx: b.x,
-        by: b.y,
-        bz: b.elevation,
-        cx: c.x,
-        cy: c.y,
-        cz: c.elevation,
-      });
-    }
-  }
+  for (const object of objects) appendObjectTriangles(document, object, fail, triangles);
   if (errors.length > 0) return { sampler: null, errors };
 
-  // Ускоряющая решётка: треугольник лежит во всех клетках своего bbox (с
-  // запасом на отступ выборок), выборка смотрит только клетку точки.
-  const { width, height, cellSize } = spec;
-  const margin = cellSize * EDGE_INSET_RATIO;
-  const buckets: number[][] = Array.from({ length: width * height }, () => []);
-  const clampX = (value: number): number => Math.min(Math.max(value, 0), width - 1);
-  const clampY = (value: number): number => Math.min(Math.max(value, 0), height - 1);
-  for (let index = 0; index < triangles.length; index++) {
-    const t = triangles[index]!;
-    const x0 = clampX(Math.floor((Math.min(t.ax, t.bx, t.cx) - margin) / cellSize));
-    const x1 = clampX(Math.floor((Math.max(t.ax, t.bx, t.cx) + margin) / cellSize));
-    const y0 = clampY(Math.floor((Math.min(t.ay, t.by, t.cy) - margin) / cellSize));
-    const y1 = clampY(Math.floor((Math.max(t.ay, t.by, t.cy) + margin) / cellSize));
-    for (let y = y0; y <= y1; y++) {
-      for (let x = x0; x <= x1; x++) buckets[y * width + x]!.push(index);
-    }
-  }
-
-  const heightAt = (x: number, y: number): number | null => {
-    const bucket = buckets[clampY(Math.floor(y / cellSize)) * width + clampX(Math.floor(x / cellSize))]!;
-    let best: number | null = null;
-    for (const index of bucket) {
-      const t = triangles[index]!;
-      // Знаковые площади подтреугольников: точка внутри, когда все три одного
-      // знака (с допуском на float32); нулевая полная площадь — стенка.
-      const area = (t.bx - t.ax) * (t.cy - t.ay) - (t.by - t.ay) * (t.cx - t.ax);
-      const scale = Math.abs(area);
-      const tolerance =
-        BARYCENTRIC_TOLERANCE *
-        Math.max(1, Math.abs(t.ax), Math.abs(t.ay), Math.abs(t.bx), Math.abs(t.by), Math.abs(t.cx), Math.abs(t.cy)) ** 2;
-      if (scale <= tolerance) continue;
-      const wa = ((t.bx - x) * (t.cy - y) - (t.by - y) * (t.cx - x)) / area;
-      const wb = ((t.cx - x) * (t.ay - y) - (t.cy - y) * (t.ax - x)) / area;
-      const wc = 1 - wa - wb;
-      // Кламп сверху: у почти вырожденного треугольника `tolerance / scale`
-      // растёт без предела, и точка ВНЕ его проекции принималась бы с
-      // экстраполированной высотой.
-      const slack = Math.min(tolerance / scale, 1e-6);
-      if (wa < -slack || wb < -slack || wc < -slack) continue;
-      const elevation = wa * t.az + wb * t.bz + wc * t.cz;
-      if (best === null || elevation > best) best = elevation;
-    }
-    return best;
-  };
-  return { sampler: { heightAt }, errors: [] };
+  return { sampler: createSampler(triangles, bucketTriangles(triangles, spec), spec), errors: [] };
 }
 
 /**
@@ -272,22 +315,166 @@ export interface SculptCells {
   readonly outOfRange: readonly { readonly x: number; readonly y: number; readonly height: number }[];
 }
 
+/** Рабочие массивы деривации: по одному значению на клетку сетки цели. */
+interface CellArrays {
+  readonly heights: number[];
+  /** Уровень клетки; `null` — ещё не назначен (дыра либо клетка вне алфавита). */
+  readonly levels: (number | null)[];
+  readonly ramps: number[];
+  readonly noFloor: number[];
+  readonly outOfRange: { x: number; y: number; height: number }[];
+}
+
+/**
+ * Уровень клетки — высота её ЦЕНТРА, квантованная к ближайшему целому; уровень
+ * вне алфавита схемы собирается в `outOfRange` вместе с сырой высотой. Нет
+ * пересечения над центром — клетка без пола `_` (дыра — инструмент).
+ */
+function sampleCellLevels(
+  sampler: SculptSampler,
+  spec: CellGridSpec,
+  maxLevel: number,
+  levelUnit: number,
+  cells: CellArrays,
+): void {
+  const { width, height, cellSize } = spec;
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      const at = y * width + x;
+      const sampled = sampler.heightAt((x + 0.5) * cellSize, (y + 0.5) * cellSize);
+      if (sampled === null) {
+        cells.noFloor[at] = 1;
+        continue;
+      }
+      const level = Math.round(sampled / levelUnit);
+      if (level < 0 || level > maxLevel) {
+        cells.outOfRange.push({ x, y, height: sampled });
+        continue;
+      }
+      cells.levels[at] = level;
+      cells.heights[at] = level * levelUnit;
+    }
+  }
+}
+
+/** Кольцо волны: соседи-дыры клетки берут её уровень, если он старше уже взятого. */
+function spreadHoleLevel(
+  ring: Map<number, number>,
+  cells: CellArrays,
+  spec: CellGridSpec,
+  at: number,
+  level: number,
+): void {
+  const { width, height } = spec;
+  const x = at % width;
+  const y = (at - x) / width;
+  for (const neighbor of [
+    x > 0 ? at - 1 : -1,
+    x + 1 < width ? at + 1 : -1,
+    y > 0 ? at - width : -1,
+    y + 1 < height ? at + width : -1,
+  ]) {
+    if (neighbor < 0 || cells.noFloor[neighbor] !== 1 || cells.levels[neighbor] !== null) continue;
+    const known = ring.get(neighbor);
+    if (known === undefined || level > known) ring.set(neighbor, level);
+  }
+}
+
+/**
+ * Уровень клеток без пола — волной от клеток с полом: кольцо за кольцом, в
+ * кольце каждая дыра берёт СТАРШИЙ уровень среди примыкающих присвоенных.
+ * Уровень дыры не мёртвые данные: из него строятся клифы (TERR-5) и высота
+ * восстановленного по ходу матча пола (TERR-3), и ноль дырявил бы плато ложным
+ * кольцом обрывов. Порядок обхода на результат не влияет (максимум
+ * коммутативен), недостижимые дырами от края до края клетки остаются на нуле.
+ */
+function fillHoleLevels(spec: CellGridSpec, levelUnit: number, cells: CellArrays): void {
+  const total = spec.width * spec.height;
+  let frontier: number[] = [];
+  for (let at = 0; at < total; at++) if (cells.levels[at] !== null) frontier.push(at);
+  while (frontier.length > 0) {
+    const ring = new Map<number, number>();
+    // Уровень клетки фронта присвоен по построению фронта.
+    for (const at of frontier) spreadHoleLevel(ring, cells, spec, at, cells.levels[at]!);
+    frontier = [];
+    for (const [at, level] of [...ring.entries()].sort(([a], [b]) => a - b)) {
+      frontier.push(at);
+      cells.levels[at] = level;
+      cells.heights[at] = level * levelUnit;
+    }
+  }
+}
+
+/**
+ * Пара соседних клеток с перепадом в единицу: отрезок между их центрами
+ * сэмплируется `CONTINUITY_INTERVALS` интервалами, и если максимальный скачок
+ * между соседними выборками ниже порога обрыва, рампу получает НИЖНЯЯ клетка
+ * пары (TERR-5). Обрыв ловится любой своей позицией внутри пары, а не только у
+ * самой границы; помечается всегда нижняя клетка, поэтому от порядка обхода
+ * результат не зависит.
+ */
+function considerRamp(
+  sampler: SculptSampler,
+  spec: CellGridSpec,
+  cells: CellArrays,
+  threshold: number,
+  aX: number,
+  aY: number,
+  bX: number,
+  bY: number,
+): void {
+  const { width, cellSize } = spec;
+  const a = aY * width + aX;
+  const b = bY * width + bX;
+  if (cells.noFloor[a] === 1 || cells.noFloor[b] === 1) return;
+  const levelA = cells.levels[a] ?? null;
+  const levelB = cells.levels[b] ?? null;
+  if (levelA === null || levelB === null || Math.abs(levelA - levelB) !== 1) return;
+  const fromX = (aX + 0.5) * cellSize;
+  const fromY = (aY + 0.5) * cellSize;
+  const stepX = ((bX - aX) * cellSize) / CONTINUITY_INTERVALS;
+  const stepY = ((bY - aY) * cellSize) / CONTINUITY_INTERVALS;
+  let previous: number | null = null;
+  for (let i = 0; i <= CONTINUITY_INTERVALS; i++) {
+    const sampled = sampler.heightAt(fromX + stepX * i, fromY + stepY * i);
+    // Разрыв геометрии на отрезке (щель уже клетки) — та же непроходимость,
+    // что и скачок: рампы нет.
+    if (sampled === null) return;
+    if (previous !== null && Math.abs(sampled - previous) >= threshold) return;
+    previous = sampled;
+  }
+  cells.ramps[levelA < levelB ? a : b] = 1;
+}
+
+/** Рампы по всем парам соседних клеток — вправо и вниз: пара считается один раз. */
+function markRamps(
+  sampler: SculptSampler,
+  spec: CellGridSpec,
+  cliffJump: number,
+  levelUnit: number,
+  cells: CellArrays,
+): void {
+  const threshold = cliffJump * levelUnit;
+  const { width, height } = spec;
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      if (x + 1 < width) considerRamp(sampler, spec, cells, threshold, x, y, x + 1, y);
+      if (y + 1 < height) considerRamp(sampler, spec, cells, threshold, x, y, x, y + 1);
+    }
+  }
+}
+
 /**
  * Уровни, пол и рампы из объединения скалпта (BLND-13):
  *
  * - уровень — высота центра клетки, квантованная к ближайшему целому; уровень
  *   вне алфавита схемы собирается в `outOfRange` вместе с сырой высотой — отказ
- *   обязан называть клетку И ЕЁ ВЫСОТУ, а не уже квантованный уровень;
- * - нет пересечения над центром — клетка без пола `_` (дыра — инструмент);
- *   уровень такой клетки — уровень БЛИЖАЙШЕЙ клетки с полом (при равных
- *   расстояниях — старший): уровень дыры не мёртвые данные, из него строятся
- *   клифы (TERR-5) и высота восстановленного по ходу матча пола (TERR-3), и
- *   ноль дырявил бы плато ложным кольцом обрывов;
+ *   обязан называть клетку И ЕЁ ВЫСОТУ, а не уже квантованный уровень
+ *   (`sampleCellLevels`);
+ * - нет пересечения над центром — клетка без пола `_`, а её уровень берётся
+ *   волной от ближайших клеток с полом (`fillHoleLevels`);
  * - рампа — непрерывность на отрезке между центрами пары клеток с перепадом в
- *   единицу: отрезок сэмплируется `CONTINUITY_INTERVALS` интервалами, и если
- *   максимальный скачок между соседними выборками ниже порога обрыва, рампу
- *   получает НИЖНЯЯ клетка пары (TERR-5). Обрыв ловится любой своей позицией
- *   внутри пары, а не только у самой границы.
+ *   единицу (`markRamps`, TERR-5).
  */
 export function deriveSculptCells(
   sampler: SculptSampler,
@@ -296,97 +483,25 @@ export function deriveSculptCells(
   maxLevel: number,
   levelUnit: number,
 ): SculptCells {
-  const { width, height, cellSize } = spec;
-  const total = width * height;
-  const heights = new Array<number>(total).fill(0);
-  const levels = new Array<number | null>(total).fill(null);
-  const ramps = new Array<number>(total).fill(0);
-  const noFloor = new Array<number>(total).fill(0);
-  const outOfRange: { x: number; y: number; height: number }[] = [];
-
-  for (let y = 0; y < height; y++) {
-    for (let x = 0; x < width; x++) {
-      const at = y * width + x;
-      const sampled = sampler.heightAt((x + 0.5) * cellSize, (y + 0.5) * cellSize);
-      if (sampled === null) {
-        noFloor[at] = 1;
-        continue;
-      }
-      const level = Math.round(sampled / levelUnit);
-      if (level < 0 || level > maxLevel) {
-        outOfRange.push({ x, y, height: sampled });
-        continue;
-      }
-      levels[at] = level;
-      heights[at] = level * levelUnit;
-    }
-  }
-
-  // Уровень клеток без пола — волной от клеток с полом: кольцо за кольцом,
-  // в кольце каждая дыра берёт СТАРШИЙ уровень среди примыкающих присвоенных.
-  // Порядок обхода на результат не влияет (максимум коммутативен), недостижимые
-  // дырами от края до края клетки остаются на нуле.
-  let frontier: number[] = [];
-  for (let at = 0; at < total; at++) if (levels[at] !== null) frontier.push(at);
-  while (frontier.length > 0) {
-    const ring = new Map<number, number>();
-    for (const at of frontier) {
-      const x = at % width;
-      const y = (at - x) / width;
-      const level = levels[at]!;
-      for (const neighbor of [
-        x > 0 ? at - 1 : -1,
-        x + 1 < width ? at + 1 : -1,
-        y > 0 ? at - width : -1,
-        y + 1 < height ? at + width : -1,
-      ]) {
-        if (neighbor < 0 || noFloor[neighbor] !== 1 || levels[neighbor] !== null) continue;
-        const known = ring.get(neighbor);
-        if (known === undefined || level > known) ring.set(neighbor, level);
-      }
-    }
-    frontier = [...ring.keys()].sort((a, b) => a - b);
-    for (const at of frontier) {
-      const level = ring.get(at)!;
-      levels[at] = level;
-      heights[at] = level * levelUnit;
-    }
-  }
-
-  const threshold = cliffJump * levelUnit;
-  // Пара соседних клеток с |Δ| = 1: непрерывность скалпта между их центрами
-  // решает, рампа это или обрыв. Помечается всегда нижняя клетка пары, поэтому
-  // от порядка обхода результат не зависит.
-  const consider = (aX: number, aY: number, bX: number, bY: number): void => {
-    const a = aY * width + aX;
-    const b = bY * width + bX;
-    if (noFloor[a] === 1 || noFloor[b] === 1) return;
-    const levelA = levels[a] ?? null;
-    const levelB = levels[b] ?? null;
-    if (levelA === null || levelB === null || Math.abs(levelA - levelB) !== 1) return;
-    const fromX = (aX + 0.5) * cellSize;
-    const fromY = (aY + 0.5) * cellSize;
-    const stepX = ((bX - aX) * cellSize) / CONTINUITY_INTERVALS;
-    const stepY = ((bY - aY) * cellSize) / CONTINUITY_INTERVALS;
-    let previous: number | null = null;
-    for (let i = 0; i <= CONTINUITY_INTERVALS; i++) {
-      const sampled = sampler.heightAt(fromX + stepX * i, fromY + stepY * i);
-      // Разрыв геометрии на отрезке (щель уже клетки) — та же непроходимость,
-      // что и скачок: рампы нет.
-      if (sampled === null) return;
-      if (previous !== null && Math.abs(sampled - previous) >= threshold) return;
-      previous = sampled;
-    }
-    const lower = levelA < levelB ? a : b;
-    ramps[lower] = 1;
+  const total = spec.width * spec.height;
+  const cells: CellArrays = {
+    heights: new Array<number>(total).fill(0),
+    levels: new Array<number | null>(total).fill(null),
+    ramps: new Array<number>(total).fill(0),
+    noFloor: new Array<number>(total).fill(0),
+    outOfRange: [],
   };
-  for (let y = 0; y < height; y++) {
-    for (let x = 0; x < width; x++) {
-      if (x + 1 < width) consider(x, y, x + 1, y);
-      if (y + 1 < height) consider(x, y, x, y + 1);
-    }
-  }
-  return { heights, ramps, noFloor, outOfRange };
+
+  sampleCellLevels(sampler, spec, maxLevel, levelUnit, cells);
+  fillHoleLevels(spec, levelUnit, cells);
+  markRamps(sampler, spec, cliffJump, levelUnit, cells);
+
+  return {
+    heights: cells.heights,
+    ramps: cells.ramps,
+    noFloor: cells.noFloor,
+    outOfRange: cells.outOfRange,
+  };
 }
 
 /**

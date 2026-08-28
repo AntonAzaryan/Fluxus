@@ -109,6 +109,22 @@ export interface SourceObject {
   readonly world: readonly number[];
 }
 
+/**
+ * Единственная семантика объекта; `undefined` — их нет вовсе либо больше одной
+ * (BLND-3: «размещение принадлежит одному слою»). Одно написание на пакет:
+ * «объект несёт ровно одну семантику» решается в четырёх местах — генерация
+ * слоя, выбор grid-объекта, отбор скалпта и перечень слотов импорта, — и второе
+ * его написание разошлось бы с первым молча (ED-1).
+ */
+export function singleSemanticOf(object: SourceObject): SemanticKind | undefined {
+  return object.semantics.length === 1 ? object.semantics[0] : undefined;
+}
+
+/** Несёт ли объект ровно эту одну семантику (BLND-3) — см. `singleSemanticOf`. */
+export function hasSingleSemantic(object: SourceObject, kind: SemanticKind): boolean {
+  return singleSemanticOf(object) === kind;
+}
+
 /** Точка в величинах конвейера: те же оси, что у разложения трансформа. */
 export interface WorldPoint {
   readonly x: number;
@@ -154,8 +170,7 @@ export function multiplyMatrices(a: readonly number[], b: readonly number[]): nu
  * перенос.
  */
 export function localMatrixOf(node: GltfNode): number[] {
-  // eslint-disable-next-line @typescript-eslint/prefer-optional-chain -- baseline
-  if (node.matrix !== undefined && node.matrix.length === 16) return [...node.matrix];
+  if (node.matrix?.length === 16) return [...node.matrix];
   const [tx = 0, ty = 0, tz = 0] = node.translation ?? [];
   const [qx = 0, qy = 0, qz = 0, qw = 1] = node.rotation ?? [];
   const [sx = 1, sy = 1, sz = 1] = node.scale ?? [];
