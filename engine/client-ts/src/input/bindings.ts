@@ -48,10 +48,13 @@ function validateKeyboardMouse(value: unknown): KeyboardMouseBindings {
 function validateTouch(value: unknown): TouchBindings {
   const touch = record(value, 'touch');
   const moveStick = stick(touch.moveStick, 'touch.moveStick');
+  // Секции, которых документ не назвал, остаются ОТСУТСТВУЮЩИМИ ключами —
+  // отсюда `NonNullable`: обращение по индексу к необязательному полю добавило
+  // бы к типу `undefined`, то есть разрешило бы записать пустой ключ.
   const result: {
     moveStick: TouchBindings['moveStick'];
-    aimStick?: TouchBindings['aimStick'];
-    buttons?: TouchBindings['buttons'];
+    aimStick?: NonNullable<TouchBindings['aimStick']>;
+    buttons?: NonNullable<TouchBindings['buttons']>;
   } = { moveStick };
   if (touch.aimStick !== undefined) {
     const aim = record(touch.aimStick, 'touch.aimStick');

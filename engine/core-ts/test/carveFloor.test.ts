@@ -52,11 +52,17 @@ const TERRAIN: TerrainDef = {
   flags: Array.from({ length: 6 }, () => '.'.repeat(8)),
 };
 
-const SCENE = {
+/**
+ * Сцена БЕЗ террейна — это сцена без ключа `terrain`, а не с пустым ключом:
+ * загрузчик читает отсутствие поля (`def.terrain === undefined`), а документ
+ * сцены ключа со значением `undefined` не знает вовсе (SER-7).
+ */
+const SCENE_BASE = {
   components: [{ name: 'Position', fields: { x: 'fixed', y: 'fixed' } as const }],
   prefabs: [{ name: 'Actor', components: { Position: { x: 0, y: 0 } } }],
-  terrain: TERRAIN,
 };
+
+const SCENE = { ...SCENE_BASE, terrain: TERRAIN };
 
 /** Центр клетки: тест не должен зависеть от того, какой клетке досталась граница. */
 const at = (cx: number, cy: number): Vec2 => ({
@@ -76,7 +82,9 @@ interface Harness {
 
 /** `null` — сцена без террейна: явный `undefined` подставил бы значение по умолчанию. */
 function harness(def: TerrainDef | null = TERRAIN): Harness {
-  const { world, terrain, modifiers } = loadScene({ ...SCENE, terrain: def ?? undefined });
+  const { world, terrain, modifiers } = loadScene(
+    def === null ? SCENE_BASE : { ...SCENE_BASE, terrain: def },
+  );
   const commands = createCommandBuffer(world);
   const setFieldLog: string[] = [];
 

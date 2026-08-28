@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { runScenario, type ScenarioDef } from '../src/sim/scenario.js';
-import { worldInitForm } from '../src/sim/worldInit.js';
+import { worldInitForm, type WorldInitParts } from '../src/sim/worldInit.js';
 import { loadScene } from '../src/sim/scene.js';
 import { canonicalJson } from '../src/sim/canonicalJson.js';
 import { listAlive, spawn } from '../src/ecs/world.js';
@@ -31,6 +31,20 @@ const BASE: ScenarioDef = {
 };
 
 const hashOf = (def: ScenarioDef): string => runScenario(def).worldInitHash;
+
+/**
+ * Части `worldInit` из загруженной сцены — той же сборкой, какой их собирает
+ * `buildMatchWorld` (`sim/build.ts`): часть, которой у сцены нет, ключа не
+ * получает вовсе. Форма читает ИМЕННО отсутствие (`parts.terrain !==
+ * undefined`), и собирать её из ключей со значением `undefined` значило бы
+ * проверять состояние, в котором сборка матча не бывает.
+ */
+const partsOf = (loaded: ReturnType<typeof loadScene>): WorldInitParts => ({
+  world: loaded.world,
+  mode: 'Running',
+  ...(loaded.terrain !== undefined ? { terrain: loaded.terrain } : {}),
+  ...(loaded.arena !== undefined ? { arena: loaded.arena } : {}),
+});
 
 /** Глубокая правка сцены без мутации исходника: сценарии в тестах переиспользуются. */
 const withScene = (patch: Record<string, unknown>): ScenarioDef => ({
@@ -156,23 +170,23 @@ describe('worldInit hash (DET-1)', () => {
     // пуст, а счётчик равен числу расставленных сущностей (ID-2, ID-6). Пустота
     // при этом не основание опустить поле: опущенный ключ дал бы другой поток
     // байт на тех же данных.
-    const { world, terrain, arena } = loadScene(BASE.scene);
-    spawn(world, 'Unit');
-    spawn(world, 'Unit');
-    const form = worldInitForm({ world, mode: 'Running', terrain, arena });
+    const loaded = loadScene(BASE.scene);
+    spawn(loaded.world, 'Unit');
+    spawn(loaded.world, 'Unit');
+    const form = worldInitForm(partsOf(loaded));
     const plain = form.world as { freeList: readonly number[]; nextIndex: number };
 
     expect(plain.freeList).toEqual([]);
     // Счётчик равен числу расставленных сущностей — включая те, что ставит сам
     // загрузчик сцены (границы арены): переиспользований слотов до первого тика нет.
-    expect(plain.nextIndex).toBe(listAlive(world).length);
+    expect(plain.nextIndex).toBe(listAlive(loaded.world).length);
     expect(canonicalJson(form)).toContain('"freeList":[]');
   });
 
   it('в каноническую форму не входят RNG, шина событий и номер тика', () => {
-    const { world, terrain, arena } = loadScene(BASE.scene);
-    spawn(world, 'Unit');
-    const form = worldInitForm({ world, mode: 'Running', terrain, arena });
+    const loaded = loadScene(BASE.scene);
+    spawn(loaded.world, 'Unit');
+    const form = worldInitForm(partsOf(loaded));
 
     expect(Object.keys(form).sort()).toEqual(['arena', 'mode', 'terrain', 'world']);
     // Производная геометрия обрывов — результат обработки карт, а не данные.

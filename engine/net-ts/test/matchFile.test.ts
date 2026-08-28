@@ -107,8 +107,29 @@ function packOf(match: MatchDocument) {
 }
 
 function configOf(overrides: Partial<MatchDocument> = {}): MatchConfig {
-  const match = document(overrides);
+  return configOfDocument(document(overrides));
+}
+
+function configOfDocument(match: MatchDocument): MatchConfig {
   return matchConfigOf(match, packOf(match));
+}
+
+/**
+ * Тот же документ, НЕ назвавший перечисленные секции. Именно удаление ключа, а
+ * не запись `undefined` в него: документ матча — разобранный JSON, ключа со
+ * значением `undefined` в нём не бывает, и «документ вправе секцию не
+ * называть» — это ровно про отсутствие ключа. Раскладка везёт остаток
+ * документа целиком (`...carried`), поэтому разница между «нет ключа» и «ключ
+ * пустой» доезжает до конфига матча как есть.
+ */
+function documentWithout(...omit: readonly (keyof MatchDocument)[]): MatchDocument {
+  const match: { -readonly [K in keyof MatchDocument]?: MatchDocument[K] } = document();
+  for (const field of omit) delete match[field];
+  return match;
+}
+
+function configWithout(...omit: readonly (keyof MatchDocument)[]): MatchConfig {
+  return configOfDocument(documentWithout(...omit));
 }
 
 describe('раскладка документа матча в конфиг (NTR-6, NTR-14)', () => {
@@ -131,7 +152,7 @@ describe('раскладка документа матча в конфиг (NTR-
   });
 
   it('матч без секции rewind поднимается по-прежнему — перемотки в нём просто нет', () => {
-    const config = configOf({ rewind: undefined });
+    const config = configWithout('rewind');
     expect(config.rewind).toBeUndefined();
     const server = new MatchServer(config);
     expect(() => { server.pause(); }).toThrow(/без истории/);
@@ -161,13 +182,13 @@ describe('раскладка документа матча в конфиг (NTR-
   });
 
   it('умолчания темпа те же, что были: документ вправе их не называть', () => {
-    const config = configOf({
-      tickRate: undefined,
-      snapshotRate: undefined,
-      inputDelay: undefined,
-      silenceSeconds: undefined,
-      initial: undefined,
-    });
+    const config = configWithout(
+      'tickRate',
+      'snapshotRate',
+      'inputDelay',
+      'silenceSeconds',
+      'initial',
+    );
 
     expect(config.tickRate).toBe(60);
     expect(config.snapshotRate).toBe(30);

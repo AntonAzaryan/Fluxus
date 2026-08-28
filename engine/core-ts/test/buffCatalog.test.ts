@@ -180,7 +180,9 @@ describe('Проверки загрузки определений баффов 
   });
 
   it('политика `stack` без потолка — ошибка загрузки (BUFF-3)', () => {
-    expect(failing({ stacking: 'stack', maxStacks: undefined })).toThrow(
+    // Потолка нет как ключа: `SLOW` его не объявляет, и перекрывается только
+    // политика. Ключ со значением `undefined` документом невыразим вовсе.
+    expect(failing({ stacking: 'stack' })).toThrow(
       /политика "stack" требует потолка стаков в поле "maxStacks"/,
     );
   });

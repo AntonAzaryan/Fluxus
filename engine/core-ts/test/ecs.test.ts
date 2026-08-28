@@ -27,12 +27,13 @@ const Stealth: ComponentSchema = { name: 'Stealth', fields: { flag: 'i32' } };
 
 const schemas = [Position, Health, Stealth];
 
+/** Prefab — документ (SER-7): не названных тегов в нём НЕТ, а не «есть пустые». */
 function prefab(
   name: string,
   components: PrefabDef['components'],
   tags?: readonly string[],
 ): PrefabDef {
-  return { name, components, tags };
+  return { name, components, ...(tags !== undefined ? { tags } : {}) };
 }
 
 describe('createWorld: prefab (ECS-5)', () => {

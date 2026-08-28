@@ -247,12 +247,19 @@ export type FieldHandle = number & { readonly __brand: 'FieldHandle' };
 /** Имя компонента позиции — единственная конвенция, на которую опирается `withinRadius`. */
 export const POSITION_COMPONENT = 'Position';
 
+/**
+ * Фильтры запроса (QUERY-1). Каждый необязателен, и `undefined` у него значит
+ * то же, что отсутствие ключа: «фильтр не задан» — так их приравнивает QUERY-1
+ * и так их читает `query`. Отсюда явный `| undefined` в объявлении: фильтр
+ * приезжает сюда переменной («тег, если он указан», PHYS-6), а не ключом
+ * литерала, и второго состояния у него нет.
+ */
 export interface QuerySpec {
-  readonly all?: readonly string[];
-  readonly any?: readonly string[];
-  readonly not?: readonly string[];
-  readonly withinRadius?: { readonly center: Vec2; readonly radius: Fixed };
-  readonly withTag?: string;
+  readonly all?: readonly string[] | undefined;
+  readonly any?: readonly string[] | undefined;
+  readonly not?: readonly string[] | undefined;
+  readonly withinRadius?: { readonly center: Vec2; readonly radius: Fixed } | undefined;
+  readonly withTag?: string | undefined;
 }
 
 /** Переопределение значений полей prefab'а при спавне: компонент → поле → значение (CMD-6). */

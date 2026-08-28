@@ -21,15 +21,28 @@ import * as world from './world.js';
  */
 interface Traced { seq?: number }
 
+/**
+ * Запись буфера. Необязательные `overrides` и `values` объявлены с явным
+ * `| undefined`: они приезжают необязательным АРГУМЕНТОМ метода буфера
+ * (`spawn(prefab, overrides?)`), и «аргумента не было» здесь неотличимо от
+ * «переопределений нет» — так же их читают и проверка, и применение
+ * (`checkSpawn`, `world.spawn`, `values?.[field]`). Форма записи от этого
+ * одна на все команды одного вида, а наружу поле не уходит вовсе: в трейс
+ * идёт только `commandData` (DIAG-2, DIAG-4).
+ */
 type Command = Traced &
   (
-    | { readonly kind: 'spawn'; readonly prefab: string; readonly overrides?: FieldOverrides }
+    | {
+        readonly kind: 'spawn';
+        readonly prefab: string;
+        readonly overrides?: FieldOverrides | undefined;
+      }
     | { readonly kind: 'destroy'; readonly entity: EntityId }
     | {
         readonly kind: 'addComponent';
         readonly entity: EntityId;
         readonly component: string;
-        readonly values?: Readonly<Record<string, number>>;
+        readonly values?: Readonly<Record<string, number>> | undefined;
       }
     | { readonly kind: 'removeComponent'; readonly entity: EntityId; readonly component: string }
     | {

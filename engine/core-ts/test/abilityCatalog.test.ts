@@ -67,13 +67,16 @@ function scene(extra: Partial<SceneDef> = {}): SceneDef {
   return { components: BASE, abilities: [SIMPLE], ...extra };
 }
 
-/** Компиляция вне загрузчика — та же чистая функция над тем же миром. */
+/**
+ * Компиляция вне загрузчика — та же чистая функция над тем же миром. Срез
+ * конфига едет тем же объектом, каким его отдаёт загрузчик (`scene.ts`):
+ * перечисление полей поимённо пересобирало бы `AbilityCatalogDef` со своим
+ * набором ключей, и поле, названное сценой, но не названное здесь, тихо
+ * выпадало бы из теста.
+ */
 function compile(def: Partial<SceneDef>): ReturnType<typeof compileAbilityCatalog> {
   const loaded = loadScene({ components: BASE, ...def });
-  return compileAbilityCatalog(
-    { abilities: def.abilities, abilityRuntime: def.abilityRuntime, systems: def.systems },
-    loaded.world,
-  );
+  return compileAbilityCatalog(def, loaded.world);
 }
 
 // ----------------------------------------------------------- компоненты

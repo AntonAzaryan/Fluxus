@@ -177,7 +177,9 @@ export function createThreePortraitStage(options: PortraitStageOptions): Portrai
       controller = new AnimationController(
         new MixerAnimationBackend(instance.mixer, shared.clips),
         visual.animations ?? {},
-        { warn: options.warn },
+        // Стока у сборки может не быть — тогда ключа нет вовсе, и контроллер
+        // берёт своё умолчание (console.warn), а не пустое значение.
+        options.warn === undefined ? {} : { warn: options.warn },
       );
       controller.setState(STAND_STATE);
       frameModel(instance);
