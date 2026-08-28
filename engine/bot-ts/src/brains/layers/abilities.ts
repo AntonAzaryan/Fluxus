@@ -392,6 +392,9 @@ export class AbilityLayer {
     let best: Candidate | undefined;
     for (const [index, ability] of this.profile.abilities.entries()) {
       if (index === except) continue;
+      // `readyAtTick` построен как `profile.abilities.map(...)`, а `index` идёт
+      // из `.entries()` того же массива — длины совпадают по построению.
+      // eslint-disable-next-line @typescript-eslint/no-non-null-assertion -- инвариант описан строкой выше
       if (tick < this.readyAtTick[index]!) continue;
       const candidate = this.score(index, ability, world, plan);
       if (candidate.score <= 0) continue;

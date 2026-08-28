@@ -302,6 +302,7 @@ export function placementsOf(input: SceneDraftInput): readonly ScenePlacement[] 
   for (const [index, entry] of entries.entries()) {
     // Носители отброшены сдвигом: индекс записи — это индекс сущности за ними,
     // и проверка `carriers` выше говорит, что он в списке живых есть.
+    // eslint-disable-next-line @typescript-eslint/no-non-null-assertion -- инвариант описан строкой выше
     const entity = alive[carriers + index]!;
     const prefab = entry.prefab;
     // Позиция — поле компонента, а не поле записи: какой компонент её несёт,

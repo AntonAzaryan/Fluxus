@@ -23,9 +23,10 @@ const EMPTY: readonly ValidationIssue[] = Object.freeze([]);
 export function comparePaths(a: JsonPath, b: JsonPath): number {
   const shared = Math.min(a.length, b.length);
   for (let i = 0; i < shared; i++) {
-    // Индекс меньше длины обоих путей: шаг под ним есть у каждого.
+    /* eslint-disable @typescript-eslint/no-non-null-assertion -- индекс меньше длины обоих путей: шаг под ним есть у каждого. */
     const left = a[i]!;
     const right = b[i]!;
+    /* eslint-enable @typescript-eslint/no-non-null-assertion */
     if (typeof left === 'number' && typeof right === 'number') {
       if (left !== right) return left - right;
       continue;

@@ -93,6 +93,9 @@ export class ShellSender {
       oldest = this.events[0];
     }
     const delta = ext.floorDelta;
+    // Пары «клетка → уровень» лежат подряд, и условие цикла держит обе внутри
+    // длины: `i + 1 < delta.length`.
+    // eslint-disable-next-line @typescript-eslint/no-non-null-assertion -- инвариант описан строкой выше
     for (let i = 0; i + 1 < delta.length; i += 2) this.floor.set(delta[i]!, delta[i + 1]!);
     this.snapAllPending ||= ext.snapAll;
     this.freshPending ||= ext.freshEvents;

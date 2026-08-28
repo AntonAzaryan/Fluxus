@@ -212,6 +212,9 @@ export class BotSubstitutes {
       return;
     }
     this.states[slot] = 'seating';
+    // `states` построен как `players.map(...)`, а `slot` приходит только из
+    // диапазона `0..states.length - 1` — длины совпадают по построению.
+    // eslint-disable-next-line @typescript-eslint/no-non-null-assertion -- инвариант описан строкой выше
     this.options.attach(this.options.players[slot]!);
   }
 

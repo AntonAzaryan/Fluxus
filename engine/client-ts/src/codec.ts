@@ -186,6 +186,8 @@ export function writeTick(
   new Int32Array(buffer, at.kind, count).set(ext.kind.subarray(0, count));
   new Int32Array(buffer, at.statIndex, statPairs).set(ext.statIndex.subarray(0, statPairs));
   const floor = new Uint32Array(buffer, at.floor, floorPairs * 2);
+  // `floorPairs` посчитан из длины самого `floorDelta`, поэтому индекс внутри.
+  // eslint-disable-next-line @typescript-eslint/no-non-null-assertion -- инвариант описан строкой выше
   for (let i = 0; i < floorPairs * 2; i++) floor[i] = floorDelta[i]!;
   new Uint8Array(buffer, at.level, count).set(ext.level.subarray(0, count));
   new Uint8Array(buffer, at.flags, count).set(ext.flags.subarray(0, count));
