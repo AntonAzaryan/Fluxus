@@ -225,7 +225,9 @@ describe('BOT-13: механика выводится из определени�
   });
 
   it('кулдаун-литерал даёт нижнюю границу, а кулдаун-выражение требует числа аннотации', () => {
-    const expression = { var: 'slot.level' } as unknown as AbilityDef['cooldownTicks'];
+    // Кулдаун-ВЫРАЖЕНИЕ, а не молчание поля: `NonNullable` снимает `undefined`,
+    // который необязательность поля определения тащит в тип обращения.
+    const expression = { var: 'slot.level' } as unknown as NonNullable<AbilityDef['cooldownTicks']>;
     const silent = derive({ cooldownTicks: expression }, { target: 'enemy', range: 5 });
     expect(silent.findings.join('\n')).toContain('число для сверки обязана назвать аннотация');
     const named = derive({ cooldownTicks: expression }, { target: 'enemy', range: 5, cooldownTicks: 90 });

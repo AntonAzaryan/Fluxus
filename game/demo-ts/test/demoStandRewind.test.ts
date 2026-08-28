@@ -59,15 +59,17 @@ const READY_TICKS = 20;
  * параллельно, и соседний файл начинает падать по тайм-ауту.
  */
 function sceneWithReadyUlt(): SceneDef {
-  const scene = structuredClone(SCENE) as {
-    prefabs?: { name: string; components: Record<string, Record<string, number>> }[];
-  };
+  // Клон СВОЙ, и правится в нём одно число. `readonly` документа снимается
+  // точечно — на самом компоненте: приведение всей сцены к изменяемой форме
+  // заодно снимало бы readonly с массива префабов, о чём в сигнатуре не сказано
+  // ни слова.
+  const scene = structuredClone(SCENE);
   const slot = scene.prefabs?.find((prefab) => prefab.name === 'SlotRewind');
   expect(slot).toBeDefined();
   const cooldown = slot!.components.AbilityCooldown;
   expect(cooldown).toBeDefined();
-  cooldown!.remaining = READY_TICKS;
-  return scene as unknown as SceneDef;
+  (cooldown as Record<string, number>).remaining = READY_TICKS;
+  return scene;
 }
 
 /** Конфиг матча ровно тем путём, каким его собирает стенд. */

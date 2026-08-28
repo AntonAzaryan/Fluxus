@@ -140,7 +140,7 @@ import {
   type SceneStageOptions,
 } from './sceneStage.js';
 import { reasonOf } from '../reason.js';
-import { areaFrame } from '../frame/areaChrome.js';
+import { areaFrame, runOperation } from '../frame/areaChrome.js';
 
 /** Идентификатор области. Один и тот же в реестре, рельсе и записи состояния. */
 export const ASSETS_AREA_ID = 'area.assets';
@@ -370,16 +370,13 @@ function assign(
   operationId: string,
   params: Readonly<Record<string, string>>,
 ): void {
-  const { state, session } = context;
+  const { state } = context;
   const id = state.visualsId;
   if (id === null) return;
-  try {
-    session.applyOperation(operationId, { document: id, entry: state.entry, ...params });
-    state.failure = null;
-  } catch (error) {
-    state.failure = reasonOf(error);
-  }
-  state.refresh();
+  // Дальше — общий каркасный ход операции: он снимает прежнюю причину, называет
+  // новую и один раз просит перерисовать. Своего try/catch и своей просьбы у
+  // области нет: вторые разошлись бы с каркасом по одной штуке за раз.
+  runOperation(context, operationId, { document: id, entry: state.entry, ...params });
 }
 
 /**
@@ -976,17 +973,9 @@ function effectOperation(
   operationId: string,
   params: OperationParams,
 ): void {
-  const { state, session } = context;
-  const id = state.visualsId;
+  const id = context.state.visualsId;
   if (id === null) return;
-  try {
-    session.applyOperation(operationId, { document: id, ...params });
-    state.failure = null;
-  } catch (error) {
-    state.failure = reasonOf(error);
-  }
-  state.refresh();
-  context.refresh();
+  runOperation(context, operationId, { document: id, ...params });
 }
 
 /** Состояние ассета подписью: статус — ресурс, причина — текст модуля ассетов. */

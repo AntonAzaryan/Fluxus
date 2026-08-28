@@ -75,15 +75,16 @@ function twisty(item: TreeItem): UiNode {
     attrs: { type: 'button', 'aria-expanded': String(item.expanded === true) },
     labels: { ariaLabel: item.label },
     children: [icon({ name })],
-    on:
-      item.onToggle === undefined
-        ? undefined
-        : {
+    ...(item.onToggle === undefined
+      ? {}
+      : {
+          on: {
             click: (event: Event) => {
               event.stopPropagation();
               item.onToggle?.(item.id);
             },
           },
+        }),
   });
 }
 
@@ -111,14 +112,15 @@ function treeRow(item: TreeItem, depth: number, focused: boolean | undefined): U
             children: [statusChip({ label: item.badge })],
           }),
     ),
-    on:
-      item.onSelect === undefined
-        ? undefined
-        : {
+    ...(item.onSelect === undefined
+      ? {}
+      : {
+          on: {
             click: () => {
               item.onSelect?.(item.id);
             },
           },
+        }),
   });
   return withValidation(row, item.validation);
 }
@@ -309,14 +311,15 @@ export function denseList(spec: ListSpec): UiNode {
             ? undefined
             : el('span', { classes: ['fx-row__trailing'], text: item.trailing }),
         ),
-        on:
-          item.onSelect === undefined || item.disabled === true
-            ? undefined
-            : {
+        ...(item.onSelect === undefined || item.disabled === true
+          ? {}
+          : {
+              on: {
                 click: () => {
                   item.onSelect?.(item.id);
                 },
               },
+            }),
       });
       return withValidation(row, item.validation);
     }),

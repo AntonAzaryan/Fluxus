@@ -3955,7 +3955,10 @@ describe('ульта отката: политика в сцене (опреде�
     const controller = createRewindController(a.sim, a.state, {
       history,
       inputs,
-      exempt: MATCH.rewind!.exempt,
+      // Ключ пишется, только если он в документе есть, — тем же приёмом, что и
+      // у рабочей сборки (`app/worker.ts`): «поля нет» и «поле пустое» здесь не
+      // сливаются, хотя ядро и подставляет под молчание пустой список.
+      ...(MATCH.rewind!.exempt !== undefined ? { exempt: MATCH.rewind!.exempt } : {}),
     });
     const record = (): void => {
       inputs.record(a.state.tick, a.frames());

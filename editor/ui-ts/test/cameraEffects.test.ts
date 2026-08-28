@@ -30,6 +30,7 @@ import {
   emittedEventTypes,
 } from '../src/areas/assetCameraEffects.js';
 import { createAssetArea, type AssetAreaState } from '../src/areas/assets.js';
+import type { WorkspaceFrame } from '../src/frame/frame.js';
 import { fakeStage, settle } from './support/project.js';
 import { buildFrame, buttonByKey, press } from './support/frame.js';
 
@@ -227,6 +228,8 @@ describe('ED-14: привязка пишется операцией и без и
 interface Fixture {
   readonly state: AssetAreaState;
   readonly session: EditorSession;
+  /** Сам каркас — по его оповещениям и видно, сколько кадров просит одна правка. */
+  readonly frame: WorkspaceFrame;
   view(): UiNode;
 }
 
@@ -250,7 +253,12 @@ async function areaWith(description: CameraEffectsDescription): Promise<Fixture>
   fixture.frame.view();
   // Сцена открыта рядом с манифестом: из неё собираются подсказки имён событий.
   fixture.session.openDocument({ id: SCENE, kind: 'scene', value: SCENE_VALUE });
-  return { state, session: fixture.session, view: () => fixture.frame.view() };
+  return {
+    state,
+    session: fixture.session,
+    frame: fixture.frame,
+    view: () => fixture.frame.view(),
+  };
 }
 
 /** Значения выпадающего списка по подписи ячейки таблицы полей. */
@@ -260,6 +268,17 @@ function optionsOf(root: UiNode, label: string): readonly string[] {
   return findAll(select, (node) => node.tag === 'option').map(
     (node) => node.attrs?.value ?? '',
   );
+}
+
+/** Ввод числа в поле параметра — тем же обработчиком, каким его вводит автор. */
+function commitParam(root: UiNode, param: string, raw: string): void {
+  const input = findAll(
+    root,
+    (node) => node.tag === 'input' && node.labels?.ariaLabel?.value === param,
+  )[0];
+  const handler = input?.on?.change;
+  if (handler === undefined) throw new Error(`поля "${param}" в таблице нет`);
+  handler({ target: { value: raw } } as unknown as Event);
 }
 
 /** Подписи строк таблицы полей — по ним видно, какие поля показаны. */
@@ -349,6 +368,41 @@ describe('ED-14: привязка снимается из таблицы, а н�
     fixture.state.effectBinding = 'Stale';
     press(buttonByKey(fixture.view(), 'ui.area.assets.effectRemove'));
     expect(bindingOf(fixture.session.documentValue(VISUALS), EVENTS_TABLE, 'Stale')).toBeNull();
+  });
+});
+
+describe('ED-30: отказ правки секции назван причиной', () => {
+  it('число вне диапазона показано причиной, а перерисовка просится один раз', async () => {
+    const fixture = await areaWith(CAMERA_EFFECTS_DESCRIPTION);
+    fixture.state.effectTable = EVENTS_TABLE;
+    fixture.state.effectBinding = 'FireballExploded';
+    let redraws = 0;
+    const stop = fixture.frame.subscribe(() => {
+      redraws += 1;
+    });
+
+    commitParam(fixture.view(), 'amplitude', '-1');
+    expect(fixture.state.failure).toMatch(/диапазон/);
+    // Правка секции идёт тем же каркасным ходом операции, что и назначение
+    // ассета, и просьба перерисовать в нём одна: вторая была бы вторым кадром
+    // на одну правку.
+    expect(redraws).toBe(1);
+    // Полуправок отказ не оставляет (ED-29).
+    expect(sectionOf(fixture.session, EVENTS_TABLE, 'FireballExploded')).toEqual({
+      effect: 'shake',
+      amplitude: 0.45,
+      radius: 14,
+    });
+
+    // Удачная правка гасит прежнюю причину (ED-8).
+    commitParam(fixture.view(), 'amplitude', '0.6');
+    expect(fixture.state.failure).toBeNull();
+    expect(sectionOf(fixture.session, EVENTS_TABLE, 'FireballExploded')).toEqual({
+      effect: 'shake',
+      amplitude: 0.6,
+      radius: 14,
+    });
+    stop();
   });
 });
 

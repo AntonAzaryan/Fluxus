@@ -438,6 +438,29 @@ describe('ED-20/ED-29: выбор пишется операцией и отме�
     ).toThrow(/ASSET-2/);
   });
 
+  it('отказ операции назван причиной, а перерисовка просится один раз (ED-30)', async () => {
+    const fixture = await buildAssetFrame();
+    let redraws = 0;
+    const stop = fixture.frame.subscribe(() => {
+      redraws += 1;
+    });
+    // Скина `green` в записи нет: операция откажет, и причина обязана быть
+    // видна, а не потеряна в обработчике нажатия (ED-30).
+    fixture.state.skin = 'green';
+    press(buttonByKey(fixture.frame.view(), 'ui.area.assets.assignSkin'));
+    expect(fixture.state.failure).toMatch(/green/);
+    // Ход операции у области один — каркасный (`runOperation`), и просьба
+    // перерисовать в нём одна: вторая была бы вторым кадром на одну правку.
+    expect(redraws).toBe(1);
+
+    // Удачная правка гасит прежнюю причину: оставленная, она отправила бы
+    // автора чинить починенное (ED-8).
+    fixture.state.skin = 'blue';
+    press(buttonByKey(fixture.frame.view(), 'ui.area.assets.assignSkin'));
+    expect(fixture.state.failure).toBeNull();
+    stop();
+  });
+
   it('назначать нечего — кнопка показана недоступной, а не молчит (ED-26)', async () => {
     const fixture = await buildAssetFrame();
     const disabled = (key: string): string | undefined =>

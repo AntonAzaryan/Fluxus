@@ -62,6 +62,21 @@ const STATIC_CAP = 512;
 /** Потолок перечня динамических коллайдеров: их десятки, а не тысячи (PHYS-5). */
 const DYNAMIC_CAP = 64;
 
+/**
+ * Изменяемая форма пробы: поля источника плюс причина «нет данных» (RDBG-6).
+ *
+ * Причина и ставится, и снимается записью — снятие не удаляет ключ. Проба
+ * переиспользуется между кадрами (RDBG-2), поэтому `delete` перекраивал бы её
+ * форму на каждом кадре: ровно та покадровая суета, ради отсутствия которой
+ * существует REND-26. Читателям это ничего не стоит — `DebugLayer.frame`
+ * проверяет `!== undefined`, а `dumpSection` пустые значения из выгрузки
+ * выбрасывает, так что «ключа нет» и «ключ пуст» для них одно и то же. Та же
+ * форма у источников самого движка (`render-ts/src/debug/*Source.ts`).
+ */
+function probeState<T extends object>(fields: T): T & { noData: string | undefined } {
+  return { ...fields, noData: undefined };
+}
+
 // ------------------------------------ 4.1 статика и broad-phase из handshake
 
 /** Прямоугольник нулевой толщины — так же представляет обрыв физика (PHYS-10). */
@@ -108,15 +123,14 @@ export function staticCollidersDebugSource(
     levelNeg: 0,
     levelPos: 0,
   }));
-  const probe = {
+  const probe = probeState({
     reconstruction: true as const,
     cliffSegments: 0,
     broadPhaseCellWorldUnits: BROAD_PHASE_CELL_WORLD_UNITS,
     broadPhaseCellsX: 0,
     broadPhaseCellsY: 0,
     colliders: rows.list,
-    noData: undefined as string | undefined,
-  };
+  });
   return {
     id: 'physics.statics',
     title: 'статика обрывов и broad-phase (реконструкция)',
@@ -199,13 +213,12 @@ export function dynamicCollidersDebugSource(statName: string): DebugSource<Debug
     frameWorldY: 0,
     radiusWorldUnits: 0,
   }));
-  const probe = {
+  const probe = probeState({
     statName,
     withRadius: 0,
     withoutRadius: 0,
     colliders: rows.list,
-    noData: undefined as string | undefined,
-  };
+  });
   return {
     id: 'physics.dynamics',
     title: 'круги динамических коллайдеров (по объявленному стату)',
@@ -302,7 +315,7 @@ export interface InspectorAccess {
  */
 export function inspectorDebugSource(access: InspectorAccess): DebugSource<DebugInspectorProbe> {
   const stats: Record<string, number> = {};
-  const probe = {
+  const probe = probeState({
     hit: 'none',
     entity: 0,
     decoration: false,
@@ -325,8 +338,7 @@ export function inspectorDebugSource(access: InspectorAccess): DebugSource<Debug
     motionPhase: null as number | null,
     flightPhase: null as number | null,
     stats,
-    noData: undefined as string | undefined,
-  };
+  });
   const reset = (): void => {
     probe.entity = 0;
     probe.decoration = false;
@@ -527,7 +539,7 @@ function groundAt(
  * наощупь.
  */
 export function cameraDebugSource(access: CameraDebugAccess): DebugSource<DebugCameraProbe> {
-  const probe = {
+  const probe = probeState({
     mode: 'none',
     posWorldX: 0,
     posWorldY: 0,
@@ -546,8 +558,7 @@ export function cameraDebugSource(access: CameraDebugAccess): DebugSource<DebugC
     edgeMarginPixels: 0,
     viewportWidthPixels: 0,
     viewportHeightPixels: 0,
-    noData: undefined as string | undefined,
-  };
+  });
   return {
     id: 'camera.pose',
     title: 'пирамида камеры и зоны краевого панорамирования',

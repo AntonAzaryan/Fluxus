@@ -34,7 +34,13 @@ const RU: LocaleBundle = {
 };
 
 function resources(project?: Record<string, LocaleBundle>): StringResources {
-  return new StringResources({ locale: 'ru', editor: { en: EN, ru: RU }, project });
+  // Ключ `project` пишется, только когда бандлы проекта есть, — тем же приёмом,
+  // каким его пишет рабочий сборщик ресурсов (`editor/ui-ts/src/i18n/uiBundles.ts`).
+  return new StringResources({
+    locale: 'ru',
+    editor: { en: EN, ru: RU },
+    ...(project === undefined ? {} : { project }),
+  });
 }
 
 describe('ED-28: ключ выводится из пути поля в схеме', () => {

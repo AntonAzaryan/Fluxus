@@ -116,6 +116,13 @@ export interface UiNode {
   readonly labels?: UiLabels;
   readonly text?: UiText;
   readonly children?: readonly UiNode[];
+  /**
+   * Слушатели узла. Узел без слушателей поля `on` не несёт ВОВСЕ: «слушателей
+   * нет» — это отсутствие ключа, а не ключ с пустым значением, ровно как у
+   * текстовых атрибутов `labels`. Собирающему описание это стоит подстановки
+   * ключа (`...(cond ? { on: … } : {})`), зато читающему описание не приходится
+   * различать два написания одного и того же.
+   */
   readonly on?: Readonly<Record<string, UiHandler>>;
 }
 

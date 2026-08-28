@@ -80,13 +80,14 @@ export function button(spec: ButtonSpec): UiNode {
       spec.icon === undefined ? undefined : icon({ name: spec.icon }),
       labelled ? el('span', { text: spec.label }) : undefined,
     ),
-    on:
-      spec.onPress === undefined || disabled
-        ? undefined
-        : {
+    ...(spec.onPress === undefined || disabled
+      ? {}
+      : {
+          on: {
             click: () => {
               spec.onPress?.();
             },
           },
+        }),
   });
 }

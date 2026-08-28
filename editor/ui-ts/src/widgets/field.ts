@@ -52,16 +52,21 @@ function control(spec: FieldSpec, extraClasses: readonly string[]): UiNode {
       el('input', {
         classes: ['fx-input', ...extraClasses],
         attrs: { type: 'text', ...(spec.readOnly === true ? { readonly: '' } : {}) },
-        labels: { ariaLabel: spec.label, placeholder: spec.placeholder, value: spec.value },
-        on:
-          spec.onCommit === undefined || spec.readOnly === true
-            ? undefined
-            : {
+        labels: {
+          ariaLabel: spec.label,
+          ...(spec.placeholder === undefined ? {} : { placeholder: spec.placeholder }),
+          value: spec.value,
+        },
+        ...(spec.onCommit === undefined || spec.readOnly === true
+          ? {}
+          : {
+              on: {
                 change: (event: Event) => {
                   const raw = eventValue(event);
                   if (raw !== undefined) spec.onCommit?.(raw);
                 },
               },
+            }),
       }),
     ],
   });
@@ -116,15 +121,16 @@ export function select(spec: SelectSpec): UiNode {
                   text: option.label,
                 }),
               ),
-              on:
-                spec.onSelect === undefined || disabled
-                  ? undefined
-                  : {
+              ...(spec.onSelect === undefined || disabled
+                ? {}
+                : {
+                    on: {
                       change: (event: Event) => {
                         const raw = eventValue(event);
                         if (raw !== undefined) spec.onSelect?.(raw);
                       },
                     },
+                  }),
             }),
             icon({ name: 'chevron-down' }),
           ],
@@ -165,14 +171,15 @@ export function toggle(spec: ToggleSpec): UiNode {
     },
     labels: { ariaLabel: spec.label },
     children: children(el('span', { classes: ['fx-toggle__knob'] })),
-    on:
-      spec.onChange === undefined || disabled
-        ? undefined
-        : {
+    ...(spec.onChange === undefined || disabled
+      ? {}
+      : {
+          on: {
             click: () => {
               spec.onChange?.(!spec.on);
             },
           },
+        }),
   });
   return withValidation(
     el('div', { classes: ['fx-control'], children: [switchNode] }),

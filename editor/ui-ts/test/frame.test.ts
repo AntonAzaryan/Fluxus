@@ -215,7 +215,10 @@ describe('ED-23: состояние области переживает пере
     const replacement: WorkspaceArea<{ readonly own: true }> = {
       ...blankArea,
       id: sceneArea.id,
-      hotkey: sceneArea.hotkey,
+      // Сочетание переносится КЛЮЧОМ, а не значением: у `blankArea` его нет, и
+      // `hotkey: undefined` поверх спреда означало бы «стереть», а не «взять то
+      // же» — вклад собирается спредом, и разница здесь наблюдаема.
+      ...(sceneArea.hotkey === undefined ? {} : { hotkey: sceneArea.hotkey }),
       createState: () => ({ own: true }),
     };
     fixture.areas.override(replacement);
