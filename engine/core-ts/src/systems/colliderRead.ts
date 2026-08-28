@@ -58,6 +58,23 @@ function colliderInto(
 export type FieldReader = (entity: EntityId, component: string, field: string) => number;
 
 /**
+ * Имена компонентов, которые физика читает (PHYS-1). Живут здесь, а не в
+ * `physics.ts`, потому что читает их этот модуль — и разрешение движения, и
+ * луч спрашивают у него одни и те же имена; в `physics.ts` тип остаётся
+ * реэкспортом, адрес физики снаружи один.
+ *
+ * В отличие от `PhysicsDeps` (`columnModel.ts`), это имена документа сцены, а
+ * не зависимости сборки.
+ */
+export interface PhysicsOptions {
+  readonly collider?: string;
+  readonly velocity?: string;
+}
+
+export const DEFAULT_COLLIDER_COMPONENT = 'Collider';
+export const DEFAULT_VELOCITY_COMPONENT = 'Velocity';
+
+/**
  * Handle полей, которые разрешение движения читает НА КАЖДОГО кандидата
  * КАЖДОГО шага оси (`data-driven-systems` SYS-10): позиция, четыре числа
  * коллайдера, три маски и скорость. Имена разрешаются один раз, на первом

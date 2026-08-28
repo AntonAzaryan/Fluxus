@@ -168,6 +168,21 @@ export function threatAdd(
   // ограничить её обязан механизм: величина события — число сцены, а не
   // проверенное поле документа (NPC-5).
   const amount = rawAmount >= THREAT_CEILING ? THREAT_CEILING : rawAmount;
+  placeThreat(ctx, handles, entity, source, amount);
+}
+
+/**
+ * Размещение уже ограниченной прибавки в таблице (NPC-5): свой слот, свободный
+ * слот либо вытеснение НАИМЕНЬШЕЙ угрозы. Один проход по таблице, без
+ * аллокаций.
+ */
+function placeThreat(
+  ctx: SystemContext,
+  handles: NpcHandles,
+  entity: EntityId,
+  source: EntityId,
+  amount: Fixed,
+): void {
   let freeSlot = -1;
   let minSlot = 0;
   let minValue = Number.POSITIVE_INFINITY;

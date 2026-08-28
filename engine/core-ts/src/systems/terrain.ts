@@ -143,10 +143,12 @@ function readMap(
       throw new Error(`TERR-2: карта "${what}", ряд ${y} — ${row.length} клеток вместо ${width}`);
     }
     for (let x = 0; x < width; x++) {
-      const value = alphabet.indexOf(row[x]!);
+      // Длина ряда уже сверена с шириной выше: символ по индексу есть.
+      const symbol = row[x]!;
+      const value = alphabet.indexOf(symbol);
       if (value < 0) {
         throw new Error(
-          `TERR-3: карта "${what}", клетка (${x}, ${y}): символ "${row[x]}" вне алфавита "${alphabet}"`,
+          `TERR-3: карта "${what}", клетка (${x}, ${y}): символ "${symbol}" вне алфавита "${alphabet}"`,
         );
       }
       cells[y * width + x] = value;
@@ -356,51 +358,118 @@ export function carveFloor(ctx: SystemContext, at: Vec2, radius?: Fixed): void {
     word.after &= ~(1 << (cell & 31));
   };
 
-  if (radius === undefined) {
-    clear(cellAt(grid, at));
-  } else {
-    const { tileSize, width, height } = grid;
-    // Центр клетки при нечётном `tileSize` в Q16.16 не представим — сдвиг
-    // усекает вниз, и это часть нормы (TERR-8), а не округление на вкус.
-    const half = tileSize >> 1;
-    // Границы — заведомо надмножество с запасом в клетку: принадлежность решает
-    // точный целочисленный тест ниже. Поэтому конвенция деления отрицательных
-    // (floor у JS против усечения у Rust) на результат не влияет — надмножеством
-    // границы остаются при любой из них, а парность даёт `distSqLe`.
-    //
-    // DET-2, условия 3 и 5: делимое — `at.x ± radius`, сумма двух `i32`,
-    // считанная обычной арифметикой, то есть по модулю меньше 2^32; делитель
-    // `tileSize` — целое ≥ 1 (TERR-2). Промежуток из 2^53 не выходит, частное
-    // приводится к целому. Условие 4 снято доводом выше: приведённое частное
-    // проходит дальше через `clamp` и точный тест `distSqLe`, стирающие разницу
-    // конвенций (тот же довод — у `hasFloorWithin`).
-    const lo = (v: number, max: number): number => clamp(Math.floor(v / tileSize) - 1, max);
-    const hi = (v: number, max: number): number => clamp(Math.floor(v / tileSize) + 1, max);
-    const xLo = lo(at.x - radius, width - 1);
-    const xHi = hi(at.x + radius, width - 1);
-    const yLo = lo(at.y - radius, height - 1);
-    const yHi = hi(at.y + radius, height - 1);
-    // Обход построчный — как нумерация клеток (TERR-6) и сборка обрывов (TERR-5).
-    for (let y = yLo; y <= yHi; y++) {
-      for (let x = xLo; x <= xHi; x++) {
-        const dx = x * tileSize + half - at.x;
-        const dy = y * tileSize + half - at.y;
-        if (distSqLe(dx, dy, radius)) clear(y * width + x);
-      }
-    }
-  }
+  if (radius === undefined) clear(cellAt(grid, at));
+  else carveCircle(grid, at, radius, clear);
 
   // Команда — одна на слово и только на изменившееся: карта пола участвует в
   // dirty-дельте (TERR-6), и запись прежнего значения объявила бы изменение,
   // которого не было. Порядок — по возрастанию индекса слова (TERR-8).
-  for (const index of [...words.keys()].sort((a, b) => a - b)) {
-    const word = words.get(index)!;
+  for (const [index, word] of [...words].sort((a, b) => a[0] - b[0])) {
     if (word.after === word.before) continue;
     ctx.commands.setField(floorEntity, FLOOR_COMPONENT, wordName(index, total), word.after);
   }
 }
 
 // ------------------------------------------------------------------- запросы
+
+/**
+ * Клетки круга снятия (TERR-8): круг по ЦЕНТРАМ клеток, тем же правилом, что
+ * фильтр `withinRadius` Query API.
+ *
+ * Границы — заведомо надмножество с запасом в клетку: принадлежность решает
+ * точный целочисленный тест внутри. Поэтому конвенция деления отрицательных
+ * (floor у JS против усечения у Rust) на результат не влияет — надмножеством
+ * границы остаются при любой из них, а парность даёт `distSqLe`.
+ *
+ * DET-2, условия 3 и 5: делимое — `at.x ± radius`, сумма двух `i32`, считанная
+ * обычной арифметикой, то есть по модулю меньше 2^32; делитель `tileSize` —
+ * целое ≥ 1 (TERR-2). Промежуток из 2^53 не выходит, частное приводится к
+ * целому. Условие 4 снято доводом выше: приведённое частное проходит дальше
+ * через `clamp` и точный тест `distSqLe`, стирающие разницу конвенций (тот же
+ * довод — у `hasFloorWithin`).
+ */
+function carveCircle(grid: TerrainGrid, at: Vec2, radius: Fixed, clear: (cell: number) => void): void {
+  const { tileSize, width, height } = grid;
+  // Центр клетки при нечётном `tileSize` в Q16.16 не представим — сдвиг
+  // усекает вниз, и это часть нормы (TERR-8), а не округление на вкус.
+  const half = tileSize >> 1;
+  const xLo = cellLo(at.x - radius, tileSize, width - 1);
+  const xHi = cellHi(at.x + radius, tileSize, width - 1);
+  const yLo = cellLo(at.y - radius, tileSize, height - 1);
+  const yHi = cellHi(at.y + radius, tileSize, height - 1);
+  // Обход построчный — как нумерация клеток (TERR-6) и сборка обрывов (TERR-5).
+  for (let y = yLo; y <= yHi; y++) {
+    for (let x = xLo; x <= xHi; x++) {
+      const dx = x * tileSize + half - at.x;
+      const dy = y * tileSize + half - at.y;
+      if (distSqLe(dx, dy, radius)) clear(y * width + x);
+    }
+  }
+}
+
+/** Нижняя граница обхода в клетках, с запасом в клетку. */
+function cellLo(value: Fixed, tileSize: number, max: number): number {
+  return clamp(Math.floor(value / tileSize) - 1, max);
+}
+
+/** Верхняя граница обхода в клетках, с запасом в клетку. */
+function cellHi(value: Fixed, tileSize: number, max: number): number {
+  return clamp(Math.floor(value / tileSize) + 1, max);
+}
+
+/**
+ * Ближайшая к точке координата прямоугольника клетки по одной оси (ARENA-5).
+ * Функция модуля, а не замыкание-помощник: опорную проверку зовут на каждом
+ * тике для каждой сущности с ненулевой опорой, и замыкание на вызов было бы
+ * аллокацией, пропорциональной сцене.
+ */
+function nearestOnCell(value: Fixed, min: Fixed, size: Fixed): Fixed {
+  if (value < min) return min;
+  const max = min + size;
+  return value > max ? max : value;
+}
+
+/**
+ * Пересекает ли круг хотя бы одну клетку с полом (ARENA-5). Обход построчный
+ * (TERR-6); на результат порядок не влияет — это проверка существования, и
+ * ранний выход детерминизма не трогает.
+ *
+ * Границы — надмножество с запасом в клетку, как в `carveCircle`:
+ * принадлежность решает точный тест внутри, поэтому конвенция деления
+ * отрицательных (floor у JS против усечения у Rust) роли не играет.
+ *
+ * DET-2, условия 3 и 5: четыре деления с делимым `position.x|y ± radius` —
+ * сумма двух `i32` обычной арифметикой, по модулю меньше 2^32, делитель
+ * `tileSize` целый ≥ 1 (TERR-2). Делимое бывает отрицательным, и условие 4
+ * снято тем же доводом, что в `carveCircle`: частное уходит в `clamp`, а
+ * принадлежность решает точный `distSqLe` — надмножеством границы остаются
+ * при любой конвенции.
+ */
+function floorWithin(
+  grid: TerrainGrid,
+  floorBit: (cell: number) => boolean,
+  position: Vec2,
+  radius: Fixed,
+): boolean {
+  const { tileSize, width, height } = grid;
+  const xLo = cellLo(position.x - radius, tileSize, width - 1);
+  const xHi = cellHi(position.x + radius, tileSize, width - 1);
+  const yLo = cellLo(position.y - radius, tileSize, height - 1);
+  const yHi = cellHi(position.y + radius, tileSize, height - 1);
+  let sawCell = false;
+  for (let y = yLo; y <= yHi; y++) {
+    for (let x = xLo; x <= xHi; x++) {
+      const nx = nearestOnCell(position.x, x * tileSize, tileSize);
+      const ny = nearestOnCell(position.y, y * tileSize, tileSize);
+      if (!distSqLe(nx - position.x, ny - position.y, radius)) continue;
+      sawCell = true;
+      if (floorBit(y * width + x)) return true;
+    }
+  }
+  // Круг не задел ни одной клетки — сущность далеко за краем сетки.
+  // Отвечает ближайшая клетка (тотальность TERR-4): тик не падает.
+  return sawCell ? false : floorBit(cellAt(grid, position));
+}
 
 /**
  * Запрос уровня и пола (TERR-4). Замыкается на мир и на сущность-носителя
@@ -438,42 +507,7 @@ export function createTerrainApi(
      * сущности посреди клетки, чей центр вне её малого круга. Здесь —
      * ближайшая точка прямоугольника клетки, включающее сравнение квадратов.
      */
-    hasFloorWithin: (position, radius) => {
-      if (radius <= 0) return floorBit(cellAt(grid, position));
-      const { tileSize, width, height } = grid;
-      // Границы — надмножество с запасом в клетку, как в `carveFloor`:
-      // принадлежность решает точный тест ниже, поэтому конвенция деления
-      // отрицательных (floor у JS против усечения у Rust) роли не играет.
-      // Без замыканий-помощников: запрос зовётся на каждом тике для каждой
-      // сущности с ненулевой опорой — это горячий путь, а не действие.
-      //
-      // DET-2, условия 3 и 5: четыре деления с делимым `position.x|y ± radius` —
-      // сумма двух `i32` обычной арифметикой, по модулю меньше 2^32, делитель
-      // `tileSize` целый ≥ 1 (TERR-2). Делимое бывает отрицательным, и условие 4
-      // снято тем же доводом, что в `carveFloor`: частное уходит в `clamp`, а
-      // принадлежность решает точный `distSqLe` — надмножеством границы остаются
-      // при любой конвенции.
-      const xLo = clamp(Math.floor((position.x - radius) / tileSize) - 1, width - 1);
-      const xHi = clamp(Math.floor((position.x + radius) / tileSize) + 1, width - 1);
-      const yLo = clamp(Math.floor((position.y - radius) / tileSize) - 1, height - 1);
-      const yHi = clamp(Math.floor((position.y + radius) / tileSize) + 1, height - 1);
-      // Обход построчный (TERR-6); на результат порядок не влияет — это
-      // проверка существования, и ранний выход детерминизма не трогает.
-      let sawCell = false;
-      for (let y = yLo; y <= yHi; y++) {
-        for (let x = xLo; x <= xHi; x++) {
-          const minX = x * tileSize;
-          const minY = y * tileSize;
-          const nx = position.x < minX ? minX : position.x > minX + tileSize ? minX + tileSize : position.x;
-          const ny = position.y < minY ? minY : position.y > minY + tileSize ? minY + tileSize : position.y;
-          if (!distSqLe(nx - position.x, ny - position.y, radius)) continue;
-          sawCell = true;
-          if (floorBit(y * width + x)) return true;
-        }
-      }
-      // Круг не задел ни одной клетки — сущность далеко за краем сетки.
-      // Отвечает ближайшая клетка (тотальность TERR-4): тик не падает.
-      return sawCell ? false : floorBit(cellAt(grid, position));
-    },
+    hasFloorWithin: (position, radius) =>
+      radius <= 0 ? floorBit(cellAt(grid, position)) : floorWithin(grid, floorBit, position, radius),
   };
 }

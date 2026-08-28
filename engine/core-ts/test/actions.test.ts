@@ -238,7 +238,9 @@ describe('итерация по событиям тика (ACT-1, EVT-2)', () =>
     },
   });
 
-  const types = (h: Harness): string[] => [...h.events].map((e) => `${e.type}:${e.data.n}`);
+  // Поле `n` кладёт сам тест; пропавшее показывается как `undefined` в диффе
+  // сравнения, а не теряется молча.
+  const types = (h: Harness): string[] => [...h.events].map((e) => `${e.type}:${String(e.data.n)}`);
 
   it('обходит только события своего типа, в порядке публикации', () => {
     const h = harness();

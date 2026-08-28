@@ -102,7 +102,12 @@ export function buildQueryMask(masks: ComponentMasks, componentIds: readonly num
 }
 
 export function isEmptyMask(queryMask: Uint32Array): boolean {
-  // eslint-disable-next-line @typescript-eslint/prefer-for-of -- baseline
+  /* eslint-disable-next-line @typescript-eslint/prefer-for-of --
+   * Индексный цикл намеренно: `matchesAny` зовёт эту проверку на КАЖДУЮ
+   * сущность запроса каждого тика, а `for-of` по TypedArray идёт через
+   * протокол итератора — объект на вызов, то есть аллокация, пропорциональная
+   * числу сущностей (дисциплина аллокаций). Соседние `matchesAll`/`matchesNone`
+   * по той же причине написаны так же. */
   for (let w = 0; w < queryMask.length; w++) {
     if (queryMask[w] !== 0) return false;
   }

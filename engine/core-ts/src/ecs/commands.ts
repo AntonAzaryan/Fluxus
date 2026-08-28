@@ -10,7 +10,7 @@
  * не вправе оставить в мире первые девять.
  */
 import type { CommandOutcome, CommandBuffer, EntityId, FieldOverrides, WorldState } from '../types.js';
-import { countCommands, nextSeq, record, traceFull } from '../debug.js';
+import { countCommands, nextSeq, record, traceFull, type DiagnosticsContext } from '../debug.js';
 import * as world from './world.js';
 
 /**
@@ -59,6 +59,66 @@ function commandData(cmd: Command): Readonly<Record<string, number | string>> {
         field: cmd.field,
         value: cmd.value,
       };
+  }
+}
+
+/**
+ * Обвязка прохода применения при полном уровне трейса (DIAG-2, CMD-3). Исходы
+ * копятся и уходят в трейс ПОСЛЕ прохода: перекрытие становится известно только
+ * когда до мира дошла более поздняя запись в то же поле, то есть задним числом
+ * относительно перекрытой команды. При выключенном трейсе записи нет вовсе — и
+ * ни одной аллокации сверх обычного прохода.
+ */
+interface FlushTrace {
+  readonly ctx: DiagnosticsContext;
+  readonly outcomes: (CommandOutcome | undefined)[];
+  /** Индекс последней команды, писавшей в адрес поля: `entity|component|field`. */
+  readonly lastWriter: Map<string, number>;
+}
+
+/** Применение одной команды к миру (CMD-3): порядок — порядок создания. */
+function applyCommand(state: WorldState, cmd: Command): void {
+  switch (cmd.kind) {
+    case 'spawn':
+      world.spawn(state, cmd.prefab, cmd.overrides);
+      break;
+    case 'destroy':
+      world.destroy(state, cmd.entity);
+      break;
+    case 'addComponent':
+      world.addComponent(state, cmd.entity, cmd.component, cmd.values);
+      break;
+    case 'removeComponent':
+      world.removeComponent(state, cmd.entity, cmd.component);
+      break;
+    case 'setField':
+      world.setField(state, cmd.entity, cmd.component, cmd.field, cmd.value);
+      break;
+  }
+}
+
+/** Исход применённой команды и перекрытие предыдущей записи в тот же адрес (CMD-3). */
+function noteApplied(trace: FlushTrace, cmd: Command, index: number): void {
+  trace.outcomes[index] = 'applied';
+  if (cmd.kind !== 'setField') return;
+  const key = `${cmd.entity}|${cmd.component}|${cmd.field}`;
+  const previous = trace.lastWriter.get(key);
+  // Значение предыдущей команды до мира дошло, но было перезаписано этой — для
+  // наблюдателя оно потеряно бесследно (CMD-3).
+  if (previous !== undefined) trace.outcomes[previous] = 'overwritten';
+  trace.lastWriter.set(key, index);
+}
+
+/** Записи о командах буфера — одним проходом после применения (DIAG-2, DIAG-5). */
+function traceCommands(trace: FlushTrace, commands: readonly Command[]): void {
+  for (let i = 0; i < commands.length; i++) {
+    const cmd = commands[i]!;
+    const outcome = trace.outcomes[i];
+    record(trace.ctx, 'command', 'info', 'COMMAND', {
+      ...(cmd.seq !== undefined ? { seq: cmd.seq } : {}),
+      data: commandData(cmd),
+      ...(outcome !== undefined ? { outcome } : {}),
+    });
   }
 }
 
@@ -200,12 +260,9 @@ export function createCommandBuffer(state: WorldState): CommandBufferHandle {
       // тексту действует инвариант «проход применения не бросает» (SYS-9).
       validate();
 
-      const traced = traceFull();
-      // Исходы копятся и уходят в трейс ПОСЛЕ прохода: перекрытие (CMD-3)
-      // становится известно только когда до мира дошла более поздняя запись в
-      // то же поле, то есть задним числом относительно перекрытой команды.
-      const outcomes: (CommandOutcome | undefined)[] | undefined = traced ? [] : undefined;
-      const lastWriter: Map<string, number> | undefined = traced ? new Map() : undefined;
+      const ctx = traceFull();
+      const trace: FlushTrace | undefined =
+        ctx === undefined ? undefined : { ctx, outcomes: [], lastWriter: new Map() };
       let applied = 0;
 
       for (let i = 0; i < commands.length; i++) {
@@ -215,54 +272,19 @@ export function createCommandBuffer(state: WorldState): CommandBufferHandle {
         // поколений в ID-1). Актуально для команд, созданных до того, как
         // предыдущая команда в этом же буфере убила цель.
         if (cmd.kind !== 'spawn' && !world.isAlive(state, cmd.entity)) {
-          if (outcomes !== undefined) outcomes[i] = 'dropped:dead-target';
+          if (trace !== undefined) trace.outcomes[i] = 'dropped:dead-target';
           continue;
         }
         applied++;
-        if (outcomes !== undefined && lastWriter !== undefined) {
-          outcomes[i] = 'applied';
-          if (cmd.kind === 'setField') {
-            const key = `${cmd.entity}|${cmd.component}|${cmd.field}`;
-            const previous = lastWriter.get(key);
-            // Значение предыдущей команды до мира дошло, но было перезаписано
-            // этой — для наблюдателя оно потеряно бесследно (CMD-3).
-            if (previous !== undefined) outcomes[previous] = 'overwritten';
-            lastWriter.set(key, i);
-          }
-        }
-        switch (cmd.kind) {
-          case 'spawn':
-            world.spawn(state, cmd.prefab, cmd.overrides);
-            break;
-          case 'destroy':
-            world.destroy(state, cmd.entity);
-            break;
-          case 'addComponent':
-            world.addComponent(state, cmd.entity, cmd.component, cmd.values);
-            break;
-          case 'removeComponent':
-            world.removeComponent(state, cmd.entity, cmd.component);
-            break;
-          case 'setField':
-            world.setField(state, cmd.entity, cmd.component, cmd.field, cmd.value);
-            break;
-        }
+        if (trace !== undefined) noteApplied(trace, cmd, i);
+        applyCommand(state, cmd);
       }
 
       // Счётчики нужны записи `systemEnd` и на уровне границ систем, где
       // потока команд нет вовсе (DIAG-3).
       countCommands(commands.length, applied);
 
-      if (traced !== undefined && outcomes !== undefined) {
-        for (let i = 0; i < commands.length; i++) {
-          const cmd = commands[i]!;
-          record(traced, 'command', 'info', 'COMMAND', {
-            ...(cmd.seq !== undefined ? { seq: cmd.seq } : {}),
-            data: commandData(cmd),
-            ...(outcomes[i] !== undefined ? { outcome: outcomes[i]! } : {}),
-          });
-        }
-      }
+      if (trace !== undefined) traceCommands(trace, commands);
 
       commands.length = 0;
       destroys = 0;

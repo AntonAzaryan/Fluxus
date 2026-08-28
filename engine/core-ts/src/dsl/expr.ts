@@ -79,10 +79,19 @@ export interface ExpressionEvaluator {
 
 const NO_VARS: ExprVars = {};
 
+/**
+ * Узел-объект выражения. Вход — `unknown`, а не `Expression`, и это не
+ * формальность: выражение приезжает документом контента, где законны и `null`,
+ * и вложенный массив, а `typeof null === 'object'`. В типе `Expression` их нет,
+ * поэтому проверка по типам выглядит лишней — а по данным она обязательна.
+ */
+function isNode(value: unknown): value is Readonly<Record<string, unknown>> {
+  return typeof value === 'object' && value !== null;
+}
+
 export function evaluate(expr: Expression, world: ExprWorld, vars: ExprVars = NO_VARS): ExprValue {
   if (typeof expr === 'number' || typeof expr === 'boolean') return expr;
-  // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- baseline
-  if (typeof expr !== 'object' || expr === null) {
+  if (!isNode(expr)) {
     throw new Error(`строка допустима только как аргумент-имя оператора: ${JSON.stringify(expr)}`);
   }
   const keys = Object.keys(expr);
@@ -91,9 +100,11 @@ export function evaluate(expr: Expression, world: ExprWorld, vars: ExprVars = NO
   }
   const op = keys[0]!;
   // hasOwn, а не `op in OPS`: иначе `constructor` в позиции оператора
-  // разрешился бы через цепочку прототипов (EXPR-6).
-  if (!Object.hasOwn(OPS, op)) throw new Error(`неизвестный оператор "${op}"`);
-  const def = OPS[op]!;
+  // разрешился бы через цепочку прототипов (EXPR-6). Разрешение имени и
+  // проверка — одним шагом: таблица операторов заполнена этим же модулем, и
+  // «нашлось» для неё то же самое, что «объявлено».
+  const def = Object.hasOwn(OPS, op) ? OPS[op] : undefined;
+  if (def === undefined) throw new Error(`неизвестный оператор "${op}"`);
   const raw = (expr as Record<string, unknown>)[op];
   // Значение-не-список читается как список из одного аргумента — конвенция
   // JsonLogic, на которой держится запись `{"!": {"var": "flag"}}` (EXPR-8).

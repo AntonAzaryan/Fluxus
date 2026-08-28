@@ -128,27 +128,31 @@ export function parseJournalDictionary(value: unknown, where: string): JournalDi
   // Ключи по алфавиту: словарь — вход чистой функции (DIAG-10), и порядок его
   // разбора не должен зависеть от порядка полей в файле.
   for (const type of Object.keys(table).sort()) {
-    const raw = table[type];
-    if (typeof raw !== 'object' || raw === null) {
-      throw new Error(`${where}: семантика события "${type}" — объект`);
-    }
-    const semantics = raw as { kind?: unknown; actor?: unknown; target?: unknown };
-    if (typeof semantics.kind !== 'string' || semantics.kind === '') {
-      throw new Error(`${where}: у события "${type}" нет непустого "kind" — семантического кода факта`);
-    }
-    if (semantics.actor !== undefined && typeof semantics.actor !== 'string') {
-      throw new Error(`${where}: роль "actor" события "${type}" — имя поля события, то есть строка`);
-    }
-    if (semantics.target !== undefined && typeof semantics.target !== 'string') {
-      throw new Error(`${where}: роль "target" события "${type}" — имя поля события, то есть строка`);
-    }
-    parsed[type] = {
-      kind: semantics.kind,
-      ...(semantics.actor !== undefined ? { actor: semantics.actor } : {}),
-      ...(semantics.target !== undefined ? { target: semantics.target } : {}),
-    };
+    parsed[type] = parseEventSemantics(table[type], type, where);
   }
   return { events: parsed };
+}
+
+/** Семантика одного типа события из словаря: код факта и имена полей-ролей. */
+function parseEventSemantics(raw: unknown, type: string, where: string): JournalEventSemantics {
+  if (typeof raw !== 'object' || raw === null) {
+    throw new Error(`${where}: семантика события "${type}" — объект`);
+  }
+  const semantics = raw as { kind?: unknown; actor?: unknown; target?: unknown };
+  if (typeof semantics.kind !== 'string' || semantics.kind === '') {
+    throw new Error(`${where}: у события "${type}" нет непустого "kind" — семантического кода факта`);
+  }
+  if (semantics.actor !== undefined && typeof semantics.actor !== 'string') {
+    throw new Error(`${where}: роль "actor" события "${type}" — имя поля события, то есть строка`);
+  }
+  if (semantics.target !== undefined && typeof semantics.target !== 'string') {
+    throw new Error(`${where}: роль "target" события "${type}" — имя поля события, то есть строка`);
+  }
+  return {
+    kind: semantics.kind,
+    ...(semantics.actor !== undefined ? { actor: semantics.actor } : {}),
+    ...(semantics.target !== undefined ? { target: semantics.target } : {}),
+  };
 }
 
 /** Ветвь истории по последней встреченной отметке (DIAG-9). */
@@ -176,7 +180,7 @@ function entryOf(
   branch: string | undefined,
   unknown: Set<string>,
 ): JournalEntry | undefined {
-  const common = {
+  const common: JournalCommon = {
     tick: record.tick,
     seq: record.seq,
     ...(record.system !== undefined ? { system: record.system } : {}),
@@ -186,24 +190,43 @@ function entryOf(
   // Нарушенные инварианты попадают в журнал БЕЗ словаря вовсе (DIAG-10): тот,
   // кто читает журнал боя, обязан увидеть дефект прогона там же, где видит
   // смерти и попадания, а не во втором файле.
-  if (record.kind === 'invariant' || record.kind === 'assert') {
-    return {
-      ...common,
-      kind: record.kind === 'invariant' ? JOURNAL_INVARIANT : JOURNAL_ASSERT,
-      type: record.code,
-      params: {
-        ...(record.data ?? {}),
-        // Текст свободен и частью API не является (DIAG-2), но локализует
-        // дефект — поэтому он параметр, а не идентификатор факта. Имя со знаком
-        // `$`: одноимённое поле `data` записи — данные прогона, и затирать их
-        // текстом инструмента нельзя.
-        ...(record.message !== undefined ? { [JOURNAL_MESSAGE]: record.message } : {}),
-      },
-    };
-  }
-
+  if (record.kind === 'invariant' || record.kind === 'assert') return brokenEntry(record, common);
   if (record.kind !== 'event') return undefined;
+  return eventEntry(record, common, dictionary, unknown);
+}
 
+/** Общая часть факта: место в прогоне и его авторство (DIAG-2, DIAG-9). */
+interface JournalCommon {
+  readonly tick: number;
+  readonly seq: number;
+  readonly system?: string;
+  readonly branch?: string;
+}
+
+/** Нарушенный инвариант или assert (FP-4) — факт журнала без словаря. */
+function brokenEntry(record: DiagnosticRecord, common: JournalCommon): JournalEntry {
+  return {
+    ...common,
+    kind: record.kind === 'invariant' ? JOURNAL_INVARIANT : JOURNAL_ASSERT,
+    type: record.code,
+    params: {
+      ...(record.data ?? {}),
+      // Текст свободен и частью API не является (DIAG-2), но локализует
+      // дефект — поэтому он параметр, а не идентификатор факта. Имя со знаком
+      // `$`: одноимённое поле `data` записи — данные прогона, и затирать их
+      // текстом инструмента нельзя.
+      ...(record.message !== undefined ? { [JOURNAL_MESSAGE]: record.message } : {}),
+    },
+  };
+}
+
+/** Событие прогона (DIAG-5) — факт журнала по словарю игры (DIAG-10). */
+function eventEntry(
+  record: DiagnosticRecord,
+  common: JournalCommon,
+  dictionary: JournalDictionary | undefined,
+  unknown: Set<string>,
+): JournalEntry | undefined {
   const data = record.data ?? {};
   const type = data.type;
   // Тип события кладёт сама шина рядом с числовыми полями (`ecs/events.ts`).
@@ -219,25 +242,37 @@ function entryOf(
   const actor = actorField === undefined ? undefined : data[actorField];
   const target = targetField === undefined ? undefined : data[targetField];
 
-  const params: Record<string, number | string> = {};
-  for (const key of Object.keys(data).sort()) {
-    if (key === 'type') continue;
-    // Поле, занятое ролью, из параметров уходит — но только если роль
-    // действительно нашла значение: словарь, назвавший поле, которого в событии
-    // нет, не должен ещё и терять то, что в событии есть.
-    if (key === actorField && typeof actor === 'number') continue;
-    if (key === targetField && typeof target === 'number') continue;
-    params[key] = data[key]!;
-  }
-
   return {
     ...common,
     kind: semantics?.kind ?? JOURNAL_UNKNOWN,
     type,
     ...(typeof actor === 'number' ? { actor } : {}),
     ...(typeof target === 'number' ? { target } : {}),
-    params,
+    params: eventParams(data, actorField, targetField, actor, target),
   };
+}
+
+/**
+ * Параметры факта: все поля события, кроме типа и тех, что заняты ролями.
+ * Молча потерянное поле хуже лишнего (DIAG-10), поэтому уходит только то поле,
+ * роль которого действительно нашла значение: словарь, назвавший поле, которого
+ * в событии нет, не должен ещё и терять то, что в событии есть.
+ */
+function eventParams(
+  data: Readonly<Record<string, number | string>>,
+  actorField: string | undefined,
+  targetField: string | undefined,
+  actor: number | string | undefined,
+  target: number | string | undefined,
+): Record<string, number | string> {
+  const params: Record<string, number | string> = {};
+  for (const key of Object.keys(data).sort()) {
+    if (key === 'type') continue;
+    if (key === actorField && typeof actor === 'number') continue;
+    if (key === targetField && typeof target === 'number') continue;
+    params[key] = data[key]!;
+  }
+  return params;
 }
 
 /**

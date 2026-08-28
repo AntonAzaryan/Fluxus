@@ -148,15 +148,15 @@ describe('снятие пола: область (TERR-8)', () => {
       [3, 1],
       [2, 0],
       [2, 2],
-    ]) {
-      expect(h.bit(cell(x!, y!)), `клетка (${x}, ${y}) в круге`).toBe(false);
+    ] as const) {
+      expect(h.bit(cell(x, y)), `клетка (${x}, ${y}) в круге`).toBe(false);
     }
     for (const [x, y] of [
       [1, 0],
       [3, 2],
       [4, 1],
-    ]) {
-      expect(h.bit(cell(x!, y!)), `клетка (${x}, ${y}) вне круга`).toBe(true);
+    ] as const) {
+      expect(h.bit(cell(x, y)), `клетка (${x}, ${y}) вне круга`).toBe(true);
     }
   });
 

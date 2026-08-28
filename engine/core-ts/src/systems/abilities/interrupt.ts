@@ -31,6 +31,7 @@ import {
   SlotScope,
   type ExprVarsRecord,
 } from './runtime.js';
+import type { SlotHandles } from './handles.js';
 import { NO_ENTITY, type EntityId, type QuerySpec, type System, type SystemContext } from '../../types.js';
 
 /**
@@ -243,49 +244,78 @@ export class CastInterruptSystem implements System {
     // Handle полей слота (SYS-10): один раз, на первом входе, после раннего выхода.
     const h = this.scope.handles(ctx);
     for (const slot of slots) {
-      const phaseIndex = ctx.getByHandle(slot, h.phase);
-      if (phaseIndex < 0) continue;
-      const ability = abilityOf(this.catalog, ctx, h, slot);
-      if ((ability.declared & sourceMask(INTERRUPT_DAMAGED)) === 0) continue;
-      const owner = ctx.getByHandle(slot, h.owner);
-      if (owner === NO_ENTITY || !ctx.isAlive(owner)) continue;
-
-      // Урон за тик суммируется: «получил урон сверх порога» — про тик, а не
-      // про отдельное событие, и два попадания подряд обязаны складываться.
-      let damage = 0;
-      let hit = false;
-      for (let i = 0; i < published; i++) {
-        const event = ctx.events.at(i);
-        if (event.type !== damageType) continue;
-        if (!Object.hasOwn(event.data, damageEntityField)) continue;
-        if (event.data[damageEntityField] !== owner) continue;
-        hit = true;
-        // Сложение через Math API, а не голым `+`: величина урона — данные
-        // контента, и масштаб у неё Q16.16 (DET-2, FP-4).
-        const amount = Object.hasOwn(event.data, damageAmountField) ? event.data[damageAmountField]! : 0;
-        damage = ctx.math.add(damage, amount);
-      }
-      if (!hit) continue;
-
-      this.scope.bind(ctx, slot, owner);
-      const threshold =
-        ability.damageThreshold === undefined ? 0 : thresholdOf(ctx, ability, this.scope.vars);
-      if (damage <= threshold) continue;
-
-      const phase = this.catalog.phases[ability.phaseStart + phaseIndex]!;
-      applyInterrupt(
-        ctx,
-        this.catalog,
-        ability,
-        phase,
-        slot,
-        owner,
-        INTERRUPT_DAMAGED,
-        this.scope,
-        this.name,
-      );
+      this.interruptSlot(ctx, h, slot, published, damageType, damageEntityField, damageAmountField);
     }
   }
+
+  /** Один слот: дошёл ли до него урон этого тика и превысил ли он порог (ABIL-6). */
+  private interruptSlot(
+    ctx: SystemContext,
+    h: SlotHandles,
+    slot: EntityId,
+    published: number,
+    damageType: string,
+    damageEntityField: string,
+    damageAmountField: string,
+  ): void {
+    const phaseIndex = ctx.getByHandle(slot, h.phase);
+    if (phaseIndex < 0) return;
+    const ability = abilityOf(this.catalog, ctx, h, slot);
+    if ((ability.declared & sourceMask(INTERRUPT_DAMAGED)) === 0) return;
+    const owner = ctx.getByHandle(slot, h.owner);
+    if (owner === NO_ENTITY || !ctx.isAlive(owner)) return;
+
+    const damage = damageThisTick(ctx, owner, published, damageType, damageEntityField, damageAmountField);
+    // Урона по владельцу не было вовсе — порог не спрашивается: он может быть
+    // и отрицательным, и тогда «нет события» отличается от «ноль урона».
+    if (damage === undefined) return;
+
+    this.scope.bind(ctx, slot, owner);
+    const threshold =
+      ability.damageThreshold === undefined ? 0 : thresholdOf(ctx, ability, this.scope.vars);
+    if (damage <= threshold) return;
+
+    const phase = this.catalog.phases[ability.phaseStart + phaseIndex]!;
+    applyInterrupt(
+      ctx,
+      this.catalog,
+      ability,
+      phase,
+      slot,
+      owner,
+      INTERRUPT_DAMAGED,
+      this.scope,
+      this.name,
+    );
+  }
+}
+
+/**
+ * Урон, полученный владельцем за тик (ABIL-6). Суммируется: «получил урон сверх
+ * порога» — про тик, а не про отдельное событие, и два попадания подряд обязаны
+ * складываться. `undefined` — событий урона по этому владельцу не было ни
+ * одного, и это не то же самое, что нулевой урон.
+ */
+function damageThisTick(
+  ctx: SystemContext,
+  owner: EntityId,
+  published: number,
+  damageType: string,
+  damageEntityField: string,
+  damageAmountField: string,
+): number | undefined {
+  let damage: number | undefined;
+  for (let i = 0; i < published; i++) {
+    const event = ctx.events.at(i);
+    if (event.type !== damageType) continue;
+    if (!Object.hasOwn(event.data, damageEntityField)) continue;
+    if (event.data[damageEntityField] !== owner) continue;
+    // Сложение через Math API, а не голым `+`: величина урона — данные
+    // контента, и масштаб у неё Q16.16 (DET-2, FP-4).
+    const amount = Object.hasOwn(event.data, damageAmountField) ? event.data[damageAmountField]! : 0;
+    damage = ctx.math.add(damage ?? 0, amount);
+  }
+  return damage;
 }
 
 function thresholdOf(ctx: SystemContext, ability: CompiledAbility, vars: ExprVarsRecord): number {

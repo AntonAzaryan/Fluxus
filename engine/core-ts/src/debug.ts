@@ -32,7 +32,14 @@ import type {
  * В релизе `DEBUG === false`, и все ветки с assert вырезаются минификатором.
  */
 export const DEBUG: boolean =
-  // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- baseline
+  /* eslint-disable-next-line @typescript-eslint/no-unnecessary-condition --
+   * `?.` здесь не лишний, и выражение сознательно оставлено дословным.
+   * Типы Node обещают, что `process.env` есть всегда, но эта строка исполняется
+   * и там, где `process` — shim бандлера без `env`, и там, где глобали нет
+   * вовсе (браузер, воркер); отсюда обе проверки. Переписать их через
+   * промежуточную переменную нельзя: бандлер подставляет значение вместо
+   * ТЕКСТА `process.env.NODE_ENV`, и на этой подстановке держится вырезание
+   * веток assert в релизе (FP-4). */
   typeof process !== 'undefined' && process.env?.NODE_ENV !== 'production';
 
 /** Счётчики текущей системы для записи `systemEnd` (DIAG-3). */

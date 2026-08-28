@@ -37,6 +37,7 @@ export function execute(
   vars: ExprVars = {},
   body?: string,
 ): void {
+  // Индексный цикл: номер узла входит в путь ошибки исполнения (SYS-9) ниже.
   for (let i = 0; i < actions.length; i++) {
     const action = actions[i]!;
     const keys = Object.keys(action);
@@ -45,9 +46,11 @@ export function execute(
     }
     const name = keys[0]!;
     // hasOwn, а не `name in ACTIONS`: то же правило, что для операторов (EXPR-6).
-    if (!Object.hasOwn(ACTIONS, name)) throw new Error(`неизвестное действие "${name}"`);
+    // Разрешение имени и проверка одним шагом — как у операторов в `expr.ts`.
+    const run = Object.hasOwn(ACTIONS, name) ? ACTIONS[name] : undefined;
+    if (run === undefined) throw new Error(`неизвестное действие "${name}"`);
     try {
-      ACTIONS[name]!(args(action[name], name), ctx, vars);
+      run(args(action[name], name), ctx, vars);
     } catch (cause) {
       throw atNode(`${body === undefined ? '' : `.${body}`}[${i}].${name}`, cause);
     }

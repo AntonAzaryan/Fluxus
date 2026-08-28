@@ -7,7 +7,7 @@
  * меняет ничего вокруг.
  */
 import { execute, actionNames, requiredArgs, systemError, type Action } from './actions.js';
-import { arityError, signatureOf, type Expression } from './expr.js';
+import { arityError, signatureOf, type Expression, type OpSignature } from './expr.js';
 import { componentSchema, prefabOf } from '../ecs/world.js';
 import type { System, SystemContext, WorldState } from '../types.js';
 
@@ -167,88 +167,17 @@ function checkAction(node: unknown, world: WorldState, scope: Scope, path: strin
   if (!actionNames.includes(name)) fail(path, `неизвестное действие "${name}"`);
   const here = `${path}.${name}`;
   const args = asMap(rawArgs, here);
-
-  // Имена, введённые этим действием, видны только его телу; `bindings` при
-  // этом вычисляются снаружи (параллельное связывание, см. ACT-1). Вид
-  // связывания запоминается вместе с именем — по нему решается `set` (ACT-4).
-  const inner = new Map(scope);
-  if (args.as !== undefined) inner.set(literal(args.as, `${here}.as`), 'as');
-  if (args.bindings !== undefined) {
-    for (const key of Object.keys(asMap(args.bindings, `${here}.bindings`))) inner.set(key, 'let');
-  }
+  const inner = innerScope(scope, args, here);
 
   const component = args.component === undefined ? undefined : literal(args.component, `${here}.component`);
   if (component !== undefined && componentSchema(world, component) === undefined) {
     fail(`${here}.component`, `компонент "${component}" не зарегистрирован`);
   }
 
+  // Окружение собирается один раз на действие, а не на каждый его аргумент.
+  const argScope: ActionArgScope = { world, scope, inner, args, component, here };
   for (const [key, value] of Object.entries(args)) {
-    const at = `${here}.${key}`;
-    switch (key) {
-      case 'do':
-      case 'then':
-      case 'else':
-        checkActions(value, world, inner, at);
-        break;
-      case 'values':
-      case 'data':
-      case 'bindings':
-        checkFields(value, world, scope, at, component);
-        break;
-      case 'entity':
-      case 'cond':
-      case 'bound':
-      case 'value':
-      case 'nearestTo':
-      case 'limit':
-      case 'at':
-      case 'radius':
-      case 'def':
-      case 'from':
-      case 'to':
-      case 'duration':
-      case 'easing':
-      case 'ignoreTimeScale':
-      case 'id':
-        // Аргументы-выражения: шесть общих позиций плюс `at`/`radius` у
-        // carveFloor, числа addTween (`def`, `from`, `to`, `duration`,
-        // `easing`, `ignoreTimeScale`) и `id` модификаторов. Исполнитель
-        // вычисляет их все одним `evaluate` — значит и проверяет их этот же
-        // обход (SYS-3): опечатка в редко исполняемой ветке обязана упасть на
-        // регистрации, а не на первом срабатывании.
-        checkExpression(value, world, scope, at);
-        break;
-      // Имя изменяемой привязки (ACT-4): вид связывания известен статически,
-      // поэтому и несвязанное имя, и связанное `as` отвергаются здесь — как
-      // несвязанный `var`, и по той же причине.
-      case 'name': {
-        const target = literal(value, at);
-        const kind = scope.get(target);
-        if (kind === undefined) fail(at, `переменная "${target}" не связана`);
-        if (kind !== 'let') fail(at, `переменная "${target}" связана как "as" и неизменяема`);
-        break;
-      }
-      case 'query':
-        checkQuery(value, world, scope, at);
-        break;
-      case 'overrides':
-        checkOverrides(value, world, scope, at, literal(args.prefab, `${here}.prefab`));
-        break;
-      case 'prefab': {
-        const prefab = literal(value, at);
-        if (prefabOf(world, prefab) === undefined) fail(at, `prefab "${prefab}" не зарегистрирован`);
-        break;
-      }
-      case 'component':
-      case 'field':
-      case 'type':
-      case 'as':
-      case 'subStream':
-        literal(value, at);
-        break;
-      // Ключ вне конвенции не читает ни одно действие таблицы — содержимое
-      // такого аргумента исполнителю невидимо, и проверять в нём нечего.
-    }
+    checkActionArg(key, value, argScope);
   }
 
   // Обязательные аргументы — после обхода, а не до него: если в написанном есть
@@ -257,6 +186,106 @@ function checkAction(node: unknown, world: WorldState, scope: Scope, path: strin
   const required = Object.hasOwn(requiredArgs, name) ? requiredArgs[name]! : [];
   for (const key of required) {
     if (args[key] === undefined) fail(here, `не задан обязательный аргумент "${key}"`);
+  }
+}
+
+/**
+ * Имена, введённые действием, видны только его телу; `bindings` при этом
+ * вычисляются снаружи (параллельное связывание, см. ACT-1). Вид связывания
+ * запоминается вместе с именем — по нему решается `set` (ACT-4).
+ */
+function innerScope(scope: Scope, args: Readonly<Record<string, unknown>>, here: string): Scope {
+  const inner = new Map(scope);
+  if (args.as !== undefined) inner.set(literal(args.as, `${here}.as`), 'as');
+  if (args.bindings !== undefined) {
+    for (const key of Object.keys(asMap(args.bindings, `${here}.bindings`))) inner.set(key, 'let');
+  }
+  return inner;
+}
+
+/**
+ * Окружение разбора одного аргумента действия: обе области имён (внешняя — для
+ * выражений, внутренняя — для тела), сам список аргументов и путь до узла.
+ * Записью, а не восемью позиционными аргументами: вызов — один на аргумент
+ * действия, на регистрации системы, вне тика.
+ */
+interface ActionArgScope {
+  readonly world: WorldState;
+  readonly scope: Scope;
+  readonly inner: Scope;
+  readonly args: Readonly<Record<string, unknown>>;
+  readonly component: string | undefined;
+  readonly here: string;
+}
+
+/** Один аргумент действия по конвенции имён Action DSL (SYS-3). */
+function checkActionArg(key: string, value: unknown, ctx: ActionArgScope): void {
+  const { world, scope, inner, args, component, here } = ctx;
+  const at = `${here}.${key}`;
+  switch (key) {
+    case 'do':
+    case 'then':
+    case 'else':
+      checkActions(value, world, inner, at);
+      break;
+    case 'values':
+    case 'data':
+    case 'bindings':
+      checkFields(value, world, scope, at, component);
+      break;
+    case 'entity':
+    case 'cond':
+    case 'bound':
+    case 'value':
+    case 'nearestTo':
+    case 'limit':
+    case 'at':
+    case 'radius':
+    case 'def':
+    case 'from':
+    case 'to':
+    case 'duration':
+    case 'easing':
+    case 'ignoreTimeScale':
+    case 'id':
+      // Аргументы-выражения: шесть общих позиций плюс `at`/`radius` у
+      // carveFloor, числа addTween (`def`, `from`, `to`, `duration`,
+      // `easing`, `ignoreTimeScale`) и `id` модификаторов. Исполнитель
+      // вычисляет их все одним `evaluate` — значит и проверяет их этот же
+      // обход (SYS-3): опечатка в редко исполняемой ветке обязана упасть на
+      // регистрации, а не на первом срабатывании.
+      checkExpression(value, world, scope, at);
+      break;
+    // Имя изменяемой привязки (ACT-4): вид связывания известен статически,
+    // поэтому и несвязанное имя, и связанное `as` отвергаются здесь — как
+    // несвязанный `var`, и по той же причине.
+    case 'name': {
+      const target = literal(value, at);
+      const kind = scope.get(target);
+      if (kind === undefined) fail(at, `переменная "${target}" не связана`);
+      if (kind !== 'let') fail(at, `переменная "${target}" связана как "as" и неизменяема`);
+      break;
+    }
+    case 'query':
+      checkQuery(value, world, scope, at);
+      break;
+    case 'overrides':
+      checkOverrides(value, world, scope, at, literal(args.prefab, `${here}.prefab`));
+      break;
+    case 'prefab': {
+      const prefab = literal(value, at);
+      if (prefabOf(world, prefab) === undefined) fail(at, `prefab "${prefab}" не зарегистрирован`);
+      break;
+    }
+    case 'component':
+    case 'field':
+    case 'type':
+    case 'as':
+    case 'subStream':
+      literal(value, at);
+      break;
+    // Ключ вне конвенции не читает ни одно действие таблицы — содержимое
+    // такого аргумента исполнителю невидимо, и проверять в нём нечего.
   }
 }
 
@@ -271,7 +300,9 @@ function checkFields(
   const schema = component === undefined ? undefined : componentSchema(world, component);
   for (const [field, expr] of Object.entries(asMap(node, path))) {
     if (schema !== undefined && schema.fields[field] === undefined) {
-      fail(`${path}.${field}`, `у компонента "${component}" нет поля "${field}"`);
+      // Имя — из самой схемы: реестр адресует её именно им (ECS-5), и в
+      // сообщении не остаётся `component`, который тип видит как необязательный.
+      fail(`${path}.${field}`, `у компонента "${schema.name}" нет поля "${field}"`);
     }
     checkExpression(expr, world, scope, `${path}.${field}`);
   }
@@ -340,8 +371,22 @@ function checkExpression(node: unknown, world: WorldState, scope: Scope, path: s
   const wrongArity = arityError(op, signature, args.length);
   if (wrongArity !== undefined) fail(at, wrongArity);
 
+  checkSignatureShape(signature, args, at);
+  checkOperandNames(op, args, world, scope, at);
+
+  args.forEach((arg, i) => {
+    if (signature.literals.includes(i)) return;
+    checkExpression(arg, world, scope, `${at}[${i}]`);
+  });
+}
+
+/**
+ * Форма аргументов по сигнатуре оператора (EXPR-8): литеральные позиции и
+ * области определения целых литералов.
+ */
+function checkSignatureShape(signature: OpSignature, args: readonly Expression[], at: string): void {
   // Литеральные позиции — только имена; в остальных позициях строка отвергается
-  // рекурсивным вызовом ниже. Позиция за концом списка не проверяется: она
+  // рекурсивным вызовом снаружи. Позиция за концом списка не проверяется: она
   // бывает только у оператора с необязательным хвостом (`mask` у raycast,
   // EXPR-8), а её отсутствие уже разрешено арностью.
   for (const i of signature.literals) {
@@ -357,7 +402,20 @@ function checkExpression(node: unknown, world: WorldState, scope: Scope, path: s
       fail(`${at}[${position}]`, `ожидалось целое ${lo}..${hi}, получено ${value}`);
     }
   }
+}
 
+/**
+ * Сверка с зарегистрированным миром: связана ли переменная, существуют ли
+ * компонент и поле (SYS-3). Это уже не форма узла, поэтому и живёт отдельно от
+ * проверки по сигнатуре.
+ */
+function checkOperandNames(
+  op: string,
+  args: readonly Expression[],
+  world: WorldState,
+  scope: Scope,
+  at: string,
+): void {
   switch (op) {
     case 'var': {
       const name = args[0] as string;
@@ -380,9 +438,4 @@ function checkExpression(node: unknown, world: WorldState, scope: Scope, path: s
     default:
       break;
   }
-
-  args.forEach((arg, i) => {
-    if (signature.literals.includes(i)) return;
-    checkExpression(arg, world, scope, `${at}[${i}]`);
-  });
 }

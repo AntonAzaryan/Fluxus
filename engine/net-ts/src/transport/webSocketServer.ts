@@ -235,8 +235,10 @@ export async function webSocketChannelServer(
           target.wss.close();
         }
         http.close(() => { resolve(); });
-        // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- baseline
-        http.closeAllConnections?.();
+        // Метод есть у сервера Node с 18.2, а `engines` пакета требуют 22.18+:
+        // необязательный вызов был бы защитой от версии, которая сюда не дойдёт.
+        // Тот же вызов у агента (`server-agent-ts`) написан так же.
+        http.closeAllConnections();
       });
     },
   };

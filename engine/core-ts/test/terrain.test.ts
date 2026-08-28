@@ -14,6 +14,7 @@ import {
   FLOOR_COMPONENT,
   TERRAIN_CELL_KINDS,
   TERRAIN_LEVEL_MAX,
+  type TerrainCellKind,
   type TerrainDef,
 } from '../src/systems/terrain.js';
 import { LEVEL_OVERRIDE_COMPONENT } from '../src/types.js';
@@ -114,11 +115,17 @@ describe('запись карт ассета (TERR-3)', () => {
   });
 
   it('вид клетки записывается символом, дающим те же рампу и пол', () => {
-    const [plain, ramp, noFloor] = TERRAIN_CELL_KINDS.map((kind) => {
+    // Виды берутся у самого перечня (TERR-3): кортеж, а не результат `map`, —
+    // тогда у каждого символа есть свой вид, а не «элемент массива».
+    const flagChar = (kind: TerrainCellKind): string => {
       const char = terrainFlagChar(kind);
       expect(char).not.toBeNull();
       return char!;
-    });
+    };
+    const [plainKind, rampKind, noFloorKind] = TERRAIN_CELL_KINDS;
+    const plain = flagChar(plainKind);
+    const ramp = flagChar(rampKind);
+    const noFloor = flagChar(noFloorKind);
     const grid = createTerrainGrid({
       width: 2,
       height: 2,

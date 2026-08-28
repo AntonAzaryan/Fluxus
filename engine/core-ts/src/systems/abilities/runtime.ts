@@ -31,6 +31,7 @@ import {
   type AbilityCatalog,
   type CompiledAbility,
   type CompiledBuff,
+  type CompiledStep,
 } from './model.js';
 import {
   NO_ENTITY,
@@ -522,33 +523,63 @@ export function stagedStepsValid(
   const staged = ctx.getByHandle(slot, h.staged);
   for (let i = 0; i < staged && i < ability.stepCount; i++) {
     const step = catalog.steps[ability.stepStart + i]!;
-    // Точка проверки: у шага `unit` — ТЕКУЩАЯ позиция сущности (цель могла
-    // уйти), у шага `point` — записанная точка. У `vector` и `none` мерить
-    // нечего: первый хранит единичное направление, второй не берёт ничего.
-    let pointX: Fixed;
-    let pointY: Fixed;
-    if (step.kind === STEP_UNIT) {
-      const unit = ctx.getByHandle(slot, h.stepEntity[i]!);
-      if (unit === NO_ENTITY || !ctx.isAlive(unit)) return false;
-      if (step.filter !== undefined) {
-        vars[CANDIDATE_NAME] = unit;
-        if (!predicate(step.filter, ctx, vars)) return false;
-      }
-      if (!visibleToOwner(ctx, catalog, owner, unit)) return false;
-      pointX = positionOf(ctx, unit, 'x');
-      pointY = positionOf(ctx, unit, 'y');
-    } else if (step.kind === STEP_POINT) {
-      pointX = ctx.getByHandle(slot, h.stepX[i]!);
-      pointY = ctx.getByHandle(slot, h.stepY[i]!);
-    } else {
-      continue;
-    }
-    if (step.range === undefined) continue;
-    const range = evaluate(step.range, ctx, vars);
-    if (typeof range !== 'number') throw typeError(`шаг ${i} способности "${ability.id}"`, 'number', range);
-    const dx = ctx.math.sub(pointX, stepOriginX(ctx, h, slot, owner, i));
-    const dy = ctx.math.sub(pointY, stepOriginY(ctx, h, slot, owner, i));
-    if (!distSqLe(dx, dy, range)) return false;
+    if (!stagedStepValid(ctx, catalog, h, ability, slot, owner, vars, step, i)) return false;
   }
   return true;
+}
+
+/**
+ * Один накопленный шаг (ABIL-5). Точка проверки: у шага `unit` — ТЕКУЩАЯ
+ * позиция сущности (цель могла уйти), у шага `point` — записанная точка.
+ */
+function stagedStepValid(
+  ctx: SystemContext,
+  catalog: AbilityCatalog,
+  h: SlotHandles,
+  ability: CompiledAbility,
+  slot: EntityId,
+  owner: EntityId,
+  vars: ExprVarsRecord,
+  step: CompiledStep,
+  i: number,
+): boolean {
+  if (step.kind === STEP_POINT) {
+    const pointX = ctx.getByHandle(slot, h.stepX[i]!);
+    const pointY = ctx.getByHandle(slot, h.stepY[i]!);
+    return stepInRange(ctx, h, ability, slot, owner, vars, step, i, pointX, pointY);
+  }
+  // У `vector` и `none` мерить нечего: первый хранит единичное направление,
+  // второй не берёт ничего.
+  if (step.kind !== STEP_UNIT) return true;
+  const unit = ctx.getByHandle(slot, h.stepEntity[i]!);
+  if (unit === NO_ENTITY || !ctx.isAlive(unit)) return false;
+  if (step.filter !== undefined) {
+    vars[CANDIDATE_NAME] = unit;
+    if (!predicate(step.filter, ctx, vars)) return false;
+  }
+  if (!visibleToOwner(ctx, catalog, owner, unit)) return false;
+  const pointX = positionOf(ctx, unit, 'x');
+  const pointY = positionOf(ctx, unit, 'y');
+  return stepInRange(ctx, h, ability, slot, owner, vars, step, i, pointX, pointY);
+}
+
+/** Расстояние шага в пределах объявленного `range` (ABIL-5); без него — да. */
+function stepInRange(
+  ctx: SystemContext,
+  h: SlotHandles,
+  ability: CompiledAbility,
+  slot: EntityId,
+  owner: EntityId,
+  vars: ExprVarsRecord,
+  step: CompiledStep,
+  i: number,
+  pointX: Fixed,
+  pointY: Fixed,
+): boolean {
+  if (step.range === undefined) return true;
+  const range = evaluate(step.range, ctx, vars);
+  if (typeof range !== 'number') throw typeError(`шаг ${i} способности "${ability.id}"`, 'number', range);
+  const dx = ctx.math.sub(pointX, stepOriginX(ctx, h, slot, owner, i));
+  const dy = ctx.math.sub(pointY, stepOriginY(ctx, h, slot, owner, i));
+  return distSqLe(dx, dy, range);
 }

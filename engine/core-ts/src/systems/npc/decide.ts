@@ -14,6 +14,7 @@
 import { div, mul } from '../../math/fixed.js';
 import { lengthOf } from '../../math/vector.js';
 import {
+  clamp01Fixed,
   combineUtilityFixed,
   considerationScoreFixed,
   finishUtilityFixed,
@@ -177,7 +178,7 @@ export class NpcDecider {
         if (this.target === NO_ENTITY || behavior.sense <= 0) return FIXED_ONE;
         const dx = posX(ctx, handles, this.target) - this.x;
         const dy = posY(ctx, handles, this.target) - this.y;
-        return clampUnit(div(lengthOf(dx, dy), behavior.sense));
+        return clamp01Fixed(div(lengthOf(dx, dy), behavior.sense));
       }
       case INPUT_HEALTH_FRACTION:
         return healthFraction(ctx, handles, this.entity);
@@ -193,10 +194,10 @@ export class NpcDecider {
             behavior.separation,
           );
         }
-        return clampUnit(div(this.crowd * FIXED_ONE, behavior.crowdScale * FIXED_ONE));
+        return clamp01Fixed(div(this.crowd * FIXED_ONE, behavior.crowdScale * FIXED_ONE));
       }
       case INPUT_STATE_ELAPSED:
-        return clampUnit(
+        return clamp01Fixed(
           div((ctx.tick - this.enteredTick) * FIXED_ONE, behavior.elapsedScale * FIXED_ONE),
         );
       case INPUT_ROUTE_REMAINING:
@@ -252,8 +253,3 @@ export class NpcDecider {
   }
 }
 
-/** Доля в [0, 1]: отношение уже посчитано в Q16.16, остаются обе границы. */
-function clampUnit(value: Fixed): Fixed {
-  if (value <= 0) return 0;
-  return value >= FIXED_ONE ? FIXED_ONE : value;
-}

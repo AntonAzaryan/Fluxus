@@ -1,4 +1,13 @@
-/* eslint-disable max-lines -- baseline */
+/* eslint-disable max-lines --
+ * Модуль — сам мир: состояние (`WorldInternal`), его мутаторы, проверки
+ * мутаторов, handle-доступ, плоская форма и клонирование. Всё, что отсюда ещё
+ * можно вынести, работает НАД `WorldInternal`, и вынос потребовал бы
+ * экспортировать сам внутренний вид мира: обход `WorldState` стал бы доступен
+ * любому модулю ядра, а это ровно тот побочный канал, ради закрытия которого
+ * общие мутаторы не выходят из `src/index.ts` (TICK-3). Проверки объявлений на
+ * загрузке (ECS-5) вынесены отдельно (`worldSchema.ts`) — они единственные, кто
+ * состояния мира не касается.
+ */
 /**
  * Мир: собственное SoA-хранилище компонентов по JSON-схемам (ECS-1, ECS-3),
  * prefabs (ECS-4), теги и generational ID (ID-1..5) поверх `entityIndex.ts`.
@@ -24,7 +33,13 @@ import type {
   FieldType,
   WorldState,
 } from '../types.js';
-import { FIELD_TYPES, NO_ENTITY } from '../types.js';
+import {
+  representable,
+  validatePrefabs,
+  validateSchemas,
+  valueError,
+  type PrefabDef,
+} from './worldSchema.js';
 import {
   cloneStores,
   createStores,
@@ -44,7 +59,6 @@ import {
   isAlive as indexIsAlive,
   aliveEntities as indexAliveEntities,
   room as indexRoom,
-  MAX_ENTITY_ID,
   type EntityIndex,
 } from './entityIndex.js';
 import {
@@ -57,19 +71,18 @@ import {
   type ComponentMasks,
 } from './componentMask.js';
 
-/** JSON prefab/archetype (ECS-4): набор компонентов + начальные значения полей, опционально теги. */
-export interface PrefabDef {
-  readonly name: string;
-  readonly components: Readonly<Record<string, Readonly<Record<string, number>>>>;
-  readonly tags?: readonly string[];
-}
-
 /**
  * Хранилища и таблица полей живут в `fieldTable.ts` — там же, где чтение по
  * handle (SYS-10). Реэкспорт: `peekField` буфера команд обязан брать
  * нейтральное значение из того же правила, что мутаторы (CMD-5, ECS-3).
  */
 export { neutralValue };
+
+/**
+ * Объявление prefab'а живёт с проверками объявлений (`worldSchema.ts`), а
+ * адресуют его через мир: адрес ECS снаружи один.
+ */
+export type { PrefabDef } from './worldSchema.js';
 
 interface WorldInternal {
   entities: EntityIndex;
@@ -108,114 +121,6 @@ function toInternal(state: WorldState): WorldInternal {
 
 function toState(internal: WorldInternal): WorldState {
   return internal as unknown as WorldState;
-}
-
-// ------------------------------------------------- типы полей (ECS-3, ECS-6)
-
-/** Границы 32-битного поля (`i32`, `fixed`). */
-const INT32_MIN = -2147483648;
-const INT32_MAX = 2147483647;
-
-/** Набор строкой: имя типа приходит из JSON, и в рантайме там что угодно. */
-const FIELD_TYPE_NAMES: readonly string[] = FIELD_TYPES;
-
-function isKnownFieldType(name: string): boolean {
-  return FIELD_TYPE_NAMES.includes(name);
-}
-
-/**
- * Представимо ли значение в типе поля (ECS-3). Проверка целости и два сравнения
- * — без аллокаций и без зависимости от числа полей: точка вызова горячая (запись
- * поля на каждую команду). Переполнение fixed-арифметики она не задевает:
- * значение приходит завёрнутым по FP-4 и в 32 бита уже помещается.
- */
-function representable(type: FieldType, value: number): boolean {
-  if (!Number.isInteger(value)) return false;
-  if (type === 'entity') return value === NO_ENTITY || (value >= 0 && value <= MAX_ENTITY_ID);
-  return value >= INT32_MIN && value <= INT32_MAX;
-}
-
-/** Сообщение об отказе записи — одно на все точки записи поля (ECS-3). */
-function valueError(
-  action: string,
-  component: string,
-  field: string,
-  type: FieldType,
-  value: number,
-): Error {
-  return new Error(
-    `${action}: компонент "${component}", поле "${field}" типа ${type} — значение ${value} непредставимо (ECS-3)`,
-  );
-}
-
-function validateSchemas(schemas: readonly ComponentSchema[]): Map<string, ComponentSchema> {
-  const map = new Map<string, ComponentSchema>();
-  for (const schema of schemas) {
-    if (map.has(schema.name)) {
-      throw new Error(`ECS-5: компонент "${schema.name}" объявлен дважды`);
-    }
-    for (const [field, type] of Object.entries(schema.fields)) {
-      if (!isKnownFieldType(type)) {
-        // Тип поля объявлен `FieldType`, но значение пришло из JSON — именно
-        // поэтому набор проверяется в рантайме, а не только компилятором.
-        throw new Error(
-          `ECS-5: компонент "${schema.name}", поле "${field}": неизвестный тип поля "${type}" — набор закрыт (ECS-3): ${FIELD_TYPE_NAMES.join(', ')}`,
-        );
-      }
-    }
-    if (schema.defaults) {
-      for (const [field, value] of Object.entries(schema.defaults)) {
-        const type = schema.fields[field];
-        if (type === undefined) {
-          throw new Error(
-            `ECS-5: компонент "${schema.name}": default ссылается на несуществующее поле "${field}"`,
-          );
-        }
-        // Непредставимый default — та же ошибка, что и запись (ECS-3), но
-        // поймана на загрузке: до первого тика она дешевле в разы.
-        if (!representable(type, value)) {
-          throw new Error(
-            `ECS-5: компонент "${schema.name}", поле "${field}" типа ${type}: default ${value} непредставим (ECS-3)`,
-          );
-        }
-      }
-    }
-    map.set(schema.name, schema);
-  }
-  return map;
-}
-
-function validatePrefabs(
-  prefabs: readonly PrefabDef[],
-  schemas: ReadonlyMap<string, ComponentSchema>,
-): Map<string, PrefabDef> {
-  const map = new Map<string, PrefabDef>();
-  for (const prefab of prefabs) {
-    if (map.has(prefab.name)) {
-      throw new Error(`ECS-5: prefab "${prefab.name}" объявлен дважды`);
-    }
-    for (const [component, values] of Object.entries(prefab.components)) {
-      const schema = schemas.get(component);
-      if (!schema) {
-        throw new Error(`ECS-5: prefab "${prefab.name}" ссылается на неизвестный компонент "${component}"`);
-      }
-      for (const [field, value] of Object.entries(values)) {
-        const type = schema.fields[field];
-        if (type === undefined) {
-          throw new Error(
-            `ECS-5: prefab "${prefab.name}", компонент "${component}" ссылается на несуществующее поле "${field}"`,
-          );
-        }
-        // Как и с defaults: непредставимое значение prefab'а — ошибка загрузки,
-        // а не отказ первого спавна (ECS-3).
-        if (!representable(type, value)) {
-          throw valueError(`ECS-5: prefab "${prefab.name}"`, component, field, type, value);
-        }
-      }
-    }
-    map.set(prefab.name, prefab);
-  }
-  return map;
 }
 
 /** Создаёт мир: валидирует схемы/prefabs (ECS-5) и аллоцирует SoA-хранилища ёмкостью `capacity`. */
@@ -336,8 +241,9 @@ export function toPlain(state: WorldState): PlainWorld {
   }
 
   const tags: [number, string[]][] = [];
-  for (const index of [...internal.tags.keys()].sort((a, b) => a - b)) {
-    const set = internal.tags.get(index)!;
+  // Пары, а не ключи с повторным поиском: порядок задаёт тот же числовой
+  // компаратор (SER-6), а множество приходит вместе со своим индексом.
+  for (const [index, set] of [...internal.tags].sort((a, b) => a[0] - b[0])) {
     if (set.size > 0) tags.push([index, [...set].sort()]);
   }
 

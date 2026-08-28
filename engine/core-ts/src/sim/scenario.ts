@@ -77,15 +77,7 @@ export interface RunOutput {
  * тем, что был до появления диагностики, — эталоны от параметра не зависят.
  */
 export function runScenario(def: ScenarioDef, diagnostics?: DiagnosticsSink): RunOutput {
-  if (typeof def.name !== 'string' || def.name === '') throw new Error('сценарий: "name" — непустая строка');
-  if (!Number.isInteger(def.seed)) throw new Error(`сценарий "${def.name}": "seed" — целое число`);
-  if (!Number.isInteger(def.ticks) || def.ticks < 0) {
-    throw new Error(`сценарий "${def.name}": "ticks" — неотрицательное целое`);
-  }
-
-  if (def.inputs !== undefined && def.players === undefined) {
-    throw new Error(`сценарий "${def.name}": есть "inputs", но нет "players" — слоты не определены (TICK-5)`);
-  }
+  checkScenario(def);
 
   // Сборка мира — общий путь `buildSimulation` (DET-1): порядок регистрации
   // систем, расстановка и момент хеша `worldInit` там же, где их берёт матч
@@ -107,12 +99,7 @@ export function runScenario(def: ScenarioDef, diagnostics?: DiagnosticsSink): Ru
     },
   );
 
-  const byTick = new Map<number, InputFrame[]>();
-  for (const frame of def.inputs ?? []) {
-    const list = byTick.get(frame.tick);
-    if (list) list.push(frame);
-    else byTick.set(frame.tick, [frame]);
-  }
+  const byTick = inputsByTick(def.inputs);
 
   const ticks: TickRecord[] = [record(state)];
   for (let i = 0; i < def.ticks; i++) {
@@ -121,6 +108,32 @@ export function runScenario(def: ScenarioDef, diagnostics?: DiagnosticsSink): Ru
   }
 
   return { scenario: def.name, seed: def.seed, worldInitHash: hash, ticks };
+}
+
+/**
+ * Проверка документа сценария до сборки мира (CLI-2): опечатка обязана назвать
+ * себя раньше, чем прогон дойдёт до первого тика.
+ */
+function checkScenario(def: ScenarioDef): void {
+  if (typeof def.name !== 'string' || def.name === '') throw new Error('сценарий: "name" — непустая строка');
+  if (!Number.isInteger(def.seed)) throw new Error(`сценарий "${def.name}": "seed" — целое число`);
+  if (!Number.isInteger(def.ticks) || def.ticks < 0) {
+    throw new Error(`сценарий "${def.name}": "ticks" — неотрицательное целое`);
+  }
+  if (def.inputs !== undefined && def.players === undefined) {
+    throw new Error(`сценарий "${def.name}": есть "inputs", но нет "players" — слоты не определены (TICK-5)`);
+  }
+}
+
+/** Кадры ввода по тикам (TICK-5); порядок внутри тика — порядок документа. */
+function inputsByTick(inputs: readonly InputFrame[] | undefined): Map<number, InputFrame[]> {
+  const byTick = new Map<number, InputFrame[]>();
+  for (const frame of inputs ?? []) {
+    const list = byTick.get(frame.tick);
+    if (list) list.push(frame);
+    else byTick.set(frame.tick, [frame]);
+  }
+  return byTick;
 }
 
 /** Байты для golden-файла и stdout: pretty JSON того же документа. */

@@ -203,7 +203,9 @@ export function readByHandle(
     if (DEBUG) {
       assert(
         false,
-        `getField: сущность ${entity} не владеет компонентом "${table.components[handle]}" (ECS-7), поле "${table.fields[handle]}"`,
+        // Имя компонента и поля — из тех же параллельных массивов, что и
+        // `owners`/`neutrals` выше: handle есть адрес в них (SYS-10).
+        `getField: сущность ${entity} не владеет компонентом "${table.components[handle]!}" (ECS-7), поле "${table.fields[handle]!}"`,
         'COMPONENT_READ_WITHOUT_OWNERSHIP',
       );
     }

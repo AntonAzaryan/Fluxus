@@ -193,26 +193,7 @@ export class VisibilitySystem implements System {
 
     const observers = ctx.query({ all: [VISION_COMPONENT, TEAM_COMPONENT, POSITION_COMPONENT] });
     for (const observer of observers) {
-      // Наблюдатель отобран запросом по `Team`: сторона у него есть заведомо.
-      const bit = teamBit(ctx.getByHandle(observer, h.team!.id));
-      const from = positionOf(ctx, h, observer);
-      const level = ctx.terrain?.levelOf(observer);
-
-      const candidates = ctx.query({
-        all: [VISIBILITY_COMPONENT, POSITION_COMPONENT],
-        withinRadius: { center: from, radius: effectiveRadius(ctx, h, observer, this.modifiers) },
-      });
-      for (const candidate of candidates) {
-        const mask = next.get(candidate);
-        // Бит уже взведён другим наблюдателем той же команды (или это сама
-        // сущность наблюдателя) — второй раз считать нечего.
-        if (mask === undefined || (mask & bit) !== 0) continue;
-        if (isHidden(ctx, h, candidate)) continue;
-        // FOW-5: строго выше — не видно; обратное направление не ограничено.
-        if (level !== undefined && ctx.terrain!.levelOf(candidate) > level) continue;
-        if (!hasLineOfSight(ctx, h, observer, from, candidate, level)) continue;
-        next.set(candidate, mask | bit);
-      }
+      markSeenBy(ctx, h, observer, this.modifiers, next);
     }
 
     // FOW-6: команда эмитится только при фактическом изменении битов — иначе
@@ -222,6 +203,40 @@ export class VisibilitySystem implements System {
       if (mask === ctx.getByHandle(target, h.visibleTo)) continue;
       ctx.commands.setField(target, VISIBILITY_COMPONENT, 'visibleTo', mask);
     }
+  }
+}
+
+/**
+ * Взводит бит стороны наблюдателя у всех, кого он видит (FOW-3, FOW-5).
+ * Маска-накопитель приходит аргументом: она одна на прогон системы, и кандидат
+ * может быть виден нескольким наблюдателям одной стороны.
+ */
+function markSeenBy(
+  ctx: SystemContext,
+  h: VisibilityHandles,
+  observer: EntityId,
+  modifiers: ModifierList,
+  next: Map<EntityId, number>,
+): void {
+  // Наблюдатель отобран запросом по `Team`: сторона у него есть заведомо.
+  const bit = teamBit(ctx.getByHandle(observer, h.team!.id));
+  const from = positionOf(ctx, h, observer);
+  const level = ctx.terrain?.levelOf(observer);
+
+  const candidates = ctx.query({
+    all: [VISIBILITY_COMPONENT, POSITION_COMPONENT],
+    withinRadius: { center: from, radius: effectiveRadius(ctx, h, observer, modifiers) },
+  });
+  for (const candidate of candidates) {
+    const mask = next.get(candidate);
+    // Бит уже взведён другим наблюдателем той же команды (или это сама
+    // сущность наблюдателя) — второй раз считать нечего.
+    if (mask === undefined || (mask & bit) !== 0) continue;
+    if (isHidden(ctx, h, candidate)) continue;
+    // FOW-5: строго выше — не видно; обратное направление не ограничено.
+    if (level !== undefined && ctx.terrain!.levelOf(candidate) > level) continue;
+    if (!hasLineOfSight(ctx, h, observer, from, candidate, level)) continue;
+    next.set(candidate, mask | bit);
   }
 }
 

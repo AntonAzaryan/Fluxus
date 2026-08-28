@@ -16,8 +16,14 @@ import { distSqLe } from '../math/fixed.js';
 import type { QuerySpec, Vec2, WorldState } from '../types.js';
 import { POSITION_COMPONENT } from '../types.js';
 import { componentId, componentMasks, entityIndexOf, getField, hasTag } from './world.js';
-import { buildQueryMask, matchesAll, matchesAny, matchesNone } from './componentMask.js';
-import { makeEntityId } from './entityIndex.js';
+import {
+  buildQueryMask,
+  matchesAll,
+  matchesAny,
+  matchesNone,
+  type ComponentMasks,
+} from './componentMask.js';
+import { makeEntityId, type EntityIndex } from './entityIndex.js';
 
 const EMPTY = new Float64Array(0);
 
@@ -50,23 +56,63 @@ export function query(state: WorldState, spec: QuerySpec): Float64Array {
   // упаковывается только для прошедших фильтр по маске.
   const entities = entityIndexOf(state);
   const result = new Float64Array(entities.aliveCount);
-  let count = 0;
+  const count = collectMatches(state, spec, masks, entities, allMask, anyMask, notMask, result);
+  return count === result.length ? result : result.subarray(0, count);
+}
 
+/**
+ * Обход слотов и упаковка прошедших фильтр (QUERY-2, QUERY-3) — сколько
+ * записано, столько и вернулось. Аргументы плоские, а не одним объектом
+ * фильтра: запросы зовутся системами каждый тик, и объект на вызов был бы
+ * аллокацией, пропорциональной числу систем.
+ */
+function collectMatches(
+  state: WorldState,
+  spec: QuerySpec,
+  masks: ComponentMasks,
+  entities: EntityIndex,
+  allMask: Uint32Array | undefined,
+  anyMask: Uint32Array | undefined,
+  notMask: Uint32Array | undefined,
+  result: Float64Array,
+): number {
+  let count = 0;
   for (let index = 0; index < entities.nextIndex; index++) {
     if (entities.alive[index] !== 1) continue;
-    if (allMask && !matchesAll(masks, index, allMask)) continue;
-    if (anyMask && !matchesAny(masks, index, anyMask)) continue;
-    if (notMask && !matchesNone(masks, index, notMask)) continue;
+    if (!maskFilterPasses(masks, index, allMask, anyMask, notMask)) continue;
     const entity = makeEntityId(index, entities.generations[index] ?? 0);
-    if (spec.withTag !== undefined && !hasTag(state, entity, spec.withTag)) continue;
-    if (spec.withinRadius && !withinRadius(state, entity, spec.withinRadius.center, spec.withinRadius.radius)) {
-      continue;
-    }
+    if (!entityFilterPasses(state, spec, entity)) continue;
     result[count] = entity;
     count++;
   }
+  return count;
+}
 
-  return count === result.length ? result : result.subarray(0, count);
+/** Фильтры по составу компонентов: `all`/`any`/`not` (QUERY-1). */
+function maskFilterPasses(
+  masks: ComponentMasks,
+  index: number,
+  allMask: Uint32Array | undefined,
+  anyMask: Uint32Array | undefined,
+  notMask: Uint32Array | undefined,
+): boolean {
+  if (allMask && !matchesAll(masks, index, allMask)) return false;
+  if (anyMask && !matchesAny(masks, index, anyMask)) return false;
+  if (notMask && !matchesNone(masks, index, notMask)) return false;
+  return true;
+}
+
+/**
+ * Фильтры, которым нужен собранный id сущности: тег и радиус (QUERY-1). Они
+ * идут после масочных — маска отсеивает дешевле, а порядок проверок наблюдаем
+ * только через стоимость.
+ */
+function entityFilterPasses(state: WorldState, spec: QuerySpec, entity: number): boolean {
+  if (spec.withTag !== undefined && !hasTag(state, entity, spec.withTag)) return false;
+  if (spec.withinRadius && !withinRadius(state, entity, spec.withinRadius.center, spec.withinRadius.radius)) {
+    return false;
+  }
+  return true;
 }
 
 /**

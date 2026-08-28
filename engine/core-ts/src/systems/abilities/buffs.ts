@@ -106,13 +106,10 @@ export class BuffSystem implements System {
     instance: EntityId,
   ): void {
     if (ctx.getByHandle(instance, h.buffClass) !== NO_BUFF_CLASS) return;
-    const target = ctx.getByHandle(instance, h.target);
     // Цель исчезла раньше, чем бафф успел лечь: снимать нечего и исполнять
     // нечего (BUFF-6).
-    if (target === NO_ENTITY || !ctx.isAlive(target)) {
-      ctx.commands.destroy(instance);
-      return;
-    }
+    const target = this.liveTarget(ctx, h, instance);
+    if (target === NO_ENTITY) return;
     const buff = buffOf(this.catalog, ctx, h, instance);
     const source = ctx.getByHandle(instance, h.source);
 
@@ -210,16 +207,27 @@ export class BuffSystem implements System {
    * считается от тика наложения» (BUFF-5): счётчик начинает ход со следующего
    * тика, а не с того, на котором инстанс появился.
    */
+  /**
+   * Цель инстанса, если она жива; иначе инстанс уничтожается и возвращается
+   * `NO_ENTITY` (BUFF-6). Одно правило — одна запись: наложение и ход читают
+   * исчезновение цели одинаково, и разойтись им негде.
+   */
+  private liveTarget(ctx: SystemContext, h: BuffInstanceHandles, instance: EntityId): EntityId {
+    const target = ctx.getByHandle(instance, h.target);
+    if (target === NO_ENTITY || !ctx.isAlive(target)) {
+      ctx.commands.destroy(instance);
+      return NO_ENTITY;
+    }
+    return target;
+  }
+
   private advance(ctx: SystemContext, h: BuffInstanceHandles, instance: EntityId): void {
     if (ctx.getByHandle(instance, h.buffClass) === NO_BUFF_CLASS) return;
-    const target = ctx.getByHandle(instance, h.target);
     // Исчезновение цели удаляет инстанс БЕЗ `onExpire` (BUFF-6): исполнять
     // список действий над несуществующей сущностью нечем. Снимать источники
     // тоже не с кого — они исчезли вместе с целью.
-    if (target === NO_ENTITY || !ctx.isAlive(target)) {
-      ctx.commands.destroy(instance);
-      return;
-    }
+    const target = this.liveTarget(ctx, h, instance);
+    if (target === NO_ENTITY) return;
     const buff = buffOf(this.catalog, ctx, h, instance);
     const source = buffField(ctx, instance, 'source');
     const stacks = buffField(ctx, instance, 'stacks');

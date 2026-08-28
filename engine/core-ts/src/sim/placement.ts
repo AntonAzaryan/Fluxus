@@ -37,6 +37,13 @@ export interface ScenarioSpawn {
 }
 
 const isArray = (value: unknown): boolean => Array.isArray(value);
+/**
+ * Проверка без сужения типа, как `isArray`: запись расстановки приезжает
+ * документом, где законен и `null` (`typeof null === 'object'`), а в типе
+ * `ScenarioSpawn` его нет — по типам условие выглядит лишним, по данным оно
+ * обязательно.
+ */
+const isRecord = (value: unknown): boolean => value !== null && typeof value === 'object';
 
 /**
  * Применяет расстановку в порядке списка. Отсутствующий и пустой список
@@ -59,8 +66,7 @@ export function applyPlacement(
   for (let i = 0; i < entries.length; i++) {
     const entry = entries[i]!;
     const at = `${where}: расстановка, запись #${i}`;
-    // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- baseline
-    if (entry === null || typeof entry !== 'object') throw new Error(`${at}: запись — объект (SER-8)`);
+    if (!isRecord(entry)) throw new Error(`${at}: запись — объект (SER-8)`);
     if (typeof entry.prefab !== 'string' || entry.prefab === '') {
       throw new Error(`${at}: "prefab" — непустая строка (SER-8)`);
     }

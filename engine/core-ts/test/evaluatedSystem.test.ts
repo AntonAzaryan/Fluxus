@@ -89,7 +89,9 @@ function run(system: System, ticks: number): { world: ReturnType<typeof createWo
 
   const events: string[] = [];
   for (let i = 0; i < ticks; i++) {
-    for (const event of tick(sim, state).events) events.push(`${event.type}:${event.data.entity}`);
+    // Поле `entity` кладёт система из фикстуры; пропавшее видно в диффе
+    // сравнения как `undefined`, а не теряется молча.
+    for (const event of tick(sim, state).events) events.push(`${event.type}:${String(event.data.entity)}`);
   }
   return { world, events };
 }

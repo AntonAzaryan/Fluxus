@@ -22,6 +22,7 @@ import {
   type Fixed,
   type System,
   type SystemContext,
+  type TerrainApi,
   type Vec2,
   type WorldState,
 } from '../types.js';
@@ -163,27 +164,33 @@ export class ArenaSystem implements System {
     if (arena === undefined) return; // сцена без арены тикает штатно (DI-3)
 
     for (const entity of ctx.query({ all: [POSITION_COMPONENT, ARENA_STATE_COMPONENT] })) {
-      const position: Vec2 = {
-        x: ctx.get(entity, POSITION_COMPONENT, 'x'),
-        y: ctx.get(entity, POSITION_COMPONENT, 'y'),
-      };
-
-      const inside = arena.contains(position) ? 1 : 0;
-      if (inside !== ctx.get(entity, ARENA_STATE_COMPONENT, 'inside')) {
-        ctx.commands.setField(entity, ARENA_STATE_COMPONENT, 'inside', inside);
-        if (inside === 0) ctx.events.emit(LEFT_ARENA_EVENT, { entity });
-      }
-
-      // ARENA-5: пол проверяется только у стоящих на земле. Override уровня
-      // (ARENA-6) означает, что сущность в полёте — снаряд над дырой не падает.
-      // Без террейна проверять нечем (DI-3).
-      if (ctx.terrain === undefined || ctx.has(entity, LEVEL_OVERRIDE_COMPONENT)) continue;
-      const onFloor = standsOnFloor(ctx, entity, position) ? 1 : 0;
-      if (onFloor !== ctx.get(entity, ARENA_STATE_COMPONENT, 'onFloor')) {
-        ctx.commands.setField(entity, ARENA_STATE_COMPONENT, 'onFloor', onFloor);
-        if (onFloor === 0) ctx.events.emit(FELL_THROUGH_FLOOR_EVENT, { entity });
-      }
+      updateArenaState(ctx, arena, entity);
     }
+  }
+}
+
+/** Сторона границы и опора одной сущности; события — по переходу (ARENA-3, ARENA-5). */
+function updateArenaState(ctx: SystemContext, arena: ArenaApi, entity: EntityId): void {
+  const position: Vec2 = {
+    x: ctx.get(entity, POSITION_COMPONENT, 'x'),
+    y: ctx.get(entity, POSITION_COMPONENT, 'y'),
+  };
+
+  const inside = arena.contains(position) ? 1 : 0;
+  if (inside !== ctx.get(entity, ARENA_STATE_COMPONENT, 'inside')) {
+    ctx.commands.setField(entity, ARENA_STATE_COMPONENT, 'inside', inside);
+    if (inside === 0) ctx.events.emit(LEFT_ARENA_EVENT, { entity });
+  }
+
+  // ARENA-5: пол проверяется только у стоящих на земле. Override уровня
+  // (ARENA-6) означает, что сущность в полёте — снаряд над дырой не падает.
+  // Без террейна проверять нечем (DI-3).
+  const terrain = ctx.terrain;
+  if (terrain === undefined || ctx.has(entity, LEVEL_OVERRIDE_COMPONENT)) return;
+  const onFloor = standsOnFloor(ctx, terrain, entity, position) ? 1 : 0;
+  if (onFloor !== ctx.get(entity, ARENA_STATE_COMPONENT, 'onFloor')) {
+    ctx.commands.setField(entity, ARENA_STATE_COMPONENT, 'onFloor', onFloor);
+    if (onFloor === 0) ctx.events.emit(FELL_THROUGH_FLOOR_EVENT, { entity });
   }
 }
 
@@ -193,8 +200,12 @@ export class ArenaSystem implements System {
  * тождественное проверке по центру, — при нулевом `support`, без коллайдера
  * (уменьшать нечего) и без Physics API (форма коллайдера ядру неизвестна, DI-3).
  */
-function standsOnFloor(ctx: SystemContext, entity: EntityId, position: Vec2): boolean {
-  const terrain = ctx.terrain!;
+function standsOnFloor(
+  ctx: SystemContext,
+  terrain: TerrainApi,
+  entity: EntityId,
+  position: Vec2,
+): boolean {
   const support = ctx.get(entity, ARENA_STATE_COMPONENT, 'support');
   if (support !== 0 && ctx.physics !== undefined) {
     const inradius = ctx.physics.inradiusOf(entity);

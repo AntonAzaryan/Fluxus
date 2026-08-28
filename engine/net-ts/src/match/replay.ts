@@ -20,7 +20,7 @@ import {
   type InputFrame,
   type Snapshot,
 } from '@fluxus/core';
-import { buildMatchWorld, type MatchWorldDef } from './world.js';
+import { buildMatchWorld, type MatchWorld, type MatchWorldDef } from './world.js';
 
 /** Сегмент записи: эпоха и её кадры. Совпадает с `MatchSegment` сервера. */
 export interface ReplaySegment {
@@ -37,6 +37,61 @@ export interface SegmentedReplayResult {
   /** Тик последнего исполненного состояния — конец последнего сегмента. */
   readonly tick: number;
   readonly snapshot: Snapshot;
+}
+
+/**
+ * Первый тик сегмента — он же проверка его формы (NTR-16): сегмент непуст и
+ * сплошен по тикам. Пустой либо дырявый сегмент означает сломанный лог, а не
+ * законный случай.
+ */
+function firstTickOf(segment: ReplaySegment, grouped: ReadonlyMap<number, InputFrame[]>): number {
+  if (grouped.size === 0) {
+    // Эпоха без исполненных тиков сегмента не порождает (NTR-16), и пустой
+    // сегмент в записи означает сломанный лог, а не законный случай.
+    throw new Error(`реплей: сегмент эпохи ${segment.epoch} без единого кадра (NTR-16)`);
+  }
+  const ticks = [...grouped.keys()].sort((a, b) => a - b);
+  const first = ticks[0]!;
+  const last = ticks[ticks.length - 1]!;
+  if (last - first + 1 !== ticks.length) {
+    throw new Error(`реплей: сегмент эпохи ${segment.epoch} не сплошной по тикам (NTR-16)`);
+  }
+  return first;
+}
+
+/**
+ * Мир, переигранный от `worldInit` по уже исполненным тикам до `first - 1`
+ * (NTR-16). Путь восстановления выбран в шапке модуля; здесь — его исполнение.
+ */
+function replayPrefix(
+  worldDef: MatchWorldDef,
+  applied: ReadonlyMap<number, readonly InputFrame[]>,
+  epoch: number,
+  first: number,
+): MatchWorld {
+  const built = buildMatchWorld(worldDef);
+  for (let t = 1; t < first; t++) {
+    const frames = applied.get(t);
+    if (frames === undefined) {
+      // Пропуск тика в переигрываемом префиксе — сломанный лог, как пустой
+      // и как несплошной сегмент: сегменты покрывают исполненные тики
+      // подряд (NTR-16), и дырка означает, что запись не полна. Подставить
+      // здесь нулевой ввод значило бы доиграть мир кадрами, которых на
+      // сервере не было, и получить состояние, не совпадающее с
+      // авторитетным, — то есть тихо ложный прогон (DET-1, NTR-8).
+      throw new Error(
+        `реплей: тик ${t} перед сегментом эпохи ${epoch} не покрыт ни одним сегментом (NTR-16)`,
+      );
+    }
+    advanceTick(built.sim, built.state, frames);
+  }
+  if (built.state.tick !== first - 1) {
+    throw new Error(
+      `реплей: сегмент эпохи ${epoch} начинается с тика ${first}, ` +
+        `а предыдущие сегменты доходят только до ${built.state.tick} (NTR-16)`,
+    );
+  }
+  return built;
 }
 
 function byTick(frames: readonly InputFrame[]): Map<number, InputFrame[]> {
@@ -61,41 +116,12 @@ export function replaySegments(def: SegmentedReplayDef): SegmentedReplayResult {
 
   for (const segment of segments) {
     const grouped = byTick(segment.frames);
-    if (grouped.size === 0) {
-      // Эпоха без исполненных тиков сегмента не порождает (NTR-16), и пустой
-      // сегмент в записи означает сломанный лог, а не законный случай.
-      throw new Error(`реплей: сегмент эпохи ${segment.epoch} без единого кадра (NTR-16)`);
-    }
-    const ticks = [...grouped.keys()].sort((a, b) => a - b);
-    const first = ticks[0]!;
-    const last = ticks[ticks.length - 1]!;
-    if (last - first + 1 !== ticks.length) {
-      throw new Error(`реплей: сегмент эпохи ${segment.epoch} не сплошной по тикам (NTR-16)`);
-    }
+    const first = firstTickOf(segment, grouped);
+    // Сплошность уже проверена: последний тик сегмента — первый плюс их число.
+    const last = first + grouped.size - 1;
 
     if (built.state.tick !== first - 1) {
-      built = buildMatchWorld(worldDef);
-      for (let t = 1; t < first; t++) {
-        const frames = applied.get(t);
-        if (frames === undefined) {
-          // Пропуск тика в переигрываемом префиксе — сломанный лог, как пустой
-          // и как несплошной сегмент: сегменты покрывают исполненные тики
-          // подряд (NTR-16), и дырка означает, что запись не полна. Подставить
-          // здесь нулевой ввод значило бы доиграть мир кадрами, которых на
-          // сервере не было, и получить состояние, не совпадающее с
-          // авторитетным, — то есть тихо ложный прогон (DET-1, NTR-8).
-          throw new Error(
-            `реплей: тик ${t} перед сегментом эпохи ${segment.epoch} не покрыт ни одним сегментом (NTR-16)`,
-          );
-        }
-        advanceTick(built.sim, built.state, frames);
-      }
-      if (built.state.tick !== first - 1) {
-        throw new Error(
-          `реплей: сегмент эпохи ${segment.epoch} начинается с тика ${first}, ` +
-            `а предыдущие сегменты доходят только до ${built.state.tick} (NTR-16)`,
-        );
-      }
+      built = replayPrefix(worldDef, applied, segment.epoch, first);
     }
 
     for (let t = first; t <= last; t++) {

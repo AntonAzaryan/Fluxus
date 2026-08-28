@@ -1,4 +1,12 @@
-/* eslint-disable max-lines -- baseline */
+/* eslint-disable max-lines --
+ * Модуль — один класс `MatchServer` и типы его протокола: авторитетный сервер
+ * матча целиком (NTR-3..NTR-20). Резать его по строкам нечего: всё, что тут
+ * есть, — это одно состояние матча (слоты, окно ввода, рассылка снапшотов,
+ * лог сегментов, перемотка, пауза) и методы над ним. Вынести часть можно
+ * только вместе с частью состояния — то есть отдельными сотрудниками
+ * (политика паузы, контроллер скраба) с собственными инвариантами; это
+ * переработка сервера, а не деление файла, и делается она своим change'ем.
+ * Проверки конфига, не касающиеся состояния, из класса уже вынесены (выше). */
 /**
  * Авторитетный сервер матча (NTR-3): владеет симуляцией, принимает разобранные
  * сообщения, отдаёт адресованные исходящие — и не делает ввода-вывода.
@@ -496,6 +504,103 @@ function endOfReject(reason: RejectReason): SlotLeaseEnd {
   return 'rejected';
 }
 
+/**
+ * Слоты матча (NTR-5): непустой список без повторов, и номер команды каждого
+ * слота — номер команды тумана (FOW-2).
+ */
+function checkPlayers(config: MatchConfig): void {
+  if (config.players.length === 0) throw new Error('MatchConfig: нужен хотя бы один слот');
+  if (new Set(config.players).size !== config.players.length) {
+    throw new Error('MatchConfig: игрок указан дважды');
+  }
+  // `viewpoint` игрока обязан быть номером команды (FOW-2, `[0, 31]`).
+  // Проверяется, а не подразумевается: `VIEWPOINT_ALL` — это -1, и конфиг с
+  // отрицательным номером команды выдал бы игроку поток без фильтрации, то
+  // есть ровно то, что NTR-9 запрещает «ни при каких условиях».
+  config.teams?.forEach((team, slot) => {
+    if (!Number.isInteger(team) || team < 0 || team > 31) {
+      throw new Error(`MatchConfig: команда слота ${slot} вне диапазона [0, 31] (FOW-2): ${team}`);
+    }
+  });
+}
+
+/** Числовые ручки матча после умолчаний — то, что сервер держит полями. */
+interface MatchRates {
+  readonly tickRate: number;
+  readonly snapshotRate: number;
+  readonly snapshotEvery: number;
+  readonly inputDelay: number;
+  readonly inputWindow: number;
+  readonly eventRepeat: number;
+  readonly silenceTicks: number;
+  readonly scrubStep: number;
+  readonly holdTimeoutTicks: number;
+}
+
+/**
+ * Умолчания и проверки числовых ручек конфига (NTR-5, NTR-7, NTR-15, REW-7).
+ * Порядок проверок — порядок полей документа: отказ называет первую неверную.
+ */
+function resolveRates(config: MatchConfig): MatchRates {
+  const tickRate = config.tickRate ?? DEFAULTS.tickRate;
+  const snapshotRate = config.snapshotRate ?? DEFAULTS.snapshotRate;
+  // Кратность — не придирка: при некратной частоте интервал между рассылками
+  // плавал бы от тика к тику, и замер отклика мерил бы дрожание расписания.
+  if (tickRate % snapshotRate !== 0) {
+    throw new Error(`MatchConfig: snapshotRate (${snapshotRate}) не делит tickRate (${tickRate}) нацело`);
+  }
+  const inputDelay = config.inputDelay ?? DEFAULTS.inputDelay;
+  const inputWindow = config.inputWindow ?? DEFAULTS.inputWindow;
+  // Окно уже запаса задержки означало бы, что сервер отвергает собственную
+  // разметку: клиент помечает кадр тиком `serverTick + inputDelay` по тому же
+  // конфигу, который прислал сервер (NTR-7).
+  if (inputWindow < inputDelay) {
+    throw new Error(`MatchConfig: inputWindow (${inputWindow}) меньше inputDelay (${inputDelay})`);
+  }
+  const eventRepeat = config.eventRepeat ?? DEFAULTS.eventRepeat;
+  // Ноль легален — «без повтора» (NTR-15); отрицательное и дробное не
+  // означают ничего: глубина считается в рассылках, а не в долях рассылки, и
+  // молча приведённое к нулю значение выдало бы канал без избыточности за
+  // настроенный.
+  if (!Number.isInteger(eventRepeat) || eventRepeat < 0) {
+    throw new Error(`MatchConfig: eventRepeat (${eventRepeat}) — целое, не меньше нуля (NTR-15)`);
+  }
+  const scrubStep = config.rewind?.step ?? DEFAULTS.scrubStep;
+  const holdTimeoutTicks = config.rewind?.holdTimeoutTicks ?? DEFAULTS.holdTimeoutTicks;
+  checkRewindKnobs(scrubStep, holdTimeoutTicks, config.rewind?.holdButton);
+  return {
+    tickRate,
+    snapshotRate,
+    snapshotEvery: tickRate / snapshotRate,
+    inputDelay,
+    inputWindow,
+    eventRepeat,
+    silenceTicks: config.silenceTicks ?? tickRate * DEFAULTS.silenceSeconds,
+    scrubStep,
+    holdTimeoutTicks,
+  };
+}
+
+/** Ручки перемотки (REW-7): шаг, порог удержания и номер бита-удержания. */
+function checkRewindKnobs(scrubStep: number, holdTimeoutTicks: number, holdButton: number | undefined): void {
+  // Нулевой и дробный шаг не означают ничего: точка перемотки считается в
+  // тиках, а шаг «ноль» превратил бы удержание в вечное `Rewinding` без
+  // движения — то есть в тот самый зависший мир, от которого стоит порог
+  // молчания.
+  if (!Number.isInteger(scrubStep) || scrubStep < 1) {
+    throw new Error(`MatchConfig: rewind.step (${scrubStep}) — целое ≥ 1`);
+  }
+  if (!Number.isInteger(holdTimeoutTicks) || holdTimeoutTicks < 1) {
+    throw new Error(`MatchConfig: rewind.holdTimeoutTicks (${holdTimeoutTicks}) — целое ≥ 1`);
+  }
+  // Номер бита проверяется наравне с шагом и порогом: `1 << 32` в JS даёт
+  // единицу, `1 << -1` — старший бит, и оба молча читали бы из кадра НЕ ту
+  // кнопку. Отказ на сборке матча вместо скраба, который ведёт себя странно.
+  if (holdButton !== undefined && (!Number.isInteger(holdButton) || holdButton < 0 || holdButton > 31)) {
+    throw new Error(`MatchConfig: rewind.holdButton (${holdButton}) — целое 0..31 (NET-11)`);
+  }
+}
+
 export class MatchServer {
   readonly config: MatchConfig;
   readonly worldInitHash: string;
@@ -647,70 +752,20 @@ export class MatchServer {
   private liveFrontier = 0;
 
   constructor(config: MatchConfig) {
-    if (config.players.length === 0) throw new Error('MatchConfig: нужен хотя бы один слот');
-    if (new Set(config.players).size !== config.players.length) {
-      throw new Error('MatchConfig: игрок указан дважды');
-    }
-    // `viewpoint` игрока обязан быть номером команды (FOW-2, `[0, 31]`).
-    // Проверяется, а не подразумевается: `VIEWPOINT_ALL` — это -1, и конфиг с
-    // отрицательным номером команды выдал бы игроку поток без фильтрации, то
-    // есть ровно то, что NTR-9 запрещает «ни при каких условиях».
-    config.teams?.forEach((team, slot) => {
-      if (!Number.isInteger(team) || team < 0 || team > 31) {
-        throw new Error(`MatchConfig: команда слота ${slot} вне диапазона [0, 31] (FOW-2): ${team}`);
-      }
-    });
+    checkPlayers(config);
     this.config = config;
-    this.tickRate = config.tickRate ?? DEFAULTS.tickRate;
-    this.snapshotRate = config.snapshotRate ?? DEFAULTS.snapshotRate;
-    // Кратность — не придирка: при некратной частоте интервал между рассылками
-    // плавал бы от тика к тику, и замер отклика мерил бы дрожание расписания.
-    if (this.tickRate % this.snapshotRate !== 0) {
-      throw new Error(
-        `MatchConfig: snapshotRate (${this.snapshotRate}) не делит tickRate (${this.tickRate}) нацело`,
-      );
-    }
-    this.snapshotEvery = this.tickRate / this.snapshotRate;
-    this.inputDelay = config.inputDelay ?? DEFAULTS.inputDelay;
-    this.inputWindow = config.inputWindow ?? DEFAULTS.inputWindow;
-    // Окно уже запаса задержки означало бы, что сервер отвергает собственную
-    // разметку: клиент помечает кадр тиком `serverTick + inputDelay` по тому же
-    // конфигу, который прислал сервер (NTR-7).
-    if (this.inputWindow < this.inputDelay) {
-      throw new Error(
-        `MatchConfig: inputWindow (${this.inputWindow}) меньше inputDelay (${this.inputDelay})`,
-      );
-    }
-    this.eventRepeat = config.eventRepeat ?? DEFAULTS.eventRepeat;
-    // Ноль легален — «без повтора» (NTR-15); отрицательное и дробное не
-    // означают ничего: глубина считается в рассылках, а не в долях рассылки, и
-    // молча приведённое к нулю значение выдало бы канал без избыточности за
-    // настроенный.
-    if (!Number.isInteger(this.eventRepeat) || this.eventRepeat < 0) {
-      throw new Error(`MatchConfig: eventRepeat (${this.eventRepeat}) — целое, не меньше нуля (NTR-15)`);
-    }
-    this.silenceTicks = config.silenceTicks ?? this.tickRate * DEFAULTS.silenceSeconds;
-    this.scrubStep = config.rewind?.step ?? DEFAULTS.scrubStep;
-    this.holdTimeoutTicks = config.rewind?.holdTimeoutTicks ?? DEFAULTS.holdTimeoutTicks;
-    // Нулевой и дробный шаг не означают ничего: точка перемотки считается в
-    // тиках, а шаг «ноль» превратил бы удержание в вечное `Rewinding` без
-    // движения — то есть в тот самый зависший мир, от которого стоит порог
-    // молчания.
-    if (!Number.isInteger(this.scrubStep) || this.scrubStep < 1) {
-      throw new Error(`MatchConfig: rewind.step (${this.scrubStep}) — целое ≥ 1`);
-    }
-    if (!Number.isInteger(this.holdTimeoutTicks) || this.holdTimeoutTicks < 1) {
-      throw new Error(
-        `MatchConfig: rewind.holdTimeoutTicks (${this.holdTimeoutTicks}) — целое ≥ 1`,
-      );
-    }
-    // Номер бита проверяется наравне с шагом и порогом: `1 << 32` в JS даёт
-    // единицу, `1 << -1` — старший бит, и оба молча читали бы из кадра НЕ ту
-    // кнопку. Отказ на сборке матча вместо скраба, который ведёт себя странно.
-    const holdButton = config.rewind?.holdButton;
-    if (holdButton !== undefined && (!Number.isInteger(holdButton) || holdButton < 0 || holdButton > 31)) {
-      throw new Error(`MatchConfig: rewind.holdButton (${holdButton}) — целое 0..31 (NET-11)`);
-    }
+    // Умолчания и проверки числовых ручек — одним разбором, в том же порядке:
+    // отказ обязан назвать первую же неверную ручку, а не последнюю.
+    const rates = resolveRates(config);
+    this.tickRate = rates.tickRate;
+    this.snapshotRate = rates.snapshotRate;
+    this.snapshotEvery = rates.snapshotEvery;
+    this.inputDelay = rates.inputDelay;
+    this.inputWindow = rates.inputWindow;
+    this.eventRepeat = rates.eventRepeat;
+    this.silenceTicks = rates.silenceTicks;
+    this.scrubStep = rates.scrubStep;
+    this.holdTimeoutTicks = rates.holdTimeoutTicks;
 
     // Политика паузы (NTR-20). Отсутствующая секция и отсутствующее поле дают
     // НЕЙТРАЛЬНЫЙ элемент механизма, а не число: бюджета у игроков нет, отсчёт
@@ -1473,8 +1528,7 @@ export class MatchServer {
    */
   private segmentOfEpoch(): OpenSegment {
     const last = this.segments[this.segments.length - 1];
-    // eslint-disable-next-line @typescript-eslint/prefer-optional-chain -- baseline
-    if (last !== undefined && last.epoch === this.currentEpoch) return last;
+    if (last?.epoch === this.currentEpoch) return last;
     const opened: OpenSegment = { epoch: this.currentEpoch, frames: [] };
     this.segments.push(opened);
     return opened;

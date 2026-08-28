@@ -104,20 +104,42 @@ export class PhysicsWorld {
     let pairs = 0;
     for (let cy = this.cell(bounds.minY); cy <= this.cell(bounds.maxY); cy++) {
       for (let cx = this.cell(bounds.minX); cx <= this.cell(bounds.maxX); cx++) {
-        for (const index of this.cells.get(cx * 131072 + cy) ?? []) {
-          if (this.stamp[index] === this.queryId) continue;
-          this.stamp[index] = this.queryId;
-          pairs++;
-          const s = this.statics[index]!;
-          const rejected = mask === undefined ? tag !== undefined && !s.tags.includes(tag) : (s.layer & mask) === 0;
-          if (rejected) continue;
-          if (!overlaps(bounds, s)) continue;
-          found.push(index);
-        }
+        pairs += this.collectCell(cx * 131072 + cy, bounds, tag, mask, found);
       }
     }
     countCostBroadPhase(pairs);
     found.sort((a, b) => a - b);
     return found.map((index) => this.statics[index]!);
+  }
+
+  /**
+   * Кандидаты одной клетки: пропуск уже осмотренных в этом запросе (по метке),
+   * фильтр и точная проверка пересечения. Возвращает число ОСМОТРЕННЫХ
+   * кандидатов (PERF-3) — отсеянный фильтром из счёта не выпадает, работа по
+   * его осмотру уже сделана.
+   *
+   * Отдельным методом с явными аргументами, а не колбэком на клетку: обход
+   * зовут на каждом шаге оси каждого движущегося, и замыкание на клетку было бы
+   * аллокацией, пропорциональной сцене.
+   */
+  private collectCell(
+    key: number,
+    bounds: Bounds,
+    tag: string | undefined,
+    mask: number | undefined,
+    found: number[],
+  ): number {
+    let pairs = 0;
+    for (const index of this.cells.get(key) ?? []) {
+      if (this.stamp[index] === this.queryId) continue;
+      this.stamp[index] = this.queryId;
+      pairs++;
+      const s = this.statics[index]!;
+      const rejected = mask === undefined ? tag !== undefined && !s.tags.includes(tag) : (s.layer & mask) === 0;
+      if (rejected) continue;
+      if (!overlaps(bounds, s)) continue;
+      found.push(index);
+    }
+    return pairs;
   }
 }

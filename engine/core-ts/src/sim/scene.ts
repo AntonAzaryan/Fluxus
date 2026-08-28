@@ -54,7 +54,15 @@ import { NpcMovementSystem } from '../systems/npc/movement.js';
 import { NpcThreatSystem } from '../systems/npc/threat.js';
 import type { NpcCatalog, NpcPlatformDef } from '../systems/npc/model.js';
 import { applyPlacement, type ScenarioSpawn } from './placement.js';
-import type { ArenaApi, ComponentSchema, ModifierRegistry, TerrainApi, WorldState } from '../types.js';
+import type {
+  ArenaApi,
+  ComponentSchema,
+  ModifierList,
+  ModifierRegistry,
+  TerrainApi,
+  TerrainGrid,
+  WorldState,
+} from '../types.js';
 
 export interface SceneDef {
   /** Порядок задаёт битовые id компонентов и потому является частью формата (SER-7). */
@@ -128,6 +136,154 @@ export interface SceneDef {
   readonly initial?: readonly ScenarioSpawn[];
 }
 
+/**
+ * Инварианты состава сцены, проверяемые ДО создания мира (SER-7, ABIL-8):
+ * молчаливый фолбэк выглядел бы исправной сценой и расходился бы с нормой
+ * только там, где это дорого заметить.
+ */
+function checkSceneInvariants(def: SceneDef): void {
+  // Туман войны без террейна не определён и потому запрещён (SER-7): пересчёт
+  // видимости обязан отсекать кандидатов по уровню запросом уровня сущности к
+  // террейну (FOW-5, TERR-4), а в сцене без террейна запроса уровня нет вовсе.
+  // Отказ здесь, до создания мира, а не молчаливый фолбэк «все уровни нулевые»:
+  // тот выглядел бы исправной FoW и отличался бы от неё только на сценах с
+  // перепадом высот.
+  if (def.fog === true && def.terrain === undefined) {
+    throw new Error(
+      'SER-7: сцена включает туман войны (fog) без террейна (terrain) — ' +
+        'пересчёту видимости не у кого спросить уровень сущности (FOW-5, TERR-4)',
+    );
+  }
+  // Туман вместе со способностями требует объявленной стороны (ABIL-8):
+  // основание то же, что у пары «туман без террейна» — без стороны маску
+  // видимости сущности-слота вычислить нечем, и реализация оказалась бы перед
+  // выбором, какую норму нарушить, сделав слот публичным вопреки NET-12 или
+  // невидимым никому.
+  if (def.fog === true && def.abilities !== undefined && def.abilityRuntime?.teamField === undefined) {
+    throw new Error(
+      'ABIL-8: сцена включает туман войны (fog) и определения способностей (abilities), ' +
+        'но не объявляет биндинг стороны (abilityRuntime.teamField)',
+    );
+  }
+}
+
+/**
+ * Состав компонентов мира. Порядок нормативен (SER-7): floor → arena →
+ * timeScale → tween → fow → компоненты платформы способностей → компонент
+ * инстанса баффа. Он задаёт битовые id компонентов, то есть представление
+ * масок в снапшоте.
+ */
+function sceneComponents(
+  def: SceneDef,
+  grid: TerrainGrid | undefined,
+  timeScaleModifiers: ModifierList,
+  visionModifiers: ModifierList,
+): ComponentSchema[] {
+  return [
+    ...def.components,
+    ...(grid === undefined ? [] : [floorComponentSchema(grid)]),
+    ...(def.arena === undefined ? [] : ARENA_COMPONENTS),
+    ...(def.timeScale === true ? timeComponents(timeScaleModifiers) : []),
+    ...(def.tweens === undefined ? [] : [TWEEN_SCHEMA]),
+    ...(def.fog === true ? fowComponents(visionModifiers) : []),
+    ...(def.abilities === undefined ? [] : ABILITY_COMPONENTS),
+    ...(def.buffs === undefined ? [] : BUFF_COMPONENTS),
+    ...(def.npc === undefined ? [] : NPC_COMPONENTS),
+  ];
+}
+
+/** Prefab'ы мира: объявленные сценой плюс носители террейна и арены (SER-7). */
+function scenePrefabs(def: SceneDef, grid: TerrainGrid | undefined): PrefabDef[] {
+  return [
+    ...(def.prefabs ?? []),
+    ...(grid === undefined ? [] : [terrainPrefab(grid)]),
+    // Ассет арены валидируется здесь же, до `createWorld`.
+    ...(def.arena === undefined ? [] : [arenaPrefab(def.arena)]),
+  ];
+}
+
+/**
+ * Нативные системы, включаемые самим составом сцены (SER-7). Их регистрация
+ * здесь, а не у вызывающего: без них объявленные компоненты — мёртвые данные.
+ * Исключение — только системы, которым нужна зависимость сборки:
+ * `PhysicsSystem` и `VisibilitySystem` (нужен raycast, DI-3).
+ *
+ * Порядок регистрации сохраняется дословно: он наблюдаем через порядок
+ * прогона систем при равном `order` (SYS-2).
+ */
+function registerSceneSystems(
+  systems: SystemRegistry,
+  def: SceneDef,
+  world: WorldState,
+  timeScaleModifiers: ModifierList,
+  modifiers: ModifierRegistry,
+  abilities: AbilityCatalog | undefined,
+  npc: NpcCatalog | undefined,
+): void {
+  // `TweenSystem` разбирает пути к полям в конструкторе, поэтому битый
+  // `target` падает на загрузке сцены, а не в середине матча (SYS-3).
+  // Арена есть в сцене — значит, за её границей кто-то следит (ARENA-3, ARENA-5).
+  if (def.arena !== undefined) systems.register(new ArenaSystem());
+  if (def.timeScale === true) systems.register(new TimeScaleSystem(timeScaleModifiers));
+  if (def.tweens !== undefined) systems.register(new TweenSystem(def.tweens));
+  registerAbilitySystems(systems, def, modifiers, abilities);
+  registerNpcSystems(systems, npc);
+  // Валидация каждой системы — внутри registerFromJson (SYS-3): конфиг с
+  // опечаткой не должен доживать до первого тика.
+  for (const system of def.systems ?? []) systems.registerFromJson(system, world);
+}
+
+/** Системы платформы способностей и баффов (SER-7, ABIL-10, BUFF-1, NET-12). */
+function registerAbilitySystems(
+  systems: SystemRegistry,
+  def: SceneDef,
+  modifiers: ModifierRegistry,
+  abilities: AbilityCatalog | undefined,
+): void {
+  if (abilities === undefined) return;
+  if (def.abilities !== undefined) {
+    systems.register(new TargetingCommitSystem(abilities));
+    systems.register(new CastPhaseSystem(abilities));
+    systems.register(new ProjectileSystem(abilities));
+    systems.register(new CooldownSystem());
+    systems.register(new EffectDurationSystem(abilities));
+    systems.register(new CastInterruptSystem(abilities));
+  }
+  // `BuffSystem` включает своё поле конфига, а не поле способностей: сцена с
+  // одними баффами законна (SER-7, BUFF-1). Списки источников она разрешает в
+  // конструкторе, поэтому статовая правка, адресующая неподключённый список, —
+  // ошибка загрузки (BUFF-4).
+  if (def.buffs !== undefined) {
+    systems.register(new BuffSystem(abilities, modifiers));
+  }
+  // Маску сущностям-спутникам платформы пишет отдельная система (NET-12), и
+  // включает её пара «есть определения + сцена с туманом». Туман здесь условие,
+  // а не вкус: без `fog` компонента `Visibility` в мире нет вовсе, вешать его
+  // спутнику некуда, а фильтр снапшота на такой сцене не режет никого.
+  // Обе группы определений, а не одни `abilities`: инстанс баффа — такой же
+  // спутник, как слот, и сцена вправе объявить `buffs` без способностей (SER-7).
+  if (def.fog === true) {
+    systems.register(new AbilityVisibilitySystem(abilities));
+  }
+}
+
+/**
+ * Платформа поведения NPC включается составом сцены целиком (SER-7, NPC-2):
+ * зависимостей сборки у её систем нет — восприятие есть прямое чтение мира
+ * (NPC-1), поиск пути не требуется (NAV-6), — а без систем объявленные
+ * компоненты остались бы мёртвыми данными. Сами документы разобраны до
+ * создания мира.
+ */
+function registerNpcSystems(systems: SystemRegistry, npc: NpcCatalog | undefined): void {
+  if (npc === undefined) return;
+  systems.register(new NpcBehaviorSystem(npc));
+  systems.register(new NpcMovementSystem(npc));
+  systems.register(new NpcThreatSystem(npc));
+  // Режиссёр включается таблицей волн, а не самой платформой: сцена вправе
+  // расставить NPC руками и волн не иметь вовсе (NPC-8).
+  if (npc.waves !== undefined) systems.register(new NpcDirectorSystem(npc));
+}
+
 export interface Scene {
   readonly world: WorldState;
   readonly systems: SystemRegistry;
@@ -158,29 +314,7 @@ export interface Scene {
 }
 
 export function loadScene(def: SceneDef): Scene {
-  // Туман войны без террейна не определён и потому запрещён (SER-7): пересчёт
-  // видимости обязан отсекать кандидатов по уровню запросом уровня сущности к
-  // террейну (FOW-5, TERR-4), а в сцене без террейна запроса уровня нет вовсе.
-  // Отказ здесь, до создания мира, а не молчаливый фолбэк «все уровни нулевые»:
-  // тот выглядел бы исправной FoW и отличался бы от неё только на сценах с
-  // перепадом высот.
-  if (def.fog === true && def.terrain === undefined) {
-    throw new Error(
-      'SER-7: сцена включает туман войны (fog) без террейна (terrain) — ' +
-        'пересчёту видимости не у кого спросить уровень сущности (FOW-5, TERR-4)',
-    );
-  }
-  // Туман вместе со способностями требует объявленной стороны (ABIL-8):
-  // основание то же, что у пары «туман без террейна» — без стороны маску
-  // видимости сущности-слота вычислить нечем, и реализация оказалась бы перед
-  // выбором, какую норму нарушить, сделав слот публичным вопреки NET-12 или
-  // невидимым никому.
-  if (def.fog === true && def.abilities !== undefined && def.abilityRuntime?.teamField === undefined) {
-    throw new Error(
-      'ABIL-8: сцена включает туман войны (fog) и определения способностей (abilities), ' +
-        'но не объявляет биндинг стороны (abilityRuntime.teamField)',
-    );
-  }
+  checkSceneInvariants(def);
   // Схемы карты пола и арены зависят от ассетов, поэтому дописываются к
   // объявленным компонентам, а не пишутся в сцене руками (TERR-6, ARENA-1).
   const grid = def.terrain === undefined ? undefined : createTerrainGrid(def.terrain);
@@ -191,26 +325,8 @@ export function loadScene(def: SceneDef): Scene {
     [timeScaleModifiers.component, timeScaleModifiers],
     [visionModifiers.component, visionModifiers],
   ]);
-  // Порядок нормативен (SER-7): floor → arena → timeScale → tween → fow →
-  // компоненты платформы способностей → компонент инстанса баффа. Он задаёт
-  // битовые id компонентов, то есть представление масок в снапшоте.
-  const components = [
-    ...def.components,
-    ...(grid === undefined ? [] : [floorComponentSchema(grid)]),
-    ...(def.arena === undefined ? [] : ARENA_COMPONENTS),
-    ...(def.timeScale === true ? timeComponents(timeScaleModifiers) : []),
-    ...(def.tweens === undefined ? [] : [TWEEN_SCHEMA]),
-    ...(def.fog === true ? fowComponents(visionModifiers) : []),
-    ...(def.abilities === undefined ? [] : ABILITY_COMPONENTS),
-    ...(def.buffs === undefined ? [] : BUFF_COMPONENTS),
-    ...(def.npc === undefined ? [] : NPC_COMPONENTS),
-  ];
-  const prefabs = [
-    ...(def.prefabs ?? []),
-    ...(grid === undefined ? [] : [terrainPrefab(grid)]),
-    // Ассет арены валидируется здесь же, до `createWorld`.
-    ...(def.arena === undefined ? [] : [arenaPrefab(def.arena)]),
-  ];
+  const components = sceneComponents(def, grid, timeScaleModifiers, visionModifiers);
+  const prefabs = scenePrefabs(def, grid);
   // Коэффициент опоры в prefabs сцены — доля в [0, 1] (ARENA-3): опечатка
   // контента не должна доживать до первого тика.
   checkArenaSupport(def.prefabs ?? []);
@@ -237,16 +353,6 @@ export function loadScene(def: SceneDef): Scene {
   // `worldInit`. Отсутствующий список неотличим от пустого.
   applyPlacement(world, def.initial, 'сцена');
   const systems = new SystemRegistry();
-  // Нативные системы, включаемые самим составом сцены (SER-7). Их регистрация
-  // здесь, а не у вызывающего: без них объявленные компоненты — мёртвые данные.
-  // Исключение — только системы, которым нужна зависимость сборки:
-  // `PhysicsSystem` и `VisibilitySystem` (нужен raycast, DI-3).
-  // `TweenSystem` разбирает пути к полям в конструкторе, поэтому битый
-  // `target` падает на загрузке сцены, а не в середине матча (SYS-3).
-  // Арена есть в сцене — значит, за её границей кто-то следит (ARENA-3, ARENA-5).
-  if (def.arena !== undefined) systems.register(new ArenaSystem());
-  if (def.timeScale === true) systems.register(new TimeScaleSystem(timeScaleModifiers));
-  if (def.tweens !== undefined) systems.register(new TweenSystem(def.tweens));
   // Платформа способностей включается составом сцены целиком (SER-7):
   // зависимостей сборки у её систем нет, а без них объявленные компоненты —
   // мёртвые данные. Определения проверяются ДО регистрации: сцена с опечаткой
@@ -257,46 +363,7 @@ export function loadScene(def: SceneDef): Scene {
     def.abilities === undefined && def.buffs === undefined
       ? undefined
       : compileAbilityCatalog(def, world);
-  if (abilities !== undefined && def.abilities !== undefined) {
-    systems.register(new TargetingCommitSystem(abilities));
-    systems.register(new CastPhaseSystem(abilities));
-    systems.register(new ProjectileSystem(abilities));
-    systems.register(new CooldownSystem());
-    systems.register(new EffectDurationSystem(abilities));
-    systems.register(new CastInterruptSystem(abilities));
-  }
-  // `BuffSystem` включает своё поле конфига, а не поле способностей: сцена с
-  // одними баффами законна (SER-7, BUFF-1). Списки источников она разрешает в
-  // конструкторе, поэтому статовая правка, адресующая неподключённый список, —
-  // ошибка загрузки (BUFF-4).
-  if (abilities !== undefined && def.buffs !== undefined) {
-    systems.register(new BuffSystem(abilities, modifiers));
-  }
-  // Маску сущностям-спутникам платформы пишет отдельная система (NET-12), и
-  // включает её пара «есть определения + сцена с туманом». Туман здесь условие,
-  // а не вкус: без `fog` компонента `Visibility` в мире нет вовсе, вешать его
-  // спутнику некуда, а фильтр снапшота на такой сцене не режет никого.
-  // Обе группы определений, а не одни `abilities`: инстанс баффа — такой же
-  // спутник, как слот, и сцена вправе объявить `buffs` без способностей (SER-7).
-  if (abilities !== undefined && def.fog === true) {
-    systems.register(new AbilityVisibilitySystem(abilities));
-  }
-  // Платформа поведения NPC включается составом сцены целиком (SER-7, NPC-2):
-  // зависимостей сборки у её систем нет — восприятие есть прямое чтение мира
-  // (NPC-1), поиск пути не требуется (NAV-6), — а без систем объявленные
-  // компоненты остались бы мёртвыми данными. Сами документы разобраны выше, до
-  // создания мира.
-  if (npc !== undefined) {
-    systems.register(new NpcBehaviorSystem(npc));
-    systems.register(new NpcMovementSystem(npc));
-    systems.register(new NpcThreatSystem(npc));
-    // Режиссёр включается таблицей волн, а не самой платформой: сцена вправе
-    // расставить NPC руками и волн не иметь вовсе (NPC-8).
-    if (npc.waves !== undefined) systems.register(new NpcDirectorSystem(npc));
-  }
-  // Валидация каждой системы — внутри registerFromJson (SYS-3): конфиг с
-  // опечаткой не должен доживать до первого тика.
-  for (const system of def.systems ?? []) systems.registerFromJson(system, world);
+  registerSceneSystems(systems, def, world, timeScaleModifiers, modifiers, abilities, npc);
   return {
     world,
     systems,

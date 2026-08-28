@@ -75,30 +75,33 @@ export class TargetingCommitSystem implements System {
     if (slots.length === 0) return;
     // Handle полей слота (SYS-10): один раз, на первом входе, после раннего выхода.
     const h = this.scope.handles(ctx);
-    for (const slot of slots) {
-      const phaseIndex = ctx.getByHandle(slot, h.phase);
-      if (phaseIndex < 0) continue;
-      const ability = abilityOf(this.catalog, ctx, h, slot);
-      if (ability.stepCount === 0) continue;
-      const staged = ctx.getByHandle(slot, h.staged);
-      if (staged >= ability.stepCount) continue;
-      // Шаг накапливают только фазы, которые его накапливают: `hold` и `auto`
-      // завершаются временем и удержанием, и записывать в них нечего (ABIL-5).
-      const trigger = this.catalog.phases[ability.phaseStart + phaseIndex]?.trigger;
-      if (trigger !== PHASE_COMMIT && trigger !== PHASE_RELEASE) continue;
-      const owner = ctx.getByHandle(slot, h.owner);
-      if (owner === NO_ENTITY || !ctx.isAlive(owner)) continue;
-      const buttons = buttonsOf(ctx, this.catalog, owner);
-      const prevButtons = prevButtonsOf(ctx, this.catalog, owner);
-      // Фронт бита подтверждения — в обеих фазах; прекращение удержания бита
-      // триггера — только в фазе `release`, и тем же тиком оно завершит фазу
-      // (ABIL-4): условие у обеих систем считает одна функция.
-      const confirmed =
-        buttonEdge(buttons, prevButtons, ability.confirmBit) ||
-        (trigger === PHASE_RELEASE && triggerHoldEnded(ability, buttons));
-      if (!confirmed) continue;
-      this.commit(ctx, h, slot, owner, ability, staged);
-    }
+    for (const slot of slots) this.commitSlot(ctx, h, slot);
+  }
+
+  /** Один слот: подтверждён ли шаг прицеливания на этом тике (ABIL-5). */
+  private commitSlot(ctx: SystemContext, h: SlotHandles, slot: EntityId): void {
+    const phaseIndex = ctx.getByHandle(slot, h.phase);
+    if (phaseIndex < 0) return;
+    const ability = abilityOf(this.catalog, ctx, h, slot);
+    if (ability.stepCount === 0) return;
+    const staged = ctx.getByHandle(slot, h.staged);
+    if (staged >= ability.stepCount) return;
+    // Шаг накапливают только фазы, которые его накапливают: `hold` и `auto`
+    // завершаются временем и удержанием, и записывать в них нечего (ABIL-5).
+    const trigger = this.catalog.phases[ability.phaseStart + phaseIndex]?.trigger;
+    if (trigger !== PHASE_COMMIT && trigger !== PHASE_RELEASE) return;
+    const owner = ctx.getByHandle(slot, h.owner);
+    if (owner === NO_ENTITY || !ctx.isAlive(owner)) return;
+    const buttons = buttonsOf(ctx, this.catalog, owner);
+    const prevButtons = prevButtonsOf(ctx, this.catalog, owner);
+    // Фронт бита подтверждения — в обеих фазах; прекращение удержания бита
+    // триггера — только в фазе `release`, и тем же тиком оно завершит фазу
+    // (ABIL-4): условие у обеих систем считает одна функция.
+    const confirmed =
+      buttonEdge(buttons, prevButtons, ability.confirmBit) ||
+      (trigger === PHASE_RELEASE && triggerHoldEnded(ability, buttons));
+    if (!confirmed) return;
+    this.commit(ctx, h, slot, owner, ability, staged);
   }
 
   /**

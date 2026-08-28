@@ -302,11 +302,13 @@ export function rayVsBox(from: Vec2, dir: Vec2, rayLength: Fixed, box: Bounds): 
       if (origin <= lo || origin >= hi) return undefined;
       continue;
     }
-    let t0 = ratio(fixed.sub(lo, origin), direction, rayLength);
-    let t1 = ratio(fixed.sub(hi, origin), direction, rayLength);
-    if (t0 > t1) [t0, t1] = [t1, t0];
-    if (t0 > near) near = t0;
-    if (t1 < far) far = t1;
+    const t0 = ratio(fixed.sub(lo, origin), direction, rayLength);
+    const t1 = ratio(fixed.sub(hi, origin), direction, rayLength);
+    // Знак направления решает, какая из границ слэба ближняя: отрезок луча
+    // клипуется пересечением с полосой. `Math.min`/`Math.max` на целых Q16.16
+    // точны и порядок не меняют — округления здесь не возникает (DET-2).
+    near = Math.max(near, Math.min(t0, t1));
+    far = Math.min(far, Math.max(t0, t1));
     if (near > far) return undefined;
   }
   return near;

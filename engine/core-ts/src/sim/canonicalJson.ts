@@ -25,6 +25,16 @@ export function canonicalJson(value: unknown): string {
   }
   // Все числовые значения ядра целые: Q16.16 хранится как i32 (FP-1), поэтому
   // вопроса дробной записи не возникает.
-  // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- baseline
-  return JSON.stringify(value) ?? 'null';
+  return scalarJson(value) ?? 'null';
+}
+
+/**
+ * Скаляр в JSON — либо `undefined`, если значения в JSON нет вовсе.
+ *
+ * Отдельной функцией ради честного типа: `JSON.stringify` возвращает
+ * `undefined` для `undefined`, функций и символов, а платформенная сигнатура
+ * обещает строку — без этого объявления фолбэк ниже выглядел бы недостижимым.
+ */
+function scalarJson(value: unknown): string | undefined {
+  return JSON.stringify(value);
 }

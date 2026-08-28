@@ -72,6 +72,17 @@ const NO_SLOTS = new Float64Array(0);
 /** «События нет» в позиции ссылки на шину: имя триггера в область не связывается. */
 const NO_EVENT = -1;
 
+/**
+ * Исход проверки истечения фазы (`timeoutStep`) — внутренний ответ автомата, а
+ * не значение контента: `timeoutThen` из документа способности это отдельный
+ * словарь (`TIMEOUT_*` в `model.ts`).
+ */
+const TIMEOUT_STEP_PENDING = 0;
+/** Переход по `timeout` уже выполнен — автомату здесь больше делать нечего. */
+const TIMEOUT_STEP_HANDLED = 1;
+/** Истечение завершает фазу штатно: переход вида `auto` (ABIL-4). */
+const TIMEOUT_STEP_COMPLETED = 2;
+
 export class CastPhaseSystem implements System {
   readonly name = 'CastPhase';
   readonly order = ANCHOR_ORDER;
@@ -273,6 +284,73 @@ export class CastPhaseSystem implements System {
 
   // ---------------------------------------------------------------- автомат
 
+  /**
+   * Завершил ли фазу её собственный триггер (ABIL-4): удержание прекратилось
+   * либо подтверждение состоялось. Фазы прочих видов сами по себе не
+   * завершаются — их завершает истечение `durationTicks`.
+   */
+  private triggerCompleted(
+    ctx: SystemContext,
+    h: SlotHandles,
+    slot: EntityId,
+    owner: EntityId,
+    ability: CompiledAbility,
+    phase: CompiledPhase,
+  ): boolean {
+    if (phase.trigger === PHASE_HOLD || phase.trigger === PHASE_RELEASE) {
+      // Фаза длится, пока держится бит триггера; прекращение удержания завершает
+      // её (ABIL-4). У вида `release` тот же самый момент уже записал шаг
+      // прицеливания системой на −800, и завершение видит его (ABIL-5, DET-9).
+      return triggerHoldEnded(ability, buttonsOf(ctx, this.catalog, owner));
+    }
+    if (phase.trigger !== PHASE_COMMIT) return false;
+    // Фаза подтверждения завершается накоплением всех объявленных шагов, а
+    // при их отсутствии — фронтом бита подтверждения (ABIL-4).
+    if (ability.stepCount > 0) return ctx.getByHandle(slot, h.staged) >= ability.stepCount;
+    const buttons = buttonsOf(ctx, this.catalog, owner);
+    const prevButtons = prevButtonsOf(ctx, this.catalog, owner);
+    return buttonEdge(buttons, prevButtons, ability.confirmBit);
+  }
+
+  /**
+   * Истечение `durationTicks` фазы (ABIL-4). Возвращает, что делать дальше:
+   * переход по `timeout` уже выполнен, фаза завершается штатно (переход вида
+   * `auto`) либо длится дальше.
+   */
+  private timeoutStep(
+    ctx: SystemContext,
+    slot: EntityId,
+    owner: EntityId,
+    ability: CompiledAbility,
+    phase: CompiledPhase,
+    phaseIndex: number,
+    ticks: number,
+  ): number {
+    const duration =
+      phase.durationTicks === undefined
+        ? undefined
+        : ticksOf(
+            evaluate(phase.durationTicks, ctx, this.scope.vars),
+            `способность "${ability.id}": фаза "${phase.id}", "durationTicks"`,
+          );
+    if (duration === undefined || ticks < duration) return TIMEOUT_STEP_PENDING;
+    if (phase.timeoutThen === TIMEOUT_CANCEL) {
+      this.interrupt(ctx, slot, owner, ability, phase, INTERRUPT_TIMEOUT);
+      return TIMEOUT_STEP_HANDLED;
+    }
+    if (phase.timeoutThen === TIMEOUT_COMMIT) {
+      this.complete(ctx, slot, owner, ability, phase, phaseIndex, true, ticks);
+      return TIMEOUT_STEP_HANDLED;
+    }
+    if (phase.timeoutThen !== TIMEOUT_NONE) {
+      this.enter(ctx, slot, owner, ability, phase.timeoutThen, phase, NO_EVENT, ticks);
+      return TIMEOUT_STEP_HANDLED;
+    }
+    // Блока `timeout` нет: истечение `durationTicks` завершает фазу штатно —
+    // это и есть переход вида `auto` (ABIL-4).
+    return TIMEOUT_STEP_COMPLETED;
+  }
+
   private advance(
     ctx: SystemContext,
     h: SlotHandles,
@@ -286,50 +364,11 @@ export class CastPhaseSystem implements System {
     this.scope.bind(ctx, slot, owner);
     this.scope.vars.phaseTicks = ticks;
 
-    let completed = false;
-    if (phase.trigger === PHASE_HOLD || phase.trigger === PHASE_RELEASE) {
-      // Фаза длится, пока держится бит триггера; прекращение удержания завершает
-      // её (ABIL-4). У вида `release` тот же самый момент уже записал шаг
-      // прицеливания системой на −800, и завершение видит его (ABIL-5, DET-9).
-      const buttons = buttonsOf(ctx, this.catalog, owner);
-      completed = triggerHoldEnded(ability, buttons);
-    } else if (phase.trigger === PHASE_COMMIT) {
-      // Фаза подтверждения завершается накоплением всех объявленных шагов, а
-      // при их отсутствии — фронтом бита подтверждения (ABIL-4).
-      if (ability.stepCount > 0) {
-        completed = ctx.getByHandle(slot, h.staged) >= ability.stepCount;
-      } else {
-        const buttons = buttonsOf(ctx, this.catalog, owner);
-        const prevButtons = prevButtonsOf(ctx, this.catalog, owner);
-        completed = buttonEdge(buttons, prevButtons, ability.confirmBit);
-      }
-    }
-
+    let completed = this.triggerCompleted(ctx, h, slot, owner, ability, phase);
     if (!completed) {
-      const duration =
-        phase.durationTicks === undefined
-          ? undefined
-          : ticksOf(
-              evaluate(phase.durationTicks, ctx, this.scope.vars),
-              `способность "${ability.id}": фаза "${phase.id}", "durationTicks"`,
-            );
-      if (duration !== undefined && ticks >= duration) {
-        if (phase.timeoutThen === TIMEOUT_CANCEL) {
-          this.interrupt(ctx, slot, owner, ability, phase, INTERRUPT_TIMEOUT);
-          return;
-        }
-        if (phase.timeoutThen === TIMEOUT_COMMIT) {
-          this.complete(ctx, slot, owner, ability, phase, phaseIndex, true, ticks);
-          return;
-        }
-        if (phase.timeoutThen !== TIMEOUT_NONE) {
-          this.enter(ctx, slot, owner, ability, phase.timeoutThen, phase, NO_EVENT, ticks);
-          return;
-        }
-        // Блока `timeout` нет: истечение `durationTicks` завершает фазу штатно —
-        // это и есть переход вида `auto` (ABIL-4).
-        completed = true;
-      }
+      const step = this.timeoutStep(ctx, slot, owner, ability, phase, phaseIndex, ticks);
+      if (step === TIMEOUT_STEP_HANDLED) return;
+      completed = step === TIMEOUT_STEP_COMPLETED;
     }
 
     if (!completed) {

@@ -25,7 +25,7 @@ import {
   type TransportServer,
 } from '../transport/transport.js';
 import { DurationRing, summarize, type DurationSummary } from './hostMetrics.js';
-import type { MatchServer } from './matchServer.js';
+import type { MatchServer, Outgoing } from './matchServer.js';
 
 /**
  * Сколько записей по-соединениям держать: с запасом на ростер и недавние
@@ -203,31 +203,8 @@ export class MatchHost {
     for (const outgoing of this.server.drain()) {
       const transport = this.attached.get(outgoing.to);
       if (transport === undefined) continue;
-      const bytes = this.codec.encode(outgoing.message);
-      this.server.metrics.bytesSent += bytes.byteLength;
-      const counted = this.countedOf(outgoing.to);
-      counted.bytes += bytes.byteLength;
-      if (outgoing.message.type === 'Snapshot') {
-        counted.snapshotBytes += bytes.byteLength;
-        counted.snapshots++;
-      }
-      transport.send(bytes);
-      // Отметка берётся ПОСЛЕ передачи в отправку: broadcast lag — это время до
-      // передачи последнего персонального снапшота, а не до его формирования.
-      if (outgoing.message.type === 'Snapshot') {
-        lastSnapshotAt = this.now();
-        // Серверная половина отклика (NTR-11): отметка прихода ввода
-        // ПОТРЕБЛЯЕТСЯ первым же снапшотом — у молчащего игрока величина иначе
-        // росла бы вместе с молчанием.
-        if (counted.inputAt >= 0) {
-          counted.responseMs = Math.max(0, lastSnapshotAt - counted.inputAt);
-          counted.inputAt = -1;
-        }
-      }
-      if (outgoing.closeAfter) {
-        this.attached.delete(outgoing.to);
-        transport.close(outgoing.message.type === 'Reject' ? outgoing.message.reason : 'match-ended');
-      }
+      const snapshotAt = this.sendOutgoing(outgoing, transport);
+      if (snapshotAt >= 0) lastSnapshotAt = snapshotAt;
     }
     // Отставание рассылки считается один раз на тик — от его конца до
     // ПОСЛЕДНЕГО персонального снапшота: именно последний адресат и определяет,
@@ -236,6 +213,42 @@ export class MatchHost {
       this.broadcastRing.record(Math.max(0, lastSnapshotAt - this.tickEndedAt));
       this.tickEndedAt = -1;
     }
+  }
+
+  /**
+   * Отправка одного исходящего своему соединению вместе с его учётом (NTR-11).
+   * Возвращает отметку времени переданного персонального снапшота либо `-1`,
+   * если исходящее снапшотом не было.
+   */
+  private sendOutgoing(outgoing: Outgoing, transport: Transport): number {
+    const bytes = this.codec.encode(outgoing.message);
+    this.server.metrics.bytesSent += bytes.byteLength;
+    const counted = this.countedOf(outgoing.to);
+    counted.bytes += bytes.byteLength;
+    const isSnapshot = outgoing.message.type === 'Snapshot';
+    if (isSnapshot) {
+      counted.snapshotBytes += bytes.byteLength;
+      counted.snapshots++;
+    }
+    transport.send(bytes);
+    // Отметка берётся ПОСЛЕ передачи в отправку: broadcast lag — это время до
+    // передачи последнего персонального снапшота, а не до его формирования.
+    let snapshotAt = -1;
+    if (isSnapshot) {
+      snapshotAt = this.now();
+      // Серверная половина отклика (NTR-11): отметка прихода ввода
+      // ПОТРЕБЛЯЕТСЯ первым же снапшотом — у молчащего игрока величина иначе
+      // росла бы вместе с молчанием.
+      if (counted.inputAt >= 0) {
+        counted.responseMs = Math.max(0, snapshotAt - counted.inputAt);
+        counted.inputAt = -1;
+      }
+    }
+    if (outgoing.closeAfter) {
+      this.attached.delete(outgoing.to);
+      transport.close(outgoing.message.type === 'Reject' ? outgoing.message.reason : 'match-ended');
+    }
+    return snapshotAt;
   }
 
   /**

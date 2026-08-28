@@ -33,7 +33,10 @@ describe('assert (FP-4): мягкая диагностика, не часть с
   });
 
   it('возвращаемого значения нет — assert не может повлиять на результат вызывающей операции', () => {
-    // eslint-disable-next-line @typescript-eslint/no-confusing-void-expression, @typescript-eslint/no-invalid-void-type -- baseline
+    /* eslint-disable-next-line @typescript-eslint/no-confusing-void-expression, @typescript-eslint/no-invalid-void-type --
+     * Тест утверждает ровно то, что оба правила запрещают писать: у `assert`
+     * нет возвращаемого значения, и подставить его вызов в позицию значения
+     * нельзя. Проверить это, не написав такое выражение, невозможно. */
     const result: void = assert(false, 'x');
     expect(result).toBeUndefined();
   });
