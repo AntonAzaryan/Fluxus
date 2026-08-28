@@ -55,9 +55,10 @@ export interface WalkablePlacement {
   /**
    * Скрытые части записи манифеста (ASSET-6): инстанс их не рисует, значит и
    * поверхность их не видит — поле обязано совпадать с картинкой (REND-9), а
-   * наведение — с нарисованными частями (REND-15).
+   * наведение — с нарисованными частями (REND-15). Отсутствие поля и `undefined`
+   * в нём — одно и то же: так их и сводит `sameHiddenParts` ниже.
    */
-  readonly hiddenParts?: readonly number[];
+  readonly hiddenParts?: readonly number[] | undefined;
 }
 
 /**

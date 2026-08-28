@@ -50,7 +50,13 @@ interface Match {
 async function playing(): Promise<Match> {
   const matchConfig = config();
   const fixture = harness(matchConfig);
-  const build = { physics: matchConfig.physics, visibility: matchConfig.visibility };
+  // Зависимости сборки клиентского мира — по наличию, как их передаёт
+  // `playMatch`: ключ со значением `undefined` объявил бы то, чего в конфиге
+  // матча нет (NTR-14).
+  const build = {
+    ...(matchConfig.physics !== undefined ? { physics: matchConfig.physics } : {}),
+    ...(matchConfig.visibility !== undefined ? { visibility: matchConfig.visibility } : {}),
+  };
   // Непрерывный ввод у обоих: пауза обязана быть невидима записи именно на
   // матче, в котором на каждом тике что-то происходит.
   const a = connectClient(fixture.hub, 'p1', fixture.clock, matchConfig.scene, walkRight(400), build);

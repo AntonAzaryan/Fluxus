@@ -628,11 +628,15 @@ export class RenderBridge {
   private lastEpoch = 0;
 
   constructor(sceneDef: SceneDef, config: MatchConfig, clock: Clock) {
+    // Каждая необязательная зависимость сборки передаётся ПО НАЛИЧИЮ, а не
+    // значением: `buildMatchWorld` различает «поля нет» и «поле есть» (NTR-14
+    // отказывает сцене с туманом без объявленного пересчёта видимости), и
+    // ключ со значением `undefined` был бы объявлением, которого не делали.
     this.world = buildMatchWorld({
       scene: sceneDef,
       players: config.players,
       seed: config.seed,
-      initial: config.initial,
+      ...(config.initial !== undefined ? { initial: config.initial } : {}),
       ...(config.physics !== undefined ? { physics: config.physics } : {}),
       ...(config.locomotion !== undefined ? { locomotion: config.locomotion } : {}),
       ...(config.visibility !== undefined ? { visibility: config.visibility } : {}),

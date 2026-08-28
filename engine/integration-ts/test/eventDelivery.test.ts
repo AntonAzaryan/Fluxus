@@ -226,17 +226,21 @@ function markedScene(spec: SceneSpec): SceneDef {
 const BROADCAST_RATE = 30;
 
 function eventConfig(spec: SceneSpec, overrides: Partial<MatchConfig> = {}): MatchConfig {
-  return duelConfig({
+  // Пересчёта видимости этот матч не объявляет намеренно: маску авторит сама
+  // сцена (см. `markedScene`), и требовать его сцена без флага `fog` не может
+  // (NTR-14). Общая фикстура `duelConfig` пересчёт объявляет, как это делают
+  // записанные матчи, — поэтому поле у неё СНИМАЕТСЯ. Снимается ключом, а не
+  // перекрытием со значением `undefined`: в `Partial<MatchConfig>` наличие
+  // ключа и есть объявление, и «объявлено значением undefined» отличалось бы
+  // от «не объявлено» ровно там, где отличие важно, — на входе
+  // `buildMatchWorld` (NTR-14).
+  const { visibility: _noVisibility, ...config } = duelConfig({
     scene: markedScene(spec),
     snapshotRate: BROADCAST_RATE,
     eventRepeat: 0,
-    // Пересчёта видимости этот матч не объявляет намеренно: маску авторит сама
-    // сцена (см. `markedScene`), и требовать его сцена без флага `fog` не может
-    // (NTR-14). Явное `undefined` стоит здесь потому, что общая фикстура
-    // `duelConfig` пересчёт объявляет, как это делают записанные матчи.
-    visibility: undefined,
     ...overrides,
   });
+  return config;
 }
 
 // -------------------------------------------------------- обёртка транспорта

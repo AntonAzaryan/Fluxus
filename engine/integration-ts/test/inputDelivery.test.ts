@@ -164,7 +164,13 @@ async function playing(policies: { a?: Policy; b?: Policy } = {}): Promise<Match
   const fixture = harness(config);
   const aLink = new InputTapLink(fixture.hub, policies.a ?? PASS);
   const bLink = new InputTapLink(fixture.hub, policies.b ?? PASS);
-  const build = { physics: config.physics, visibility: config.visibility };
+  // Зависимости сборки клиентского мира — по наличию, как их передаёт
+  // `playMatch`: `connectClient` объявляет их серверу-эквивалентной сборке
+  // только тогда, когда ключ есть (NTR-14).
+  const build = {
+    ...(config.physics !== undefined ? { physics: config.physics } : {}),
+    ...(config.visibility !== undefined ? { visibility: config.visibility } : {}),
+  };
   const inputA = fuzzInput(SEED, 'chaos-p1', TICKS + 64);
   const inputB = fuzzInput(SEED, 'chaos-p2', TICKS + 64);
   const a = connectClient(aLink, 'p1', fixture.clock, config.scene, inputA, build);

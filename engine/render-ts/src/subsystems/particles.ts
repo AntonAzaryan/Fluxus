@@ -139,9 +139,10 @@ export interface ParticlesOptions {
   /**
    * Источник узлов-сокетов (REND-24): без него записи с сокетом играют в
    * позиции сущности и говорят об этом один раз. Опцией, а не контекстом
-   * (REND-8): контракт подсистем от сокетов не меняется.
+   * (REND-8): контракт подсистем от сокетов не меняется. `undefined` — «не
+   * задан», и дальше по конвейеру он и едет им же (`poseEmitterShell`).
    */
-  readonly sockets?: SocketSource;
+  readonly sockets?: SocketSource | undefined;
   /** Куда писать предупреждения; по умолчанию console.warn. */
   readonly warn?: (message: string) => void;
 }
