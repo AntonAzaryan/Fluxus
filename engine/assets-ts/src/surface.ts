@@ -115,15 +115,15 @@ function collectTriangles(model: NormalizedModel, hidden: ReadonlySet<number> | 
   const triMesh = new Uint32Array(count);
   const triBase = new Uint32Array(count);
   let tri = 0;
-  for (let m = 0; m < model.meshes.length; m++) {
-    if (hidden?.has(model.meshes[m]!.partId) === true) continue;
-    const triangles = Math.floor(model.meshes[m]!.indices.length / 3);
+  model.meshes.forEach((mesh, m) => {
+    if (hidden?.has(mesh.partId) === true) return;
+    const triangles = Math.floor(mesh.indices.length / 3);
     for (let k = 0; k < triangles; k++) {
       triMesh[tri] = m;
       triBase[tri] = k * 3;
       tri++;
     }
-  }
+  });
   return { count, triMesh, triBase };
 }
 

@@ -14,7 +14,14 @@ import {
   validateParticleEffect,
   type ParticleEffectDocument,
 } from '../src/index.js';
-import { FIXTURES_DIR, FsAssetSource, MemoryAssetSource, bytesOf, settled } from './helpers.js';
+import {
+  FIXTURES_DIR,
+  FsAssetSource,
+  MemoryAssetSource,
+  bytesOf,
+  expectValidationErrors,
+  settled,
+} from './helpers.js';
 
 /** Фикстура — документ, записанный самой библиотекой частиц (эмиттер в группе). */
 const TORCH_ID = 'torch.effect.json';
@@ -25,17 +32,8 @@ const minimalDoc = {
   object: { uuid: 'e0e1', type: 'ParticleEmitter', ps: { version: '3.0' } },
 };
 
-function expectErrors(doc: unknown, ...patterns: RegExp[]): string[] {
-  const result = validateParticleEffect(doc);
-  expect(result.ok).toBe(false);
-  if (result.ok) throw new Error('ожидался провал валидации');
-  for (const pattern of patterns) {
-    expect(
-      result.errors.some((e) => pattern.test(e)),
-      `нет ошибки под ${pattern}; есть:\n${result.errors.join('\n')}`,
-    ).toBe(true);
-  }
-  return result.errors;
+function expectErrors(doc: unknown, ...patterns: RegExp[]): readonly string[] {
+  return expectValidationErrors(validateParticleEffect(doc), patterns);
 }
 
 describe('ASSET-14: форма документа эффекта', () => {

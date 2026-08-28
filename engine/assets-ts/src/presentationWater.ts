@@ -28,12 +28,12 @@
  * документ от этого не правится.
  */
 import {
-  closedKeys,
   namedColorField,
   numberField,
+  optionalSubsection,
   subsection,
-  typeName,
 } from './presentationFields.js';
+import { closedKeys, typeName } from './validation.js';
 
 /**
  * Полоса пены у берега (REND-35). Ширина меряется ГЛУБИНОЙ в шкале уровней:
@@ -360,8 +360,7 @@ function validateBody(entry: unknown, path: string, errors: string[]): void {
     ['detail', validateDetail],
     ['ripples', validateRipples],
   ] as const) {
-    if (!(key in node)) continue;
-    const block = subsection(node[key], `${path}.${key}`, errors);
+    const block = optionalSubsection(node, path, key, errors);
     if (block !== null) check(block, `${path}.${key}`, errors);
   }
 }

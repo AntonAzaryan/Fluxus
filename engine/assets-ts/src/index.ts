@@ -78,23 +78,33 @@ export type {
   // секция эмиттеров частиц (ASSET-14, `rendering` REND-24)
   VisualEmitter,
   VisualParticlesSection,
-  CameraEffectsSection,
+  // параметры яруса и LOD записи (ASSET-13)
+  VisualTier,
+} from './manifest.js';
+// секции камеры манифеста (ASSET-8, ASSET-10). Форма машинного описания типов
+// эффектов (`camera` CAM-9) и состава конфига (CAM-1) живёт здесь, рядом с
+// форматом секции, а их содержимое — в коде камеры.
+export type {
+  CameraConfigDescription,
+  CameraConfigSection,
   CameraEffectDef,
-  // Форма машинного описания типов эффектов (`camera` CAM-9): контракт живёт
-  // здесь, рядом с форматом секции, а его содержимое — в коде камеры.
   CameraEffectKind,
   CameraEffectParamSpec,
   CameraEffectTypeSpec,
   CameraEffectsDescription,
-  // Секция конфига камеры (ASSET-10) — тем же порядком: формат здесь, состав
-  // параметров и умолчания в коде камеры (`camera` CAM-1).
-  CameraConfigSection,
-  CameraConfigDescription,
-  ManifestValidation,
-  ValidateManifestOptions,
-  // параметры яруса и LOD записи (ASSET-13)
-  VisualTier,
-} from './manifest.js';
+  CameraEffectsSection,
+} from './cameraEffects.js';
+export {
+  POSITIVE_MIN,
+  cameraEffectParamInRange,
+  cameraEffectParams,
+  cameraEffectRangeText,
+  cameraEffectType,
+  clampCameraEffectParam,
+} from './cameraEffects.js';
+// валидация документа манифеста (ASSET-6, ASSET-8)
+export type { ManifestValidation, ValidateManifestOptions } from './manifestValidate.js';
+export { validateManifest } from './manifestValidate.js';
 // блок света записи (ASSET-16) — локальный источник инстансов записи
 // (`rendering` REND-33): состав, единицы и разбор в величины рендера
 export type {
@@ -111,7 +121,6 @@ export {
   validateVisualLight,
 } from './visualLight.js';
 export {
-  validateManifest,
   resolveSurfaceAlign,
   resolveVisual,
   resolveVisualLight,
@@ -127,12 +136,6 @@ export {
   resolveLodThresholds,
   DEFAULT_LOD_THRESHOLDS,
   visualKeys,
-  cameraEffectParams,
-  cameraEffectParamInRange,
-  cameraEffectRangeText,
-  cameraEffectType,
-  clampCameraEffectParam,
-  POSITIVE_MIN,
   DEFAULT_SURFACE_ALIGN,
 } from './manifest.js';
 

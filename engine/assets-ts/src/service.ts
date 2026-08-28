@@ -6,6 +6,7 @@ import type {
   Handle,
   LoaderContext,
 } from './types.js';
+import { reasonOf } from './validation.js';
 
 /**
  * Запись кэша: одна на ID, разделяется всеми потребителями (ASSET-2 —
@@ -159,8 +160,7 @@ export class AssetService {
 
   private entryOf(handle: Handle): Entry {
     const entry = this.cache.get(handle.id);
-    // eslint-disable-next-line @typescript-eslint/prefer-optional-chain -- baseline
-    if (!entry || entry.kind !== handle.kind) {
+    if (entry?.kind !== handle.kind) {
       throw new Error(`handle "${handle.id}" (${handle.kind}) не выдавался этим сервисом`);
     }
     return entry;
@@ -221,8 +221,7 @@ export class AssetService {
           return await this.source.read(depId);
         } catch (e) {
           throw new Error(
-            `ассет "${id}": не удалось прочитать зависимость "${depId}" — ` +
-              (e instanceof Error ? e.message : String(e)),
+            `ассет "${id}": не удалось прочитать зависимость "${depId}" — ${reasonOf(e)}`,
           );
         }
       },
@@ -237,7 +236,7 @@ export class AssetService {
     } catch (e) {
       this.setState(entry, {
         status: 'failed',
-        reason: e instanceof Error ? e.message : String(e),
+        reason: reasonOf(e),
       });
       return;
     }

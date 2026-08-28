@@ -24,7 +24,7 @@ import {
   visualKeys,
   type CameraEffectsDescription,
 } from '../src/index.js';
-import { MemoryAssetSource, bytesOf, settled } from './helpers.js';
+import { MemoryAssetSource, bytesOf, expectValidationErrors, settled } from './helpers.js';
 
 /** Полноценный валидный визуал — покрывает все поля EntityVisual. */
 const validDoc = {
@@ -54,17 +54,8 @@ const validDoc = {
   },
 };
 
-function expectErrors(doc: unknown, ...patterns: RegExp[]): string[] {
-  const result = validateManifest(doc);
-  expect(result.ok).toBe(false);
-  if (result.ok) throw new Error('ожидался провал валидации');
-  for (const pattern of patterns) {
-    expect(
-      result.errors.some((e) => pattern.test(e)),
-      `нет ошибки под ${pattern}; есть:\n${result.errors.join('\n')}`,
-    ).toBe(true);
-  }
-  return result.errors;
+function expectErrors(doc: unknown, ...patterns: RegExp[]): readonly string[] {
+  return expectValidationErrors(validateManifest(doc), patterns);
 }
 
 describe('validateManifest (ASSET-6)', () => {

@@ -7,24 +7,15 @@
 
 import type { AssetLoader, LoaderContext } from '../types.js';
 import { validateCurvatureMap, type TerrainCurvatureMap } from '../curvature.js';
+import { findingsList, parseAssetJson } from '../validation.js';
 
 export const curvatureLoader: AssetLoader<TerrainCurvatureMap> = {
   kind: 'terrain-curvature',
   extensions: ['.json'],
   load(bytes: ArrayBuffer, ctx: LoaderContext): TerrainCurvatureMap {
-    let doc: unknown;
-    try {
-      doc = JSON.parse(new TextDecoder().decode(bytes));
-    } catch (e) {
-      throw new Error(
-        `карта кривизны "${ctx.id}": некорректный JSON — ${e instanceof Error ? e.message : String(e)}`,
-      );
-    }
-    const result = validateCurvatureMap(doc);
+    const result = validateCurvatureMap(parseAssetJson(bytes, 'карта кривизны', ctx.id));
     if (!result.ok) {
-      throw new Error(
-        `карта кривизны "${ctx.id}" не прошла валидацию:\n- ${result.errors.join('\n- ')}`,
-      );
+      throw new Error(`карта кривизны "${ctx.id}" не прошла валидацию:${findingsList(result.errors)}`);
     }
     return result.map;
   },

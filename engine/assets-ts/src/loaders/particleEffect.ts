@@ -12,23 +12,16 @@
 
 import type { AssetLoader, LoaderContext } from '../types.js';
 import { validateParticleEffect, type ParticleEffectDocument } from '../particleEffect.js';
+import { findingsList, parseAssetJson } from '../validation.js';
 
 export const particleEffectLoader: AssetLoader<ParticleEffectDocument> = {
   kind: 'particle-effect',
   extensions: ['.json'],
   load(bytes: ArrayBuffer, ctx: LoaderContext): ParticleEffectDocument {
-    let doc: unknown;
-    try {
-      doc = JSON.parse(new TextDecoder().decode(bytes));
-    } catch (e) {
-      throw new Error(
-        `эмиттерный ассет "${ctx.id}": некорректный JSON — ${e instanceof Error ? e.message : String(e)}`,
-      );
-    }
-    const result = validateParticleEffect(doc);
+    const result = validateParticleEffect(parseAssetJson(bytes, 'эмиттерный ассет', ctx.id));
     if (!result.ok) {
       throw new Error(
-        `эмиттерный ассет "${ctx.id}" не прошёл валидацию:\n- ${result.errors.join('\n- ')}`,
+        `эмиттерный ассет "${ctx.id}" не прошёл валидацию:${findingsList(result.errors)}`,
       );
     }
     return result.effect;

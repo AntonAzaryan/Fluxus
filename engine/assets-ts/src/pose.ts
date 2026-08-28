@@ -69,23 +69,41 @@ function hierarchyWorld(
   let resolved = 0;
   let guard = 0;
   while (resolved < count && guard++ <= count) {
-    for (let i = 0; i < count; i++) {
-      if (done[i] === 1) continue;
-      const parent = model.bones[i]!.parentIndex;
-      const hasParent = parent >= 0 && parent < count;
-      if (hasParent && done[parent] !== 1) continue;
-      composeTrs(trs, i * TRS_STRIDE, local, 0);
-      if (hasParent) multiplyMat4(out, parent * 16, local, 0, out, i * 16);
-      else out.set(local, i * 16);
-      done[i] = 1;
-      resolved++;
-    }
+    resolved += resolvePass(model, trs, local, done, out);
   }
   // Цикл в иерархии (кость сама себе предок) оставил бы матрицы нулевыми:
   // единичная — единственный осмысленный ответ, и он же не роняет запекание.
   for (let i = 0; i < count; i++) {
     if (done[i] === 0) identityMat4(out, i * 16);
   }
+}
+
+/**
+ * Один проход по костям в порядке индексов: разрешает те, чей родитель уже
+ * разрешён. Возвращает, сколько разрешил за проход, — по этому числу
+ * `hierarchyWorld` и решает, нужен ли следующий.
+ */
+function resolvePass(
+  model: NormalizedModel,
+  trs: Float64Array,
+  local: Float64Array,
+  done: Uint8Array,
+  out: Float64Array,
+): number {
+  const count = model.bones.length;
+  let resolved = 0;
+  for (let i = 0; i < count; i++) {
+    if (done[i] === 1) continue;
+    const parent = model.bones[i]!.parentIndex;
+    const hasParent = parent >= 0 && parent < count;
+    if (hasParent && done[parent] !== 1) continue;
+    composeTrs(trs, i * TRS_STRIDE, local, 0);
+    if (hasParent) multiplyMat4(out, parent * 16, local, 0, out, i * 16);
+    else out.set(local, i * 16);
+    done[i] = 1;
+    resolved++;
+  }
+  return resolved;
 }
 
 /**

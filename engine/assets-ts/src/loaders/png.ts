@@ -39,6 +39,15 @@ declare const DecompressionStream: new (format: string) => {
 /** 8-байтовая сигнатура PNG по спецификации. */
 const PNG_SIGNATURE = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a] as const;
 
+/**
+ * Похожи ли байты на PNG. Один ответ на весь модуль: по нему и декодер узнаёт
+ * свой файл, и загрузчик glTF решает, есть ли у встроенного изображения декодер
+ * (ASSET-5) — второе написание сигнатуры разошлось бы с первым молча.
+ */
+export function isPng(bytes: Uint8Array): boolean {
+  return bytes.length >= PNG_SIGNATURE.length && PNG_SIGNATURE.every((b, i) => bytes[i] === b);
+}
+
 /** Число каналов на цветовой тип PNG; palette (3) хранит один индекс. */
 const CHANNELS: Record<number, number> = { 0: 1, 2: 3, 3: 1, 4: 2, 6: 4 };
 
@@ -93,42 +102,59 @@ function unfilter(raw: Uint8Array, stride: number, height: number, bpp: number):
   for (let y = 0; y < height; y++) {
     const filter = raw[src++] ?? 0;
     const row = y * stride;
-    const prev = row - stride;
-    for (let x = 0; x < stride; x++) {
-      const value = raw[src++] ?? 0;
-      const a = x >= bpp ? out[row + x - bpp]! : 0;
-      const b = y > 0 ? out[prev + x]! : 0;
-      const c = y > 0 && x >= bpp ? out[prev + x - bpp]! : 0;
-      let restored: number;
-      switch (filter) {
-        case 0:
-          restored = value;
-          break;
-        case 1:
-          restored = value + a;
-          break;
-        case 2:
-          restored = value + b;
-          break;
-        case 3:
-          restored = value + ((a + b) >> 1);
-          break;
-        case 4: {
-          // Paeth: выбираем соседа, ближайшего к линейному предсказанию a+b-c
-          const p = a + b - c;
-          const pa = Math.abs(p - a);
-          const pb = Math.abs(p - b);
-          const pc = Math.abs(p - c);
-          restored = value + (pa <= pb && pa <= pc ? a : pb <= pc ? b : c);
-          break;
-        }
-        default:
-          throw new Error(`неизвестный фильтр строки PNG: ${filter}`);
-      }
-      out[row + x] = restored & 0xff;
-    }
+    unfilterRow(out, raw, src, row, row - stride, stride, bpp, filter, y > 0);
+    src += stride;
   }
   return out;
+}
+
+/**
+ * Одна строка: соседи берутся из УЖЕ восстановленных байтов `out`, поэтому
+ * порядок внутри строки строгий. Модульная функция с явными аргументами, а не
+ * замыкание: вызывается она на каждую строку изображения.
+ */
+function unfilterRow(
+  out: Uint8Array,
+  raw: Uint8Array,
+  src: number,
+  row: number,
+  prev: number,
+  stride: number,
+  bpp: number,
+  filter: number,
+  hasPrev: boolean,
+): void {
+  for (let x = 0; x < stride; x++) {
+    const value = raw[src + x] ?? 0;
+    const a = x >= bpp ? out[row + x - bpp]! : 0;
+    const b = hasPrev ? out[prev + x]! : 0;
+    const c = hasPrev && x >= bpp ? out[prev + x - bpp]! : 0;
+    out[row + x] = restoreByte(filter, value, a, b, c) & 0xff;
+  }
+}
+
+/** Байт по номеру фильтра: снимаем предсказание по соседям a (левый), b (верхний), c (левый-верхний). */
+function restoreByte(filter: number, value: number, a: number, b: number, c: number): number {
+  switch (filter) {
+    case 0:
+      return value;
+    case 1:
+      return value + a;
+    case 2:
+      return value + b;
+    case 3:
+      return value + ((a + b) >> 1);
+    case 4: {
+      // Paeth: выбираем соседа, ближайшего к линейному предсказанию a+b-c
+      const p = a + b - c;
+      const pa = Math.abs(p - a);
+      const pb = Math.abs(p - b);
+      const pc = Math.abs(p - c);
+      return value + (pa <= pb && pa <= pc ? a : pb <= pc ? b : c);
+    }
+    default:
+      throw new Error(`неизвестный фильтр строки PNG: ${filter}`);
+  }
 }
 
 /** Разбор чанков: заголовок, палитра, прозрачность палитры и склеенные IDAT. */
@@ -194,12 +220,12 @@ function readChunks(view: DataView, bytes: Uint8Array, id: string): {
 function toRgba8(
   data: Uint8Array,
   header: Header,
+  channels: number,
   palette: Uint8Array | null,
   transparency: Uint8Array | null,
   id: string,
 ): Uint8Array {
   const { width, height, bitDepth, colorType } = header;
-  const channels = CHANNELS[colorType]!;
   const step = bitDepth === 16 ? 2 : 1; // 16 бит → берём старший байт
   const stride = width * channels * step;
   const pixels = new Uint8Array(width * height * 4);
@@ -256,9 +282,7 @@ function toRgba8(
 /** Декодирование PNG в RGBA8. Headless, без DOM и GPU (ASSET-5). */
 export async function decodePng(bytes: ArrayBuffer, id: string): Promise<DecodedImage> {
   const data = new Uint8Array(bytes);
-  const validSignature =
-    data.length >= PNG_SIGNATURE.length && PNG_SIGNATURE.every((b, i) => data[i] === b);
-  if (!validSignature) {
+  if (!isPng(data)) {
     throw new Error(`ассет "${id}" не является PNG: неверная сигнатура файла`);
   }
 
@@ -298,7 +322,7 @@ export async function decodePng(bytes: ArrayBuffer, id: string): Promise<Decoded
     width: header.width,
     height: header.height,
     format: 'rgba8' as const,
-    pixels: toRgba8(rows, header, palette, transparency, id),
+    pixels: toRgba8(rows, header, channels, palette, transparency, id),
   });
 }
 

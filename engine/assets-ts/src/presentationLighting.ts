@@ -13,20 +13,19 @@
  * умолчанию — живёт у подсистемы освещения рендера (`render-ts`,
  * `lighting/config.ts`). На симуляцию секция не влияет ни байтом (PRES-4).
  *
- * Примитивы валидации (подсекция, закрытый состав, числовое поле, цвет) — общие
+ * Примитивы валидации (подсекция, числовое поле, цвет) — общие
  * на все секции документа и живут в `presentationFields.ts`: секций больше
  * одной, а правила у них одни.
  */
 import {
-  closedKeys,
   colorField,
-  isRecord,
   namedColorField,
   numberField,
+  optionalSubsection,
   subsection,
-  typeName,
   type NumberRange,
 } from './presentationFields.js';
+import { closedKeys, isRecord, typeName } from './validation.js';
 
 /**
  * Рассеянный свет сцены — половина секции `lighting` (PRES-2). Поля
@@ -332,33 +331,47 @@ function validateCyclePhase(
       `${path}.seconds: обязательное поле — положительная длительность фазы в секундах, получено ${typeName(seconds)}`,
     );
   }
-  if ('ambient' in node) {
-    const ambient = subsection(node.ambient, `${path}.ambient`, errors);
-    if (ambient !== null) validateAmbientLight(ambient, `${path}.ambient`, errors);
-  }
-  if ('directional' in node) {
-    const directional = subsection(node.directional, `${path}.directional`, errors);
-    if (directional !== null) validateDirectionalLight(directional, `${path}.directional`, errors);
-  }
-  if ('hemisphere' in node) {
-    if (!extras.hemisphere) {
-      errors.push(
-        `${path}.hemisphere: полусферной подсветки нет в статической части секции — фаза меняет числа источника, а не заводит его (REND-32, REND-29)`,
-      );
-    } else {
-      const hemisphere = subsection(node.hemisphere, `${path}.hemisphere`, errors);
-      if (hemisphere !== null) validateHemisphereLight(hemisphere, `${path}.hemisphere`, errors);
-    }
-  }
-  if (!('rim' in node)) return;
-  if (!extras.rim) {
+  const ambient = optionalSubsection(node, path, 'ambient', errors);
+  if (ambient !== null) validateAmbientLight(ambient, `${path}.ambient`, errors);
+  const directional = optionalSubsection(node, path, 'directional', errors);
+  if (directional !== null) validateDirectionalLight(directional, `${path}.directional`, errors);
+  validatePhaseExtra(node, path, 'hemisphere', extras.hemisphere, errors, (block, at) => {
+    validateHemisphereLight(block, at, errors);
+  });
+  validatePhaseExtra(node, path, 'rim', extras.rim, errors, (block, at) => {
+    validateDirectionalLight(block, at, errors);
+  });
+}
+
+/**
+ * Необязательный источник в фазе цикла (REND-32): фаза вправе вести его по
+ * кругу, если он есть у СТАТИЧЕСКОЙ части секции, и не вправе заводить его из
+ * ничего — появление источника на переходе потребовало бы семантики «свет
+ * возник из воздуха», которой формат не описывает (design D6).
+ *
+ * Одно место на оба таких источника: полусферная подсветка и контровой
+ * различаются только составом своего блока, а правило у них общее, и второе его
+ * написание разошлось бы с первым молча.
+ */
+function validatePhaseExtra(
+  node: Record<string, unknown>,
+  path: string,
+  key: 'hemisphere' | 'rim',
+  presentInStatic: boolean,
+  errors: string[],
+  validate: (block: Record<string, unknown>, at: string) => void,
+): void {
+  if (!(key in node)) return;
+  if (!presentInStatic) {
     errors.push(
-      `${path}.rim: контрового источника нет в статической части секции — фаза меняет числа источника, а не заводит его (REND-32, REND-29)`,
+      key === 'hemisphere'
+        ? `${path}.hemisphere: полусферной подсветки нет в статической части секции — фаза меняет числа источника, а не заводит его (REND-32, REND-29)`
+        : `${path}.rim: контрового источника нет в статической части секции — фаза меняет числа источника, а не заводит его (REND-32, REND-29)`,
     );
     return;
   }
-  const rim = subsection(node.rim, `${path}.rim`, errors);
-  if (rim !== null) validateDirectionalLight(rim, `${path}.rim`, errors);
+  const block = optionalSubsection(node, path, key, errors);
+  if (block !== null) validate(block, `${path}.${key}`);
 }
 
 /**
@@ -448,39 +461,23 @@ export function validateLighting(section: unknown, errors: string[]): void {
   const root = subsection(section, 'lighting', errors);
   if (root === null) return;
   closedKeys(root, 'lighting', LIGHTING_KEYS, errors);
-  if ('ambient' in root) {
-    const ambient = subsection(root.ambient, 'lighting.ambient', errors);
-    if (ambient !== null) validateAmbientLight(ambient, 'lighting.ambient', errors);
-  }
-  if ('directional' in root) {
-    const directional = subsection(root.directional, 'lighting.directional', errors);
-    if (directional !== null) validateDirectionalLight(directional, 'lighting.directional', errors);
-  }
-  if ('hemisphere' in root) {
-    const hemisphere = subsection(root.hemisphere, 'lighting.hemisphere', errors);
-    if (hemisphere !== null) validateHemisphereLight(hemisphere, 'lighting.hemisphere', errors);
-  }
-  if ('rim' in root) {
-    // Состав контрового источника — состав направленного (REND-29): те же тон,
-    // интенсивность и направление, и второго перечня этих полей быть не должно.
-    const rim = subsection(root.rim, 'lighting.rim', errors);
-    if (rim !== null) validateDirectionalLight(rim, 'lighting.rim', errors);
-  }
-  if ('shadows' in root) {
-    const shadows = subsection(root.shadows, 'lighting.shadows', errors);
-    if (shadows !== null) validateShadows(shadows, errors);
-  }
-  if ('cycle' in root) {
-    const cycle = subsection(root.cycle, 'lighting.cycle', errors);
-    // Наличие необязательных источников — свойство СТАТИЧЕСКОЙ части (REND-32):
-    // читается оно по написанным подсекциям, а не по их содержимому, — пустая
-    // подсекция всё равно заводит источник с умолчаниями подсистемы.
-    if (cycle !== null) {
-      validateLightingCycle(
-        cycle,
-        { hemisphere: 'hemisphere' in root, rim: 'rim' in root },
-        errors,
-      );
-    }
+  const ambient = optionalSubsection(root, 'lighting', 'ambient', errors);
+  if (ambient !== null) validateAmbientLight(ambient, 'lighting.ambient', errors);
+  const directional = optionalSubsection(root, 'lighting', 'directional', errors);
+  if (directional !== null) validateDirectionalLight(directional, 'lighting.directional', errors);
+  const hemisphere = optionalSubsection(root, 'lighting', 'hemisphere', errors);
+  if (hemisphere !== null) validateHemisphereLight(hemisphere, 'lighting.hemisphere', errors);
+  // Состав контрового источника — состав направленного (REND-29): те же тон,
+  // интенсивность и направление, и второго перечня этих полей быть не должно.
+  const rim = optionalSubsection(root, 'lighting', 'rim', errors);
+  if (rim !== null) validateDirectionalLight(rim, 'lighting.rim', errors);
+  const shadows = optionalSubsection(root, 'lighting', 'shadows', errors);
+  if (shadows !== null) validateShadows(shadows, errors);
+  // Наличие необязательных источников — свойство СТАТИЧЕСКОЙ части (REND-32):
+  // читается оно по написанным подсекциям, а не по их содержимому, — пустая
+  // подсекция всё равно заводит источник с умолчаниями подсистемы.
+  const cycle = optionalSubsection(root, 'lighting', 'cycle', errors);
+  if (cycle !== null) {
+    validateLightingCycle(cycle, { hemisphere: 'hemisphere' in root, rim: 'rim' in root }, errors);
   }
 }

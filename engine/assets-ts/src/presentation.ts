@@ -46,6 +46,7 @@
  * который их несёт. Сюда каждый входит одним полем и одним вызовом.
  */
 import { validateLighting, type PresentationLighting } from './presentationLighting.js';
+import { HEX_COLOR_RE, closedKeys, isRecord, typeName } from './validation.js';
 import {
   validatePostprocess,
   type PresentationPostprocess,
@@ -202,16 +203,6 @@ export function isPresentationPath(path: string): boolean {
   return path.endsWith(PRESENTATION_SUFFIX);
 }
 
-function typeName(v: unknown): string {
-  if (v === null) return 'null';
-  if (Array.isArray(v)) return 'массив';
-  return typeof v;
-}
-
-function isRecord(v: unknown): v is Record<string, unknown> {
-  return typeof v === 'object' && v !== null && !Array.isArray(v);
-}
-
 /** Состав закрыт (PRES-2): ключ, которого формат не знает, — ошибка, а не игнор. */
 const DOCUMENT_KEYS: readonly string[] = [
   'decorations',
@@ -232,10 +223,57 @@ const FOG_KEYS: readonly string[] = [
 ];
 
 /**
- * Цвет в документе — `#rrggbb`: одна форма записи на все секции, чтобы дифф
- * правки не гадал о синонимах и чтобы тон тумана и тон света читались одинаково.
+ * Числовые поля секции `fog` в порядке находок: границы и ТЕКСТ ожидания. Текст
+ * лежит рядом с границей, а не собирается из неё: «доля затемнения» и «время
+ * рассеивания» — разные величины, и автору сообщает о них поле, а не диапазон.
  */
-const HEX_COLOR_RE = /^#[0-9a-fA-F]{6}$/;
+const FOG_NUMBERS: readonly {
+  readonly key: string;
+  readonly expected: string;
+  readonly min: number;
+  readonly max?: number;
+  /** Нижняя граница исключающая: сама она значением не является. */
+  readonly exclusiveMin?: boolean;
+}[] = [
+  { key: 'strength', expected: 'ожидалась доля затемнения из [0, 1]', min: 0, max: 1 },
+  // Ноль стянул бы reveal в точку, больше единицы — визуал щедрее геймплея,
+  // то есть противоположность консервативности (FOW-9).
+  {
+    key: 'conservatism',
+    expected: 'ожидалась доля из (0, 1] (FOW-9)',
+    min: 0,
+    max: 1,
+    exclusiveMin: true,
+  },
+  {
+    key: 'edgeWidth',
+    expected: 'ожидалась неотрицательная ширина градиента в мировых единицах',
+    min: 0,
+  },
+  {
+    key: 'resolution',
+    expected: 'ожидалось положительное число текселей на мировую единицу',
+    min: 0,
+    exclusiveMin: true,
+  },
+  {
+    key: 'fadeSeconds',
+    expected: 'ожидалась неотрицательная длительность в секундах (FOW-8)',
+    min: 0,
+  },
+  {
+    key: 'dissolveSeconds',
+    expected: 'ожидалось неотрицательное время рассеивания в секундах (FOW-7)',
+    min: 0,
+  },
+];
+
+/** Значение вне объявленных границы и формы — то, о чём говорит находка поля. */
+function fogNumberBad(value: unknown, spec: (typeof FOG_NUMBERS)[number]): boolean {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return true;
+  if (spec.exclusiveMin === true ? value <= spec.min : value < spec.min) return true;
+  return spec.max !== undefined && value > spec.max;
+}
 
 /**
  * Валидация секции `fog` (PRES-2, `fog-of-war` FOW-10): состав закрыт,
@@ -249,77 +287,27 @@ function validateFog(section: unknown, errors: string[]): void {
     errors.push(`fog: ожидался объект секции конфигурации тумана (FOW-10), получено ${typeName(section)}`);
     return;
   }
-  for (const key of Object.keys(section)) {
-    if (FOG_KEYS.includes(key)) continue;
-    errors.push(`fog.${key}: неизвестное поле (допустимы: ${FOG_KEYS.join(', ')})`);
-  }
-  if ('strength' in section) {
-    const value = section.strength;
-    if (typeof value !== 'number' || !Number.isFinite(value) || value < 0 || value > 1) {
-      errors.push(`fog.strength: ожидалась доля затемнения из [0, 1], получено ${typeName(value)}`);
-    }
-  }
-  if ('conservatism' in section) {
-    const value = section.conservatism;
-    // Ноль стянул бы reveal в точку, больше единицы — визуал щедрее геймплея,
-    // то есть противоположность консервативности (FOW-9).
-    if (typeof value !== 'number' || !Number.isFinite(value) || value <= 0 || value > 1) {
-      errors.push(`fog.conservatism: ожидалась доля из (0, 1] (FOW-9), получено ${typeName(value)}`);
+  closedKeys(section, 'fog', FOG_KEYS, errors);
+  for (const spec of FOG_NUMBERS) {
+    if (!(spec.key in section)) continue;
+    const value = section[spec.key];
+    if (fogNumberBad(value, spec)) {
+      errors.push(`fog.${spec.key}: ${spec.expected}, получено ${typeName(value)}`);
     }
   }
   if ('color' in section && (typeof section.color !== 'string' || !HEX_COLOR_RE.test(section.color))) {
     errors.push(`fog.color: ожидался цвет формы "#rrggbb", получено ${typeName(section.color)}`);
   }
-  if (
-    'edgeWidth' in section &&
-    (typeof section.edgeWidth !== 'number' || !Number.isFinite(section.edgeWidth) || section.edgeWidth < 0)
-  ) {
-    errors.push(
-      `fog.edgeWidth: ожидалась неотрицательная ширина градиента в мировых единицах, получено ${typeName(section.edgeWidth)}`,
-    );
-  }
-  if (
-    'resolution' in section &&
-    (typeof section.resolution !== 'number' ||
-      !Number.isFinite(section.resolution) ||
-      section.resolution <= 0)
-  ) {
-    errors.push(
-      `fog.resolution: ожидалось положительное число текселей на мировую единицу, получено ${typeName(section.resolution)}`,
-    );
-  }
-  if (
-    'fadeSeconds' in section &&
-    (typeof section.fadeSeconds !== 'number' ||
-      !Number.isFinite(section.fadeSeconds) ||
-      section.fadeSeconds < 0)
-  ) {
-    errors.push(
-      `fog.fadeSeconds: ожидалась неотрицательная длительность в секундах (FOW-8), получено ${typeName(section.fadeSeconds)}`,
-    );
-  }
-  if (
-    'dissolveSeconds' in section &&
-    (typeof section.dissolveSeconds !== 'number' ||
-      !Number.isFinite(section.dissolveSeconds) ||
-      section.dissolveSeconds < 0)
-  ) {
-    errors.push(
-      `fog.dissolveSeconds: ожидалось неотрицательное время рассеивания в секундах (FOW-7), получено ${typeName(section.dissolveSeconds)}`,
-    );
-  }
 }
 
-function validateRecord(entry: unknown, path: string, errors: string[]): void {
-  if (!isRecord(entry)) {
-    errors.push(`${path}: ожидался объект записи decoration, получено ${typeName(entry)}`);
-    return;
-  }
+/**
+ * Состав записи закрыт (PRES-2). Сим-поля названы отдельно: `prefab` и
+ * переопределения компонентов в записи — не опечатка, а первый шаг к
+ * геймплейному влиянию в слое, который его не допускает (PRES-2, ED-19).
+ */
+function checkRecordKeys(entry: Record<string, unknown>, path: string, errors: string[]): void {
   for (const key of Object.keys(entry)) {
     if (RECORD_KEYS.includes(key)) continue;
-    // Сим-поля названы отдельно: `prefab` и переопределения компонентов в
-    // записи — не опечатка, а первый шаг к геймплейному влиянию в слое,
-    // который его не допускает (PRES-2, ED-19).
     const simField = key === 'prefab' || key === 'overrides';
     errors.push(
       simField
@@ -327,7 +315,14 @@ function validateRecord(entry: unknown, path: string, errors: string[]): void {
         : `${path}.${key}: неизвестное поле (допустимы: ${RECORD_KEYS.join(', ')})`,
     );
   }
+}
 
+/** Обязательная часть записи: вид из манифеста и место на плоскости (PRES-2). */
+function checkRecordPlacement(
+  entry: Record<string, unknown>,
+  path: string,
+  errors: string[],
+): void {
   if (typeof entry.visual !== 'string' || entry.visual.length === 0) {
     errors.push(
       `${path}.visual: обязательное поле — ключ записи манифеста визуалов (непустая строка), получено ${typeName(entry.visual)}`,
@@ -341,14 +336,16 @@ function validateRecord(entry: unknown, path: string, errors: string[]): void {
       );
     }
   }
+}
+
+/** Необязательная часть записи: курс, масштаб, скин и walkable-флаг (PRES-2). */
+function checkRecordOptions(entry: Record<string, unknown>, path: string, errors: string[]): void {
   if ('yaw' in entry && (typeof entry.yaw !== 'number' || !Number.isFinite(entry.yaw))) {
     errors.push(`${path}.yaw: ожидался курс долей оборота (конечное число), получено ${typeName(entry.yaw)}`);
   }
-  if ('scale' in entry) {
-    const scale = entry.scale;
-    if (typeof scale !== 'number' || !Number.isFinite(scale) || scale <= 0) {
-      errors.push(`${path}.scale: ожидалось положительное конечное число, получено ${typeName(scale)}`);
-    }
+  const scale = entry.scale;
+  if ('scale' in entry && (typeof scale !== 'number' || !Number.isFinite(scale) || scale <= 0)) {
+    errors.push(`${path}.scale: ожидалось положительное конечное число, получено ${typeName(scale)}`);
   }
   if ('skin' in entry && (typeof entry.skin !== 'string' || entry.skin.length === 0)) {
     errors.push(`${path}.skin: ожидалось имя скина (непустая строка), получено ${typeName(entry.skin)}`);
@@ -361,6 +358,32 @@ function validateRecord(entry: unknown, path: string, errors: string[]): void {
       `${path}.walkable: ожидался булев флаг walkable-поверхности (true либо false), получено ${typeName(entry.walkable)}`,
     );
   }
+}
+
+/** Запись размещения decoration (PRES-2): состав, обязательное и необязательное. */
+function validateRecord(entry: unknown, path: string, errors: string[]): void {
+  if (!isRecord(entry)) {
+    errors.push(`${path}: ожидался объект записи decoration, получено ${typeName(entry)}`);
+    return;
+  }
+  checkRecordKeys(entry, path, errors);
+  checkRecordPlacement(entry, path, errors);
+  checkRecordOptions(entry, path, errors);
+}
+
+/**
+ * Список размещений (PRES-2): ненаписанный и пустой неразличимы, а не-список —
+ * адресный отказ. Каждая находка адресует ЗАПИСЬ индексом, а не список целиком.
+ */
+function validateDecorations(list: unknown, errors: string[]): void {
+  if (list === undefined) return;
+  if (!Array.isArray(list)) {
+    errors.push(`decorations: ожидался список записей размещения, получено ${typeName(list)}`);
+    return;
+  }
+  list.forEach((entry: unknown, index: number) => {
+    validateRecord(entry, `decorations[${index}]`, errors);
+  });
 }
 
 /**
@@ -382,13 +405,22 @@ export function validatePresentationScene(
     }
   }
   const list = doc.decorations;
-  if (list !== undefined && !Array.isArray(list)) {
-    errors.push(`decorations: ожидался список записей размещения, получено ${typeName(list)}`);
-  } else if (Array.isArray(list)) {
-    list.forEach((entry, index) => { validateRecord(entry, `decorations[${index}]`, errors); });
-  }
-  // Отсутствующая секция `fog` — значения по умолчанию у подсистемы (FOW-10),
-  // и наружу она в этом случае не выходит вовсе: `undefined`, а не пустой объект.
+  validateDecorations(list, errors);
+  validateSections(doc, context, errors);
+  if (errors.length > 0) return { ok: false, errors };
+  return { ok: true, scene: sceneOf(doc, list) };
+}
+
+/**
+ * Секции документа. Отсутствующая секция — значения по умолчанию у своей
+ * подсистемы, и наружу она в этом случае не выходит вовсе: `undefined`, а не
+ * пустой объект (FOW-10 у тумана, PRES-2 у остальных).
+ */
+function validateSections(
+  doc: Record<string, unknown>,
+  context: PresentationSceneContext,
+  errors: string[],
+): void {
   if (doc.fog !== undefined) validateFog(doc.fog, errors);
   // Секция `lighting` — тем же порядком и по тому же основанию: её умолчания
   // держит подсистема освещения рендера.
@@ -402,25 +434,23 @@ export function validatePresentationScene(
   // карты не проверяются; `terrain: null` — террейна у сцены нет, и секция
   // отвергается целиком.
   if (doc.water !== undefined) {
-    validateWater(
-      doc.water,
-      errors,
-      'terrain' in context ? (context.terrain ?? null) : undefined,
-    );
+    validateWater(doc.water, errors, 'terrain' in context ? (context.terrain ?? null) : undefined);
   }
-  if (errors.length > 0) return { ok: false, errors };
-  // Отсутствующий и пустой список неразличимы (PRES-2): наружу и то и другое
-  // выходит пустым списком, и потребителю не приходится различать их самому.
+}
+
+/**
+ * Разобранный документ наружу. Отсутствующий и пустой список размещений
+ * неразличимы (PRES-2): наружу и то и другое выходит пустым списком, и
+ * потребителю не приходится различать их самому.
+ */
+function sceneOf(doc: Record<string, unknown>, list: unknown): PresentationScene {
   return {
-    ok: true,
-    scene: {
-      decorations: Array.isArray(list) ? (list as DecorationRecord[]) : [],
-      ...(doc.fog === undefined ? {} : { fog: doc.fog as PresentationFog }),
-      ...(doc.lighting === undefined ? {} : { lighting: doc.lighting as PresentationLighting }),
-      ...(doc.postprocess === undefined
-        ? {}
-        : { postprocess: doc.postprocess as PresentationPostprocess }),
-      ...(doc.water === undefined ? {} : { water: doc.water as PresentationWater }),
-    },
+    decorations: Array.isArray(list) ? (list as DecorationRecord[]) : [],
+    ...(doc.fog === undefined ? {} : { fog: doc.fog as PresentationFog }),
+    ...(doc.lighting === undefined ? {} : { lighting: doc.lighting as PresentationLighting }),
+    ...(doc.postprocess === undefined
+      ? {}
+      : { postprocess: doc.postprocess as PresentationPostprocess }),
+    ...(doc.water === undefined ? {} : { water: doc.water as PresentationWater }),
   };
 }

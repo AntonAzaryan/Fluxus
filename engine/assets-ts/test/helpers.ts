@@ -1,8 +1,10 @@
 /**
- * Тестовые реализации AssetSource. Обе headless (ASSET-5): файловая система
- * для эталонных фикстур, память — для контролируемых сценариев состояний.
+ * Общие тестовые примитивы модуля ассетов: реализации AssetSource — обе
+ * headless (ASSET-5), файловая система для эталонных фикстур и память для
+ * контролируемых сценариев состояний, — и общая проверка находок валидации.
  */
 
+import { expect } from 'vitest';
 import { readFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -56,4 +58,34 @@ export function bytesOf(text: string): ArrayBuffer {
   const out = new ArrayBuffer(encoded.byteLength);
   new Uint8Array(out).set(encoded);
   return out;
+}
+
+/**
+ * Результат валидации глазами теста: провал несёт свои находки, успех не несёт
+ * ничего, что проверке нужно. Форма общая у всех валидаторов модуля —
+ * манифеста, парного документа, эмиттерного ассета, карты кривизны и LUT.
+ */
+export type ValidationResult =
+  | { readonly ok: true }
+  | { readonly ok: false; readonly errors: readonly string[] };
+
+/**
+ * Провал валидации, в находках которого нашлась каждая из ожидаемых. Один
+ * помощник на все документы модуля: разошедшиеся тексты проваленной проверки
+ * читались бы как разные проверки, хотя проверка одна.
+ */
+export function expectValidationErrors(
+  result: ValidationResult,
+  patterns: readonly RegExp[],
+): readonly string[] {
+  expect(result.ok).toBe(false);
+  if (result.ok) throw new Error('ожидался провал валидации');
+  const { errors } = result;
+  for (const pattern of patterns) {
+    expect(
+      errors.some((message) => pattern.test(message)),
+      `нет ошибки под ${String(pattern)}; есть:\n${errors.join('\n')}`,
+    ).toBe(true);
+  }
+  return errors;
 }

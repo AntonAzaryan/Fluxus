@@ -16,11 +16,11 @@
  */
 import {
   booleanField,
-  closedKeys,
   numberField,
+  optionalSubsection,
   subsection,
-  typeName,
 } from './presentationFields.js';
+import { closedKeys, typeName } from './validation.js';
 
 /**
  * Оператор сведения яркости — ЗАКРЫТЫЙ словарь (REND-34). `none` — сведения нет
@@ -174,16 +174,10 @@ export function validatePostprocess(section: unknown, errors: string[]): void {
   const root = subsection(section, 'postprocess', errors);
   if (root === null) return;
   closedKeys(root, 'postprocess', POSTPROCESS_KEYS, errors);
-  if ('toneMapping' in root) {
-    const tone = subsection(root.toneMapping, 'postprocess.toneMapping', errors);
-    if (tone !== null) validateToneMapping(tone, errors);
-  }
-  if ('bloom' in root) {
-    const bloom = subsection(root.bloom, 'postprocess.bloom', errors);
-    if (bloom !== null) validateBloom(bloom, errors);
-  }
-  if ('lut' in root) {
-    const lut = subsection(root.lut, 'postprocess.lut', errors);
-    if (lut !== null) validateLut(lut, errors);
-  }
+  const tone = optionalSubsection(root, 'postprocess', 'toneMapping', errors);
+  if (tone !== null) validateToneMapping(tone, errors);
+  const bloom = optionalSubsection(root, 'postprocess', 'bloom', errors);
+  if (bloom !== null) validateBloom(bloom, errors);
+  const lut = optionalSubsection(root, 'postprocess', 'lut', errors);
+  if (lut !== null) validateLut(lut, errors);
 }

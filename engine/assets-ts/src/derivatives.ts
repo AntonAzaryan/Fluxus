@@ -287,14 +287,17 @@ export function bakeDerivatives(model: NormalizedModel, params: BakeParams = {})
   }
 
   // E. Замкнутость клипа — сравнение запечённых кадров, а не догадка о формате.
-  const closed = clips.map((clip) => framesEqual(vat, clip.offset, clip.offset + clip.length - 1));
+  const bakedClips = clips.map((clip) => ({
+    ...clip,
+    loop: framesEqual(vat, clip.offset, clip.offset + clip.length - 1),
+  }));
 
   return {
     ok: true,
     derivatives: {
       fps,
       vat,
-      clips: clips.map((clip, i) => ({ ...clip, loop: closed[i]! })),
+      clips: bakedClips,
       restFrame: 0,
       bounds: { min: [bounds[0]!, bounds[1]!, bounds[2]!], max: [bounds[3]!, bounds[4]!, bounds[5]!] },
       partVisibility: bakePartVisibility(model, clips, fps, frameCount),

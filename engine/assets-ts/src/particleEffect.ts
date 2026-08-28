@@ -24,6 +24,8 @@
  * модуле presentation-ассетов и в симуляцию не ходит (ASSET-1).
  */
 
+import { isRecord, typeName } from './validation.js';
+
 /**
  * Узел графа объектов документа: эмиттер, группа над эмиттерами либо любой
  * другой узел three.js. Названы только те поля, по которым модуль судит о форме;
@@ -51,16 +53,6 @@ const EMITTER_NODE_TYPE = 'ParticleEmitter';
 
 /** Диалект документа — граф объектов three.js; иные метаданные не наши. */
 const OBJECT_GRAPH_METADATA_TYPE = 'Object';
-
-function typeName(v: unknown): string {
-  if (v === null) return 'null';
-  if (Array.isArray(v)) return 'массив';
-  return typeof v;
-}
-
-function isRecord(v: unknown): v is Record<string, unknown> {
-  return typeof v === 'object' && v !== null && !Array.isArray(v);
-}
 
 /**
  * Узел графа и его потомки. Проверяется ровно форма узла — запись с непустым

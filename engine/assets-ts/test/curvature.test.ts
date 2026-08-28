@@ -8,7 +8,7 @@ import {
   validateManifest,
   type TerrainCurvatureMap,
 } from '../src/index.js';
-import { MemoryAssetSource, bytesOf, settled } from './helpers.js';
+import { MemoryAssetSource, bytesOf, expectValidationErrors, settled } from './helpers.js';
 
 // Сетка 4×3 клетки → узлы 5×4.
 const validDoc = {
@@ -23,15 +23,7 @@ const validDoc = {
 };
 
 function expectErrors(doc: unknown, ...patterns: RegExp[]): void {
-  const result = validateCurvatureMap(doc);
-  expect(result.ok).toBe(false);
-  if (result.ok) throw new Error('ожидался провал валидации');
-  for (const pattern of patterns) {
-    expect(
-      result.errors.some((e) => pattern.test(e)),
-      `нет ошибки под ${pattern}; есть:\n${result.errors.join('\n')}`,
-    ).toBe(true);
-  }
+  expectValidationErrors(validateCurvatureMap(doc), patterns);
 }
 
 describe('validateCurvatureMap (ASSET-7)', () => {

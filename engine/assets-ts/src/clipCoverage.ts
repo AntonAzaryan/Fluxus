@@ -7,7 +7,7 @@
  * - маска видимости частей по кадрам: то, что у детального яруса делает трек
  *   видимости, для батчевой записи, у которой меша на часть нет.
  */
-import type { NormalizedModel } from './model.js';
+import type { NormalizedMesh, NormalizedModel } from './model.js';
 import type { BakedPartVisibility } from './derivatives.js';
 import { transformPoint } from './mat4.js';
 
@@ -25,26 +25,40 @@ export function boneRadii(model: NormalizedModel, inverseBind: Float64Array): Fl
   const point = new Float64Array(3);
   for (const mesh of model.meshes) {
     const vertices = Math.floor(mesh.positions.length / 3);
-    for (let v = 0; v < vertices; v++) {
-      for (let k = 0; k < 4; k++) {
-        const weight = mesh.skinWeights[v * 4 + k] ?? 0;
-        if (weight <= 0) continue;
-        const bone = mesh.skinIndices[v * 4 + k] ?? 0;
-        if (bone >= radii.length) continue;
-        transformPoint(
-          inverseBind,
-          bone * 16,
-          mesh.positions[v * 3]!,
-          mesh.positions[v * 3 + 1]!,
-          mesh.positions[v * 3 + 2]!,
-          point,
-        );
-        const distance = Math.hypot(point[0]!, point[1]!, point[2]!);
-        if (distance > radii[bone]!) radii[bone] = distance;
-      }
-    }
+    for (let v = 0; v < vertices; v++) growRadiiByVertex(radii, inverseBind, mesh, v, point);
   }
   return radii;
+}
+
+/**
+ * Вклад одной вершины в радиусы влияния всех костей, которым она принадлежит.
+ * Модульная функция с явными аргументами, а не замыкание в цикле: вызывается
+ * она на каждую вершину каждого меша, и объекта на итерацию здесь быть не
+ * должно. `point` — тот же переиспользуемый буфер, что у вызывающего.
+ */
+function growRadiiByVertex(
+  radii: Float64Array,
+  inverseBind: Float64Array,
+  mesh: NormalizedMesh,
+  v: number,
+  point: Float64Array,
+): void {
+  for (let k = 0; k < 4; k++) {
+    const weight = mesh.skinWeights[v * 4 + k] ?? 0;
+    if (weight <= 0) continue;
+    const bone = mesh.skinIndices[v * 4 + k] ?? 0;
+    if (bone >= radii.length) continue;
+    transformPoint(
+      inverseBind,
+      bone * 16,
+      mesh.positions[v * 3]!,
+      mesh.positions[v * 3 + 1]!,
+      mesh.positions[v * 3 + 2]!,
+      point,
+    );
+    const distance = Math.hypot(point[0]!, point[1]!, point[2]!);
+    if (distance > radii[bone]!) radii[bone] = distance;
+  }
 }
 
 /** `[minX, minY, minZ, maxX, maxY, maxZ]`, пустой объём — перевёрнутый. */

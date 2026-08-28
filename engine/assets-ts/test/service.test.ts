@@ -45,15 +45,13 @@ describe('AssetService: кэш и идентичность (ASSET-2)', () => {
     const svc = new AssetService(new MemoryAssetSource(new Map([['unit.fake', bytesOf('x')]])));
     svc.registerLoader(fakeModelLoader());
     svc.request('model', 'unit.fake');
-    // eslint-disable-next-line @typescript-eslint/no-deprecated -- baseline
-    expect(() => svc.request('texture', 'unit.fake')).toThrowError(/ASSET-2|уже запрошен/);
+    expect(() => svc.request('texture', 'unit.fake')).toThrow(/ASSET-2|уже запрошен/);
   });
 
   it('state/subscribe/retry по чужому handle — ошибка «не выдавался»', () => {
     const svc = new AssetService(new MemoryAssetSource(new Map()));
     const foreign = { id: 'nope.fake', kind: 'model' as const };
-    // eslint-disable-next-line @typescript-eslint/no-deprecated -- baseline
-    expect(() => svc.state(foreign)).toThrowError(/не выдавался/);
+    expect(() => svc.state(foreign)).toThrow(/не выдавался/);
   });
 });
 

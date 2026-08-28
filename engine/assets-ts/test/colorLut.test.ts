@@ -15,7 +15,7 @@ import {
   type ColorLut,
   type Handle,
 } from '../src/index.js';
-import { MemoryAssetSource, bytesOf, settled } from './helpers.js';
+import { MemoryAssetSource, bytesOf, expectValidationErrors, settled } from './helpers.js';
 
 /** Тождественная таблица стороны `size`: цвет узла — его же координаты. */
 function identityCube(size: number, header = `LUT_3D_SIZE ${size}`): string {
@@ -31,17 +31,8 @@ function identityCube(size: number, header = `LUT_3D_SIZE ${size}`): string {
   return `${lines.join('\n')}\n`;
 }
 
-function expectErrors(text: string, ...patterns: RegExp[]): string[] {
-  const result = parseCubeLut(text);
-  expect(result.ok).toBe(false);
-  if (result.ok) throw new Error('ожидался провал разбора');
-  for (const pattern of patterns) {
-    expect(
-      result.errors.some((e) => pattern.test(e)),
-      `нет ошибки под ${pattern}; есть:\n${result.errors.join('\n')}`,
-    ).toBe(true);
-  }
-  return result.errors;
+function expectErrors(text: string, ...patterns: RegExp[]): readonly string[] {
+  return expectValidationErrors(parseCubeLut(text), patterns);
 }
 
 describe('REND-34: разбор `.cube`', () => {

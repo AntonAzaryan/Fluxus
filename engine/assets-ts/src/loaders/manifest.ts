@@ -12,12 +12,10 @@
  */
 
 import type { AssetLoader, LoaderContext } from '../types.js';
-import {
-  validateManifest,
-  type CameraConfigDescription,
-  type CameraEffectsDescription,
-  type VisualManifest,
-} from '../manifest.js';
+import type { VisualManifest } from '../manifest.js';
+import type { CameraConfigDescription, CameraEffectsDescription } from '../cameraEffects.js';
+import { validateManifest } from '../manifestValidate.js';
+import { findingsList, parseAssetJson } from '../validation.js';
 
 export interface ManifestLoaderOptions {
   /** Машинное описание типов эффектов камеры (CAM-9); нет — секция проверяется структурно. */
@@ -47,14 +45,7 @@ export function createManifestLoader(options: ManifestLoaderOptions = {}): Asset
     kind: 'manifest',
     extensions: ['.json'],
     load(bytes: ArrayBuffer, ctx: LoaderContext): VisualManifest {
-      let doc: unknown;
-      try {
-        doc = JSON.parse(new TextDecoder().decode(bytes));
-      } catch (e) {
-        throw new Error(
-          `манифест "${ctx.id}": некорректный JSON — ${e instanceof Error ? e.message : String(e)}`,
-        );
-      }
+      const doc = parseAssetJson(bytes, 'манифест', ctx.id);
       const result = validateManifest(doc, {
         ...(options.cameraEffects === undefined ? {} : { cameraEffects: options.cameraEffects }),
         ...(options.cameraConfig === undefined ? {} : { cameraConfig: options.cameraConfig }),
@@ -63,7 +54,7 @@ export function createManifestLoader(options: ManifestLoaderOptions = {}): Asset
       // не прошедшего валидацию, автору полезно увидеть обе половины ответа.
       for (const message of result.warnings) warn(`манифест "${ctx.id}": ${message}`);
       if (!result.ok) {
-        throw new Error(`манифест "${ctx.id}" не прошёл валидацию:\n- ${result.errors.join('\n- ')}`);
+        throw new Error(`манифест "${ctx.id}" не прошёл валидацию:${findingsList(result.errors)}`);
       }
       return result.manifest;
     },

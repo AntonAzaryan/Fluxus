@@ -73,7 +73,10 @@ export function bakeSkinVariants(
   params: BakeSkinParams = {},
 ): BakedSkinSet {
   const maxSize = Math.max(1, Math.floor(params.maxSize ?? DEFAULT_SKIN_MAX_SIZE));
-  if (sources.length === 0) return { variants: [], slots: [] };
+  // Базовый вариант — первый: он задаёт состав слотов и подставляется там, где
+  // вариант о слоте молчит. Нет его — запекать нечего.
+  const base = sources[0];
+  if (base === undefined) return { variants: [], slots: [] };
 
   // Состав слотов — объединение по всем вариантам, по возрастанию номера:
   // порядок обхода не должен зависеть от порядка вставки в Map (ASSET-12).
@@ -96,7 +99,7 @@ export function bakeSkinVariants(
 
     const layer = width * height * 4;
     const pixels = new Uint8Array(layer * sources.length);
-    const fallback = sources[0]!.images.get(slot);
+    const fallback = base.images.get(slot);
     sources.forEach((source, index) => {
       // Вариант молчит о слоте — слой берётся у базового; молчат оба — слой
       // остаётся нулевым (прозрачным): «текстуры нет» и «текстура чёрная» на

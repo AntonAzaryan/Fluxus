@@ -29,6 +29,8 @@
  * (ASSET-1).
  */
 
+import { HEX_COLOR_RE, closedKeys, isFiniteNumber, isRecord, typeName } from './validation.js';
+
 /** Род локального источника (ASSET-16); перечень закрыт рендером (REND-33). */
 export type VisualLightType = 'point' | 'spot';
 
@@ -125,9 +127,6 @@ const TURN_RADIANS = Math.PI * 2;
  */
 const DEFAULT_DIRECTION_Z = -1;
 
-/** Цвет блока — `#rrggbb`, одна форма записи на весь presentation-слой. */
-const HEX_COLOR_RE = /^#[0-9a-fA-F]{6}$/;
-
 /** Поля, законные в блоке ЛЮБОГО типа (ASSET-16). */
 const BASE_KEYS: readonly string[] = ['type', 'color', 'intensity', 'distance', 'decay', 'offset'];
 
@@ -151,19 +150,6 @@ const SHADOW_KEYS: readonly string[] = [
   'shadowBias',
 ];
 
-function typeName(v: unknown): string {
-  if (v === null) return 'null';
-  if (Array.isArray(v)) return 'массив';
-  return typeof v;
-}
-
-function isRecord(v: unknown): v is Record<string, unknown> {
-  return typeof v === 'object' && v !== null && !Array.isArray(v);
-}
-
-function isFiniteNumber(v: unknown): v is number {
-  return typeof v === 'number' && Number.isFinite(v);
-}
 
 /** Ось тройки: отсутствует — умолчание поля, есть — конечное число. */
 function axisOf(node: VisualLightAxes | undefined, axis: 'x' | 'y' | 'z', fallback: number): number {
@@ -218,11 +204,7 @@ function validateAxes(v: unknown, path: string, what: string, errors: string[]):
     errors.push(`${path}: ожидался объект { x?, y?, z? } — ${what}, получено ${typeName(v)}`);
     return;
   }
-  for (const key of Object.keys(v)) {
-    if (!AXIS_KEYS.includes(key)) {
-      errors.push(`${path}.${key}: неизвестное поле (допустимы: ${AXIS_KEYS.join(', ')})`);
-    }
-  }
+  closedKeys(v, path, AXIS_KEYS, errors);
   for (const axis of AXIS_KEYS) {
     if (axis in v && !isFiniteNumber(v[axis])) {
       errors.push(`${path}.${axis}: ожидалось конечное число — ${what}, получено ${typeName(v[axis])}`);

@@ -16,19 +16,10 @@ import {
   quantizeDecorationYaw,
   validatePresentationScene,
 } from '../src/index.js';
-import { MemoryAssetSource, bytesOf, settled } from './helpers.js';
+import { MemoryAssetSource, bytesOf, expectValidationErrors, settled } from './helpers.js';
 
-function expectErrors(doc: unknown, ...patterns: RegExp[]): string[] {
-  const result = validatePresentationScene(doc);
-  expect(result.ok).toBe(false);
-  if (result.ok) throw new Error('ожидался провал валидации');
-  for (const pattern of patterns) {
-    expect(
-      result.errors.some((e) => pattern.test(e)),
-      `нет ошибки под ${pattern}; есть:\n${result.errors.join('\n')}`,
-    ).toBe(true);
-  }
-  return result.errors;
+function expectErrors(doc: unknown, ...patterns: RegExp[]): readonly string[] {
+  return expectValidationErrors(validatePresentationScene(doc), patterns);
 }
 
 describe('PRES-1: парность задаётся именем, а не ссылкой', () => {
@@ -774,14 +765,22 @@ const WATER = {
 /** Сетка сцены глазами валидации: секция воды адресует её клетки (REND-35). */
 const GRID = { width: 4, height: 4 };
 
-function waterErrors(section: unknown, grid?: { width: number; height: number } | null): string[] {
-  const result = validatePresentationScene(
+/** Разбор документа с одной секцией `water`; `grid` не передан — сетка неизвестна. */
+function waterResult(
+  section: unknown,
+  grid?: { width: number; height: number } | null,
+): ReturnType<typeof validatePresentationScene> {
+  return validatePresentationScene(
     { decorations: [], water: section },
     grid === undefined ? {} : { terrain: grid },
   );
-  expect(result.ok).toBe(false);
-  if (result.ok) throw new Error('ожидался провал валидации');
-  return result.errors;
+}
+
+function waterErrors(
+  section: unknown,
+  grid?: { width: number; height: number } | null,
+): readonly string[] {
+  return expectValidationErrors(waterResult(section, grid), []);
 }
 
 function expectWaterError(
@@ -789,11 +788,7 @@ function expectWaterError(
   pattern: RegExp,
   grid?: { width: number; height: number } | null,
 ): void {
-  const errors = waterErrors(section, grid);
-  expect(
-    errors.some((message) => pattern.test(message)),
-    `нет ошибки под ${pattern}; есть:\n${errors.join('\n')}`,
-  ).toBe(true);
+  expectValidationErrors(waterResult(section, grid), [pattern]);
 }
 
 describe('REND-35: состав секции water закрыт и её находки адресны', () => {
