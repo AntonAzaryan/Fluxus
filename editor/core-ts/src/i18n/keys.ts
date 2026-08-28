@@ -73,7 +73,7 @@ export function descriptionKey(path: SchemaPath): string {
 export function keyKind(key: string): DescriptionKind {
   let kind = '';
   for (let i = 0; i < key.length; i++) {
-    const char = key[i]!;
+    const char = key.charAt(i);
     if (char === ESCAPE) {
       i += 1;
       const escaped = key[i];

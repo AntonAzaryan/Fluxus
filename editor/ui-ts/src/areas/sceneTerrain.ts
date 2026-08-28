@@ -57,7 +57,6 @@ import {
   formatPath,
   isJsonArray,
   type AuthoringOperation,
-  type DocumentId,
   type JsonPath,
   type JsonValue,
   type OperationContext,
@@ -65,6 +64,7 @@ import {
   type OperationParamSpec,
   type OperationRegistry,
 } from '@fluxus/editor-core';
+import { DOCUMENT, asDocument, asNumber, asPath } from './operationParams.js';
 
 /** Идентификаторы операций кистей. */
 export const TERRAIN_OPERATIONS = {
@@ -102,10 +102,6 @@ export const CURVATURE_OFFSETS: readonly number[] = Object.freeze([
   -48, -32, -24, -16, -12, -8, -4, -2, -1, 0, 1, 2, 4, 8, 12, 16, 24, 32, 48,
 ]);
 
-const DOCUMENT: OperationParamSpec = {
-  type: 'document',
-  descriptionKey: 'ui.operation.param.document',
-};
 const ASSET_PATH: OperationParamSpec = {
   type: 'path',
   optional: true,
@@ -118,14 +114,6 @@ const NODE_Y: OperationParamSpec = { type: 'number', descriptionKey: 'ui.operati
 const LEVEL: OperationParamSpec = { type: 'number', descriptionKey: 'ui.operation.param.level' };
 const KIND: OperationParamSpec = { type: 'string', descriptionKey: 'ui.operation.param.cellKind' };
 const OFFSET: OperationParamSpec = { type: 'number', descriptionKey: 'ui.operation.param.offset' };
-
-/*
- * Читатели ниже — приведение типа, а не вторая проверка: схему параметров уже
- * сверил слой операций к моменту вызова `apply` (ED-30).
- */
-const asDocument = (params: OperationParams): DocumentId => params.document as DocumentId;
-const asBase = (params: OperationParams): JsonPath => (params.path ?? []) as JsonPath;
-const asNumber = (params: OperationParams, name: string): number => params[name] as number;
 
 /**
  * Красит одну клетку текстовой карты: ряд переписывается целиком, потому что
@@ -144,7 +132,7 @@ function paintCell(
   char: string,
 ): void {
   const document = asDocument(params);
-  const mapPath: JsonPath = [...asBase(params), map];
+  const mapPath: JsonPath = [...asPath(params), map];
   const rows: JsonValue | undefined = ctx.readAt(document, mapPath);
   if (!isJsonArray(rows)) {
     throw new OperationError(
@@ -243,7 +231,7 @@ const setCurvatureOperation: AuthoringOperation = {
       );
     }
     const document = asDocument(params);
-    const mapPath: JsonPath = [...asBase(params), OFFSET_MAP];
+    const mapPath: JsonPath = [...asPath(params), OFFSET_MAP];
     const rows: JsonValue | undefined = ctx.readAt(document, mapPath);
     if (!isJsonArray(rows)) {
       throw new OperationError(

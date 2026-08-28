@@ -1,4 +1,8 @@
-/* eslint-disable max-lines -- baseline */
+/* eslint-disable max-lines -- каркас есть одно замыкание: активная область,
+   палитра, сквозные выделение и поиск, режим превью и разбор нажатия живут
+   одним состоянием (ED-23, ED-32). Половина, вынесенная в соседний модуль,
+   получила бы это состояние параметрами — то есть сделала бы изменяемым то,
+   что сейчас закрыто. */
 /**
  * Каркас рабочих областей (ED-23, ED-24) — то, что складывает верхний бар,
  * рельс и скелет в одну страницу и хранит между переключениями всё, что должно
@@ -79,6 +83,7 @@ import { createSelectionModel, type SelectionModel } from './selection.js';
 import { SURFACE_FOCUS_ID, areaSkeleton } from './skeleton.js';
 import { createAreaStateStore } from './state.js';
 import { frameTopBar } from './topBar.js';
+import { reasonOf } from '../reason.js';
 
 export interface WorkspaceFrameOptions {
   /** Реестр областей. Рельс есть его представление — второго списка областей нет. */
@@ -344,9 +349,6 @@ export function createWorkspaceFrame(options: WorkspaceFrameOptions): WorkspaceF
     notify();
   };
 
-  const reasonOf = (error: unknown): string =>
-    error instanceof Error ? error.message : String(error);
-
   /**
    * Первый вклад, готовый прогонять сейчас (ED-25): каркас спрашивает реестр, а
    * не знает, у кого прогон есть. Запись состояния при этом заводится только у
@@ -396,6 +398,81 @@ export function createWorkspaceFrame(options: WorkspaceFrameOptions): WorkspaceF
       }
     }
     return found;
+  };
+
+  /**
+   * Сквозные сочетания каркаса: палитра, отмена, повтор, отказ от начатого.
+   * Разбираются раньше всего — ED-32.
+   */
+  const shellStroke = (stroke: KeyStroke): boolean => {
+    if (matchesBinding(stroke, PALETTE_BINDING)) {
+      // Одно сочетание на открытие и закрытие: состояний ровно два, и второе
+      // сочетание было бы вторым местом, где они перечислены.
+      if (palette) frame.closePalette();
+      else frame.openPalette();
+      return true;
+    }
+    if (matchesBinding(stroke, UNDO_BINDING)) {
+      frame.undo();
+      return true;
+    }
+    if (matchesBinding(stroke, REDO_BINDING)) {
+      frame.redo();
+      return true;
+    }
+    if (stroke.key !== DISMISS_KEY || stroke.ctrl || stroke.alt) return false;
+    // Открытую палитру Escape гасит: всплывающее закрывается раньше, чем
+    // отменяется что-либо ещё, — иначе одна клавиша делала бы два разных
+    // дела в зависимости от того, куда автор смотрит.
+    if (palette) {
+      frame.closePalette();
+      return true;
+    }
+    // Escape возвращает клавиатуру области: это и есть тот сквозной способ
+    // вернуть её из любого виджета, которого требует ED-32. К рельсу он не
+    // возвращает намеренно — рельс потребляет стрелки, и область, у которой
+    // клавиатуру всегда держит он, своих клавиш не получила бы никогда.
+    focusRequest = SURFACE_FOCUS_ID;
+    notify();
+    return true;
+  };
+
+  /**
+   * Команды разбираются раньше областей: команда сквозная (ED-24 — «способ
+   * добраться до операции, не проходя дерево»), а горячая клавиша области
+   * переключает область. Сочетание при этом занято ровно одним из них — это
+   * проверено при сборке каркаса, а не порядком разбора.
+   */
+  const commandStroke = (stroke: KeyStroke): boolean => {
+    for (const command of commands.all()) {
+      if (command.keybinding === undefined || !matchesBinding(stroke, command.keybinding)) {
+        continue;
+      }
+      // Недоступная команда нажатие всё равно забирает: показана она
+      // недоступной (ED-26), и отдать её сочетание области значило бы, что
+      // одна клавиша делает разное в зависимости от состояния документов.
+      if (commandEnabled(command, frame)) command.run(frame);
+      return true;
+    }
+    return false;
+  };
+
+  /**
+   * Горячая клавиша области. Сквозное разбирается раньше вкладов сознательно:
+   * сочетание отмены одинаково во всех областях, и область, объявившая его
+   * своим, не должна уметь отобрать его у истории (ED-23).
+   */
+  const areaStroke = (stroke: KeyStroke): boolean => {
+    for (const area of areas.all()) {
+      if (area.hotkey === undefined || !matchesBinding(stroke, area.hotkey)) continue;
+      activate(area.id);
+      // Вошедший в область сразу получает её клавиши (ED-32): фокус,
+      // оставшийся в чужом виджете, отобрал бы у неё стрелки.
+      focusRequest = SURFACE_FOCUS_ID;
+      notify();
+      return true;
+    }
+    return false;
   };
 
   const frame: WorkspaceFrame = {
@@ -530,65 +607,9 @@ export function createWorkspaceFrame(options: WorkspaceFrameOptions): WorkspaceF
       notify();
     },
     handleKey(stroke) {
-      if (matchesBinding(stroke, PALETTE_BINDING)) {
-        // Одно сочетание на открытие и закрытие: состояний ровно два, и второе
-        // сочетание было бы вторым местом, где они перечислены.
-        if (palette) frame.closePalette();
-        else frame.openPalette();
-        return true;
-      }
-      if (matchesBinding(stroke, UNDO_BINDING)) {
-        frame.undo();
-        return true;
-      }
-      if (matchesBinding(stroke, REDO_BINDING)) {
-        frame.redo();
-        return true;
-      }
-      if (stroke.key === DISMISS_KEY && !stroke.ctrl && !stroke.alt) {
-        // Открытую палитру Escape гасит: всплывающее закрывается раньше, чем
-        // отменяется что-либо ещё, — иначе одна клавиша делала бы два разных
-        // дела в зависимости от того, куда автор смотрит.
-        if (palette) {
-          frame.closePalette();
-          return true;
-        }
-        // Escape возвращает клавиатуру области: это и есть тот сквозной способ
-        // вернуть её из любого виджета, которого требует ED-32. К рельсу он не
-        // возвращает намеренно — рельс потребляет стрелки, и область, у которой
-        // клавиатуру всегда держит он, своих клавиш не получила бы никогда.
-        focusRequest = SURFACE_FOCUS_ID;
-        notify();
-        return true;
-      }
-      // Команды разбираются раньше областей: команда сквозная (ED-24 — «способ
-      // добраться до операции, не проходя дерево»), а горячая клавиша области
-      // переключает область. Сочетание при этом занято ровно одним из них —
-      // это проверено при сборке каркаса, а не порядком разбора.
-      for (const command of commands.all()) {
-        if (command.keybinding === undefined || !matchesBinding(stroke, command.keybinding)) {
-          continue;
-        }
-        // Недоступная команда нажатие всё равно забирает: показана она
-        // недоступной (ED-26), и отдать её сочетание области значило бы, что
-        // одна клавиша делает разное в зависимости от состояния документов.
-        if (commandEnabled(command, frame)) command.run(frame);
-        return true;
-      }
-      // Сквозное разбирается раньше вкладов сознательно: сочетание отмены
-      // одинаково во всех областях, и область, объявившая его своим, не должна
-      // уметь отобрать его у истории (ED-23).
-      for (const area of areas.all()) {
-        if (area.hotkey !== undefined && matchesBinding(stroke, area.hotkey)) {
-          activate(area.id);
-          // Вошедший в область сразу получает её клавиши (ED-32): фокус,
-          // оставшийся в чужом виджете, отобрал бы у неё стрелки.
-          focusRequest = SURFACE_FOCUS_ID;
-          notify();
-          return true;
-        }
-      }
-      return false;
+      // Порядок разбора нормативен (ED-32): сквозные сочетания каркаса, затем
+      // команды, затем горячие клавиши областей.
+      return shellStroke(stroke) || commandStroke(stroke) || areaStroke(stroke);
     },
     handleAreaKey(input) {
       const area = requireArea(activeId);

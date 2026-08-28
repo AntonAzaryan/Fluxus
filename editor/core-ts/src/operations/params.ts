@@ -12,7 +12,13 @@
  */
 import { isJsonArray, type JsonPath, type JsonValue } from '../document/json.js';
 import type { DocumentId } from '../document/types.js';
-import { OperationError, type AuthoringOperation, type OperationParams, type OperationParamSpec } from './types.js';
+import {
+  OperationError,
+  type AuthoringOperation,
+  type OperationParams,
+  type OperationParamSpec,
+  type OperationParamType,
+} from './types.js';
 
 export function checkParams(operation: AuthoringOperation, params: OperationParams): void {
   for (const name of Object.keys(params)) {
@@ -23,8 +29,7 @@ export function checkParams(operation: AuthoringOperation, params: OperationPara
       throw new OperationError(operation.id, `неизвестный параметр "${name}"`, { param: name });
     }
   }
-  for (const name of Object.keys(operation.params)) {
-    const spec = operation.params[name]!;
+  for (const [name, spec] of Object.entries(operation.params)) {
     const value = params[name];
     if (value === undefined) {
       if (spec.optional === true) continue;
@@ -34,40 +39,46 @@ export function checkParams(operation: AuthoringOperation, params: OperationPara
   }
 }
 
-function checkValue(operationId: string, name: string, spec: OperationParamSpec, value: JsonValue): void {
-  const fail = (expected: string): never => {
-    throw new OperationError(operationId, `параметр "${name}": ожидалось ${expected}`, {
-      param: name,
-      received: value,
-    });
-  };
-  switch (spec.type) {
-    case 'document':
-      if (typeof value !== 'string' || value === '') fail('непустая строка — идентификатор документа');
-      return;
-    case 'descriptor':
-      if (typeof value !== 'string' || value === '') fail('непустая строка — сессионный дескриптор');
-      return;
-    case 'path':
-      if (!isJsonArray(value)) fail('список шагов пути');
-      else {
-        for (const step of value) {
-          if (typeof step !== 'string' && !Number.isInteger(step)) fail('шаг пути — имя поля или индекс');
-        }
-      }
-      return;
-    case 'string':
-      if (typeof value !== 'string') fail('строка');
-      return;
-    case 'number':
-      if (typeof value !== 'number' || !Number.isFinite(value)) fail('конечное число');
-      return;
-    case 'boolean':
-      if (typeof value !== 'boolean') fail('логическое значение');
-      return;
-    case 'json':
-      return;
+/**
+ * Проверка значения по виду параметра: `undefined` — подошло, иначе текст
+ * ожидания для отказа.
+ */
+type ParamCheck = (value: JsonValue) => string | undefined;
+
+function filledString(value: JsonValue): boolean {
+  return typeof value === 'string' && value !== '';
+}
+
+function checkPath(value: JsonValue): string | undefined {
+  if (!isJsonArray(value)) return 'список шагов пути';
+  for (const step of value) {
+    if (typeof step !== 'string' && !Number.isInteger(step)) return 'шаг пути — имя поля или индекс';
   }
+  return undefined;
+}
+
+/**
+ * Таблица «вид параметра → проверка», а не цепочка ветвей: вид — закрытый
+ * перечень схемы (`OperationParamType`), и `Record` по нему не даёт завести
+ * новый вид, забыв о проверке.
+ */
+const PARAM_CHECKS: Readonly<Record<OperationParamType, ParamCheck>> = {
+  document: (value) => (filledString(value) ? undefined : 'непустая строка — идентификатор документа'),
+  descriptor: (value) => (filledString(value) ? undefined : 'непустая строка — сессионный дескриптор'),
+  path: checkPath,
+  string: (value) => (typeof value === 'string' ? undefined : 'строка'),
+  number: (value) => (typeof value === 'number' && Number.isFinite(value) ? undefined : 'конечное число'),
+  boolean: (value) => (typeof value === 'boolean' ? undefined : 'логическое значение'),
+  json: () => undefined,
+};
+
+function checkValue(operationId: string, name: string, spec: OperationParamSpec, value: JsonValue): void {
+  const expected = PARAM_CHECKS[spec.type](value);
+  if (expected === undefined) return;
+  throw new OperationError(operationId, `параметр "${name}": ожидалось ${expected}`, {
+    param: name,
+    received: value,
+  });
 }
 
 /*

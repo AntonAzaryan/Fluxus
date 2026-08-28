@@ -136,36 +136,70 @@ export function probePath(root: JsonValue | undefined, message: string): JsonPat
  */
 const STOP = new Set([' ', '\t', ',', ';', '"', "'", '(', ')', ':', '=', '»', '«']);
 
+/**
+ * Индекс списка `[N]`, начинающийся на `at`. `undefined` — на этом месте адреса
+ * нет, разбор кончился.
+ *
+ * Символ берётся `charAt`, а не индексом: за пределами строки он даёт пустую
+ * строку, которая ни одной из проверок не проходит, — то же самое, что даёт
+ * `undefined` индексного доступа, но без утверждения о непустоте.
+ */
+function readIndex(head: string, at: number): { readonly step: number; readonly next: number } | undefined {
+  let cursor = at + 1;
+  let digits = '';
+  while (cursor < head.length && head.charAt(cursor) >= '0' && head.charAt(cursor) <= '9') {
+    digits += head.charAt(cursor);
+    cursor++;
+  }
+  if (digits === '' || head.charAt(cursor) !== ']') return undefined;
+  return { step: Number(digits), next: cursor + 1 };
+}
+
+/**
+ * Имя поля, начинающееся на `at`. `undefined` — имени нет, разбор кончился;
+ * `stop` — имя упёрлось в символ, за которым идёт проза сообщения.
+ */
+function readName(
+  head: string,
+  at: number,
+): { readonly step: string; readonly next: number; readonly stop: boolean } | undefined {
+  let cursor = at;
+  let name = '';
+  while (
+    cursor < head.length &&
+    head.charAt(cursor) !== '.' &&
+    head.charAt(cursor) !== '[' &&
+    !STOP.has(head.charAt(cursor))
+  ) {
+    name += head.charAt(cursor);
+    cursor++;
+  }
+  if (name === '') return undefined;
+  return { step: name, next: cursor, stop: cursor < head.length && STOP.has(head.charAt(cursor)) };
+}
+
 function parseAddress(message: string): readonly (string | number)[] {
   const head = message.split(':')[0] ?? '';
   const steps: (string | number)[] = [];
   let at = 0;
   while (at < head.length) {
-    const char = head[at]!;
+    const char = head.charAt(at);
     if (char === '.') {
       at++;
       continue;
     }
     if (char === '[') {
-      let cursor = at + 1;
-      let digits = '';
-      while (cursor < head.length && head[cursor]! >= '0' && head[cursor]! <= '9') {
-        digits += head[cursor]!;
-        cursor++;
-      }
-      if (digits === '' || head[cursor] !== ']') break;
-      steps.push(Number(digits));
-      at = cursor + 1;
+      const index = readIndex(head, at);
+      if (index === undefined) break;
+      steps.push(index.step);
+      at = index.next;
       continue;
     }
-    let name = '';
-    while (at < head.length && head[at] !== '.' && head[at] !== '[' && !STOP.has(head[at]!)) {
-      name += head[at]!;
-      at++;
-    }
-    if (name === '') break;
-    steps.push(name);
-    if (at < head.length && STOP.has(head[at]!)) break;
+    const name = readName(head, at);
+    if (name === undefined) break;
+    steps.push(name.step);
+    at = name.next;
+    if (name.stop) break;
   }
   return steps;
 }

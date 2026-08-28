@@ -40,6 +40,7 @@ import { button } from '../widgets/button.js';
 import { statusChip } from '../widgets/chip.js';
 import { withValidation } from '../widgets/validation.js';
 import type { EditorMode } from './preview.js';
+import { eventValue } from '../widgets/field.js';
 
 export interface TopBarSpec {
   readonly resources: StringResources;
@@ -105,10 +106,8 @@ function searchField(spec: TopBarSpec): UiNode {
     },
     on: {
       input: (event: Event) => {
-        const target = event.target;
-        if (target !== null && 'value' in target && typeof target.value === 'string') {
-          spec.onQuery(target.value);
-        }
+        const value = eventValue(event);
+        if (value !== undefined) spec.onQuery(value);
       },
     },
   });

@@ -1,4 +1,10 @@
-/* eslint-disable max-lines -- baseline */
+/* eslint-disable max-lines -- рабочая область — один вклад (ED-25), и самая
+   крупная: вьюпорт, инструменты, бары и навигатор трёх слоёв документов над
+   одной записью состояния (ED-24). Всё, что можно было вынести по материалу,
+   вынесено в sceneDocuments/sceneProject/scenePlacement/sceneDecorations/
+   sceneTerrain/sceneBrush/sceneStage/sceneInteraction/scenePreview. Следующий
+   разрез — по метке «зоны» ниже, и он требует отдельного модуля под состояние
+   области: иначе область и её зоны образуют цикл импортов. */
 /**
  * @contribution Рабочая область сцены — вклад, а не часть каркаса.
  *
@@ -70,13 +76,13 @@ import type {
 import { keyLabel } from '../frame/keys.js';
 import type { PreviewSource } from '../frame/preview.js';
 import { FILL_CLASS, FILL_COLUMN_CLASS } from '../frame/styles.js';
-import { inspectorPanel, issueState, type InspectorSubject } from '../inspector/index.js';
+import { issueState, type InspectorSubject } from '../inspector/index.js';
 import { matchesQuery, type SearchHit } from '../palette/palette.js';
 import { button } from '../widgets/button.js';
 import type { IconName } from '../widgets/icon.js';
 import { statusChip } from '../widgets/chip.js';
 import { select, toggle } from '../widgets/field.js';
-import { tree, type TreeItem } from '../widgets/rows.js';
+import { sectionTitle, tree, type TreeItem } from '../widgets/rows.js';
 import { placementSubject, sceneDocumentSubject } from './sceneSchema.js';
 import { withValidation } from '../widgets/validation.js';
 import { viewportFrame } from '../viewport.js';
@@ -118,6 +124,8 @@ import {
   type SceneProjectIds,
 } from './sceneProject.js';
 import type { SceneDraft } from './sceneDocuments.js';
+import { reasonOf } from '../reason.js';
+import { areaInspector, keepRefresh } from '../frame/areaChrome.js';
 
 /** Идентификатор области. Один и тот же в реестре, рельсе и записи состояния. */
 export const SCENE_AREA_ID = 'area.scene';
@@ -366,9 +374,6 @@ export interface SceneAreaState {
   revalidate: () => void;
 }
 
-const message = (error: unknown): string =>
-  error instanceof Error ? error.message : String(error);
-
 /**
  * Бросить начатое обоими инструментами. Незакрытая транзакция запрещает сессии
  * и следующую операцию, и undo (ED-18), поэтому её закрывает каждый путь, на
@@ -551,7 +556,7 @@ function start(
       install(state, setup, project, ids, build, host);
     })
     .catch((error: unknown) => {
-      state.failure = message(error);
+      state.failure = reasonOf(error);
       state.refresh();
     });
 }
@@ -810,10 +815,7 @@ function group(
 
 function navigator(context: AreaContext<SceneAreaState>): UiNode {
   const { state, resources } = context;
-  const title = el('div', {
-    classes: ['fx-section'],
-    text: resourceText(resources, 'ui.navigator.title'),
-  });
+  const title = sectionTitle(resourceText(resources, 'ui.navigator.title'));
   const project = state.project;
   if (project === null) {
     return el('div', {
@@ -1296,24 +1298,7 @@ function subjectOf(context: AreaContext<SceneAreaState>): InspectorSubject | nul
 }
 
 function inspector(context: AreaContext<SceneAreaState>): UiNode {
-  const { state } = context;
-  return inspectorPanel({
-    resources: context.resources,
-    session: context.session,
-    // Реестр редакторов поля — от каркаса: вклад, зарегистрированный один раз,
-    // подхватывается инспектором всех областей сразу (ED-25).
-    fieldEditors: context.fieldEditors,
-    subject: subjectOf(context),
-    // Структурный отчёт (ED-30): по нему поле и находит свою находку.
-    report: state.report,
-    // В превью операции авторинга недоступны, и поля показаны недоступными, а
-    // не молча не принимающими ввод (ED-9, ED-26).
-    disabled: authoringOff(context),
-    onFailure: (reason) => {
-      state.failure = reason;
-      context.refresh();
-    },
-  });
+  return areaInspector(context, subjectOf(context), context.state.report);
 }
 
 export function createSceneArea(options: SceneAreaOptions = {}): WorkspaceArea<SceneAreaState> {
@@ -1463,11 +1448,7 @@ export function createSceneArea(options: SceneAreaOptions = {}): WorkspaceArea<S
     },
     render(context): AreaZones {
       const { state } = context;
-      // Просьба перерисовать нужна асинхронному открытию проекта: оно
-      // заканчивается после того, как страница уже собрана.
-      state.refresh = () => {
-        context.refresh();
-      };
+      keepRefresh(context);
       // Инструмент видит выделение сессии (ED-23), кадр и текущий набор — то
       // есть ровно то, что показывает эта же сборка страницы. Подаётся здесь, а
       // не при заведении записи: выделение сквозное и приходит на отрисовку.
@@ -1499,8 +1480,7 @@ export function createSceneArea(options: SceneAreaOptions = {}): WorkspaceArea<S
             ? null
             : brushSurface(project.configId, TERRAIN_ASSET, state.draft?.grid),
         curvature:
-          // eslint-disable-next-line @typescript-eslint/prefer-optional-chain -- baseline
-          project === null || project.curvatureId === null
+          project?.curvatureId == null
             ? null
             : brushSurface(project.curvatureId, [], state.draft?.curvature),
       });

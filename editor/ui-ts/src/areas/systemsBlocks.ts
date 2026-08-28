@@ -1,4 +1,8 @@
-/* eslint-disable max-lines -- baseline */
+/* eslint-disable max-lines -- блочная сборка DSL: набор строителей блоков,
+   производный от каталогов ядра (ED-5). Делится он только по видам блоков, а
+   виды рекурсивно вложены друг в друга — выражение содержит действие, действие
+   содержит выражение, — и любой разрез даёт два модуля, ссылающихся друг на
+   друга. */
 /**
  * @contribution Блочная сборка действий и выражений (ED-5) — вклад, а не часть
  * каркаса.
@@ -56,6 +60,7 @@ import {
   isJsonObject,
   operatorBlock,
   operatorCatalog,
+  orderedSlotNames,
   pathKey,
   readActionNode,
   readExpressionNode,
@@ -65,6 +70,7 @@ import {
   type JsonValue,
   type NameSource,
   type OperatorArg,
+  type OperatorBlock,
   type StringResources,
 } from '@fluxus/editor-core';
 import { children, documentValue, el, resourceText, type UiNode } from '../dom/node.js';
@@ -358,6 +364,113 @@ function namePicker(
   });
 }
 
+/** Узел выражения, каким его читает ядро: объект с одним ключом (EXPR-1). */
+type ExpressionNode = NonNullable<ReturnType<typeof readExpressionNode>>;
+
+/** Контрол литерала: логическое — переключателем, число — числовым полем, прочее — текстом. */
+function literalControl(env: BlockEnvironment, path: JsonPath, value: JsonValue): UiNode {
+  if (typeof value === 'boolean') {
+    return toggle({
+      label: documentValue(formatPath(path)),
+      on: value,
+      disabled: env.disabled,
+      onChange: (next) => {
+        env.set(path, next);
+      },
+    });
+  }
+  if (typeof value === 'number') return numberLiteral(env, path, value);
+  return textField({
+    label: documentValue(formatPath(path)),
+    value: documentValue(typeof value === 'string' ? value : JSON.stringify(value)),
+    readOnly: env.disabled,
+    onCommit: (raw) => {
+      env.set(path, raw);
+    },
+  });
+}
+
+/** Кнопка «дописать аргумент» — одна и та же и у известной арности, и у свободного списка. */
+function addArgumentButton(env: BlockEnvironment, listPath: JsonPath, node: JsonValue): UiNode {
+  return button({
+    label: resourceText(env.resources, 'ui.area.systems.addArgument'),
+    variant: 'ghost',
+    disabled: env.disabled,
+    onPress: () => {
+      env.append(listPath, node);
+    },
+  });
+}
+
+/**
+ * Строки аргументов оператора известной формы: заполненные позиции плюс кнопка
+ * следующей. Дописать можно только следующий аргумент — дыра в середине списка
+ * в JSON не выражается.
+ */
+function fixedArgRows(
+  env: BlockEnvironment,
+  block: OperatorBlock,
+  node: ExpressionNode,
+  path: JsonPath,
+  argPath: (index: number) => JsonPath,
+  asList: boolean,
+): readonly UiNode[] {
+  const rows: UiNode[] = [];
+  block.args.forEach((kind, index) => {
+    const at = argPath(index);
+    if (index < node.args.length) {
+      rows.push(
+        slotRow(
+          String(index),
+          operatorArgControl(env, block.args, index, at, node.args[index] ?? null, node.args),
+          undefined,
+          at,
+        ),
+      );
+      return;
+    }
+    if (index !== node.args.length || !asList) return;
+    rows.push(
+      slotRow(
+        String(index),
+        addArgumentButton(env, [...path, node.operator], kind === 'expression' ? 0 : ''),
+        undefined,
+        at,
+      ),
+    );
+  });
+  return rows;
+}
+
+/**
+ * Строки аргументов свободного списка. Литеральных позиций у оператора нет:
+ * структурировать в списке нечего, и автор добавляет и убирает выражения сам.
+ * Число их рассудит регистрация.
+ */
+function variadicArgRows(
+  env: BlockEnvironment,
+  node: ExpressionNode,
+  path: JsonPath,
+  argPath: (index: number) => JsonPath,
+  asList: boolean,
+): readonly UiNode[] {
+  const rows: UiNode[] = node.args.map((arg, index) => {
+    const at = argPath(index);
+    return slotRow(String(index), expressionBlock(env, at, arg), asList ? removeButton(env, at) : undefined, at);
+  });
+  if (!asList) return rows;
+  rows.push(
+    el('div', {
+      classes: ['fx-row', BLOCK_ROW],
+      // Адрес дописывания — сам список аргументов: у вложенных выражений
+      // таких кнопок столько же, сколько узлов.
+      attrs: { 'data-append': pathKey([...path, node.operator]) },
+      children: [addArgumentButton(env, [...path, node.operator], 0)],
+    }),
+  );
+  return rows;
+}
+
 /**
  * Блок выражения (ED-5). Литерал показывается своим контролом, узел — карточкой
  * оператора с его аргументами; на диск и то и другое уходит JSON-AST.
@@ -365,30 +478,10 @@ function namePicker(
 export function expressionBlock(env: BlockEnvironment, path: JsonPath, value: JsonValue): UiNode {
   const node = readExpressionNode(value);
   if (node === undefined) {
-    const control =
-      typeof value === 'boolean'
-        ? toggle({
-            label: documentValue(formatPath(path)),
-            on: value,
-            disabled: env.disabled,
-            onChange: (next) => {
-              env.set(path, next);
-            },
-          })
-        : typeof value === 'number'
-          ? numberLiteral(env, path, value)
-          : textField({
-              label: documentValue(formatPath(path)),
-              value: documentValue(typeof value === 'string' ? value : JSON.stringify(value)),
-              readOnly: env.disabled,
-              onCommit: (raw) => {
-                env.set(path, raw);
-              },
-            });
     return el('div', {
       classes: ['fx-row', BLOCK_ROW],
       attrs: { 'data-expression': pathKey(path), 'data-literal': 'true' },
-      children: [control, operatorPicker(env, path, value)],
+      children: [literalControl(env, path, value), operatorPicker(env, path, value)],
     });
   }
 
@@ -398,75 +491,10 @@ export function expressionBlock(env: BlockEnvironment, path: JsonPath, value: Js
   const argPath = (index: number): JsonPath =>
     asList ? [...path, node.operator, index] : [...path, node.operator];
 
-  const rows: UiNode[] = [];
-  if (block !== undefined && !block.variadic) {
-    block.args.forEach((kind, index) => {
-      const at = argPath(index);
-      if (index < node.args.length) {
-        rows.push(
-          slotRow(
-            String(index),
-            operatorArgControl(env, block.args, index, at, node.args[index] ?? null, node.args),
-            undefined,
-            at,
-          ),
-        );
-        return;
-      }
-      // Аргумента ещё нет. Дописать можно только следующий: дыра в середине
-      // списка в JSON не выражается.
-      if (index !== node.args.length || !asList) return;
-      rows.push(
-        slotRow(
-          String(index),
-          button({
-            label: resourceText(env.resources, 'ui.area.systems.addArgument'),
-            variant: 'ghost',
-            disabled: env.disabled,
-            onPress: () => {
-              env.append([...path, node.operator], kind === 'expression' ? 0 : '');
-            },
-          }),
-          undefined,
-          at,
-        ),
-      );
-    });
-  } else {
-    // Литеральных позиций у оператора нет: структурировать в списке нечего, и
-    // автор добавляет и убирает выражения сам. Число их рассудит регистрация.
-    node.args.forEach((arg, index) => {
-      const at = argPath(index);
-      rows.push(
-        slotRow(
-          String(index),
-          expressionBlock(env, at, arg),
-          asList ? removeButton(env, at) : undefined,
-          at,
-        ),
-      );
-    });
-    if (asList) {
-      rows.push(
-        el('div', {
-          classes: ['fx-row', BLOCK_ROW],
-          // Адрес дописывания — сам список аргументов: у вложенных выражений
-          // таких кнопок столько же, сколько узлов.
-          attrs: { 'data-append': pathKey([...path, node.operator]) },
-          children: [
-            button({
-              label: resourceText(env.resources, 'ui.area.systems.addArgument'),
-              variant: 'ghost',
-              disabled: env.disabled,
-              onPress: () => {
-                env.append([...path, node.operator], 0);
-              },
-            }),
-          ],
-        }),
-      );
-    }
-  }
+  const rows =
+    block !== undefined && !block.variadic
+      ? fixedArgRows(env, block, node, path, argPath, asList)
+      : variadicArgRows(env, node, path, argPath, asList);
 
   return el('div', {
     classes: ['fx-card'],
@@ -551,6 +579,56 @@ function fieldsBlock(
   });
 }
 
+/**
+ * Строка «выбрать компонент и добавить»: пикер имени плюс кнопка. Из чего
+ * выбирать (`names`; `null` — кандидатов нет, значит свободный ввод) и что
+ * делает добавление — разное у карты переопределений и у списка имён запроса;
+ * всё остальное у них одно, включая черновик выбранного имени.
+ */
+function addComponentRow(
+  env: BlockEnvironment,
+  path: JsonPath,
+  names: readonly string[] | null,
+  add: (name: string) => void,
+): UiNode {
+  const draft = draftOf(env, path, 'component');
+  return el('div', {
+    classes: ['fx-row', BLOCK_ROW],
+    children: children(
+      names === null
+        ? textField({
+            label: resourceText(env.resources, 'ui.area.systems.componentName'),
+            value: documentValue(draft),
+            readOnly: env.disabled,
+            onCommit: (raw) => {
+              setDraft(env, path, 'component', raw);
+            },
+          })
+        : select({
+            label: resourceText(env.resources, 'ui.area.systems.componentName'),
+            value: draft,
+            options: [
+              { value: '', label: resourceText(env.resources, 'ui.area.systems.none') },
+              ...nameOptions(names),
+            ],
+            disabled: env.disabled,
+            onSelect: (next) => {
+              setDraft(env, path, 'component', next);
+            },
+          }),
+      button({
+        label: resourceText(env.resources, 'ui.action.addComponent'),
+        variant: 'ghost',
+        disabled: env.disabled || draft.trim() === '',
+        onPress: () => {
+          add(draft);
+          setDraft(env, path, 'component', '');
+        },
+      }),
+    ),
+  });
+}
+
 /** Переопределения полей поверх prefab'а (CMD-6): компонент → карта полей. */
 function overridesBlock(
   env: BlockEnvironment,
@@ -564,7 +642,6 @@ function overridesBlock(
     world === null || prefab === undefined
       ? null
       : world.prefabComponentNames(prefab).filter((name) => !Object.hasOwn(map, name));
-  const draft = draftOf(env, path, 'component');
   return el('div', {
     classes: ['fx-stack'],
     attrs: { 'data-overrides': pathKey(path) },
@@ -590,40 +667,8 @@ function overridesBlock(
           ],
         }),
       ),
-      el('div', {
-        classes: ['fx-row', BLOCK_ROW],
-        children: children(
-          available === null
-            ? textField({
-                label: resourceText(env.resources, 'ui.area.systems.componentName'),
-                value: documentValue(draft),
-                readOnly: env.disabled,
-                onCommit: (raw) => {
-                  setDraft(env, path, 'component', raw);
-                },
-              })
-            : select({
-                label: resourceText(env.resources, 'ui.area.systems.componentName'),
-                value: draft,
-                options: [
-                  { value: '', label: resourceText(env.resources, 'ui.area.systems.none') },
-                  ...nameOptions(available),
-                ],
-                disabled: env.disabled,
-                onSelect: (next) => {
-                  setDraft(env, path, 'component', next);
-                },
-              }),
-          button({
-            label: resourceText(env.resources, 'ui.action.addComponent'),
-            variant: 'ghost',
-            disabled: env.disabled || draft.trim() === '',
-            onPress: () => {
-              env.set([...path, draft], {});
-              setDraft(env, path, 'component', '');
-            },
-          }),
-        ),
+      addComponentRow(env, path, available, (name) => {
+        env.set([...path, name], {});
       }),
     ],
   });
@@ -633,7 +678,6 @@ function overridesBlock(
 function componentListBlock(env: BlockEnvironment, path: JsonPath, value: JsonValue): UiNode {
   const list = isJsonArray(value) ? value : [];
   const world = env.world;
-  const draft = draftOf(env, path, 'component');
   const taken = new Set(list.filter((name): name is string => typeof name === 'string'));
   return el('div', {
     classes: ['fx-stack'],
@@ -647,41 +691,14 @@ function componentListBlock(env: BlockEnvironment, path: JsonPath, value: JsonVa
           [...path, index],
         ),
       ),
-      el('div', {
-        classes: ['fx-row', BLOCK_ROW],
-        children: children(
-          world === null
-            ? textField({
-                label: resourceText(env.resources, 'ui.area.systems.componentName'),
-                value: documentValue(draft),
-                readOnly: env.disabled,
-                onCommit: (raw) => {
-                  setDraft(env, path, 'component', raw);
-                },
-              })
-            : select({
-                label: resourceText(env.resources, 'ui.area.systems.componentName'),
-                value: draft,
-                options: [
-                  { value: '', label: resourceText(env.resources, 'ui.area.systems.none') },
-                  ...nameOptions(world.componentNames.filter((name) => !taken.has(name))),
-                ],
-                disabled: env.disabled,
-                onSelect: (next) => {
-                  setDraft(env, path, 'component', next);
-                },
-              }),
-          button({
-            label: resourceText(env.resources, 'ui.action.addComponent'),
-            variant: 'ghost',
-            disabled: env.disabled || draft.trim() === '',
-            onPress: () => {
-              env.append(path, draft);
-              setDraft(env, path, 'component', '');
-            },
-          }),
-        ),
-      }),
+      addComponentRow(
+        env,
+        path,
+        world === null ? null : world.componentNames.filter((name) => !taken.has(name)),
+        (name) => {
+          env.append(path, name);
+        },
+      ),
     ],
   });
 }
@@ -800,13 +817,6 @@ function slotControl(
   }
 }
 
-/** Порядок слотов узла: конвенция сперва, аргументы вне конвенции — следом. */
-function orderedArgNames(args: Readonly<Record<string, JsonValue>>): readonly string[] {
-  const given = Object.keys(args);
-  const known = CONVENTION_SLOTS.map((slot) => slot.name).filter((name) => given.includes(name));
-  return [...known, ...given.filter((name) => !known.includes(name))];
-}
-
 /**
  * Блок одного действия (ED-4, ED-5): имя из закрытого набора, слоты конвенции и
  * палитра ненаполненных слотов. Незаполненного слота в документе нет — он
@@ -844,7 +854,7 @@ function actionNodeBlock(env: BlockEnvironment, path: JsonPath, node: JsonValue)
           removeButton(env, path),
         ),
       }),
-      ...orderedArgNames(args).map((name) => {
+      ...orderedSlotNames(args).map((name) => {
         const at = [...path, read.name, name];
         const slot = conventionSlot(name);
         // Аргумент вне конвенции ядро не структурирует, но исполняет: блок

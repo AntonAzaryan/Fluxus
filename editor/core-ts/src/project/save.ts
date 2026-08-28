@@ -233,85 +233,156 @@ function refuseDuringInteraction(session: EditorSession): void {
   }
 }
 
+/**
+ * Состав записи: что уйдёт на диск, что названо без правок и какими значениями.
+ *
+ * Снимок значений снимается здесь, до первого `await` вызывающего: сессия между
+ * `await` принимает правки, и значение, перечитанное в фазе записи, могло бы уже
+ * нести то, чего блокирующая проверка не видела (ED-21). Порядок ключей
+ * `values` — порядок открытия документов в сессии, то есть порядок записи:
+ * детерминированный и не зависящий от того, как вызывающий перечислил документы.
+ */
+interface WritePlan {
+  /** Документы сессии с несохранёнными правками. */
+  readonly dirty: ReadonlySet<DocumentId>;
+  /** Названные к сохранению, но без правок. */
+  readonly unchanged: readonly DocumentId[];
+  readonly writeSet: ReadonlySet<DocumentId>;
+  readonly values: ReadonlyMap<DocumentId, JsonValue>;
+}
+
+function planWrite(session: EditorSession, requested: readonly DocumentId[] | undefined): WritePlan {
+  const dirty = new Set(session.dirtyDocumentIds());
+  const unchanged = requested === undefined ? [] : requested.filter((id) => !dirty.has(id));
+  const writeSet = new Set(requested === undefined ? [...dirty] : requested.filter((id) => dirty.has(id)));
+  const order = session.documentIds().filter((id) => writeSet.has(id));
+  return { dirty, unchanged, writeSet, values: new Map(order.map((id) => [id, session.documentValue(id)] as const)) };
+}
+
+/**
+ * Члены групп с правками, которые это сохранение оставило бы несохранёнными.
+ * Группа, которой запись не касается вовсе, предметом фазы записи не является.
+ */
+function membersLeftUnsaved(
+  groups: readonly DocumentGroup[],
+  plan: WritePlan,
+): ReadonlyMap<DocumentId, DocumentGroup> {
+  const left = new Map<DocumentId, DocumentGroup>();
+  for (const group of groups) {
+    if (!group.members.some((id) => plan.writeSet.has(id))) continue;
+    for (const id of group.members) if (plan.dirty.has(id) && !plan.writeSet.has(id)) left.set(id, group);
+  }
+  return left;
+}
+
+/**
+ * Фаза записи: находки правила `GROUP_WRITE_RULE_ID`. Документ с правками
+ * сессией открыт по определению, поэтому вид у него есть.
+ */
+function groupWriteIssues(
+  session: EditorSession,
+  left: ReadonlyMap<DocumentId, DocumentGroup>,
+): readonly ValidationIssue[] {
+  if (left.size === 0) return [];
+  const documents = [...left.keys()].map((id) => session.document(id));
+  const kinds = [...new Set(documents.map((document) => document.kind))].sort(compareIds);
+  const rule = groupWriteRule(left, kinds);
+  return createValidator({ rules: readerOf([rule]) }).run(sourceOf(documents)).issues;
+}
+
+/** Состояния дерева «до записи» и «после неё» — вход обоих прогонов фазы дерева. */
+interface TreeStates {
+  readonly before: readonly EditorDocument[];
+  readonly after: readonly EditorDocument[];
+}
+
+async function readTreeStates(
+  session: EditorSession,
+  host: ContentTreeHost,
+  groups: readonly DocumentGroup[],
+  plan: WritePlan,
+): Promise<TreeStates> {
+  const touched = new Set<DocumentId>();
+  for (const group of groups) for (const id of group.members) touched.add(id);
+  for (const id of plan.writeSet) touched.add(id);
+
+  const before: EditorDocument[] = [];
+  const after: EditorDocument[] = [];
+  for (const id of touched) {
+    // Вид документа приносит тот, кто его открывает (ED-25), и по файлу он не
+    // выводится: неоткрытому документу правило сопоставить не с чем.
+    if (!session.isOpen(id)) continue;
+    const document = session.document(id);
+    const disk = await onDiskValue(host, id);
+    if (disk !== undefined) before.push(asTreeState(document, disk));
+    // Состояние «после записи» строится из того же снимка, который уйдёт на
+    // диск: значение сессии к этому месту могло уже уехать правкой.
+    const next = plan.writeSet.has(id) ? plan.values.get(id) : disk;
+    if (next !== undefined) after.push(asTreeState(document, next));
+  }
+  return { before, after };
+}
+
+/**
+ * Фаза дерева: те же правила по состоянию «после записи» против состояния «до
+ * неё». Один валидатор на оба прогона: документ, которого запись не касается,
+ * приходит в оба одним и тем же значением, и правила о нём исполняются однажды.
+ * Валидатор свой, а не тот, что держит редактор: его кэш — состояние сессии, и
+ * подмешивать в него состояние диска нельзя (ED-8).
+ *
+ * Блокирует запись только внесённое этим сохранением (ED-21); лежавшее на диске
+ * до него — предмет валидации (ED-8), а не повод не дать сохранить.
+ */
+function treeIssues(
+  rules: ContributionReader<ValidationRule>,
+  states: TreeStates,
+): { readonly found: readonly ValidationIssue[]; readonly blocking: readonly ValidationIssue[] } {
+  const validator = createValidator({ rules });
+  const known = new Set(validator.run(sourceOf(states.before)).issues.map(issueKey));
+  const found = validator.run(sourceOf(states.after)).issues;
+  return { found, blocking: found.filter((issue) => issue.severity === 'error' && !known.has(issueKey(issue))) };
+}
+
+/**
+ * Запись снимка на диск. Правка или взаимодействие, пришедшие за время
+ * асинхронной записи, сохранёнными не объявляются: на диске — проверенный
+ * снимок, в сессии — более новое состояние, и оно остаётся несохранённым до
+ * следующего сохранения. `markSaved` посреди мазка к тому же запрещён самой
+ * сессией.
+ */
+async function writeValues(
+  session: EditorSession,
+  host: ContentTreeHost,
+  values: ReadonlyMap<DocumentId, JsonValue>,
+): Promise<DocumentId[]> {
+  const written: DocumentId[] = [];
+  for (const [id, value] of values) {
+    await host.write(id, encodeDocument(value));
+    if (!session.pending && session.documentValue(id) === value) session.markSaved(id);
+    written.push(id);
+  }
+  return written;
+}
+
 export async function saveDocuments(request: SaveRequest): Promise<SaveResult> {
   const { session, host } = request;
   // Отказ — до единой записи и до снимка значений.
   refuseDuringInteraction(session);
   const groups = request.groups ?? [];
   const rules = request.rules;
+  const plan = planWrite(session, request.documentIds);
 
-  const dirty = new Set(session.dirtyDocumentIds());
-  const requested = request.documentIds;
-  const unchanged = requested === undefined ? [] : requested.filter((id) => !dirty.has(id));
-  const writeSet = new Set(requested === undefined ? [...dirty] : requested.filter((id) => dirty.has(id)));
+  const found: ValidationIssue[] = [...groupWriteIssues(session, membersLeftUnsaved(groups, plan))];
+  const blocking: ValidationIssue[] = found.filter((issue) => issue.severity === 'error');
 
-  // Порядок записи — порядок открытия документов в сессии: детерминированный и
-  // не зависящий от того, в каком порядке вызывающий перечислил документы.
-  const order = session.documentIds().filter((id) => writeSet.has(id));
-
-  // Снимок записываемых значений — до первого `await`. Сессия между `await`
-  // принимает правки, и значение, перечитанное в фазе записи, могло бы уже
-  // нести то, чего блокирующая проверка не видела: пишется и проверяется ровно
-  // этот снимок, а не «текущее на момент записи» (ED-21).
-  const values = new Map(order.map((id) => [id, session.documentValue(id)] as const));
-
-  const found: ValidationIssue[] = [];
-  const blocking: ValidationIssue[] = [];
-
-  // Фаза записи: члены группы с правками, оставленные несохранёнными. Документ
-  // с правками сессией открыт по определению, поэтому вид у него есть.
-  const left = new Map<DocumentId, DocumentGroup>();
-  for (const group of groups) {
-    if (!group.members.some((id) => writeSet.has(id))) continue;
-    for (const id of group.members) if (dirty.has(id) && !writeSet.has(id)) left.set(id, group);
-  }
-  if (left.size > 0) {
-    const documents = [...left.keys()].map((id) => session.document(id));
-    const kinds = [...new Set(documents.map((document) => document.kind))].sort(compareIds);
-    const rule = groupWriteRule(left, kinds);
-    for (const issue of createValidator({ rules: readerOf([rule]) }).run(sourceOf(documents)).issues) {
-      found.push(issue);
-      if (issue.severity === 'error') blocking.push(issue);
-    }
-  }
-
-  // Фаза дерева: те же правила по состоянию «после записи» против состояния
-  // «до неё».
   if (rules !== undefined) {
-    const touched = new Set<DocumentId>();
-    for (const group of groups) for (const id of group.members) touched.add(id);
-    for (const id of writeSet) touched.add(id);
-
-    const before: EditorDocument[] = [];
-    const after: EditorDocument[] = [];
-    for (const id of touched) {
-      // Вид документа приносит тот, кто его открывает (ED-25), и по файлу он не
-      // выводится: неоткрытому документу правило сопоставить не с чем.
-      if (!session.isOpen(id)) continue;
-      const document = session.document(id);
-      const disk = await onDiskValue(host, id);
-      if (disk !== undefined) before.push(asTreeState(document, disk));
-      // Состояние «после записи» строится из того же снимка, который уйдёт на
-      // диск: значение сессии к этому месту могло уже уехать правкой.
-      const next = writeSet.has(id) ? values.get(id) : disk;
-      if (next !== undefined) after.push(asTreeState(document, next));
-    }
-
-    // Один валидатор на оба прогона: документ, которого запись не касается,
-    // приходит в оба одним и тем же значением, и правила о нём исполняются
-    // однажды. Валидатор свой, а не тот, что держит редактор: его кэш —
-    // состояние сессии, и подмешивать в него состояние диска нельзя (ED-8).
-    const validator = createValidator({ rules });
-    const known = new Set(validator.run(sourceOf(before)).issues.map(issueKey));
-    for (const issue of validator.run(sourceOf(after)).issues) {
-      found.push(issue);
-      // Внесённое этим сохранением отвергает запись (ED-21); лежавшее на диске
-      // до него — предмет валидации (ED-8), а не повод не дать сохранить.
-      if (issue.severity === 'error' && !known.has(issueKey(issue))) blocking.push(issue);
-    }
+    const tree = treeIssues(rules, await readTreeStates(session, host, groups, plan));
+    found.push(...tree.found);
+    blocking.push(...tree.blocking);
   }
 
   const report = createReport(found);
+  const { unchanged } = plan;
   if (blocking.length > 0) {
     return {
       refused: true,
@@ -322,17 +393,11 @@ export async function saveDocuments(request: SaveRequest): Promise<SaveResult> {
     };
   }
 
-  const written: DocumentId[] = [];
-  for (const id of order) {
-    const value = values.get(id)!;
-    await host.write(id, encodeDocument(value));
-    // Правка или взаимодействие, пришедшие за время асинхронной записи,
-    // сохранёнными не объявляются: на диске — проверенный снимок, в сессии —
-    // более новое состояние, и оно остаётся несохранённым до следующего
-    // сохранения. `markSaved` посреди мазка к тому же запрещён самой сессией.
-    if (!session.pending && session.documentValue(id) === value) session.markSaved(id);
-    written.push(id);
-  }
-
-  return { refused: false, written, unchanged, report, blocking: Object.freeze([]) };
+  return {
+    refused: false,
+    written: await writeValues(session, host, plan.values),
+    unchanged,
+    report,
+    blocking: Object.freeze([]),
+  };
 }

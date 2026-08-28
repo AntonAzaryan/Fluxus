@@ -42,11 +42,12 @@ import {
   type JsonPath,
   type JsonValue,
   type OperationContext,
-  type OperationParams,
   type OperationParamSpec,
   type OperationRegistry,
 } from '@fluxus/editor-core';
 import { validateManifest, type EntityVisual, type VisualManifest } from '@fluxus/assets';
+import { reasonOf } from '../reason.js';
+import { ASSET_ID, DOCUMENT, asDocument, asString } from './operationParams.js';
 
 /** Идентификаторы операций над записями манифеста. */
 export const VISUALS_OPERATIONS = {
@@ -62,21 +63,9 @@ const MODEL_KEY = 'model';
 const DEFAULT_SKIN_KEY = 'defaultSkin';
 const SKINS_KEY = 'skins';
 
-const DOCUMENT: OperationParamSpec = {
-  type: 'document',
-  descriptionKey: 'ui.operation.param.document',
-};
 const ENTRY: OperationParamSpec = { type: 'string', descriptionKey: 'ui.operation.param.entry' };
-const ASSET: OperationParamSpec = { type: 'string', descriptionKey: 'ui.operation.param.assetId' };
 const SKIN: OperationParamSpec = { type: 'string', descriptionKey: 'ui.operation.param.skin' };
 const SLOT: OperationParamSpec = { type: 'string', descriptionKey: 'ui.operation.param.slot' };
-
-/*
- * Читатели ниже — приведение типа, а не вторая проверка: схему параметров уже
- * сверил слой операций к моменту вызова `apply` (ED-30).
- */
-const asDocument = (params: OperationParams): DocumentId => params.document as DocumentId;
-const asString = (params: OperationParams, name: string): string => params[name] as string;
 
 /** Путь записи манифеста внутри документа. */
 function entryPath(entry: string, ...rest: readonly string[]): JsonPath {
@@ -124,7 +113,7 @@ function requireAssetId(operationId: string, param: string, raw: string): string
   } catch (error) {
     throw new OperationError(
       operationId,
-      `параметр "${param}": ${error instanceof Error ? error.message : String(error)}`,
+      `параметр "${param}": ${reasonOf(error)}`,
       { param, received: raw },
     );
   }
@@ -179,7 +168,7 @@ function checkEntry(
 const setEntryModelOperation: AuthoringOperation = {
   id: VISUALS_OPERATIONS.setModel,
   descriptionKey: 'ui.operation.visuals.entry.setModel',
-  params: { document: DOCUMENT, entry: ENTRY, asset: ASSET },
+  params: { document: DOCUMENT, entry: ENTRY, asset: ASSET_ID },
   apply(ctx, params) {
     const id = VISUALS_OPERATIONS.setModel;
     const document = asDocument(params);
@@ -224,7 +213,7 @@ const setEntryDefaultSkinOperation: AuthoringOperation = {
 const setEntrySkinTextureOperation: AuthoringOperation = {
   id: VISUALS_OPERATIONS.setSkinTexture,
   descriptionKey: 'ui.operation.visuals.entry.setSkinTexture',
-  params: { document: DOCUMENT, entry: ENTRY, skin: SKIN, slot: SLOT, asset: ASSET },
+  params: { document: DOCUMENT, entry: ENTRY, skin: SKIN, slot: SLOT, asset: ASSET_ID },
   apply(ctx, params) {
     const id = VISUALS_OPERATIONS.setSkinTexture;
     const document = asDocument(params);

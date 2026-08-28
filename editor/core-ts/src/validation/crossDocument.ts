@@ -166,15 +166,20 @@ const MISSING_COMPONENT = 'missingComponent';
  */
 const SYNTHETIC_PREFABS: readonly string[] = Object.freeze([TERRAIN_PREFAB, ARENA_PREFAB]);
 
-function prefabNamesOf(value: JsonValue | undefined): readonly string[] {
+/** Имена записей списка по пути: поле `name` каждой записи-объекта. */
+function namesAt(value: JsonValue | undefined, path: JsonPath): readonly string[] {
   if (value === undefined) return [];
-  const list = getAtPath(value, PREFABS_PATH);
+  const list = getAtPath(value, path);
   if (!isJsonArray(list)) return [];
   const names: string[] = [];
   for (const entry of list) {
     if (isJsonObject(entry) && typeof entry.name === 'string') names.push(entry.name);
   }
   return names;
+}
+
+function prefabNamesOf(value: JsonValue | undefined): readonly string[] {
+  return namesAt(value, PREFABS_PATH);
 }
 
 function entityKeysOf(value: JsonValue | undefined): readonly string[] {
@@ -259,6 +264,39 @@ export function prefabForVisualRule(kinds: PairKinds = DEFAULT_PAIR_KINDS): Vali
 }
 
 /**
+ * Находки на записях списков: поле `field` каждой записи обязано разрешаться в
+ * известное имя. Адресуется сама запись — ради этого правила и написаны (ED-19,
+ * PRES-2), а не документ целиком.
+ *
+ * Форму записи проверяет формат (SER-8, PRES-2): не-строка — его нарушение, а
+ * не отсутствующая ссылка, и второго сообщения о ней здесь не будет.
+ */
+function reportMissingReferences(
+  run: ValidationRun,
+  sites: readonly DocumentSite[],
+  field: string,
+  known: Known,
+  code: string,
+): void {
+  for (const site of sites) {
+    if (site.kind !== run.document.kind) continue;
+    const list = getAtPath(run.document.value, site.path);
+    if (!isJsonArray(list)) continue;
+    list.forEach((entry, index) => {
+      if (!isJsonObject(entry)) return;
+      const name = entry[field];
+      if (typeof name !== 'string' || known.names.has(name)) return;
+      run.report({
+        path: [...site.path, index, field],
+        expected: { kind: 'reference', targets: known.targets, known: known.sorted },
+        code,
+        params: { name },
+      });
+    });
+  }
+}
+
+/**
  * ED-19: запись расстановки на несуществующий prefab. Адресуется сама запись —
  * ради этого правило и написано (см. шапку файла).
  */
@@ -276,24 +314,7 @@ export function placementPrefabRule(
       const scenes = run.documentsOfKind(kinds.scene);
       if (scenes.length === 0) return;
       const known = collect(scenes, PREFABS_PATH, prefabNamesOf, run, SYNTHETIC_PREFABS);
-      for (const site of sites) {
-        if (site.kind !== run.document.kind) continue;
-        const list = getAtPath(run.document.value, site.path);
-        if (!isJsonArray(list)) continue;
-        list.forEach((entry, index) => {
-          if (!isJsonObject(entry)) return;
-          const name = entry.prefab;
-          // Форму записи проверяет ядро (SER-8): не-строка — его нарушение, а
-          // не отсутствующая ссылка, и второго сообщения о ней здесь не будет.
-          if (typeof name !== 'string' || known.names.has(name)) return;
-          run.report({
-            path: [...site.path, index, 'prefab'],
-            expected: { kind: 'reference', targets: known.targets, known: known.sorted },
-            code: MISSING_PREFAB,
-            params: { name },
-          });
-        });
-      }
+      reportMissingReferences(run, sites, 'prefab', known, MISSING_PREFAB);
     },
   };
 }
@@ -366,38 +387,14 @@ export function decorationVisualRule(
       const manifests = run.documentsOfKind(kinds.manifest);
       if (manifests.length === 0) return;
       const known = collectVisuals(manifests, run);
-      for (const site of sites) {
-        if (site.kind !== run.document.kind) continue;
-        const list = getAtPath(run.document.value, site.path);
-        if (!isJsonArray(list)) continue;
-        list.forEach((entry, index) => {
-          if (!isJsonObject(entry)) return;
-          const name = entry.visual;
-          // Форму записи проверяет формат (PRES-2): не-строка — его нарушение,
-          // а не отсутствующая ссылка, и второго сообщения о ней здесь нет.
-          if (typeof name !== 'string' || known.names.has(name)) return;
-          run.report({
-            path: [...site.path, index, 'visual'],
-            expected: { kind: 'reference', targets: known.targets, known: known.sorted },
-            code: MISSING_VISUAL,
-            params: { name },
-          });
-        });
-      }
+      reportMissingReferences(run, sites, 'visual', known, MISSING_VISUAL);
     },
   };
 }
 
 /** Имена компонент, объявленных конфигом сцены (SER-7). */
 function componentNamesOf(value: JsonValue | undefined): readonly string[] {
-  if (value === undefined) return [];
-  const list = getAtPath(value, COMPONENTS_PATH);
-  if (!isJsonArray(list)) return [];
-  const names: string[] = [];
-  for (const entry of list) {
-    if (isJsonObject(entry) && typeof entry.name === 'string') names.push(entry.name);
-  }
-  return names;
+  return namesAt(value, COMPONENTS_PATH);
 }
 
 /**

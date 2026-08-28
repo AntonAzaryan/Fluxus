@@ -41,16 +41,14 @@ export function createAreaStateStore(): AreaStateStore {
   return {
     of<S extends AreaState>(area: WorkspaceArea<S>, setup: AreaSetup): S {
       const existing = records.get(area.id);
-      // eslint-disable-next-line @typescript-eslint/prefer-optional-chain -- baseline
-      if (existing !== undefined && existing.area === area) return existing.state as S;
+      if (existing?.area === area) return existing.state as S;
       const created = area.createState(setup);
       records.set(area.id, { area, state: created });
       return created;
     },
     peek(area: WorkspaceArea): AreaState | undefined {
       const existing = records.get(area.id);
-      // eslint-disable-next-line @typescript-eslint/prefer-optional-chain -- baseline
-      return existing !== undefined && existing.area === area ? existing.state : undefined;
+      return existing?.area === area ? existing.state : undefined;
     },
   };
 }

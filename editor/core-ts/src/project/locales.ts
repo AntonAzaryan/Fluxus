@@ -28,6 +28,30 @@ export interface ProjectBundlesResult {
   readonly failures: readonly ProjectBundleFailure[];
 }
 
+/**
+ * Итог чтения одного файла локали: бандл, причина отказа либо `undefined` —
+ * «файла в дереве нет», что отказом не является.
+ */
+type BundleRead = { readonly bundle: LocaleBundle } | { readonly reason: string } | undefined;
+
+async function readBundle(host: ContentTreeHost, path: string): Promise<BundleRead> {
+  const found = await host.stat(path);
+  if (found?.kind !== 'file') return undefined;
+  let parsed: JsonValue;
+  try {
+    parsed = decodeDocument(await host.read(path));
+  } catch (error) {
+    return { reason: error instanceof Error ? error.message : String(error) };
+  }
+  if (!isJsonObject(parsed)) return { reason: 'бандл локали — плоская карта «ключ → строка»' };
+  const bundle: Record<string, string> = {};
+  for (const [key, value] of Object.entries(parsed)) {
+    if (typeof value !== 'string') return { reason: `значение ключа "${key}" — не строка` };
+    bundle[key] = value;
+  }
+  return { bundle };
+}
+
 export async function loadProjectBundles(
   host: ContentTreeHost,
   locales: readonly LocaleId[] = SHIPPED_LOCALES,
@@ -37,34 +61,10 @@ export async function loadProjectBundles(
 
   for (const locale of locales) {
     const path = projectBundlePath(locale);
-    const found = await host.stat(path);
-    // eslint-disable-next-line @typescript-eslint/prefer-optional-chain -- baseline
-    if (found === undefined || found.kind !== 'file') continue;
-    let parsed: JsonValue;
-    try {
-      parsed = decodeDocument(await host.read(path));
-    } catch (error) {
-      failures.push({ locale, path, reason: error instanceof Error ? error.message : String(error) });
-      continue;
-    }
-    if (!isJsonObject(parsed)) {
-      failures.push({ locale, path, reason: 'бандл локали — плоская карта «ключ → строка»' });
-      continue;
-    }
-    const bundle: Record<string, string> = {};
-    let broken: string | undefined;
-    for (const [key, value] of Object.entries(parsed)) {
-      if (typeof value !== 'string') {
-        broken = key;
-        break;
-      }
-      bundle[key] = value;
-    }
-    if (broken !== undefined) {
-      failures.push({ locale, path, reason: `значение ключа "${broken}" — не строка` });
-      continue;
-    }
-    bundles[locale] = bundle;
+    const read = await readBundle(host, path);
+    if (read === undefined) continue;
+    if ('reason' in read) failures.push({ locale, path, reason: read.reason });
+    else bundles[locale] = read.bundle;
   }
 
   return { bundles, failures };

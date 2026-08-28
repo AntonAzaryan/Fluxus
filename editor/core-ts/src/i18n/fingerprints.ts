@@ -17,6 +17,7 @@
  * ключ, чей перевод с прошлого раза изменился.
  */
 import { fnv1a32, prettyJsonSerializer } from '@fluxus/core';
+import { compareIds } from '../registry/contribution.js';
 import type { LocaleBundle, LocaleId } from './resources.js';
 
 /**
@@ -62,8 +63,7 @@ export function confirmTranslations(
     const translatedPrint = fingerprint(translated[key] ?? '');
     const before = previous?.entries[key];
     entries[key] =
-      // eslint-disable-next-line @typescript-eslint/prefer-optional-chain -- baseline
-      before !== undefined && before.translated === translatedPrint
+      before?.translated === translatedPrint
         ? before
         : { source: fingerprint(sourceText), translated: translatedPrint };
   }
@@ -79,7 +79,10 @@ export function confirmTranslations(
  */
 export function fingerprintFileContent(file: FingerprintFile): string {
   const entries: Record<string, FingerprintEntry> = {};
-  for (const key of Object.keys(file.entries).sort()) entries[key] = file.entries[key]!;
+  // Порядок ключей — тот же, каким реестр перечисляет вклады: по кодовым точкам.
+  for (const [key, entry] of Object.entries(file.entries).sort((a, b) => compareIds(a[0], b[0]))) {
+    entries[key] = entry;
+  }
   const bytes = prettyJsonSerializer.encode({ locale: file.locale, source: file.source, entries });
   return new TextDecoder().decode(bytes);
 }
@@ -109,8 +112,7 @@ export function translationStatus(
       continue;
     }
     const entry = file.entries[key];
-    // eslint-disable-next-line @typescript-eslint/prefer-optional-chain -- baseline
-    if (entry === undefined || entry.translated !== fingerprint(translation)) {
+    if (entry?.translated !== fingerprint(translation)) {
       unconfirmed.push(key);
       continue;
     }

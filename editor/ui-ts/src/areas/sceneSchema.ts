@@ -36,9 +36,10 @@
  * редактора схем (ED-6), которого этим проходом ещё нет.
  */
 import { schemaFiles } from '@fluxus/core';
-import type { EditorSession, JsonValue, SchemaPath } from '@fluxus/editor-core';
+import type { EditorSession } from '@fluxus/editor-core';
 import { documentValue } from '../dom/node.js';
 import type { FieldGroup, InspectorSubject, SchemaField } from '../inspector/index.js';
+import { COMPONENT_KIND, jsonSchemaFields, objectAt } from './schemaJson.js';
 
 /** JSON-схема сцены (SER-5) — из неё же выведены и общие типы её `$defs`. */
 const SCENE_SCHEMA = schemaFiles['scene.schema.json'];
@@ -48,59 +49,6 @@ const SPAWN_ENTRY = 'spawnEntry';
 
 /** Корень путей описаний полей формата: тот же, что у отчёта ресурсов (ED-28). */
 const SCENE_ROOT = 'scene';
-
-/**
- * Типы JSON-схемы, у которых есть значение и, значит, может быть редактор поля.
- * Объект и массив сюда не входят: см. шапку.
- */
-const SCALAR_TYPES: ReadonlySet<string> = new Set(['string', 'number', 'integer', 'boolean']);
-
-/** Вид описания полей форматов документов — тот же, что у путей отчёта (ED-28). */
-const SCHEMA_KIND = 'schema';
-
-/** Вид описания полей компонентов: их объявляет контент, он же их и документирует. */
-const COMPONENT_KIND = 'component';
-
-function objectAt(node: unknown, key: string): Record<string, unknown> | undefined {
-  if (typeof node !== 'object' || node === null) return undefined;
-  const value = (node as Record<string, unknown>)[key];
-  return typeof value === 'object' && value !== null ? (value as Record<string, unknown>) : undefined;
-}
-
-function stringAt(node: unknown, key: string): string | undefined {
-  if (typeof node !== 'object' || node === null) return undefined;
-  const value = (node as Record<string, unknown>)[key];
-  return typeof value === 'string' ? value : undefined;
-}
-
-/**
- * Поля из `properties` JSON-схемы: имя, тип и перечисленные значения. Путь
- * описания собирается из корня схемы и имени поля — ровно так же, как его
- * собирает отчёт ресурсов (ED-28), поэтому ключ подсказки совпадает с ключом
- * бандла без всякой таблицы соответствий.
- */
-export function jsonSchemaFields(root: string, schema: unknown): readonly SchemaField[] {
-  const properties = objectAt(schema, 'properties');
-  if (properties === undefined) return [];
-  const fields: SchemaField[] = [];
-  for (const name of Object.keys(properties)) {
-    const property = properties[name];
-    const type = stringAt(property, 'type');
-    if (type === undefined || !SCALAR_TYPES.has(type)) continue;
-    const values =
-      typeof property === 'object' && property !== null && Array.isArray((property as Record<string, unknown>).enum)
-        ? ((property as Record<string, unknown>).enum as readonly JsonValue[])
-        : undefined;
-    fields.push({
-      name,
-      type,
-      path: [name],
-      description: [SCHEMA_KIND, root, name] as SchemaPath,
-      ...(values === undefined ? {} : { values }),
-    });
-  }
-  return fields;
-}
 
 interface ComponentShape {
   readonly name?: unknown;

@@ -410,8 +410,7 @@ export async function createEditorApp(options: EditorAppOptions): Promise<Editor
                 {
                   scene: current.config,
                   manifest: current.visuals,
-                  // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- baseline
-                  ...(writesPresentation && presentation !== null ? { presentation } : {}),
+                  ...(writesPresentation ? { presentation } : {}),
                 },
               ]),
             }),

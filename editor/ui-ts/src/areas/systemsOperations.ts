@@ -36,7 +36,6 @@ import {
   type JsonPath,
   type JsonValue,
   type OperationContext,
-  type OperationParams,
   type OperationParamSpec,
   type OperationRegistry,
 } from '@fluxus/editor-core';
@@ -49,6 +48,7 @@ import {
   triggerOf,
   type TriggerSource,
 } from './systemsDocuments.js';
+import { DOCUMENT, LIST, RECORD, asDocument, asList, asPath, asRecord, asString } from './operationParams.js';
 
 /**
  * Имена операций области. Перестановки систем среди них нет и не заводится:
@@ -67,15 +67,6 @@ export const SYSTEM_OPERATIONS = {
   remove: 'document.list.remove',
 } as const;
 
-const DOCUMENT: OperationParamSpec = {
-  type: 'document',
-  descriptionKey: 'ui.operation.param.document',
-};
-const LIST: OperationParamSpec = { type: 'path', descriptionKey: 'ui.operation.param.list' };
-const RECORD: OperationParamSpec = {
-  type: 'descriptor',
-  descriptionKey: 'ui.operation.param.record',
-};
 const SYSTEM_NAME: OperationParamSpec = {
   type: 'string',
   descriptionKey: 'ui.operation.param.systemName',
@@ -88,16 +79,6 @@ const EVENT_TYPE: OperationParamSpec = {
   optional: true,
   descriptionKey: 'ui.operation.param.eventType',
 };
-
-/*
- * Читатели — приведение типа, а не вторая проверка: схему параметров уже сверил
- * слой операций к моменту вызова `apply` (ED-30).
- */
-const asDocument = (params: OperationParams): DocumentId => params.document as DocumentId;
-const asList = (params: OperationParams): JsonPath => (params.list ?? []) as JsonPath;
-const asRecord = (params: OperationParams): string => params.record as string;
-const asPath = (params: OperationParams): JsonPath => (params.path ?? []) as JsonPath;
-const asString = (params: OperationParams, name: string): string => params[name] as string;
 
 /** Все источники ED-4: перечень нужен операции, чтобы отвергнуть чужое слово. */
 const SOURCES: readonly TriggerSource[] = Object.freeze(['tick', 'query', 'event']);
@@ -191,6 +172,22 @@ const appendNodeOperation: AuthoringOperation = {
 };
 
 /**
+ * Снять запрос записи, если он в ней есть. Запрос и событие взаимно исключают
+ * друг друга: система с обоими сразу означала бы два источника у одного
+ * триггера, а ED-4 знает один.
+ */
+function clearQuery(
+  ctx: OperationContext,
+  document: DocumentId,
+  record: string,
+  system: JsonValue | undefined,
+): void {
+  if (isJsonObject(system) && system[QUERY_KEY] !== undefined) {
+    ctx.removeRecordValue(document, record, [QUERY_KEY]);
+  }
+}
+
+/**
  * Источник срабатывания триггера (ED-4) — с сохранением собранного тела.
  *
  * Формы три, и перенос между ними механический:
@@ -245,9 +242,7 @@ const setTriggerSourceOperation: AuthoringOperation = {
           },
         },
       ]);
-      if (isJsonObject(system) && system[QUERY_KEY] !== undefined) {
-        ctx.removeRecordValue(document, record, [QUERY_KEY]);
-      }
+      clearQuery(ctx, document, record, system);
       return undefined;
     }
 
@@ -264,9 +259,7 @@ const setTriggerSourceOperation: AuthoringOperation = {
     if (source === 'query') {
       const existing = isJsonObject(system) ? system[QUERY_KEY] : undefined;
       ctx.setRecordValue(document, record, [QUERY_KEY], existing ?? {});
-    } else if (isJsonObject(system) && system[QUERY_KEY] !== undefined) {
-      ctx.removeRecordValue(document, record, [QUERY_KEY]);
-    }
+    } else clearQuery(ctx, document, record, system);
     return undefined;
   },
 };

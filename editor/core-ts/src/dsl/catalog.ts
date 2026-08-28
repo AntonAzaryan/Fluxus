@@ -125,13 +125,15 @@ function actionBlockOf(name: string): ActionBlock {
 function argsOf(name: string): readonly OperatorArg[] {
   const signature = expr.signatureOf(name);
   if (signature === undefined || signature.literals.length === 0) return NO_ARGS;
-  const kinds = Object.hasOwn(LITERAL_KINDS, name) ? LITERAL_KINDS[name]! : NO_ARGS;
+  // Собственный ключ, а не цепочка прототипов: имя оператора вида `toString`
+  // иначе вытащило бы из `Object.prototype` не-таблицу.
+  const kinds = Object.hasOwn(LITERAL_KINDS, name) ? LITERAL_KINDS[name] : undefined;
   const args: OperatorArg[] = [];
   // Литеральные позиции бывают только у операторов точной арности, поэтому
   // длина списка известна.
   for (let i = 0; i < signature.max; i++) args.push('expression');
   signature.literals.forEach((position, nth) => {
-    args[position] = kinds[nth] ?? 'expression';
+    args[position] = kinds?.[nth] ?? 'expression';
   });
   return Object.freeze(args);
 }

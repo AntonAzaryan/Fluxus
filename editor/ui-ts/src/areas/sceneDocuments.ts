@@ -231,6 +231,7 @@ export {
   type RotationBinding,
 } from '@fluxus/editor-core';
 import { DEFAULT_POSITION_BINDING, type PositionBinding } from '@fluxus/editor-core';
+import { reasonOf } from '../reason.js';
 
 export interface SceneDraftInput {
   /** Значение конфига сцены — как его отдаёт сессия. */
@@ -257,9 +258,6 @@ interface SceneShape {
   readonly arena?: unknown;
   readonly initial?: readonly ScenarioSpawn[];
 }
-
-const message = (error: unknown): string =>
-  error instanceof Error ? error.message : String(error);
 
 /** Ключ записи, когда сессия дескрипторов не дала (например, документ не открыт). */
 const fallbackKey = (index: number): string => `#${index}`;
@@ -301,8 +299,9 @@ export function placementsOf(input: SceneDraftInput): readonly ScenePlacement[] 
   const at = input.position ?? DEFAULT_POSITION_BINDING;
   const spin = at.rotation;
   const placements: ScenePlacement[] = [];
-  for (let index = 0; index < entries.length; index++) {
-    const entry = entries[index]!;
+  for (const [index, entry] of entries.entries()) {
+    // Носители отброшены сдвигом: индекс записи — это индекс сущности за ними,
+    // и проверка `carriers` выше говорит, что он в списке живых есть.
     const entity = alive[carriers + index]!;
     const prefab = entry.prefab;
     // Позиция — поле компонента, а не поле записи: какой компонент её несёт,
@@ -459,18 +458,18 @@ export function sceneDraft(input: SceneDraftInput): SceneDraft {
     // Конфиг разобран: «сетка есть» и «террейна у сцены нет» теперь различимы.
     terrainKnown = input.config !== undefined && input.config !== null;
   } catch (error) {
-    reasons.push(message(error));
+    reasons.push(reasonOf(error));
   }
   const terrain = terrainKnown ? grid : undefined;
   try {
     curvature = curvatureOf(input.curvature);
   } catch (error) {
-    reasons.push(message(error));
+    reasons.push(reasonOf(error));
   }
   try {
     placements = placementsOf(input);
   } catch (error) {
-    reasons.push(message(error));
+    reasons.push(reasonOf(error));
   }
   // Сломанный парный документ не гасит ни террейн, ни расстановку: слой
   // изолирован от симуляции (PRES-4), и картинка без декораций — законный кадр
@@ -481,7 +480,7 @@ export function sceneDraft(input: SceneDraftInput): SceneDraft {
     // отсутствующей: парный слой от поломки сим-документа не гаснет (PRES-4).
     decorations = decorationsOf(input, terrain);
   } catch (error) {
-    reasons.push(message(error));
+    reasons.push(reasonOf(error));
   }
 
   // Сравнения сеток кривизны и террейна здесь нет намеренно: это отношение

@@ -50,8 +50,14 @@ function requireName(name: string, kind: string): void {
   if (typeof name !== 'string' || name === '') throw new Error(`${kind}: имя пусто — узел собрать не из чего`);
 }
 
-/** Ключи в порядке конвенции; всё, чего конвенция не знает, — следом, как подали. */
-function orderedSlotNames(slots: SlotValues): readonly string[] {
+/**
+ * Ключи в порядке конвенции; всё, чего конвенция не знает, — следом, как подали.
+ *
+ * Экспортируется потому, что тем же порядком блочный редактор показывает слоты
+ * уже собранного узла: порядок слотов — правило конвенции SYS-3, и второй его
+ * реализации в интерфейсе быть не должно (ED-1).
+ */
+export function orderedSlotNames(slots: SlotValues): readonly string[] {
   const given = Object.keys(slots);
   const known = CONVENTION_SLOTS.map((slot) => slot.name).filter((name) => given.includes(name));
   return [...known, ...given.filter((name) => !known.includes(name))];
@@ -90,16 +96,25 @@ export function buildExpression(operator: string, args: readonly JsonValue[] = [
 }
 
 /**
+ * Единственная пара «ключ — значение» узла DSL. Узел действия и узел выражения
+ * устроены одинаково — объект с ОДНИМ ключом (ACT-1, EXPR-1), — и `undefined`
+ * здесь означает «это не узел» для обоих разборов сразу.
+ */
+function singleEntry(node: JsonValue): readonly [string, JsonValue] | undefined {
+  if (!isJsonObject(node)) return undefined;
+  const entries = Object.entries(node);
+  return entries.length === 1 ? entries[0] : undefined;
+}
+
+/**
  * Имя действия узла и его аргументы — обратный разбор той же формы. Нужен
  * блочному редактору, чтобы показать уже записанный узел: `undefined` означает
  * «это не узел действия», и сказать о нём что-то ещё — дело ядра, а не разбора.
  */
 export function readActionNode(node: JsonValue): { readonly name: string; readonly args: JsonObject } | undefined {
-  if (!isJsonObject(node)) return undefined;
-  const keys = Object.keys(node);
-  if (keys.length !== 1) return undefined;
-  const name = keys[0]!;
-  const args = node[name];
+  const entry = singleEntry(node);
+  if (entry === undefined) return undefined;
+  const [name, args] = entry;
   return { name, args: isJsonObject(args) ? args : {} };
 }
 
@@ -111,10 +126,8 @@ export function readActionNode(node: JsonValue): { readonly name: string; readon
 export function readExpressionNode(
   node: JsonValue,
 ): { readonly operator: string; readonly args: readonly JsonValue[] } | undefined {
-  if (!isJsonObject(node)) return undefined;
-  const keys = Object.keys(node);
-  if (keys.length !== 1) return undefined;
-  const operator = keys[0]!;
-  const raw = node[operator]!;
+  const entry = singleEntry(node);
+  if (entry === undefined) return undefined;
+  const [operator, raw] = entry;
   return { operator, args: Array.isArray(raw) ? raw : [raw] };
 }

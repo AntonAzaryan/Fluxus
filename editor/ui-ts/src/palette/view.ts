@@ -21,6 +21,7 @@ import { rovingContainer } from '../dom/roving.js';
 import { icon } from '../widgets/icon.js';
 import { denseList, type ListItem } from '../widgets/rows.js';
 import type { PaletteEntry } from './palette.js';
+import { eventValue } from '../widgets/field.js';
 
 /** Идентификатор roving-контейнера палитры: по нему каркас возвращает сюда фокус. */
 export const PALETTE_ROVING_ID = 'fx-palette';
@@ -95,10 +96,8 @@ export function paletteView(spec: PaletteViewSpec): UiNode {
       // Посимвольно: список обязан сужаться по мере набора, иначе поиск при
       // сотнях документов не отличается от прохода по дереву (ED-24).
       input: (event: Event) => {
-        const target = event.target;
-        if (target !== null && 'value' in target && typeof target.value === 'string') {
-          spec.onQuery(target.value);
-        }
+        const value = eventValue(event);
+        if (value !== undefined) spec.onQuery(value);
       },
       keydown: (event: Event) => {
         if (!('key' in event) || typeof event.key !== 'string') return;

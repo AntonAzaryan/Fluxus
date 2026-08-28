@@ -38,7 +38,7 @@ import {
   type FieldTableSpec,
 } from '../widgets/fieldTable.js';
 import { numberField, select, textField, toggle } from '../widgets/field.js';
-import { denseList, tree, type TreeItem } from '../widgets/rows.js';
+import { denseList, sectionTitle, tree, type TreeItem } from '../widgets/rows.js';
 import { tooltip } from '../widgets/tooltip.js';
 import type { ValidationSeverity, ValidationState } from '../widgets/validation.js';
 import { viewportFrame } from '../viewport.js';
@@ -233,12 +233,12 @@ function navigator(
     // задаёт каркас (ED-24), и второго набора магических чисел здесь нет.
     classes: ['fx-panel', NAVIGATOR_ZONE_CLASS],
     children: [
-      el('div', { classes: ['fx-section'], text: resourceText(resources, 'ui.navigator.title') }),
+      sectionTitle(resourceText(resources, 'ui.navigator.title')),
       tree({
         label: resourceText(resources, 'ui.navigator.title'),
         items: nest(resources, state, sample.tree, 0, 0, refresh).items,
       }),
-      el('div', { classes: ['fx-section'], text: resourceText(resources, 'ui.navigator.assets') }),
+      sectionTitle(resourceText(resources, 'ui.navigator.assets')),
       denseList({
         label: resourceText(resources, 'ui.navigator.assets'),
         items: sample.assets.map((asset) => ({
@@ -314,7 +314,7 @@ function widgetShelf(resources: StringResources): UiNode {
   return el('div', {
     classes: ['fx-surface', 'fx-stack'],
     children: [
-      el('div', { classes: ['fx-section'], text: resourceText(resources, 'ui.gallery.title') }),
+      sectionTitle(resourceText(resources, 'ui.gallery.title')),
       el('div', {
         classes: ['fx-card', 'fx-cluster'],
         children: [
@@ -332,7 +332,7 @@ function widgetShelf(resources: StringResources): UiNode {
           }),
         ],
       }),
-      el('div', { classes: ['fx-section'], text: resourceText(resources, 'ui.gallery.states') }),
+      sectionTitle(resourceText(resources, 'ui.gallery.states')),
       el('div', {
         classes: ['fx-card', 'fx-cluster'],
         children: [
@@ -340,7 +340,7 @@ function widgetShelf(resources: StringResources): UiNode {
           ...tones.map(([tone, key]) => statusChip({ label: resourceText(resources, key), tone })),
         ],
       }),
-      el('div', { classes: ['fx-section'], text: resourceText(resources, 'ui.gallery.hints') }),
+      sectionTitle(resourceText(resources, 'ui.gallery.hints')),
       el('div', {
         classes: ['fx-cluster'],
         children: [
@@ -355,7 +355,7 @@ function widgetShelf(resources: StringResources): UiNode {
           }),
         ],
       }),
-      el('div', { classes: ['fx-section'], text: resourceText(resources, 'ui.gallery.frame') }),
+      sectionTitle(resourceText(resources, 'ui.gallery.frame')),
       el('div', {
         classes: ['fx-frame-slot'],
         children: [

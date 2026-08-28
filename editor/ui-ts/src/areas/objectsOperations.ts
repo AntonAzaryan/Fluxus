@@ -63,6 +63,7 @@ import {
   type OperationRegistry,
 } from '@fluxus/editor-core';
 import { PREFAB_COMPONENTS_KEY } from './objectsPrefabs.js';
+import { ASSET_ID, DOCUMENT, LIST, RECORD, asDocument, asList, asRecord, asString } from './operationParams.js';
 
 /** Идентификаторы операций пары (ED-19). */
 export const PAIR_OPERATIONS = {
@@ -113,15 +114,6 @@ export function prefabReferences(sites: readonly PrefabReferenceSite[]): Operati
   };
 }
 
-const DOCUMENT: OperationParamSpec = {
-  type: 'document',
-  descriptionKey: 'ui.operation.param.document',
-};
-const LIST: OperationParamSpec = { type: 'path', descriptionKey: 'ui.operation.param.list' };
-const RECORD: OperationParamSpec = {
-  type: 'descriptor',
-  descriptionKey: 'ui.operation.param.record',
-};
 const PREFAB_NAME: OperationParamSpec = {
   type: 'string',
   descriptionKey: 'ui.operation.param.prefabName',
@@ -132,21 +124,11 @@ const VISUALS: OperationParamSpec = {
   optional: true,
   descriptionKey: 'ui.operation.param.visuals',
 };
-const MODEL: OperationParamSpec = { type: 'string', descriptionKey: 'ui.operation.param.assetId' };
 const REFERENCES: OperationParamSpec = {
   type: 'json',
   optional: true,
   descriptionKey: 'ui.operation.param.references',
 };
-
-/*
- * Читатели — приведение типа, а не вторая проверка: схему параметров уже сверил
- * слой операций к моменту вызова `apply` (ED-30).
- */
-const asDocument = (params: OperationParams): DocumentId => params.document as DocumentId;
-const asList = (params: OperationParams): JsonPath => (params.list ?? []) as JsonPath;
-const asRecord = (params: OperationParams): string => params.record as string;
-const asString = (params: OperationParams, name: string): string => params[name] as string;
 
 /** Документ манифеста из параметра; `null` — половины пары в этом вызове нет. */
 function visualsOf(params: OperationParams): DocumentId | null {
@@ -317,7 +299,7 @@ function nameOfRecord(operationId: string, ctx: OperationContext, document: Docu
 const createPrefabPairOperation: AuthoringOperation = {
   id: PAIR_OPERATIONS.create,
   descriptionKey: 'ui.operation.objects.prefab.create',
-  params: { document: DOCUMENT, list: LIST, name: PREFAB_NAME, visuals: VISUALS, model: MODEL },
+  params: { document: DOCUMENT, list: LIST, name: PREFAB_NAME, visuals: VISUALS, model: ASSET_ID },
   apply(ctx, params) {
     const id = PAIR_OPERATIONS.create;
     const document = asDocument(params);

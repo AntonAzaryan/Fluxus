@@ -42,7 +42,6 @@ import {
   type JsonPath,
   type JsonValue,
   type OperationContext,
-  type OperationParams,
   type OperationParamSpec,
   type OperationRegistry,
 } from '@fluxus/editor-core';
@@ -58,6 +57,7 @@ import {
   type CameraEffectsDescription,
 } from '@fluxus/assets';
 import { CAMERA_EFFECTS_DESCRIPTION } from '@fluxus/render';
+import { DOCUMENT, asDocument, asNumber, asString } from './operationParams.js';
 
 /** Идентификаторы операций над секцией эффектов. */
 export const CAMERA_EFFECTS_OPERATIONS = {
@@ -87,26 +87,14 @@ const TABLE_KINDS: Readonly<Record<string, CameraEffectKind>> = Object.freeze({
 /** Имена таблиц в порядке секции — из них автор и выбирает. */
 const TABLES: readonly string[] = Object.freeze([EVENTS_TABLE, STATES_TABLE]);
 
-const DOCUMENT: OperationParamSpec = {
-  type: 'document',
-  descriptionKey: 'ui.operation.param.document',
-};
 const TABLE: OperationParamSpec = { type: 'string', descriptionKey: 'ui.operation.param.table' };
-const BINDING: OperationParamSpec = {
+const BINDING_NAME: OperationParamSpec = {
   type: 'string',
   descriptionKey: 'ui.operation.param.bindingName',
 };
 const EFFECT: OperationParamSpec = { type: 'string', descriptionKey: 'ui.operation.param.effect' };
 const PARAM: OperationParamSpec = { type: 'string', descriptionKey: 'ui.operation.param.effectParam' };
 const VALUE: OperationParamSpec = { type: 'number', descriptionKey: 'ui.operation.param.value' };
-
-/*
- * Читатели — приведение типа, а не вторая проверка: схему параметров уже сверил
- * слой операций к моменту вызова `apply` (ED-30).
- */
-const asDocument = (params: OperationParams): DocumentId => params.document as DocumentId;
-const asString = (params: OperationParams, name: string): string => params[name] as string;
-const asNumber = (params: OperationParams, name: string): number => params[name] as number;
 
 /** Путь записи привязки внутри документа манифеста. */
 export function bindingPath(table: string, name: string, ...rest: readonly string[]): JsonPath {
@@ -236,7 +224,7 @@ function bindCameraEffectOperation(
   return {
     id: CAMERA_EFFECTS_OPERATIONS.bind,
     descriptionKey: 'ui.operation.visuals.cameraEffects.bind',
-    params: { document: DOCUMENT, table: TABLE, name: BINDING, effect: EFFECT },
+    params: { document: DOCUMENT, table: TABLE, name: BINDING_NAME, effect: EFFECT },
     apply(ctx, params) {
       const id = CAMERA_EFFECTS_OPERATIONS.bind;
       const document = asDocument(params);
@@ -297,7 +285,7 @@ function setCameraEffectParamOperation(
   return {
     id: CAMERA_EFFECTS_OPERATIONS.setParam,
     descriptionKey: 'ui.operation.visuals.cameraEffects.setParam',
-    params: { document: DOCUMENT, table: TABLE, name: BINDING, param: PARAM, value: VALUE },
+    params: { document: DOCUMENT, table: TABLE, name: BINDING_NAME, param: PARAM, value: VALUE },
     apply(ctx, params) {
       const id = CAMERA_EFFECTS_OPERATIONS.setParam;
       const document = asDocument(params);

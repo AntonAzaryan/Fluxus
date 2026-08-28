@@ -42,6 +42,7 @@ import {
   type PositionBinding,
   type SceneDraft,
 } from './sceneDocuments.js';
+import { reasonOf } from '../reason.js';
 
 /** Путь списка расстановки в конфиге сцены (SER-7, SER-8) — доменное знание вклада. */
 export const PLACEMENT_LIST: JsonPath = ['initial'];
@@ -292,9 +293,6 @@ export async function openSceneProject(
   };
 }
 
-const message = (error: unknown): string =>
-  error instanceof Error ? error.message : String(error);
-
 /**
  * Кадр по текущему состоянию открытых документов (ED-15). Ключи записей —
  * дескрипторы сессии: они переживают правку соседей, а значит инстанс не
@@ -312,7 +310,7 @@ export function draftOf(session: EditorSession, project: SceneProject): SceneDra
   try {
     visuals = visualsOf(session.documentValue(project.visualsId));
   } catch (error) {
-    broken = message(error);
+    broken = reasonOf(error);
   }
   const presentationOpen = session.isOpen(project.presentationId);
   const draft = sceneDraft({

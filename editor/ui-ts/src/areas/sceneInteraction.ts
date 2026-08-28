@@ -1,4 +1,7 @@
-/* eslint-disable max-lines -- baseline */
+/* eslint-disable max-lines -- инструмент вьюпорта — одно замыкание: выделение,
+   перетаскивание, постановка, поворот и удаление ведут одно взаимодействие и
+   одну транзакцию сессии (ED-18). Разрезать его по действиям значит разрезать
+   это взаимодействие. */
 /**
  * @contribution Инструмент вьюпорта сцены: выделение, picking и расстановка
  * (ED-16, ED-17) — вклад области, а не часть каркаса.
@@ -431,33 +434,43 @@ export function createPlacementTool(options: PlacementToolOptions): PlacementToo
    * перемещения: сим-объект называет prefab, декорация — визуальный вид
    * (ED-19), и это два разных действия, а не одно с параметром.
    */
+  /**
+   * Что ставится сейчас: декорация называет визуальный вид, сим-объект —
+   * prefab. `null` — ставить нечем либо слой недоступен.
+   */
+  const placing = (): { readonly decoration: string } | { readonly prefab: string } | null => {
+    if (layer !== 'decoration') return prefab === null ? null : { prefab };
+    return visual === null || !canDecorate() ? null : { decoration: visual };
+  };
+
   const place = (event: StagePointer): void => {
     const picker = input?.picker;
     // Пока идёт чужое взаимодействие, второй операции сессия не начнёт — и
     // отказывает исключением. Отказ здесь тот же, что у поворота и удаления:
     // молча ничего не сделать, а не уронить обработчик указателя.
     if (picker == null || session.pending) return;
-    const decorating = layer === 'decoration';
-    if (decorating ? visual === null || !canDecorate() : prefab === null) return;
+    const target = placing();
+    if (target === null) return;
     // Точка на поверхности, а не под объектом: ставят на арену, а не на юнита.
     const hit = picker.pickSurface(event.x, event.y);
     if (hit === null) return;
-    const outcome = decorating
-      ? session.applyOperation(DECORATION_OPERATIONS.add, {
-          document: documentOf('decoration'),
-          list: options.decorationList ?? [],
-          visual: visual!,
-          x: snap(hit.x),
-          y: snap(hit.y),
-        })
-      : session.applyOperation(PLACEMENT_OPERATIONS.add, {
-          ...bound,
-          document: options.documentId,
-          list: options.list,
-          prefab: prefab!,
-          x: snap(hit.x),
-          y: snap(hit.y),
-        });
+    const outcome =
+      'decoration' in target
+        ? session.applyOperation(DECORATION_OPERATIONS.add, {
+            document: documentOf('decoration'),
+            list: options.decorationList ?? [],
+            visual: target.decoration,
+            x: snap(hit.x),
+            y: snap(hit.y),
+          })
+        : session.applyOperation(PLACEMENT_OPERATIONS.add, {
+            ...bound,
+            document: options.documentId,
+            list: options.list,
+            prefab: target.prefab,
+            x: snap(hit.x),
+            y: snap(hit.y),
+          });
     // Поставленное сразу и выделено: следующее действие автора почти всегда о нём.
     if (typeof outcome.result === 'string') select([outcome.result]);
     else refresh();
@@ -477,8 +490,7 @@ export function createPlacementTool(options: PlacementToolOptions): PlacementToo
     const hit = picker.pick(event.x, event.y);
     // Клик по пустому месту снимает выделение (ED-17); с модификатором —
     // не снимает: набирающий мультивыделение промахивается чаще всего.
-    // eslint-disable-next-line @typescript-eslint/prefer-optional-chain -- baseline
-    if (hit === null || hit.kind !== 'entity' || hit.key === null) {
+    if (hit?.kind !== 'entity' || hit.key === null) {
       if (!event.additive) select([]);
       return;
     }

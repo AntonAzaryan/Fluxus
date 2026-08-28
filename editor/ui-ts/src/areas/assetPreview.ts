@@ -51,6 +51,7 @@ import type {
   VisualManifest,
 } from '@fluxus/assets';
 import type { StageDraft } from './sceneStage.js';
+import { reasonOf } from '../reason.js';
 
 /**
  * Что просмотрщику нужно от модуля ассетов (ASSET-2, ASSET-4). Объявлено
@@ -128,9 +129,6 @@ export interface AssetProbe {
   dispose(): void;
 }
 
-const message = (error: unknown): string =>
-  error instanceof Error ? error.message : String(error);
-
 /**
  * Наблюдатель за состояниями открытых ассетов.
  *
@@ -182,7 +180,7 @@ export function createAssetProbe(options: AssetProbeOptions): AssetProbe {
       } catch (error) {
         // Синхронный отказ ASSET-2 (тот же ID под другим видом) — состояние
         // этой записи, а не исключение наружу: просмотрщик остаётся живым.
-        return failed(kind, id, message(error));
+        return failed(kind, id, reasonOf(error));
       }
       handles.set(id, handle);
       // Подписка зовёт слушателя немедленно (ASSET-4), и этот первый вызов
@@ -198,7 +196,7 @@ export function createAssetProbe(options: AssetProbeOptions): AssetProbe {
           }),
         );
       } catch (error) {
-        return failed(kind, id, message(error));
+        return failed(kind, id, reasonOf(error));
       }
       settling = false;
       return opened.get(id) ?? adopt(kind, id, { status: 'loading' });
@@ -208,8 +206,7 @@ export function createAssetProbe(options: AssetProbeOptions): AssetProbe {
       const known = opened.get(id);
       const handle = handles.get(id);
       const assets = options.assets;
-      // eslint-disable-next-line @typescript-eslint/prefer-optional-chain -- baseline
-      if (known === undefined || known.status !== 'failed' || assets === null) return;
+      if (known?.status !== 'failed' || assets === null) return;
       if (handle === undefined) {
         // Хэндла нет — запрос отказал синхронно (ASSET-2) и загрузки не было
         // вовсе. Вторая попытка здесь — это первый запрос, а не повтор.
@@ -223,7 +220,7 @@ export function createAssetProbe(options: AssetProbeOptions): AssetProbe {
       } catch (error) {
         // Отказ самой попытки — состояние этой записи, а не исключение наружу:
         // просмотрщик роняться не имеет права (ED-20).
-        failed(known.kind, id, message(error));
+        failed(known.kind, id, reasonOf(error));
       }
       options.onChange();
     },
@@ -259,8 +256,7 @@ export function createAssetProbe(options: AssetProbeOptions): AssetProbe {
 
 /** Данные модели открытого ассета; `null` — это не готовая модель (ASSET-5). */
 export function modelOf(asset: OpenedAsset | undefined): NormalizedModel | null {
-  // eslint-disable-next-line @typescript-eslint/prefer-optional-chain -- baseline
-  if (asset === undefined || asset.status !== 'ready' || asset.kind !== 'model') return null;
+  if (asset?.status !== 'ready' || asset.kind !== 'model') return null;
   return asset.data as NormalizedModel;
 }
 

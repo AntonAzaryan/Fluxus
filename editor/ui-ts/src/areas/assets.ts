@@ -1,4 +1,7 @@
-/* eslint-disable max-lines -- baseline */
+/* eslint-disable max-lines -- рабочая область — один вклад (ED-25). Дерево,
+   просмотрщик, модуль ассетов, записи манифеста и эффекты камеры уже вынесены
+   в assetTree/assetPreview/assetModule/assetVisuals/assetCameraEffects;
+   остаток — три зоны области над одной записью состояния (ED-24). */
 /**
  * @contribution Рабочая область просмотрщика presentation-ассетов (ED-20) —
  * вклад, а не часть каркаса.
@@ -78,7 +81,6 @@ import type {
   AreaContext,
   AreaSearch,
   AreaSetup,
-  AreaZones,
   WorkspaceArea,
 } from '../frame/area.js';
 import { matchesQuery, type SearchHit } from '../palette/palette.js';
@@ -87,7 +89,7 @@ import { button } from '../widgets/button.js';
 import { statusChip } from '../widgets/chip.js';
 import { numberField, select, textField } from '../widgets/field.js';
 import { fieldTable, type FieldGroupSpec, type FieldRowSpec } from '../widgets/fieldTable.js';
-import { tree, type TreeItem } from '../widgets/rows.js';
+import { sectionTitle, tree, type TreeItem } from '../widgets/rows.js';
 import { withValidation } from '../widgets/validation.js';
 import { viewportFrame } from '../viewport.js';
 import {
@@ -137,6 +139,8 @@ import {
   type SceneStage,
   type SceneStageOptions,
 } from './sceneStage.js';
+import { reasonOf } from '../reason.js';
+import { areaFrame } from '../frame/areaChrome.js';
 
 /** Идентификатор области. Один и тот же в реестре, рельсе и записи состояния. */
 export const ASSETS_AREA_ID = 'area.assets';
@@ -255,9 +259,6 @@ export interface AssetAreaState {
   refresh: () => void;
 }
 
-const message = (error: unknown): string =>
-  error instanceof Error ? error.message : String(error);
-
 /**
  * Чем собирается кадр превью. Отдельно от самой сборки, потому что проверяемо
  * без WebGL ровно это: «набор из одного инстанса без сцены и террейна» (REND-11)
@@ -326,7 +327,7 @@ function show(state: AssetAreaState, session: EditorSession): void {
   } catch (error) {
     // Сломанный манифест не гасит область: причина показывается, кадр остаётся
     // пустым, дерево и остальные ассеты работают (ED-8, ED-20).
-    state.previewFailure = message(error);
+    state.previewFailure = reasonOf(error);
   }
   stage.applyVisuals(previewManifest(entry));
   stage.submit(previewDraft(entry, { clip: state.clip, skin: state.skin }));
@@ -376,7 +377,7 @@ function assign(
     session.applyOperation(operationId, { document: id, entry: state.entry, ...params });
     state.failure = null;
   } catch (error) {
-    state.failure = message(error);
+    state.failure = reasonOf(error);
   }
   state.refresh();
 }
@@ -444,7 +445,7 @@ function start(state: AssetAreaState, setup: AreaSetup, options: AssetAreaOption
     try {
       await work;
     } catch (error) {
-      state.failure = message(error);
+      state.failure = reasonOf(error);
     }
   };
 
@@ -503,10 +504,7 @@ function navigator(context: AreaContext<AssetAreaState>): UiNode {
   const { state, resources } = context;
   return el('div', {
     children: children(
-      el('div', {
-        classes: ['fx-section'],
-        text: resourceText(resources, 'ui.navigator.title'),
-      }),
+      sectionTitle(resourceText(resources, 'ui.navigator.title')),
       // Перечисления в этой среде нет — так и сказано (ED-12). Пустое дерево на
       // этом месте означало бы «ассетов нет», то есть неправду.
       state.tree.failure === null
@@ -985,7 +983,7 @@ function effectOperation(
     session.applyOperation(operationId, { document: id, ...params });
     state.failure = null;
   } catch (error) {
-    state.failure = message(error);
+    state.failure = reasonOf(error);
   }
   state.refresh();
   context.refresh();
@@ -1176,19 +1174,7 @@ export function createAssetArea(options: AssetAreaOptions = {}): WorkspaceArea<A
       start(state, setup, options);
       return state;
     },
-    render(context): AreaZones {
-      const { state } = context;
-      // Просьба перерисовать нужна асинхронному: обход дерева и загрузка ассета
-      // заканчиваются после того, как страница уже собрана (ASSET-4).
-      state.refresh = () => {
-        context.refresh();
-      };
-      return {
-        navigator: navigator(context),
-        surface: surface(context),
-        inspector: inspector(context),
-      };
-    },
+    render: (context) => areaFrame(context, { navigator, surface, inspector }),
   };
 }
 

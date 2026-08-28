@@ -201,38 +201,42 @@ function collectEditableTypes(
   rules: readonly ValidationRuleContribution[],
   describe: (key: string) => string,
 ): readonly CatalogEditableType[] {
-  const declared = new Map<string, { schemaId: string | null; descriptionKey: string }>();
-  const byType = new Map<string, string[]>();
+  const declared = new Map<string, { schemaId: string | null; descriptionKey: string; areas: string[] }>();
 
   for (const area of areas) {
     for (const type of area.editableTypes) {
       const current = { schemaId: type.schemaId ?? null, descriptionKey: type.descriptionKey };
       const known = declared.get(type.id);
-      if (known !== undefined && !sameDeclaration(known, current)) {
+      if (known === undefined) {
+        declared.set(type.id, { ...current, areas: [area.id] });
+        continue;
+      }
+      if (!sameDeclaration(known, current)) {
         throw new Error(
           `каталог: тип редактируемого "${type.id}" объявлен областями по-разному` +
-            ` (схемы "${known.schemaId}" и "${current.schemaId}",` +
+            ` (схемы ${schemaLabel(known.schemaId)} и ${schemaLabel(current.schemaId)},` +
             ` ключи "${known.descriptionKey}" и "${current.descriptionKey}")`,
         );
       }
-      declared.set(type.id, current);
-      const declaring = byType.get(type.id);
-      if (declaring === undefined) byType.set(type.id, [area.id]);
-      else declaring.push(area.id);
+      known.areas.push(area.id);
     }
   }
 
-  return [...byType.keys()].sort(compareIds).map((id): CatalogEditableType => {
-    const type = declared.get(id)!;
-    return {
+  return [...declared.entries()]
+    .sort((a, b) => compareIds(a[0], b[0]))
+    .map(([id, type]): CatalogEditableType => ({
       id,
       descriptionKey: type.descriptionKey,
       description: describe(type.descriptionKey),
       schemaId: type.schemaId,
-      areas: byType.get(id) ?? [],
+      areas: type.areas,
       validationRules: rules.filter((rule) => rule.appliesTo.includes(id)).map((rule) => rule.id),
-    };
-  });
+    }));
+}
+
+/** Схема типа в тексте отказа: `null` — «схемы нет», и это осмысленное объявление, а не пропуск. */
+function schemaLabel(schemaId: string | null): string {
+  return schemaId === null ? '<без схемы>' : `"${schemaId}"`;
 }
 
 function sameDeclaration(

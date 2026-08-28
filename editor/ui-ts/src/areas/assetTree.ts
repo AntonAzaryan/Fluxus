@@ -42,6 +42,7 @@ import {
   type AssetKind,
   type AssetLoader,
 } from '@fluxus/assets';
+import { reasonOf } from '../reason.js';
 
 /**
  * Загрузчики, ассеты которых просмотрщик умеет открывать. Тот же список, что
@@ -99,9 +100,6 @@ export interface AssetTreeOptions {
   readonly loaders?: readonly AssetLoader[];
 }
 
-const message = (error: unknown): string =>
-  error instanceof Error ? error.message : String(error);
-
 interface MutableNode extends AssetNode {
   readonly children: AssetNode[];
 }
@@ -121,7 +119,7 @@ export async function loadAssetTree(
   try {
     entries = await walkContentTree(host, root);
   } catch (error) {
-    return { nodes: [], failure: message(error) };
+    return { nodes: [], failure: reasonOf(error) };
   }
 
   const byPath = new Map<ContentPath, MutableNode>();

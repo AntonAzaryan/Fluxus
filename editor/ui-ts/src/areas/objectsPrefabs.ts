@@ -40,7 +40,7 @@ import {
 import { schemaFiles } from '@fluxus/core';
 import { documentValue } from '../dom/node.js';
 import type { FieldGroup, InspectorSubject, SchemaField } from '../inspector/index.js';
-import { jsonSchemaFields } from './sceneSchema.js';
+import { jsonSchemaFields } from './schemaJson.js';
 import { componentEntry, derivedComponentFields } from './objectsSchemas.js';
 
 /** Где в конфиге сцены лежат prefab'ы (SER-7). */

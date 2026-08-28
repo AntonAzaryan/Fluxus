@@ -75,8 +75,9 @@ function commit(row: Row, value: string): void {
   const input = findAll(row.node, (node) => node.tag === 'input')[0];
   const handler = input?.on?.change;
   if (handler === undefined) throw new Error(`строка ${row.label} не принимает ввод`);
-  // eslint-disable-next-line @typescript-eslint/no-extraneous-class -- baseline
-  handler({ target: Object.assign(new (class {})(), { value }) } as unknown as Event);
+  // Цель события — обычный объект со значением: контрол читает ввод
+  // duck-typing'ом (`valueOf` в `widgets/field.ts`), а не `instanceof`.
+  handler({ target: { value } } as unknown as Event);
 }
 
 describe('ED-24, ED-2: набор строк инспектора — это схема, а не список в редакторе', () => {

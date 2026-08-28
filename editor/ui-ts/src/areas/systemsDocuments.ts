@@ -48,7 +48,7 @@ import {
 } from '@fluxus/editor-core';
 import { documentValue } from '../dom/node.js';
 import type { InspectorSubject } from '../inspector/index.js';
-import { jsonSchemaFields } from './sceneSchema.js';
+import { jsonSchemaFields } from './schemaJson.js';
 
 /** Где в конфиге сцены лежат JSON-системы (SER-7, SYS-1). */
 export const SYSTEM_LIST: JsonPath = Object.freeze(['systems']);

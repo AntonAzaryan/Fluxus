@@ -13,6 +13,7 @@
  */
 import { children, el, type UiNode, type UiText } from '../dom/node.js';
 import { icon } from './icon.js';
+import { sectionTitle } from './rows.js';
 
 export interface FieldRowSpec {
   /** Имя поля — идентификатор документа, он не локализуется (ED-27). */
@@ -72,7 +73,7 @@ export interface FieldTableSpec {
 export function fieldTable(spec: FieldTableSpec): UiNode {
   const cells: UiNode[] = [];
   for (const group of spec.groups) {
-    cells.push(el('div', { classes: ['fx-section'], text: group.label }));
+    cells.push(sectionTitle(group.label));
     for (const row of group.rows) cells.push(fieldRow(row));
   }
   return el('div', {

@@ -68,9 +68,7 @@ import {
   isJsonArray,
   isJsonObject,
   type AuthoringOperation,
-  type DocumentId,
   type JsonObject,
-  type JsonPath,
   type JsonValue,
   type OperationParams,
   type OperationParamSpec,
@@ -84,6 +82,7 @@ import {
   type PositionBinding,
   type RotationBinding,
 } from './sceneDocuments.js';
+import { BINDING, DOCUMENT, LIST, OPTIONAL_TURNS, PREFAB, RECORD, TURNS, X, Y, asDocument, asList, asNumber, asRecord } from './operationParams.js';
 
 /** Идентификаторы операций расстановки. Удаление — базовая операция ядра редактора. */
 export const PLACEMENT_OPERATIONS = {
@@ -136,25 +135,6 @@ function requireDecimal(
 /** Путь переопределений внутри записи расстановки (SER-8). */
 export const OVERRIDES_KEY = 'overrides';
 
-const DOCUMENT: OperationParamSpec = {
-  type: 'document',
-  descriptionKey: 'ui.operation.param.document',
-};
-const LIST: OperationParamSpec = { type: 'path', descriptionKey: 'ui.operation.param.list' };
-const RECORD: OperationParamSpec = {
-  type: 'descriptor',
-  descriptionKey: 'ui.operation.param.record',
-};
-const PREFAB: OperationParamSpec = { type: 'string', descriptionKey: 'ui.operation.param.prefab' };
-const X: OperationParamSpec = { type: 'number', descriptionKey: 'ui.operation.param.x' };
-const Y: OperationParamSpec = { type: 'number', descriptionKey: 'ui.operation.param.y' };
-const TURNS: OperationParamSpec = { type: 'number', descriptionKey: 'ui.operation.param.turns' };
-const OPTIONAL_TURNS: OperationParamSpec = { ...TURNS, optional: true };
-const BINDING: OperationParamSpec = {
-  type: 'json',
-  optional: true,
-  descriptionKey: 'ui.operation.param.binding',
-};
 const LAYER: OperationParamSpec = {
   type: 'string',
   optional: true,
@@ -174,7 +154,12 @@ export function quantized(value: number): number | null {
   return Math.abs(fixed.toFloat(raw) - value) < 1 / FIXED_ONE ? raw : null;
 }
 
-function requireQuantized(operationId: string, param: string, value: number): number {
+/**
+ * Авторская величина в валидный Q16.16 (FP-1) либо отказ операции. Одна на все
+ * операции расстановки: «вне представимого» — свойство ядра, а не операции, и
+ * второй его формулировки быть не должно.
+ */
+export function requireQuantized(operationId: string, param: string, value: number): number {
   const raw = quantized(value);
   if (raw === null) {
     throw new OperationError(operationId, `параметр "${param}": вне представимого Q16.16 (FP-1)`, {
@@ -188,15 +173,6 @@ function requireQuantized(operationId: string, param: string, value: number): nu
 function readString(value: JsonValue | undefined): string | null {
   return typeof value === 'string' && value !== '' ? value : null;
 }
-
-/*
- * Читатели ниже — приведение типа, а не вторая проверка: схему параметров уже
- * сверил слой операций к моменту вызова `apply` (ED-30).
- */
-const asDocument = (params: OperationParams): DocumentId => params.document as DocumentId;
-const asList = (params: OperationParams): JsonPath => (params.list ?? []) as JsonPath;
-const asRecord = (params: OperationParams): string => params.record as string;
-const asNumber = (params: OperationParams, name: string): number => params[name] as number;
 
 /**
  * Привязка из параметра. Отсутствует — конвенция ядра: проект, не сказавший о
@@ -264,7 +240,7 @@ function requireRotation(operationId: string, binding: PositionBinding): Rotatio
 }
 
 /** Карта переопределений «компонент → поле → значение» (SER-8, CMD-6). */
-function overridesOf(entries: readonly [string, string, number][]): JsonObject {
+export function overridesOf(entries: readonly [string, string, number][]): JsonObject {
   const out: Record<string, Record<string, number>> = {};
   for (const [component, field, value] of entries) {
     const fields = (out[component] ??= {});

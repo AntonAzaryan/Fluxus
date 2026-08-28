@@ -1,4 +1,9 @@
-/* eslint-disable max-lines -- baseline */
+/* eslint-disable max-lines -- рабочая область — один вклад (ED-25): три зоны
+   одного скелета (ED-24) правят одну запись состояния и один документ.
+   Материал области уже вынесен по существу — схемы, prefab'ы и операции лежат
+   в objectsSchemas/objectsPrefabs/objectsOperations; остаток — сама область.
+   Следующий разрез проходит по метке «зоны» ниже и требует третьего модуля
+   под состояние, иначе область и её зоны ссылались бы друг на друга. */
 /**
  * @contribution Рабочая область объектов (ED-7, ED-6, ED-19, ED-23) — вклад, а
  * не часть каркаса.
@@ -68,16 +73,15 @@ import type {
   AreaKeyInput,
   AreaSearch,
   AreaSetup,
-  AreaZones,
   WorkspaceArea,
 } from '../frame/area.js';
 import { FILL_CLASS, FILL_COLUMN_CLASS, SCROLL_CLASS } from '../frame/styles.js';
-import { inspectorPanel, type InspectorSubject } from '../inspector/index.js';
+import type { InspectorSubject } from '../inspector/index.js';
 import { matchesQuery, type SearchHit } from '../palette/palette.js';
 import { button } from '../widgets/button.js';
 import { statusChip } from '../widgets/chip.js';
 import { select, textField } from '../widgets/field.js';
-import { tree, type TreeItem } from '../widgets/rows.js';
+import { sectionTitle, tree, type TreeItem } from '../widgets/rows.js';
 import { withValidation } from '../widgets/validation.js';
 import {
   COMPONENT_LIST,
@@ -104,6 +108,8 @@ import {
   prefabReferences,
   type PrefabReferenceSite,
 } from './objectsOperations.js';
+import { reasonOf } from '../reason.js';
+import { areaFrame, areaInspector, noProjectRow, runOperation, untrackedRow } from '../frame/areaChrome.js';
 
 /** Идентификатор области. Один и тот же в реестре, рельсе и записи состояния. */
 export const OBJECTS_AREA_ID = 'area.objects';
@@ -221,9 +227,6 @@ export interface ObjectsAreaState {
   refresh: () => void;
 }
 
-const message = (error: unknown): string =>
-  error instanceof Error ? error.message : String(error);
-
 /** Ключ выделения производной схемы: записи в документе у неё нет (ECS-5). */
 export function derivedKey(name: string): string {
   return `${OBJECT_NODES.derived}:${name}`;
@@ -292,29 +295,11 @@ function start(state: ObjectsAreaState, setup: AreaSetup, options: ObjectsAreaOp
         opened.some((tracked) => tracked.length === list.length && tracked[0] === list[0]),
       );
     } catch (error) {
-      state.failure = message(error);
+      state.failure = reasonOf(error);
     } finally {
       state.refresh();
     }
   })();
-}
-
-/**
- * Правка идёт операцией и только ей (ED-29); отказ — структурный (ED-30), и его
- * причина показывается, а не теряется в обработчике нажатия.
- */
-function run(context: AreaContext<ObjectsAreaState>, operationId: string, params: OperationParams): JsonValue | undefined {
-  const { state, session } = context;
-  try {
-    const outcome = session.applyOperation(operationId, params);
-    state.failure = null;
-    return outcome.result;
-  } catch (error) {
-    state.failure = message(error);
-    return undefined;
-  } finally {
-    context.refresh();
-  }
 }
 
 // ------------------------------------------------------------------ зоны
@@ -397,41 +382,14 @@ function navigator(context: AreaContext<ObjectsAreaState>): UiNode {
   const derived = derivedItems(context);
   return el('div', {
     children: children(
-      el('div', {
-        classes: ['fx-section'],
-        text: resourceText(resources, 'ui.navigator.title'),
-      }),
+      sectionTitle(resourceText(resources, 'ui.navigator.title')),
       // Проект не открыт — так и сказано (ED-12, решение 9). Пустые разделы на
       // этом месте означали бы «объектов нет», то есть неправду.
       state.configId === null
-        ? el('div', {
-            classes: ['fx-row'],
-            children: [
-              withValidation(
-                statusChip({
-                  label: resourceText(resources, 'ui.area.objects.noProject'),
-                  tone: 'warning',
-                }),
-                state.failure === null
-                  ? { severity: 'warning', reason: resourceText(resources, 'ui.area.objects.noProject') }
-                  : { severity: 'error', reason: documentValue(state.failure) },
-              ),
-            ],
-          })
+        ? noProjectRow(resources, 'ui.area.objects.noProject', state.failure)
         : undefined,
       state.configId !== null && !state.tracked
-        ? el('div', {
-            classes: ['fx-row'],
-            children: [
-              withValidation(
-                statusChip({
-                  label: resourceText(resources, 'ui.area.objects.noLists'),
-                  tone: 'error',
-                }),
-                { severity: 'error', reason: resourceText(resources, 'ui.area.objects.noLists') },
-              ),
-            ],
-          })
+        ? untrackedRow(resources, 'ui.area.objects.noLists')
         : undefined,
       state.configId === null
         ? undefined
@@ -553,7 +511,7 @@ function schemaBar(context: AreaContext<ObjectsAreaState>): readonly UiNode[] {
       variant: 'ghost',
       disabled: off || state.drafts.component.trim() === '',
       onPress: () => {
-        run(context, SCHEMA_OPERATIONS.create, {
+        runOperation(context, SCHEMA_OPERATIONS.create, {
           document: state.configId ?? '',
           list: [...COMPONENT_LIST],
           name: state.drafts.component,
@@ -585,7 +543,7 @@ function schemaBar(context: AreaContext<ObjectsAreaState>): readonly UiNode[] {
       variant: 'ghost',
       disabled: off || record === null || state.drafts.field.trim() === '',
       onPress: () => {
-        run(context, SCHEMA_OPERATIONS.addField, {
+        runOperation(context, SCHEMA_OPERATIONS.addField, {
           document: state.configId ?? '',
           record: record?.key ?? '',
           field: state.drafts.field,
@@ -604,7 +562,7 @@ function schemaBar(context: AreaContext<ObjectsAreaState>): readonly UiNode[] {
       variant: 'ghost',
       disabled: off || record === null,
       onPress: () => {
-        run(context, SCHEMA_OPERATIONS.remove, {
+        runOperation(context, SCHEMA_OPERATIONS.remove, {
           document: state.configId ?? '',
           record: record?.key ?? '',
         });
@@ -658,7 +616,7 @@ function prefabBar(context: AreaContext<ObjectsAreaState>): readonly UiNode[] {
       variant: 'ghost',
       disabled: off || state.drafts.prefab.trim() === '' || state.drafts.model.trim() === '',
       onPress: () => {
-        const created = run(context, PAIR_OPERATIONS.create, {
+        const created = runOperation(context, PAIR_OPERATIONS.create, {
           ...pair(),
           list: [...PREFAB_LIST],
           name: state.drafts.prefab,
@@ -687,7 +645,7 @@ function prefabBar(context: AreaContext<ObjectsAreaState>): readonly UiNode[] {
       variant: 'ghost',
       disabled: off || record === null || state.drafts.rename.trim() === '',
       onPress: () => {
-        run(context, PAIR_OPERATIONS.rename, {
+        runOperation(context, PAIR_OPERATIONS.rename, {
           ...pair(),
           record: record?.key ?? '',
           to: state.drafts.rename,
@@ -701,7 +659,7 @@ function prefabBar(context: AreaContext<ObjectsAreaState>): readonly UiNode[] {
       variant: 'ghost',
       disabled: off || record === null,
       onPress: () => {
-        run(context, PAIR_OPERATIONS.delete, { ...pair(), record: record?.key ?? '' });
+        runOperation(context, PAIR_OPERATIONS.delete, { ...pair(), record: record?.key ?? '' });
         context.selection.set([]);
       },
     }),
@@ -723,7 +681,7 @@ function prefabBar(context: AreaContext<ObjectsAreaState>): readonly UiNode[] {
       variant: 'ghost',
       disabled: off || record === null || state.drafts.prefabComponent === '',
       onPress: () => {
-        run(context, PREFAB_COMPOSITION_OPERATIONS.setValue, {
+        runOperation(context, PREFAB_COMPOSITION_OPERATIONS.setValue, {
           document: state.configId ?? '',
           record: record?.key ?? '',
           path: [PREFAB_COMPONENTS_KEY, state.drafts.prefabComponent],
@@ -742,7 +700,7 @@ function composition(context: AreaContext<ObjectsAreaState>): readonly UiNode[] 
   if (component !== null) {
     return component.fields.map(([name, type]) =>
       compositionRow(context, name, name, type, () => {
-        run(context, SCHEMA_OPERATIONS.removeField, {
+        runOperation(context, SCHEMA_OPERATIONS.removeField, {
           document: state.configId ?? '',
           record: component.key,
           field: name,
@@ -763,7 +721,7 @@ function composition(context: AreaContext<ObjectsAreaState>): readonly UiNode[] 
   if (prefab !== null) {
     return prefab.components.map((name) =>
       compositionRow(context, name, name, name, () => {
-        run(context, PREFAB_COMPOSITION_OPERATIONS.removeValue, {
+        runOperation(context, PREFAB_COMPOSITION_OPERATIONS.removeValue, {
           document: state.configId ?? '',
           record: prefab.key,
           path: [PREFAB_COMPONENTS_KEY, name],
@@ -801,10 +759,7 @@ function surface(context: AreaContext<ObjectsAreaState>): UiNode {
       el('div', {
         classes: [SCROLL_CLASS, 'fx-stack'],
         children: [
-          el('div', {
-            classes: ['fx-section'],
-            text: resourceText(resources, 'ui.area.objects.composition'),
-          }),
+          sectionTitle(resourceText(resources, 'ui.area.objects.composition')),
           ...composition(context),
         ],
       }),
@@ -834,18 +789,7 @@ function subjectOf(context: AreaContext<ObjectsAreaState>): InspectorSubject | n
 }
 
 function inspector(context: AreaContext<ObjectsAreaState>): UiNode {
-  const { state } = context;
-  return inspectorPanel({
-    resources: context.resources,
-    session: context.session,
-    fieldEditors: context.fieldEditors,
-    subject: subjectOf(context),
-    disabled: context.mode === 'preview',
-    onFailure: (reason) => {
-      state.failure = reason;
-      context.refresh();
-    },
-  });
+  return areaInspector(context, subjectOf(context));
 }
 
 /**
@@ -886,7 +830,8 @@ export function createObjectsArea(options: ObjectsAreaOptions = {}): WorkspaceAr
      */
     search(input: AreaSearch<ObjectsAreaState>): readonly SearchHit[] {
       const { query, state, session, selection } = input;
-      if (state.configId === null) return [];
+      const configId = state.configId;
+      if (configId === null) return [];
       const found: SearchHit[] = [];
       const reveal = (id: string, node: string, section: ObjectsSection) => () => {
         state.expanded.add(node);
@@ -894,26 +839,26 @@ export function createObjectsArea(options: ObjectsAreaOptions = {}): WorkspaceAr
         state.focusId = id;
         selection.set([id]);
       };
-      for (const record of componentsOf(state, session)) {
-        if (!matchesQuery(query, record.name)) continue;
-        found.push({
-          id: record.key,
-          label: documentValue(record.name),
-          detail: documentValue(state.configId),
-          icon: 'stamp',
-          reveal: reveal(record.key, OBJECT_NODES.components, 'components'),
-        });
-      }
-      for (const record of prefabsOf(state, session)) {
-        if (!matchesQuery(query, record.name)) continue;
-        found.push({
-          id: record.key,
-          label: documentValue(record.name),
-          detail: documentValue(state.configId),
-          icon: 'stamp',
-          reveal: reveal(record.key, OBJECT_NODES.prefabs, 'prefabs'),
-        });
-      }
+      // Оба раздела ищутся одинаково: находка открывает свой раздел и выделяет
+      // свою запись — разное у них только то, в каком разделе она лежит.
+      const collect = (
+        records: readonly { readonly key: string; readonly name: string }[],
+        node: string,
+        section: ObjectsSection,
+      ): void => {
+        for (const record of records) {
+          if (!matchesQuery(query, record.name)) continue;
+          found.push({
+            id: record.key,
+            label: documentValue(record.name),
+            detail: documentValue(configId),
+            icon: 'stamp',
+            reveal: reveal(record.key, node, section),
+          });
+        }
+      };
+      collect(componentsOf(state, session), OBJECT_NODES.components, 'components');
+      collect(prefabsOf(state, session), OBJECT_NODES.prefabs, 'prefabs');
       return found;
     },
     createState(setup): ObjectsAreaState {
@@ -943,19 +888,7 @@ export function createObjectsArea(options: ObjectsAreaOptions = {}): WorkspaceAr
       start(state, setup, options);
       return state;
     },
-    render(context): AreaZones {
-      const { state } = context;
-      // Просьба перерисовать нужна асинхронному: открытие документов кончается
-      // после того, как страница уже собрана (ED-12).
-      state.refresh = () => {
-        context.refresh();
-      };
-      return {
-        navigator: navigator(context),
-        surface: surface(context),
-        inspector: inspector(context),
-      };
-    },
+    render: (context) => areaFrame(context, { navigator, surface, inspector }),
   };
 }
 

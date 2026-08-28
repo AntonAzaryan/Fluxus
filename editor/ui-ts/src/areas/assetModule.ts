@@ -200,8 +200,7 @@ export function createAssetModule(host: EnvironmentHost): AssetModule {
       // Хэндл прежнего сервиса: дерево изменилось, и кэш уже выброшен. Просьба
       // автора от этого не пропадает — она становится первым запросом к новому
       // кэшу, а он читает свежие байты (ASSET-2, ASSET-4).
-      // eslint-disable-next-line @typescript-eslint/prefer-optional-chain -- baseline
-      if (known === undefined || known.kind !== handle.kind) {
+      if (known?.kind !== handle.kind) {
         issued.set(handle.id, service.request(handle.kind, handle.id));
         return;
       }

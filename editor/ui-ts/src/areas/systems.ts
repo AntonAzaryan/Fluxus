@@ -1,4 +1,7 @@
-/* eslint-disable max-lines -- baseline */
+/* eslint-disable max-lines -- рабочая область — один вклад (ED-25): три зоны
+   одного скелета (ED-24) над одной записью состояния. Блоки DSL, документы и
+   операции области уже вынесены в systemsBlocks/systemsDocuments/
+   systemsOperations; остаток — сама область. */
 /**
  * @contribution Рабочая область систем (ED-4, ED-5, ED-23) — вклад, а не часть
  * каркаса.
@@ -52,7 +55,6 @@ import {
   type EnvironmentHost,
   type JsonPath,
   type JsonValue,
-  type OperationParams,
 } from '@fluxus/editor-core';
 import { children, documentValue, el, resourceText, type UiNode } from '../dom/node.js';
 import type {
@@ -61,16 +63,15 @@ import type {
   AreaKeyInput,
   AreaSearch,
   AreaSetup,
-  AreaZones,
   WorkspaceArea,
 } from '../frame/area.js';
 import { FILL_CLASS, FILL_COLUMN_CLASS, SCROLL_CLASS } from '../frame/styles.js';
-import { inspectorPanel, type InspectorSubject } from '../inspector/index.js';
+import type { InspectorSubject } from '../inspector/index.js';
 import { matchesQuery, type SearchHit } from '../palette/palette.js';
 import { button } from '../widgets/button.js';
 import { statusChip } from '../widgets/chip.js';
 import { select, textField } from '../widgets/field.js';
-import { denseList } from '../widgets/rows.js';
+import { denseList, sectionTitle } from '../widgets/rows.js';
 import { withValidation } from '../widgets/validation.js';
 import {
   BRANCH_ACTION,
@@ -93,6 +94,8 @@ import {
   queryBlock,
   type BlockEnvironment,
 } from './systemsBlocks.js';
+import { reasonOf } from '../reason.js';
+import { areaFrame, areaInspector, noProjectRow, runOperation, untrackedRow } from '../frame/areaChrome.js';
 
 /** Идентификатор области. Один и тот же в реестре, рельсе и записи состояния. */
 export const SYSTEMS_AREA_ID = 'area.systems';
@@ -174,9 +177,6 @@ export interface SystemsAreaState {
   refresh: () => void;
 }
 
-const message = (error: unknown): string =>
-  error instanceof Error ? error.message : String(error);
-
 /**
  * Мир для пикеров, посчитанный один раз на значение документа. Значения сессии
  * иммутабельны и меняются заменой ссылки, поэтому ключ по ссылке точен: правка
@@ -236,33 +236,11 @@ function start(state: SystemsAreaState, setup: AreaSetup, options: SystemsAreaOp
         .document(config)
         .lists.some((list) => list.length === SYSTEM_LIST.length && list[0] === SYSTEM_LIST[0]);
     } catch (error) {
-      state.failure = message(error);
+      state.failure = reasonOf(error);
     } finally {
       state.refresh();
     }
   })();
-}
-
-/**
- * Правка идёт операцией и только ей (ED-29); отказ — структурный (ED-30), и его
- * причина показывается, а не теряется в обработчике нажатия.
- */
-function run(
-  context: AreaContext<SystemsAreaState>,
-  operationId: string,
-  params: OperationParams,
-): JsonValue | undefined {
-  const { state, session } = context;
-  try {
-    const outcome = session.applyOperation(operationId, params);
-    state.failure = null;
-    return outcome.result;
-  } catch (error) {
-    state.failure = message(error);
-    return undefined;
-  } finally {
-    context.refresh();
-  }
 }
 
 /** Выбранная система; `null` — выбрано что-то другое либо ничего. */
@@ -278,44 +256,14 @@ function navigator(context: AreaContext<SystemsAreaState>): UiNode {
   const { state, resources, selection, session } = context;
   return el('div', {
     children: children(
-      el('div', {
-        classes: ['fx-section'],
-        text: resourceText(resources, 'ui.navigator.title'),
-      }),
+      sectionTitle(resourceText(resources, 'ui.navigator.title')),
       // Проект не открыт — так и сказано (ED-12, решение 9). Пустой перечень на
       // этом месте означал бы «систем нет», то есть неправду.
       state.configId === null
-        ? el('div', {
-            classes: ['fx-row'],
-            children: [
-              withValidation(
-                statusChip({
-                  label: resourceText(resources, 'ui.area.systems.noProject'),
-                  tone: 'warning',
-                }),
-                state.failure === null
-                  ? {
-                      severity: 'warning',
-                      reason: resourceText(resources, 'ui.area.systems.noProject'),
-                    }
-                  : { severity: 'error', reason: documentValue(state.failure) },
-              ),
-            ],
-          })
+        ? noProjectRow(resources, 'ui.area.systems.noProject', state.failure)
         : undefined,
       state.configId !== null && !state.tracked
-        ? el('div', {
-            classes: ['fx-row'],
-            children: [
-              withValidation(
-                statusChip({
-                  label: resourceText(resources, 'ui.area.systems.noList'),
-                  tone: 'error',
-                }),
-                { severity: 'error', reason: resourceText(resources, 'ui.area.systems.noList') },
-              ),
-            ],
-          })
+        ? untrackedRow(resources, 'ui.area.systems.noList')
         : undefined,
       state.configId === null
         ? undefined
@@ -364,7 +312,7 @@ function bar(context: AreaContext<SystemsAreaState>, record: SystemRecord | null
       variant: 'ghost',
       disabled: off || state.name.trim() === '',
       onPress: () => {
-        const created = run(context, SYSTEM_OPERATIONS.create, {
+        const created = runOperation(context, SYSTEM_OPERATIONS.create, {
           document: state.configId ?? '',
           list: [...SYSTEM_LIST],
           name: state.name,
@@ -382,7 +330,7 @@ function bar(context: AreaContext<SystemsAreaState>, record: SystemRecord | null
       variant: 'ghost',
       disabled: off || record === null,
       onPress: () => {
-        run(context, SYSTEM_OPERATIONS.remove, {
+        runOperation(context, SYSTEM_OPERATIONS.remove, {
           document: state.configId ?? '',
           record: record?.key ?? '',
         });
@@ -399,7 +347,7 @@ function bar(context: AreaContext<SystemsAreaState>, record: SystemRecord | null
       disabled: off || record === null,
       onSelect: (next) => {
         if (next === trigger.source) return;
-        run(context, SYSTEM_OPERATIONS.source, {
+        runOperation(context, SYSTEM_OPERATIONS.source, {
           document: state.configId ?? '',
           record: record?.key ?? '',
           source: next,
@@ -423,7 +371,7 @@ function blockEnvironment(
     disabled: context.mode === 'preview' || state.configId === null || !state.tracked,
     drafts: state.drafts,
     set: (path, value) => {
-      run(context, SYSTEM_OPERATIONS.setValue, {
+      runOperation(context, SYSTEM_OPERATIONS.setValue, {
         document,
         record: record.key,
         path: [...path],
@@ -431,14 +379,14 @@ function blockEnvironment(
       });
     },
     remove: (path) => {
-      run(context, SYSTEM_OPERATIONS.removeValue, {
+      runOperation(context, SYSTEM_OPERATIONS.removeValue, {
         document,
         record: record.key,
         path: [...path],
       });
     },
     append: (path, node) => {
-      run(context, SYSTEM_OPERATIONS.append, {
+      runOperation(context, SYSTEM_OPERATIONS.append, {
         document,
         record: record.key,
         path: [...path],
@@ -472,23 +420,23 @@ function eventBlock(
   const literals = isJsonObject(args) ? args : {};
   return el('div', {
     classes: ['fx-stack'],
-    children: [EVENT_TYPE_SLOT, EVENT_AS_SLOT].map((slot) =>
-      el('div', {
+    children: [EVENT_TYPE_SLOT, EVENT_AS_SLOT].map((slot) => {
+      const literal = literals[slot];
+      return el('div', {
         classes: ['fx-row', BLOCK_ROW],
         attrs: { 'data-slot': slot },
         children: [
           textField({
             label: documentValue(slot),
-            // eslint-disable-next-line @typescript-eslint/no-unnecessary-type-conversion -- baseline
-            value: documentValue(typeof literals[slot] === 'string' ? String(literals[slot]) : ''),
+            value: documentValue(typeof literal === 'string' ? literal : ''),
             readOnly: env.disabled,
             onCommit: (raw) => {
               env.set([...(trigger.eventPath ?? []), slot], raw);
             },
           }),
         ],
-      }),
-    ),
+      });
+    }),
   });
 }
 
@@ -533,7 +481,7 @@ function section(context: AreaContext<SystemsAreaState>, block: TriggerBlock, la
     classes: ['fx-stack', ...(context.state.block === block ? ['fx-is-selected'] : [])],
     attrs: { 'data-block': block },
     children: [
-      el('div', { classes: ['fx-section'], text: resourceText(context.resources, labelKey) }),
+      sectionTitle(resourceText(context.resources, labelKey)),
       body,
     ],
   });
@@ -592,18 +540,7 @@ function subjectOf(context: AreaContext<SystemsAreaState>): InspectorSubject | n
 }
 
 function inspector(context: AreaContext<SystemsAreaState>): UiNode {
-  const { state } = context;
-  return inspectorPanel({
-    resources: context.resources,
-    session: context.session,
-    fieldEditors: context.fieldEditors,
-    subject: subjectOf(context),
-    disabled: context.mode === 'preview',
-    onFailure: (reason) => {
-      state.failure = reason;
-      context.refresh();
-    },
-  });
+  return areaInspector(context, subjectOf(context));
 }
 
 /**
@@ -673,19 +610,7 @@ export function createSystemsArea(options: SystemsAreaOptions = {}): WorkspaceAr
       start(state, setup, options);
       return state;
     },
-    render(context): AreaZones {
-      const { state } = context;
-      // Просьба перерисовать нужна асинхронному: открытие документа кончается
-      // после того, как страница уже собрана (ED-12).
-      state.refresh = () => {
-        context.refresh();
-      };
-      return {
-        navigator: navigator(context),
-        surface: surface(context),
-        inspector: inspector(context),
-      };
-    },
+    render: (context) => areaFrame(context, { navigator, surface, inspector }),
   };
 }
 

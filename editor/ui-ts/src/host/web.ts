@@ -60,6 +60,7 @@ import {
   type EnvironmentHost,
   type WindowHost,
 } from '@fluxus/editor-core';
+import { reasonOf } from '../reason.js';
 
 /**
  * Минимум от `fetch`, которым пользуется хост. Объявлен структурно, а не
@@ -178,7 +179,7 @@ async function reply(
     response = await http(url, init);
   } catch (error) {
     throw new Error(
-      `дерево контента: запрос "${path}" не прошёл: ${error instanceof Error ? error.message : String(error)}`,
+      `дерево контента: запрос "${path}" не прошёл: ${reasonOf(error)}`,
     );
   }
   if (!response.ok) {

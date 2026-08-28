@@ -41,14 +41,15 @@ import {
   type JsonObject,
   type JsonPath,
   type JsonValue,
-  type OperationParams,
   type OperationParamSpec,
   type OperationRegistry,
   type SchemaPath,
 } from '@fluxus/editor-core';
 import { documentValue } from '../dom/node.js';
 import type { FieldGroup, InspectorSubject, SchemaField } from '../inspector/index.js';
-import { jsonSchemaFields } from './sceneSchema.js';
+import { COMPONENT_KIND, SCHEMA_KIND, jsonSchemaFields, objectAt } from './schemaJson.js';
+import { reasonOf } from '../reason.js';
+import { DOCUMENT, LIST, RECORD, asDocument, asList, asRecord, asString } from './operationParams.js';
 
 /** Где в конфиге сцены объявлены схемы компонентов (SER-7). */
 export const COMPONENT_LIST: JsonPath = Object.freeze(['components']);
@@ -57,20 +58,8 @@ export const COMPONENT_LIST: JsonPath = Object.freeze(['components']);
 const FIELDS_KEY = 'fields';
 const DEFAULTS_KEY = 'defaults';
 
-/** Корень путей описаний полей формата — тот же, что у отчёта ресурсов (ED-28). */
-const SCHEMA_KIND = 'schema';
-
-/** Вид описания полей компонента: их объявляет контент, он же их и документирует. */
-const COMPONENT_KIND = 'component';
-
 /** Имя схемы формата компонента в наборе ядра (SER-5). */
 const COMPONENT_SCHEMA_FILE = 'component.schema.json';
-
-function objectAt(node: unknown, key: string): Record<string, unknown> | undefined {
-  if (typeof node !== 'object' || node === null) return undefined;
-  const value = (node as Record<string, unknown>)[key];
-  return typeof value === 'object' && value !== null ? (value as Record<string, unknown>) : undefined;
-}
 
 /**
  * Закрытый набор типов поля — из опубликованной схемы формата (SER-5), а не
@@ -171,9 +160,6 @@ const EMPTY_LOADED: LoadedConfig = Object.freeze({ world: null, failure: null })
 const loadedCache = new WeakMap<object, LoadedConfig>();
 const derivedCache = new WeakMap<object, DerivedComponents>();
 
-const message = (error: unknown): string =>
-  error instanceof Error ? error.message : String(error);
-
 function loadedConfig(config: JsonValue | undefined): LoadedConfig {
   if (!isJsonObject(config)) return EMPTY_LOADED;
   const cached = loadedCache.get(config);
@@ -185,7 +171,7 @@ function loadedConfig(config: JsonValue | undefined): LoadedConfig {
     // реализацией правила (ED-1); причина отказа показывается как есть.
     found = { world: loadScene(config as unknown as SceneDef).world, failure: null };
   } catch (error) {
-    found = { world: null, failure: message(error) };
+    found = { world: null, failure: reasonOf(error) };
   }
   loadedCache.set(config, found);
   return found;
@@ -331,15 +317,6 @@ export const SCHEMA_OPERATIONS = {
   remove: 'document.list.remove',
 } as const;
 
-const DOCUMENT: OperationParamSpec = {
-  type: 'document',
-  descriptionKey: 'ui.operation.param.document',
-};
-const LIST: OperationParamSpec = { type: 'path', descriptionKey: 'ui.operation.param.list' };
-const RECORD: OperationParamSpec = {
-  type: 'descriptor',
-  descriptionKey: 'ui.operation.param.record',
-};
 const COMPONENT: OperationParamSpec = {
   type: 'string',
   descriptionKey: 'ui.operation.param.component',
@@ -349,15 +326,6 @@ const FIELD_TYPE: OperationParamSpec = {
   type: 'string',
   descriptionKey: 'ui.operation.param.fieldType',
 };
-
-/*
- * Читатели — приведение типа, а не вторая проверка: схему параметров уже сверил
- * слой операций к моменту вызова `apply` (ED-30).
- */
-const asDocument = (params: OperationParams): DocumentId => params.document as DocumentId;
-const asList = (params: OperationParams): JsonPath => (params.list ?? []) as JsonPath;
-const asRecord = (params: OperationParams): string => params.record as string;
-const asString = (params: OperationParams, name: string): string => params[name] as string;
 
 function requireText(operationId: string, param: string, value: string): string {
   if (value.trim() === '') {

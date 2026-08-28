@@ -23,10 +23,12 @@ import { withValidation, type ValidationState } from './validation.js';
  * Значение элемента, на котором случилось событие. Проверка по наличию
  * значения, а не по классу элемента: класс принадлежит тому окну, в котором
  * построена страница, и `instanceof` ложно отрицателен и в соседнем окне
- * оболочки среды (ED-12), и там, где документа нет вовсе. То же duck-typing,
- * что у строки поиска каркаса, — второго способа прочитать ввод не заводится.
+ * оболочки среды (ED-12), и там, где документа нет вовсе.
+ *
+ * Экспортируется затем, чтобы второго способа прочитать ввод действительно не
+ * заводилось: тем же читают ввод строка поиска бара и строка запроса палитры.
  */
-function valueOf(event: Event): string | undefined {
+export function eventValue(event: Event): string | undefined {
   const target: unknown = event.target;
   if (typeof target !== 'object' || target === null || !('value' in target)) return undefined;
   const { value } = target;
@@ -56,7 +58,7 @@ function control(spec: FieldSpec, extraClasses: readonly string[]): UiNode {
             ? undefined
             : {
                 change: (event: Event) => {
-                  const raw = valueOf(event);
+                  const raw = eventValue(event);
                   if (raw !== undefined) spec.onCommit?.(raw);
                 },
               },
@@ -119,7 +121,7 @@ export function select(spec: SelectSpec): UiNode {
                   ? undefined
                   : {
                       change: (event: Event) => {
-                        const raw = valueOf(event);
+                        const raw = eventValue(event);
                         if (raw !== undefined) spec.onSelect?.(raw);
                       },
                     },

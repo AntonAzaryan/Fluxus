@@ -32,6 +32,7 @@ import type { ContributionRegistry, StringResources } from '@fluxus/editor-core'
 import { documentValue } from '../dom/node.js';
 import type { WorkspaceArea } from '../frame/area.js';
 import type { CommandTarget, PaletteCommand } from './palette.js';
+import { reasonOf } from '../reason.js';
 
 /** Идентификаторы команд оболочки — по ним они и адресуются в каталоге ED-30. */
 export const SHELL_COMMANDS = {
@@ -74,9 +75,6 @@ export interface ShellCommandOptions {
   readonly dirty?: (target: CommandTarget) => boolean;
 }
 
-const message = (error: unknown): string =>
-  error instanceof Error ? error.message : String(error);
-
 /**
  * Действие с показанной причиной отказа. Асинхронность здесь настоящая — обе
  * половины ходят в дерево, — и брошенный промис оставил бы автора без ответа:
@@ -89,10 +87,10 @@ function guarded(action: ShellAction): (target: CommandTarget) => void {
       const done = action(target);
       if (done === undefined) return;
       done.catch((error: unknown) => {
-        target.setNotice(documentValue(message(error)));
+        target.setNotice(documentValue(reasonOf(error)));
       });
     } catch (error) {
-      target.setNotice(documentValue(message(error)));
+      target.setNotice(documentValue(reasonOf(error)));
     }
   };
 }

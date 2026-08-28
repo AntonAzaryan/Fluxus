@@ -1,4 +1,7 @@
-/* eslint-disable max-lines -- baseline */
+/* eslint-disable max-lines -- вьюпорт есть одно замыкание над подсистемами
+   рендера: сборка, подача документов, кадровый цикл и указатель делят рендерер,
+   камеру и набор подсистем. Вынесенная половина получила бы их параметрами,
+   то есть открыла бы наружу то, чем владеет вьюпорт (ED-15, REND-11). */
 /**
  * @contribution Сборка вьюпорта сцены — часть вклада области, а не каркаса.
  *
@@ -167,6 +170,7 @@ import {
 import type { TerrainGrid } from '@fluxus/core';
 import type { AssetModule } from './assetModule.js';
 import { createSceneCamera, type PointerSample, type SceneCamera } from './sceneCamera.js';
+import { reasonOf } from '../reason.js';
 import type {
   ScenePick,
   ScenePicker,
@@ -494,8 +498,6 @@ export function createSceneStage(options: SceneStageOptions): SceneStage {
    */
   let applyFailure: string | null = null;
   let drawFailure: string | null = null;
-  const reasonOf = (error: unknown): string =>
-    error instanceof Error ? error.message : String(error);
   /** Что о вьюпорте уже показано интерфейсом — с этим и сверяется `onChange`. */
   let shown: StageSignals = { flying: false, failure: null, canFrame: false };
 
@@ -846,42 +848,41 @@ export function createSceneStage(options: SceneStageOptions): SceneStage {
     options.onChange?.();
   };
 
-  const frame = (now: number): void => {
-    if (disposed) return;
-    // Планирование до работы: сорвавшийся кадр не имеет права увести цикл.
-    requestAnimationFrame(frame);
-    // Кадра нет, пока узла нет в странице: правка ждёт возвращения вьюпорта
-    // (`dirty` не гаснет), а не теряется в кадре, которого никто не увидел.
-    if (!attach()) return;
-
-    const dt = lastFrameAt === null ? 0 : Math.min((now - lastFrameAt) / 1000, 0.25);
-    lastFrameAt = now;
-
-    // Флаг гасится до сведения, а не после: сорвавшееся сведение обязано
-    // назвать причину, а не повторяться каждый кадр на тех же документах.
-    if (dirty && draft !== null) {
-      dirty = false;
-      const again = reapply;
-      reapply = false;
-      try {
-        applyDraft(draft, again);
-        applyFailure = null;
-      } catch (error) {
-        // Последнее целое остаётся нарисованным, причина уходит в интерфейс.
-        applyFailure = reasonOf(error);
-      }
+  /**
+   * Свести накопленную подачу в подсистемы. Флаг гасится до сведения, а не
+   * после: сорвавшееся сведение обязано назвать причину, а не повторяться
+   * каждый кадр на тех же документах.
+   */
+  const applyPending = (): void => {
+    if (!dirty || draft === null) return;
+    dirty = false;
+    const again = reapply;
+    reapply = false;
+    try {
+      applyDraft(draft, again);
+      applyFailure = null;
+    } catch (error) {
+      // Последнее целое остаётся нарисованным, причина уходит в интерфейс.
+      applyFailure = reasonOf(error);
     }
-    // Кадрирование — раньше кадра камеры и после раскладки холста: пропорции
-    // подаёт потребитель (CAM-8), и до первой раскладки подавать нечего. Пока
-    // размеры нулевые, просьба ждёт: кадр нулевого размера дал бы конвейеру
-    // пропорции, которых у него не будет уже в следующем кадре.
-    if (framing !== null && camera !== null) {
-      const box = rect();
-      if (box.width > 0 && box.height > 0) {
-        camera.frameBounds(framing.rect, box.width / box.height, framing.immediate);
-        framing = null;
-      }
-    }
+  };
+
+  /**
+   * Кадрирование — раньше кадра камеры и после раскладки холста: пропорции
+   * подаёт потребитель (CAM-8), и до первой раскладки подавать нечего. Пока
+   * размеры нулевые, просьба ждёт: кадр нулевого размера дал бы конвейеру
+   * пропорции, которых у него не будет уже в следующем кадре.
+   */
+  const applyFraming = (): void => {
+    if (framing === null || camera === null) return;
+    const box = rect();
+    if (box.width <= 0 || box.height <= 0) return;
+    camera.frameBounds(framing.rect, box.width / box.height, framing.immediate);
+    framing = null;
+  };
+
+  /** Отрисовка кадра: поза камеры, подсистемы, чужие продюсеры, вывод. */
+  const draw = (now: number, dt: number): void => {
     try {
       if (camera !== null) {
         camera.sample(heldKeys(), pointer);
@@ -907,6 +908,22 @@ export function createSceneStage(options: SceneStageOptions): SceneStage {
     } catch (error) {
       drawFailure = reasonOf(error);
     }
+  };
+
+  const frame = (now: number): void => {
+    if (disposed) return;
+    // Планирование до работы: сорвавшийся кадр не имеет права увести цикл.
+    requestAnimationFrame(frame);
+    // Кадра нет, пока узла нет в странице: правка ждёт возвращения вьюпорта
+    // (`dirty` не гаснет), а не теряется в кадре, которого никто не увидел.
+    if (!attach()) return;
+
+    const dt = lastFrameAt === null ? 0 : Math.min((now - lastFrameAt) / 1000, 0.25);
+    lastFrameAt = now;
+
+    applyPending();
+    applyFraming();
+    draw(now, dt);
     publish();
   };
   requestAnimationFrame(frame);

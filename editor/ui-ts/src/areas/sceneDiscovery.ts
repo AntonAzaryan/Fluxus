@@ -49,6 +49,7 @@ import {
   type JsonValue,
 } from '@fluxus/editor-core';
 import type { SceneProjectIds } from './sceneProject.js';
+import { reasonOf } from '../reason.js';
 
 /**
  * Каталоги, внутрь которых обход не заходит. Служебные каталоги инструментов
@@ -74,9 +75,6 @@ export interface DiscoveryOptions {
   readonly root?: ContentPath;
   readonly maxDepth?: number;
 }
-
-const message = (error: unknown): string =>
-  error instanceof Error ? error.message : String(error);
 
 function isObject(value: JsonValue): value is Record<string, JsonValue> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -144,7 +142,7 @@ export async function discoverProject(
       acceptFile: (entry) => contentPathExtension(entry.path) === '.json',
     });
   } catch (error) {
-    return { root, scenes: [], manifests: [], failure: message(error) };
+    return { root, scenes: [], manifests: [], failure: reasonOf(error) };
   }
 
   const scenes: ContentPath[] = [];

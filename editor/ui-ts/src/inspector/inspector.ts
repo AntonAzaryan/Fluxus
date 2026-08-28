@@ -51,6 +51,7 @@ import {
   type SubjectAddress,
 } from './schema.js';
 import type { ContributionReader } from '@fluxus/editor-core';
+import { reasonOf } from '../reason.js';
 
 export interface InspectorSpec {
   readonly resources: StringResources;
@@ -66,9 +67,6 @@ export interface InspectorSpec {
   /** Куда уходит причина отказавшей операции (ED-8); нет — отказ поднимается вызывающему. */
   readonly onFailure?: (reason: string) => void;
 }
-
-const message = (error: unknown): string =>
-  error instanceof Error ? error.message : String(error);
 
 /** Корень субъекта в документе: у записи он свой и едет вместе с ней (ED-29). */
 function rootOf(session: EditorSession, address: SubjectAddress): JsonPath | null {
@@ -164,7 +162,7 @@ function fieldRowOf(
         // Отказ операции — структурный (ED-30), и молчать о нём нельзя: автор
         // видел бы, как значение возвращается к прежнему, без причины.
         if (spec.onFailure === undefined) throw error;
-        spec.onFailure(message(error));
+        spec.onFailure(reasonOf(error));
       }
     },
   };

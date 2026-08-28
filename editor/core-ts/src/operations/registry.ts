@@ -7,6 +7,7 @@
  * Второго набора операций не существует: набор, доступный без интерфейса, и
  * набор, доступный из интерфейса, — один и тот же объект (ED-29).
  */
+import { compareIds } from '../registry/contribution.js';
 import {
   SESSION_SCOPED_TYPES,
   type AuthoringOperation,
@@ -82,17 +83,14 @@ export function describeOperations(registry: OperationRegistry): readonly Operat
   return registry.list().map((operation) => ({
     id: operation.id,
     descriptionKey: operation.descriptionKey,
-    params: Object.keys(operation.params)
-      .sort()
-      .map((name) => {
-        const spec = operation.params[name]!;
-        return {
-          name,
-          type: spec.type,
-          optional: spec.optional === true,
-          sessionScoped: SESSION_SCOPED_TYPES.has(spec.type),
-          descriptionKey: spec.descriptionKey,
-        };
-      }),
+    params: Object.entries(operation.params)
+      .sort((a, b) => compareIds(a[0], b[0]))
+      .map(([name, spec]) => ({
+        name,
+        type: spec.type,
+        optional: spec.optional === true,
+        sessionScoped: SESSION_SCOPED_TYPES.has(spec.type),
+        descriptionKey: spec.descriptionKey,
+      })),
   }));
 }

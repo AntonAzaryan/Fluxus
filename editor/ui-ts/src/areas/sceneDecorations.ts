@@ -62,14 +62,15 @@ import {
   type AuthoringOperation,
   type DocumentId,
   type JsonObject,
-  type JsonPath,
   type JsonValue,
-  type OperationParams,
+  type OperationContext,
   type OperationParamSpec,
+  type OperationParams,
   type OperationRegistry,
 } from '@fluxus/editor-core';
 import { DECORATION_FIELDS, type PositionBinding } from './sceneDocuments.js';
-import { OVERRIDES_KEY, quantized, readBinding } from './scenePlacement.js';
+import { OVERRIDES_KEY, overridesOf, readBinding, requireQuantized } from './scenePlacement.js';
+import { BINDING, DOCUMENT, LIST, OPTIONAL_TURNS, PREFAB, RECORD, X, Y, asDocument, asList, asNumber, asRecord } from './operationParams.js';
 
 /** Идентификаторы операций слоя декораций. Удаление — базовая операция ядра. */
 export const DECORATION_OPERATIONS = {
@@ -88,41 +89,12 @@ export const DECORATION_OPERATIONS = {
   fromProp: 'scene.decoration.fromProp',
 } as const;
 
-const DOCUMENT: OperationParamSpec = {
-  type: 'document',
-  descriptionKey: 'ui.operation.param.document',
-};
-const LIST: OperationParamSpec = { type: 'path', descriptionKey: 'ui.operation.param.list' };
-const RECORD: OperationParamSpec = {
-  type: 'descriptor',
-  descriptionKey: 'ui.operation.param.record',
-};
 const VISUAL: OperationParamSpec = { type: 'string', descriptionKey: 'ui.operation.param.visual' };
-const PREFAB: OperationParamSpec = { type: 'string', descriptionKey: 'ui.operation.param.prefab' };
-const X: OperationParamSpec = { type: 'number', descriptionKey: 'ui.operation.param.x' };
-const Y: OperationParamSpec = { type: 'number', descriptionKey: 'ui.operation.param.y' };
-const TURNS: OperationParamSpec = { type: 'number', descriptionKey: 'ui.operation.param.turns' };
-const OPTIONAL_TURNS: OperationParamSpec = { ...TURNS, optional: true };
 const SCALE: OperationParamSpec = { type: 'number', descriptionKey: 'ui.operation.param.scale' };
-const BINDING: OperationParamSpec = {
-  type: 'json',
-  optional: true,
-  descriptionKey: 'ui.operation.param.binding',
-};
 const TARGET: OperationParamSpec = {
   type: 'document',
   descriptionKey: 'ui.operation.param.target',
 };
-
-/*
- * Читатели — приведение типа, а не вторая проверка: схему параметров уже сверил
- * слой операций к моменту вызова `apply` (ED-30).
- */
-const asDocument = (params: OperationParams, name = 'document'): DocumentId =>
-  params[name] as DocumentId;
-const asList = (params: OperationParams): JsonPath => (params.list ?? []) as JsonPath;
-const asRecord = (params: OperationParams): string => params.record as string;
-const asNumber = (params: OperationParams, name: string): number => params[name] as number;
 
 /** Квантованная длина (позиция, масштаб) либо отказ операции (PRES-3). */
 function requireLength(operationId: string, param: string, value: number): number {
@@ -233,14 +205,27 @@ function readNumber(value: unknown, fallback: number): number {
   return typeof value === 'number' && Number.isFinite(value) ? value : fallback;
 }
 
-/** Карта переопределений «компонент → поле → значение» (SER-8, CMD-6). */
-function overridesOf(entries: readonly [string, string, number][]): JsonObject {
-  const out: Record<string, Record<string, number>> = {};
-  for (const [component, field, value] of entries) {
-    const fields = (out[component] ??= {});
-    fields[field] = value;
+/**
+ * Запись, адресованная дескриптором: сам документ, дескриптор и объект записи
+ * по её адресу. Отсутствие объекта — структурный отказ (ED-30), а не пустая
+ * запись: переносить между слоями (PRES-5) нечего, если переносимого нет.
+ */
+function requireEntry(
+  id: string,
+  ctx: OperationContext,
+  params: OperationParams,
+): { readonly source: DocumentId; readonly descriptor: string; readonly entry: JsonObject } {
+  const source = asDocument(params);
+  const descriptor = asRecord(params);
+  const where = ctx.locate(source, descriptor);
+  const entry = ctx.readAt(source, where.path);
+  if (!isJsonObject(entry)) {
+    throw new OperationError(id, `запись "${descriptor}": по её адресу нет объекта записи`, {
+      param: 'record',
+      received: descriptor,
+    });
   }
-  return out;
+  return { source, descriptor, entry };
 }
 
 /**
@@ -270,27 +255,18 @@ const decorationToPropOperation: AuthoringOperation = {
   },
   apply(ctx, params) {
     const id = DECORATION_OPERATIONS.toProp;
-    const source = asDocument(params);
-    const descriptor = asRecord(params);
-    const where = ctx.locate(source, descriptor);
-    const entry = ctx.readAt(source, where.path);
-    if (!isJsonObject(entry)) {
-      throw new OperationError(id, `запись "${descriptor}": по её адресу нет объекта записи`, {
-        param: 'record',
-        received: descriptor,
-      });
-    }
+    const { source, descriptor, entry } = requireEntry(id, ctx, params);
     const binding: PositionBinding = readBinding(id, params);
     const entries: [string, string, number][] = [
-      [binding.component, binding.x, requireFixed(id, 'x', readNumber(entry[DECORATION_FIELDS.x], 0))],
-      [binding.component, binding.y, requireFixed(id, 'y', readNumber(entry[DECORATION_FIELDS.y], 0))],
+      [binding.component, binding.x, requireQuantized(id, 'x', readNumber(entry[DECORATION_FIELDS.x], 0))],
+      [binding.component, binding.y, requireQuantized(id, 'y', readNumber(entry[DECORATION_FIELDS.y], 0))],
     ];
     const turns = readNumber(entry[DECORATION_FIELDS.yaw], 0);
     // Курс переносится, только если проект знает, где его хранить: привязка без
     // поворота — честный ответ «сцена поворота не хранит» (ED-16), а не повод
     // выдумать имя компонента.
     if (binding.rotation !== undefined && turns !== 0) {
-      entries.push([binding.rotation.component, binding.rotation.field, requireFixed(id, 'turns', turns)]);
+      entries.push([binding.rotation.component, binding.rotation.field, requireQuantized(id, 'turns', turns)]);
     }
     // Порядок важен: сперва появление в приёмнике, потом исчезновение из
     // источника. Упади вторая половина — откатится всё применение целиком
@@ -330,16 +306,7 @@ const propToDecorationOperation: AuthoringOperation = {
   },
   apply(ctx, params) {
     const id = DECORATION_OPERATIONS.fromProp;
-    const source = asDocument(params);
-    const descriptor = asRecord(params);
-    const where = ctx.locate(source, descriptor);
-    const entry = ctx.readAt(source, where.path);
-    if (!isJsonObject(entry)) {
-      throw new OperationError(id, `запись "${descriptor}": по её адресу нет объекта записи`, {
-        param: 'record',
-        received: descriptor,
-      });
-    }
+    const { source, descriptor, entry } = requireEntry(id, ctx, params);
     const binding = readBinding(id, params);
     const overrides = entry[OVERRIDES_KEY];
     const component = isJsonObject(overrides) ? overrides[binding.component] : undefined;
@@ -364,18 +331,6 @@ const propToDecorationOperation: AuthoringOperation = {
     return created;
   },
 };
-
-/** Авторская величина в валидный Q16.16 (FP-1) либо отказ операции. */
-function requireFixed(operationId: string, param: string, value: number): number {
-  const raw = quantized(value);
-  if (raw === null) {
-    throw new OperationError(operationId, `параметр "${param}": вне представимого Q16.16 (FP-1)`, {
-      param,
-      received: value,
-    });
-  }
-  return raw;
-}
 
 /**
  * Из чего автор выбирает вид декорации — пространство визуальных ключей целиком

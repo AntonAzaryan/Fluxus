@@ -23,5 +23,11 @@ export type { ActionBlock, DslCatalog, OperatorArg, OperatorBlock } from './cata
 export { dslWorldView, loadDslWorld } from './world.js';
 export type { DslWorldView } from './world.js';
 export { boundNamesAt } from './scope.js';
-export { buildAction, buildExpression, readActionNode, readExpressionNode } from './build.js';
+export {
+  buildAction,
+  buildExpression,
+  orderedSlotNames,
+  readActionNode,
+  readExpressionNode,
+} from './build.js';
 export type { ActionDraft, SlotValues } from './build.js';
