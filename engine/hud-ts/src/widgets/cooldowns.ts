@@ -114,17 +114,25 @@ export function cooldownModel(
   return { fraction, seconds: Math.ceil((remaining * tickMs) / 1000), unknown: false };
 }
 
-/** Смонтированная кнопка: её элементы для точечных обновлений (HUD-5). */
-interface ButtonNodes {
+/** Способность панели вместе с её резолвнутой иконкой. */
+interface AbilityButton {
   readonly ability: AbilitySpec;
+  readonly iconUrl: string;
+}
+
+/** Смонтированная кнопка: её элементы для точечных обновлений (HUD-5). */
+interface ButtonNodes extends AbilityButton {
   root: Element | null;
   overlay: Element | null;
   seconds: Element | null;
 }
 
 class CooldownsWidget implements HudWidget {
-  private readonly abilities: readonly AbilitySpec[];
-  private readonly iconUrls: readonly string[];
+  /**
+   * Способности панели вместе с иконками: ОДИН список, а не два параллельных
+   * массива, — иначе «иконка i-й способности» держалась бы совпадением длин.
+   */
+  private readonly buttons: readonly AbilityButton[];
   private readonly perRow: number;
   private readonly tickMs: number;
 
@@ -132,21 +140,24 @@ class CooldownsWidget implements HudWidget {
   private nodes: ButtonNodes[] = [];
 
   constructor(params: HudParams, icons: HudIconSource) {
-    this.abilities = abilitiesFromParams(params);
+    const abilities = abilitiesFromParams(params);
     // Иконки резолвятся при создании — до монтирования, как имена композиции:
     // дырка в таблице валит `apply` и называет способность, а не молчит.
     const table: HudIconTable = Object.fromEntries(
-      this.abilities.map((ability) => [ability.action, ability.icon]),
+      abilities.map((ability) => [ability.action, ability.icon]),
     );
-    this.iconUrls = this.abilities.map((ability) => resolveIcon(table, icons, ability.action));
+    this.buttons = abilities.map((ability) => ({
+      ability,
+      iconUrl: resolveIcon(table, icons, ability.action),
+    }));
     this.perRow = numberParam(params, 'perRow', DEFAULT_PER_ROW);
     this.tickMs = numberParam(params, 'tickMs', DEFAULT_TICK_MS);
   }
 
   mount(actions: HudActionsPort): HudNode {
     this.actions = actions;
-    this.nodes = this.abilities.map((ability) => ({
-      ability,
+    this.nodes = this.buttons.map((button) => ({
+      ...button,
       root: null,
       overlay: null,
       seconds: null,
@@ -157,11 +168,12 @@ class CooldownsWidget implements HudWidget {
       // Число рядов — данные композиции: раскладка панели принадлежит ей, а не
       // коду виджета (HUD-4).
       style: { 'grid-template-columns': `repeat(${String(this.perRow)}, auto)` },
-      children: this.nodes.map((node, index) => this.buttonNode(node, this.iconUrls[index]!)),
+      children: this.nodes.map((node) => this.buttonNode(node)),
     });
   }
 
-  private buttonNode(node: ButtonNodes, iconUrl: string): HudNode {
+  private buttonNode(node: ButtonNodes): HudNode {
+    const iconUrl = node.iconUrl;
     return interactive(
       el('button', {
         classes: ['hud-cooldowns__button'],

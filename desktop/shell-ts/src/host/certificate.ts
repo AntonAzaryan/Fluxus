@@ -43,7 +43,9 @@ export function isFingerprint(text: string): boolean {
 export function certificateFingerprint(pem: string): string {
   const block = CERTIFICATE.exec(pem);
   if (block === null) return '';
-  const body = block[1]!.replace(/\s+/g, '');
+  // Группа у совпавшего выражения есть всегда; но «её нет» и «в ней пусто» —
+  // один и тот же ответ функции («это не сертификат»), и он ниже.
+  const body = (block[1] ?? '').replace(/\s+/g, '');
   if (body === '') return '';
   return createHash('sha256').update(Buffer.from(body, 'base64')).digest('hex');
 }

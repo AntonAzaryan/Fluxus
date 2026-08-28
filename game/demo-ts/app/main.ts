@@ -232,7 +232,11 @@ function loadAsset<T>(kind: string, id: string): Promise<T> {
       unsubscribe?.();
     };
     unsubscribe = assets.subscribe(handle, onState);
-    // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- baseline
+    // Уже готовый ассет отдаётся наблюдателю СИНХРОННО, ещё внутри `subscribe`:
+    // тогда `settled` здесь уже true, а отписываться в тот момент было нечем —
+    // функции отписки ещё не существовало. Анализ потока этого присваивания из
+    // замыкания не видит и считает проверку лишней; она не лишняя.
+    // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- присваивание идёт из замыкания-наблюдателя, см. комментарий выше
     if (settled) unsubscribe();
   });
 }

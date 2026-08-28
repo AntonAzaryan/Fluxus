@@ -82,6 +82,15 @@ export function startBotWorker(init: BotWorkerInit, options: BotWorkerOptions = 
     ...(init.names !== undefined ? { names: init.names } : {}),
   };
   const serializer = serializerOf(init.wireFormat);
+  // Зависимости сборки мира, формат кадра и часы — ОДНИ на воркер, а не на
+  // бота: считаются один раз, до цикла по местам.
+  const shared = {
+    content: pack,
+    ...(init.physics !== undefined ? { physics: init.physics } : {}),
+    ...(init.visibility !== undefined ? { visibility: init.visibility } : {}),
+    ...(serializer !== undefined ? { serializer } : {}),
+    ...(options.now !== undefined ? { now: options.now } : {}),
+  };
   const host = new BotHost();
   for (const [index, seat] of init.seats.entries()) {
     const port = init.ports[index];
@@ -110,15 +119,11 @@ export function startBotWorker(init: BotWorkerInit, options: BotWorkerOptions = 
       // Валидация профиля на конструировании бота (BOT-6): документ приехал
       // сообщением, и «его уже проверила сборка» — предположение, а не факт.
       profile: parseBotProfile(seat.profile, `профиль бота "${seat.playerId}"`),
-      content: pack,
       // Хеш контент-пака считается ЗДЕСЬ, из своего контента: сверка версии
       // (`netcode` NET-16) обязана сравнивать то, что клиент реально поднял, а
       // не то, что о нём сказала сборка.
       version: { buildId: init.buildId, contentPackHash: pack.hash },
-      ...(init.physics !== undefined ? { physics: init.physics } : {}),
-      ...(init.visibility !== undefined ? { visibility: init.visibility } : {}),
-      ...(serializer !== undefined ? { serializer } : {}),
-      ...(options.now !== undefined ? { now: options.now } : {}),
+      ...shared,
     });
   }
   host.start();

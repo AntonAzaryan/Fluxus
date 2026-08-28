@@ -101,24 +101,31 @@ export interface HttpServe {
   close(): Promise<void>;
 }
 
+/**
+ * Файл ОДНОГО слоя: сам путь либо `index.html` его каталога; `undefined` —
+ * в этом слое такого файла нет.
+ */
+function fileInLayer(root: string, pathname: string): string | undefined {
+  const candidate = insideOf(root, pathname);
+  if (candidate === undefined) return undefined;
+  if (!existsSync(candidate)) return undefined;
+  const stat = statSync(candidate);
+  if (stat.isDirectory()) {
+    const index = join(candidate, 'index.html');
+    // Именно ФАЙЛ: каталог по имени `index.html` (или сокет, или fifo) открыть
+    // потоком нельзя, и раздача превратилась бы в отказ на уровне ОС.
+    return existsSync(index) && statSync(index).isFile() ? index : undefined;
+  }
+  return stat.isFile() ? candidate : undefined;
+}
+
 /** Слои раздачи: бандл закрывает дерево при совпадении имён — как в контейнере (DSK-4). */
 function layerFile(layers: readonly string[], pathname: string): string | undefined {
   for (const root of layers) {
     if (root === '') continue;
     try {
-      const candidate = insideOf(root, pathname);
-      if (candidate === undefined) continue;
-      if (!existsSync(candidate)) continue;
-      const stat = statSync(candidate);
-      if (stat.isDirectory()) {
-        const index = join(candidate, 'index.html');
-        // Именно ФАЙЛ: каталог по имени `index.html` (или сокет, или fifo) открыть
-        // потоком нельзя, и раздача превратилась бы в отказ на уровне ОС.
-        if (existsSync(index) && statSync(index).isFile()) return index;
-        continue;
-      }
-      if (!stat.isFile()) continue;
-      return candidate;
+      const found = fileInLayer(root, pathname);
+      if (found !== undefined) return found;
     } catch {
       // `statSync` вправе бросить ПОСЛЕ `existsSync`: файл убрали в окне между
       // ними (сборка, чистка каталога), прав на каталог нет, битая ссылка. Без

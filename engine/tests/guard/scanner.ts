@@ -66,6 +66,15 @@ function isFloatLiteral(text: string): boolean {
   return text.includes('.') || /[eE]/.test(text);
 }
 
+/**
+ * Родитель узла. Отдельной функцией с честным типом: `ts.Node.parent` объявлено
+ * API непустым, но у корня и у узла ВНЕ дерева родителя нет, — и подъём вверх
+ * обязан на этом останавливаться, а не гасить линтер на каждой такой проверке.
+ */
+function parentOf(node: ts.Node): ts.Node | undefined {
+  return (node as { parent?: ts.Node }).parent;
+}
+
 /** Идентификатор — использование значения, а не имя свойства/типа/импорта. */
 function isValueUsage(id: ts.Identifier): boolean {
   const p = id.parent;
@@ -84,11 +93,36 @@ function isValueUsage(id: ts.Identifier): boolean {
     return false;
   }
   if (ts.isImportSpecifier(p) || ts.isExportSpecifier(p)) return false;
-  // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- baseline
-  for (let a: ts.Node | undefined = p; a && !ts.isSourceFile(a); a = a.parent) {
+  for (let a: ts.Node | undefined = p; a !== undefined && !ts.isSourceFile(a); a = parentOf(a)) {
     if (ts.isTypeNode(a)) return false; // `x: Promise<void>` — тип, ловим только значение
   }
   return true;
+}
+
+/** Куда сканер складывает нарушение: узел, правило, текст. */
+type GuardPush = (node: ts.Node, rule: string, message: string) => void;
+
+/**
+ * Проверки строгого режима: float-литералы и асинхронность (DET-2, TICK-1).
+ *
+ * Отдельной функцией, а не веткой внутри обхода: режимов два, и вырожденный
+ * `pure-cycle` не обязан читаться сквозь чужие правила.
+ */
+function visitStrict(node: ts.Node, sf: ts.SourceFile, push: GuardPush): void {
+  if (ts.isNumericLiteral(node) && isFloatLiteral(node.getText(sf))) {
+    // node.text нормализован (1e3 → «1000»), поэтому смотрим на исходную запись.
+    push(node, 'float-literal', `float-литерал ${node.getText(sf)} в геймплейной математике (DET-2)`);
+  }
+  if (ts.isAwaitExpression(node)) {
+    push(node, 'async', 'await внутри детерминированного кода: тик синхронный (TICK-1)');
+  }
+  if (ts.canHaveModifiers(node)) {
+    const asyncMod = ts.getModifiers(node)?.find((m) => m.kind === ts.SyntaxKind.AsyncKeyword);
+    if (asyncMod) push(asyncMod, 'async', 'async-функция внутри детерминированного кода: тик синхронный (TICK-1)');
+  }
+  if (ts.isIdentifier(node) && node.text === 'Promise' && isValueUsage(node)) {
+    push(node, 'async', 'Promise внутри детерминированного кода: тик синхронный (TICK-1)');
+  }
 }
 
 /** Сканирует один исходник; `fileName` попадает в нарушения как есть. */
@@ -110,26 +144,12 @@ export function scanSourceText(fileName: string, text: string, mode: GuardMode):
       push(node, 'math-api', `Math.${node.name.text}: не точен на целых или недетерминирован (DET-2, DET-4)`);
     }
 
-    if (ts.isIdentifier(node) && FORBIDDEN_GLOBALS.has(node.text) && isValueUsage(node)) {
-      push(node, 'forbidden-global', `${node.text}: ${FORBIDDEN_GLOBALS.get(node.text)!}`);
+    if (ts.isIdentifier(node)) {
+      const why = FORBIDDEN_GLOBALS.get(node.text);
+      if (why !== undefined && isValueUsage(node)) push(node, 'forbidden-global', `${node.text}: ${why}`);
     }
 
-    if (mode === 'strict') {
-      if (ts.isNumericLiteral(node) && isFloatLiteral(node.getText(sf))) {
-        // node.text нормализован (1e3 → «1000»), поэтому смотрим на исходную запись.
-        push(node, 'float-literal', `float-литерал ${node.getText(sf)} в геймплейной математике (DET-2)`);
-      }
-      if (ts.isAwaitExpression(node)) {
-        push(node, 'async', 'await внутри детерминированного кода: тик синхронный (TICK-1)');
-      }
-      if (ts.canHaveModifiers(node)) {
-        const asyncMod = ts.getModifiers(node)?.find((m) => m.kind === ts.SyntaxKind.AsyncKeyword);
-        if (asyncMod) push(asyncMod, 'async', 'async-функция внутри детерминированного кода: тик синхронный (TICK-1)');
-      }
-      if (ts.isIdentifier(node) && node.text === 'Promise' && isValueUsage(node)) {
-        push(node, 'async', 'Promise внутри детерминированного кода: тик синхронный (TICK-1)');
-      }
-    }
+    if (mode === 'strict') visitStrict(node, sf, push);
 
     ts.forEachChild(node, visit);
   };
@@ -184,11 +204,13 @@ export function scanDomInSource(fileName: string, text: string): GuardViolation[
     out.push({ file: fileName, line: line + 1, rule: 'dom-in-render', message: `${message} — ${CONFIG_HINT}` });
   };
   const visit = (node: ts.Node): void => {
-    if (ts.isIdentifier(node) && DOM_GLOBALS.has(node.text) && isValueUsage(node)) {
-      push(node, `${node.text}: ${DOM_GLOBALS.get(node.text)!}`);
+    if (ts.isIdentifier(node)) {
+      const why = DOM_GLOBALS.get(node.text);
+      if (why !== undefined && isValueUsage(node)) push(node, `${node.text}: ${why}`);
     }
-    if (ts.isPropertyAccessExpression(node) && DOM_MEMBERS.has(node.name.text)) {
-      push(node, `.${node.name.text}: ${DOM_MEMBERS.get(node.name.text)!}`);
+    if (ts.isPropertyAccessExpression(node)) {
+      const why = DOM_MEMBERS.get(node.name.text);
+      if (why !== undefined) push(node, `.${node.name.text}: ${why}`);
     }
     ts.forEachChild(node, visit);
   };

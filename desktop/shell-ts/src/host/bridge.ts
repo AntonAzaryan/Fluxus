@@ -76,10 +76,22 @@ function refuse(what: string): Error {
   return new Error(`мост контейнера: ${what}`);
 }
 
-export function createHostBridge(options: HostBridgeOptions): HostBridgeHandle {
-  const { profile } = options;
+/**
+ * Сверка объявленных профилем корней с переданными реализациями (DSK-5) и их
+ * указатель по имени.
+ *
+ * Сверка идёт в обе стороны и до сборки моста: объявленный корень без
+ * реализации — обещание, которого сессия не выполнит, а реализация без
+ * объявления — доступ мимо whitelist'а профиля. Признак записи сверяется
+ * отдельно: совпадение имён при разошедшемся `writable` и есть та самая
+ * незаметная дырка, ради закрытия которой профиль вообще существует.
+ */
+function matchRoots(
+  profile: AppProfile,
+  roots: readonly HostRoot[],
+): Map<BridgeRootId, HostRoot> {
   const byId = new Map<BridgeRootId, HostRoot>();
-  for (const root of options.roots) {
+  for (const root of roots) {
     if (byId.has(root.id)) throw refuse(`корень "${root.id}" передан дважды`);
     byId.set(root.id, root);
   }
@@ -92,34 +104,39 @@ export function createHostBridge(options: HostBridgeOptions): HostBridgeHandle {
       );
     }
   }
-  for (const root of options.roots) {
+  for (const root of roots) {
     if (!profile.roots.some((declared) => declared.id === root.id)) {
       throw refuse(`корень "${root.id}" не объявлен профилем "${profile.id}" (DSK-5)`);
     }
   }
+  return byId;
+}
+
+export function createHostBridge(options: HostBridgeOptions): HostBridgeHandle {
+  const { profile } = options;
+  const byId = matchRoots(profile, options.roots);
+
+  const rootOf = (id: BridgeRootId): HostRoot => {
+    const root = byId.get(id);
+    if (root === undefined) throw refuse(`корень "${id}" профилем не объявлен (DSK-5)`);
+    return root;
+  };
 
   const baseFor = options.baseFor ?? ((): string => '');
-  const rootViews: readonly BridgeRootView[] = profile.roots.map((declared) => {
-    const root = byId.get(declared.id)!;
-    return {
-      id: declared.id,
-      label: declared.label,
-      writable: declared.writable,
-      base: declared.serve ? baseFor(root) : '',
-    };
-  });
+  // Корень берётся тем же `rootOf`, что и на запросах страницы: сверка выше уже
+  // отвергла профиль, чьё объявление не покрыто реализацией.
+  const rootViews: readonly BridgeRootView[] = profile.roots.map((declared) => ({
+    id: declared.id,
+    label: declared.label,
+    writable: declared.writable,
+    base: declared.serve ? baseFor(rootOf(declared.id)) : '',
+  }));
 
   const session: BridgeSession = {
     profile: profile.id,
     capabilities: profile.capabilities,
     roots: rootViews,
     services: profile.services.map((declared) => declared.id),
-  };
-
-  const rootOf = (id: BridgeRootId): HostRoot => {
-    const root = byId.get(id);
-    if (root === undefined) throw refuse(`корень "${id}" профилем не объявлен (DSK-5)`);
-    return root;
   };
 
   const grants = (capability: BridgeCapability): boolean => profileGrants(profile, capability);
@@ -190,11 +207,17 @@ export function createHostBridge(options: HostBridgeOptions): HostBridgeHandle {
   if (grants('service') && services === undefined) {
     throw refuse(`профиль "${profile.id}" объявил возможность "service", а реализации сервисов нет`);
   }
-  const serviceSurface = {
-    startService: async (id: BridgeServiceId) => services!.start(id),
-    stopService: async (id: BridgeServiceId) => services!.stop(id),
-    serviceState: async (id: BridgeServiceId) => services!.state(id),
-  };
+  // Поверхность собирается только там, где реализация есть: отказ выше уже
+  // отверг профиль, объявивший возможность без неё, — значит `undefined` здесь
+  // означает ровно «возможность не объявлена», и в мост поверхность не попадёт.
+  const serviceSurface =
+    services === undefined
+      ? {}
+      : {
+          startService: async (id: BridgeServiceId) => services.start(id),
+          stopService: async (id: BridgeServiceId) => services.stop(id),
+          serviceState: async (id: BridgeServiceId) => services.state(id),
+        };
 
   const bridge: DesktopBridge = {
     api: BRIDGE_API,

@@ -29,10 +29,19 @@ class PortTransport extends BaseTransport {
     super();
     this.port = port;
     port.onMessage((raw) => {
+      // Разбор по полю-дискриминатору, а не цепочкой `if/else`: сообщение
+      // приехало через границу потоков, и вида, которого этот кодек не знает,
+      // достаточно, чтобы `else` перестал означать `close`. `switch` без
+      // `default` молча пропускает такой вид — ровно то, что здесь и нужно.
       const message = raw as WireMessage;
-      if (message.t === 'bytes') this.deliver(message.bytes);
-      // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- baseline
-      else if (message.t === 'close') this.closedByPeer(message.reason);
+      switch (message.t) {
+        case 'bytes':
+          this.deliver(message.bytes);
+          break;
+        case 'close':
+          this.closedByPeer(message.reason);
+          break;
+      }
     });
   }
 

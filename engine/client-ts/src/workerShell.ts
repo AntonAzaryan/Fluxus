@@ -243,7 +243,9 @@ export class WorkerShell {
     // Вне `Running` канонический кадр не собирается: применить его некуда
     // (REW-4), а ввод замороженного мира на симуляцию влиять не должен (REW-5).
     const frames: InputFrame[] =
-      live && this.config.playerId !== undefined ? [this.takeInputFrame(state.tick + 1)] : [];
+      live && this.config.playerId !== undefined
+        ? [this.takeInputFrame(state.tick + 1, this.config.playerId)]
+        : [];
     if (live) this.config.inputs?.record(state.tick + 1, frames);
 
     const result = coreTick(sim, state, frames);
@@ -411,12 +413,12 @@ export class WorkerShell {
   }
 
   /** Канонический кадр ввода из латча: `tick`/`seq` знает воркер-сторона (SHELL-6). */
-  private takeInputFrame(tickNumber: number): InputFrame {
+  private takeInputFrame(tickNumber: number, playerId: string): InputFrame {
     this.seq += 1;
     const sample = this.input.take();
     return {
       tick: tickNumber,
-      playerId: this.config.playerId!,
+      playerId,
       seq: this.seq,
       move: sample.move,
       aimDir: sample.aimDir,

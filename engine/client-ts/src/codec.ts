@@ -197,6 +197,18 @@ export function writeTick(
 const EMPTY_STAT_NAMES: readonly string[] = [];
 
 /**
+ * Слово заголовка кадра. Функцией, а не `header[i]!` в каждом чтении: длину
+ * заголовка вызывающий уже проверил (`HEADER_BYTES`), поэтому `undefined`
+ * здесь — артефакт `noUncheckedIndexedAccess`, а не состояние кадра. Одно
+ * место, называющее это вслух, честнее семи восклицательных знаков.
+ */
+function headerWord(header: Uint32Array, index: number): number {
+  const value = header[index];
+  if (value === undefined) throw new Error(`codec: слово заголовка ${index} за краем кадра`);
+  return value;
+}
+
+/**
  * Прочитанный тик: колонки — view'ы В БУФЕР, валидные до его возврата
  * (transfer детачит их). Потребитель обязан выпить всё синхронно —
  * `ViewBuffer.apply` так и делает. `events`/`kindTable` кодек не заполняет:
@@ -215,12 +227,13 @@ export function readTick(
     throw new Error(`codec: кадр ${buffer.byteLength} байт, заголовок — ${HEADER_BYTES}`);
   }
   const header = new Uint32Array(buffer, 0, HEADER_WORDS);
-  if (header[H_VERSION] !== CODEC_VERSION) {
-    throw new Error(`codec: версия раскладки ${header[H_VERSION]}, читатель ждёт ${CODEC_VERSION}`);
+  const version = headerWord(header, H_VERSION);
+  if (version !== CODEC_VERSION) {
+    throw new Error(`codec: версия раскладки ${version}, читатель ждёт ${CODEC_VERSION}`);
   }
-  const count = header[H_COUNT]!;
-  const floorPairs = header[H_FLOOR_PAIRS]!;
-  const statPairs = header[H_STAT_PAIRS]!;
+  const count = headerWord(header, H_COUNT);
+  const floorPairs = headerWord(header, H_FLOOR_PAIRS);
+  const statPairs = headerWord(header, H_STAT_PAIRS);
   const at = layout(count, floorPairs, statPairs);
   /**
    * `count`/`floorPairs` приезжают из заголовка, то есть определяют раскладку
@@ -234,14 +247,15 @@ export function readTick(
       `codec: кадр ${buffer.byteLength} байт, заголовок обещает ${at.total} (count=${count}, floorPairs=${floorPairs}, statPairs=${statPairs})`,
     );
   }
-  const mode = MODES[header[H_MODE]!];
+  const modeIndex = headerWord(header, H_MODE);
+  const mode = MODES[modeIndex];
   if (mode === undefined) {
-    throw new Error(`codec: режим мира ${header[H_MODE]} вне таблицы из ${MODES.length}`);
+    throw new Error(`codec: режим мира ${modeIndex} вне таблицы из ${MODES.length}`);
   }
-  const flags = header[H_FLAGS]!;
+  const flags = headerWord(header, H_FLAGS);
   const f32 = at.f32;
   return {
-    tick: header[H_TICK]!,
+    tick: headerWord(header, H_TICK),
     mode,
     isReplay: (flags & FLAG_IS_REPLAY) !== 0,
     snapAll: (flags & FLAG_SNAP_ALL) !== 0,

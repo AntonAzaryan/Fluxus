@@ -267,6 +267,23 @@ export function createHostServices(options: HostServicesOptions): HostServices {
   };
 
   /**
+   * Адрес пережившего процесса: написанный САМИМ процессом, а объявленный
+   * профилем — только если он молчал (DSK-7).
+   */
+  const survivorAddress = (declared: ProfileService, survivor: { readonly address: string }): string =>
+    survivor.address === '' ? declared.address : survivor.address;
+
+  /**
+   * Ответ о пережившем сервисе — он же строка отчёта. Одним местом на оба пути
+   * к пережившему (мгновенный ответ и ожидание): расходиться им нечем, а
+   * молчаливый второй ответ означал бы адрес без записи в отчёте.
+   */
+  const survivorRunning = (declared: ProfileService, address: string): BridgeServiceState => {
+    report(`сервис "${declared.id}": пережил прежнюю сессию, адрес ${address}`);
+    return { id: declared.id, running: true, address };
+  };
+
+  /**
    * Отвязанный сервис, переживший ПРЕЖНЮЮ сессию (DSK-7, решение D6): его
    * процесс жив, а владения им у этой сессии нет. Повторный запрос на запуск
    * обязан вернуть его адрес и не породить второго процесса — в том числе через
@@ -284,12 +301,11 @@ export function createHostServices(options: HostServicesOptions): HostServices {
       forgetDetached(files);
       return undefined;
     }
-    const address = survivor.address === '' ? declared.address : survivor.address;
+    const address = survivorAddress(declared, survivor);
     // Живой процесс — ещё не работающий сервис: адрес обязан отвечать. Иначе мы
     // выдали бы приложению строку, по которой никого нет.
     if (endpointOf(address) !== undefined && !(await answers(address))) return undefined;
-    report(`сервис "${declared.id}": пережил прежнюю сессию, адрес ${address}`);
-    return { id: declared.id, running: true, address };
+    return survivorRunning(declared, address);
   };
 
   /**
@@ -314,10 +330,9 @@ export function createHostServices(options: HostServicesOptions): HostServices {
         forgetDetached(files);
         return undefined;
       }
-      const address = survivor.address === '' ? declared.address : survivor.address;
+      const address = survivorAddress(declared, survivor);
       if (endpointOf(address) === undefined || (await answers(address))) {
-        report(`сервис "${declared.id}": пережил прежнюю сессию, адрес ${address}`);
-        return { id: declared.id, running: true, address };
+        return survivorRunning(declared, address);
       }
       if (Date.now() >= deadline) {
         throw refuse(
@@ -401,7 +416,10 @@ export function createHostServices(options: HostServicesOptions): HostServices {
       // сессий (DSK-7): владения у этой сессии нет, а идентификатор процесса
       // остался в каталоге состояния.
       const survivor = files === undefined ? undefined : detachedSurvivor(files);
-      if (survivor !== undefined) {
+      // Пережившего без файлов не бывает — их отсутствие и означает «сервис не
+      // отвязываемый»; названо это здесь одним условием, чтобы ниже не
+      // утверждать того же восклицательными знаками.
+      if (files !== undefined && survivor !== undefined) {
         // Сигнал шлётся только ТОМУ процессу, чей момент старта совпадает: PID
         // мог переиспользоваться после перезагрузки (DSK-7).
         //
@@ -414,11 +432,11 @@ export function createHostServices(options: HostServicesOptions): HostServices {
         // его ещё можно опознать. Не отвечает — просто забываем запись.
         const identified = survivor.startProc !== 0 || (await answers(addressOf(declared, files)));
         if (!identified) {
-          forgetDetached(files!);
+          forgetDetached(files);
           return stateOf(declared, false);
         }
         await stopPid({ pid: survivor.pid, startProc: survivor.startProc }, graceMs);
-        forgetDetached(files!);
+        forgetDetached(files);
         return stateOf(declared, false);
       }
       return stateOf(declared, await answers(declared.address));

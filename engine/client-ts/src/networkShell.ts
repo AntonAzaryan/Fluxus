@@ -62,6 +62,17 @@ const FALLBACK_STEP_RATE = 60;
 const NO_EVENTS: readonly GameEvent[] = [];
 
 /**
+ * Факты пачки — событиями рендера. Тик у них тик ПАЧКИ, а не применяемого
+ * состояния (NTR-15): и раскладка ожидания, и выпуск хвоста говорят об этом
+ * одинаково, поэтому перевод здесь один.
+ */
+function pushRenderEvents(out: RenderEvent[], batch: DeliveredEvents): void {
+  for (const event of batch.events) {
+    out.push({ type: event.type, tick: batch.tick, data: event.data });
+  }
+}
+
+/**
  * Метка «дельты неизвестны, пол перечитать»: снапшот dirty-tracking'а не несёт
  * (OBS-6), а единственный читатель дельт в потоке рендера — зеркало карты пола
  * в `Extractor`, и смотрит он только на непустоту множества (TERR-6 → REND-7).
@@ -339,29 +350,7 @@ export class NetworkShell {
     const before: RenderEvent[] = [];
     const own: GameEvent[] = [];
     const rest: DeliveredEvents[] = [];
-    for (const batch of this.pending) {
-      // Факты эпохи, стёртой перемоткой, отбрасываются и здесь, а не только на
-      // приёме: пачка могла лечь в ожидание ДО того, как эпоха выросла, и её тик
-      // с тиками новой ветви несравним (NTR-16).
-      if (batch.epoch < epoch) continue;
-      // Факты эпохи, которую применённое состояние ещё НЕ догнало: канал не
-      // упорядочен (NTR-2), и `Events` новой эпохи может обогнать её первый
-      // снапшот. Тик такой пачки с тиками текущей ветви несравним точно так же
-      // (NTR-16) — сравнение с `latest.tick` уложило бы её в `before`, то есть
-      // проиграло бы факты новой ветви на картинке старой и съело их. Пачка
-      // ждёт доставки состояния своей эпохи.
-      if (batch.epoch > epoch) {
-        rest.push(batch);
-      } else if (batch.tick < latest.tick) {
-        for (const event of batch.events) {
-          before.push({ type: event.type, tick: batch.tick, data: event.data });
-        }
-      } else if (batch.tick === latest.tick) {
-        for (const event of batch.events) own.push(event);
-      } else {
-        rest.push(batch);
-      }
-    }
+    this.partitionPending(epoch, latest.tick, before, own, rest);
     this.pending = rest;
     // Свежесть фактов гасится разрывом по той же причине, по которой её гасит
     // `Extractor` (OBS-5, REND-2): конверт разрыва рисуется snap'ом, и играть в
@@ -392,6 +381,43 @@ export class NetworkShell {
   }
 
   /**
+   * Раскладка ждущих пачек фактов по применяемому состоянию `(epoch, tick)`.
+   *
+   * Пишет в переданные массивы, а не возвращает запись: раскладка идёт на каждой
+   * доставке состояния, и объект-результат был бы аллокацией ровно за то, что
+   * вызывающему и так нужно тремя массивами.
+   */
+  private partitionPending(
+    epoch: number,
+    tick: number,
+    before: RenderEvent[],
+    own: GameEvent[],
+    rest: DeliveredEvents[],
+  ): void {
+    for (const batch of this.pending) {
+      // Факты эпохи, стёртой перемоткой, отбрасываются и здесь, а не только на
+      // приёме: пачка могла лечь в ожидание ДО того, как эпоха выросла, и её тик
+      // с тиками новой ветви несравним (NTR-16).
+      if (batch.epoch < epoch) continue;
+      // Факты эпохи, которую применённое состояние ещё НЕ догнало: канал не
+      // упорядочен (NTR-2), и `Events` новой эпохи может обогнать её первый
+      // снапшот. Тик такой пачки с тиками текущей ветви несравним точно так же
+      // (NTR-16) — сравнение с `latest.tick` уложило бы её в `before`, то есть
+      // проиграло бы факты новой ветви на картинке старой и съело их. Пачка
+      // ждёт доставки состояния своей эпохи.
+      if (batch.epoch > epoch) {
+        rest.push(batch);
+      } else if (batch.tick < tick) {
+        pushRenderEvents(before, batch);
+      } else if (batch.tick === tick) {
+        for (const event of batch.events) own.push(event);
+      } else {
+        rest.push(batch);
+      }
+    }
+  }
+
+  /**
    * Хвост потока событий на конце сессии (NTR-15).
    *
    * Конец матча приходит как `Events` с накопленным хвостом и `End`, и финального
@@ -406,9 +432,7 @@ export class NetworkShell {
     const tail: RenderEvent[] = [];
     for (const batch of [...this.pending].sort((left, right) => left.tick - right.tick)) {
       if (batch.epoch < epoch) continue;
-      for (const event of batch.events) {
-        tail.push({ type: event.type, tick: batch.tick, data: event.data });
-      }
+      pushRenderEvents(tail, batch);
     }
     this.pending = [];
     if (tail.length === 0) return;

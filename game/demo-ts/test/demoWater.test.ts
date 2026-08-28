@@ -169,7 +169,7 @@ describe('REND-35: водоём демо лежит в лощине карты �
     // procedural-деталь БЕЗ предупреждения: он доедет и пересоберёт материал.
     const rig = makeRig();
     expect(rig.requests.sort()).toEqual(
-      [detail.normalMap, detail.foamNoise].map((id) => `texture ${id}`).sort(),
+      [detail.normalMap, detail.foamNoise].map((id) => `texture ${id!}`).sort(),
     );
     expect(rig.warnings).toEqual([]);
   });

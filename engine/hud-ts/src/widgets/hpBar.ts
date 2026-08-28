@@ -98,9 +98,13 @@ class HpBarWidget implements HudWidget {
       setAttr(this.fill, 'style', `width: ${String((fraction ?? 0) * 100)}%`);
     }
     if (this.text !== null) {
+      // Прочерк — не только когда доли нет: текст показывает те же две
+      // величины, из которых доля и считается, и «данных нет» у них одно (HUD-8).
       setText(
         this.text,
-        fraction === null ? this.emptyText : `${String(Math.round(value!))} / ${String(Math.round(max!))}`,
+        fraction === null || value === undefined || max === undefined
+          ? this.emptyText
+          : `${String(Math.round(value))} / ${String(Math.round(max))}`,
       );
     }
   }

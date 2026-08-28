@@ -27,7 +27,7 @@
  * навсегда. То же условие и по той же причине держит заполнитель слотов
  * (BOT-7).
  */
-import type { FillSchedule } from './fill.js';
+import { defaultCancel, defaultSchedule, type FillSchedule } from './fill.js';
 
 export interface BotSubstitutesOptions {
   /**
@@ -127,12 +127,6 @@ export interface BotSubstitutesOptions {
 type SlotState = 'idle' | 'pending' | 'seating';
 
 const DEFAULT_DELAY_MS = 2000;
-
-const defaultSchedule: FillSchedule = (run, delayMs) => setTimeout(run, delayMs);
-
-const defaultCancel = (handle: unknown): void => {
-  clearTimeout(handle as ReturnType<typeof setTimeout>);
-};
 
 export class BotSubstitutes {
   private readonly options: BotSubstitutesOptions;

@@ -204,8 +204,11 @@ export class Perception {
 
   /** Наблюдения, чей срок реакции истёк, становятся знанием — по возрастанию тика. */
   private release(tick: number): void {
-    while (this.pending.length > 0 && this.pending[0]!.readyAtTick <= tick) {
-      const { view } = this.pending.shift()!;
+    for (;;) {
+      const head = this.pending[0];
+      if (head === undefined || head.readyAtTick > tick) return;
+      this.pending.shift();
+      const { view } = head;
       // Наблюдение прошлого тика не заменяет более свежее осознанное: джиттер
       // задержки вправе переставить пару наблюдений, а картинка назад не ходит.
       if (this.awareOf !== undefined && view.tick < this.awareOf.tick) continue;

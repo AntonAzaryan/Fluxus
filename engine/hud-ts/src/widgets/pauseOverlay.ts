@@ -216,27 +216,45 @@ class PauseOverlayWidget implements HudWidget {
     const denied = this.deniedKey;
     // Оверлея нет вовсе, пока нечего показывать: ни заморозки, ни отказа.
     setAttr(this.root, 'style', frozen || denied !== null ? null : 'display: none');
+    // Заморозка едет частями САМИМ состоянием, а не флагом рядом с ним: `null`
+    // означает «не заморожено», и второй записи этого факта не заводится.
+    this.renderFrozen(frozen ? pause : null);
+    this.renderCountdown(pause !== null && pause.state === 'resuming');
+    this.renderDenied(denied);
+  }
 
+  /** Заголовок и строка инициатора: они есть ровно в заморозке (HUD-9). */
+  private renderFrozen(frozen: HudPauseState | null): void {
     if (this.titleElement !== null) {
-      setAttr(this.titleElement, 'style', frozen ? null : 'display: none');
+      setAttr(this.titleElement, 'style', frozen === null ? 'display: none' : null);
       setText(this.titleElement, this.title);
     }
     if (this.byElement !== null) {
-      setAttr(this.byElement, 'style', frozen ? null : 'display: none');
-      setText(this.byElement, frozen ? `${this.byLabel}: ${this.initiator(pause.slot)}` : '');
-    }
-    if (this.countdownElement !== null) {
-      const resuming = pause !== null && pause.state === 'resuming';
-      setAttr(this.countdownElement, 'style', resuming ? null : 'display: none');
+      setAttr(this.byElement, 'style', frozen === null ? 'display: none' : null);
       setText(
-        this.countdownElement,
-        resuming ? `${this.resumingLabel} ${String(Math.ceil(this.remainingMs / 1000))}` : '',
+        this.byElement,
+        frozen === null ? '' : `${this.byLabel}: ${this.initiator(frozen.slot)}`,
       );
     }
-    if (this.deniedElement !== null) {
-      setAttr(this.deniedElement, 'style', denied === null ? 'display: none' : null);
-      setText(this.deniedElement, denied === null ? '' : (this.denyLabels[denied] ?? denied));
-    }
+  }
+
+  /** Обратный отсчёт возобновления: местные часы, доставленная длительность (HUD-5). */
+  private renderCountdown(resuming: boolean): void {
+    const element = this.countdownElement;
+    if (element === null) return;
+    setAttr(element, 'style', resuming ? null : 'display: none');
+    setText(
+      element,
+      resuming ? `${this.resumingLabel} ${String(Math.ceil(this.remainingMs / 1000))}` : '',
+    );
+  }
+
+  /** Именованный отказ политики: фраза словаря композиции, иначе — сам ключ (HUD-9). */
+  private renderDenied(denied: string | null): void {
+    const element = this.deniedElement;
+    if (element === null) return;
+    setAttr(element, 'style', denied === null ? 'display: none' : null);
+    setText(element, denied === null ? '' : (this.denyLabels[denied] ?? denied));
   }
 }
 

@@ -86,12 +86,11 @@ export class ShellSender {
     if (ext.freshEvents) {
       for (const event of ext.events) this.events.push(event);
     }
-    while (
-      this.events.length > 0 &&
-      ext.tick - (this.events[0]!.tick ?? ext.tick) > this.maxEventAgeTicks
-    ) {
+    let oldest = this.events[0];
+    while (oldest !== undefined && ext.tick - (oldest.tick ?? ext.tick) > this.maxEventAgeTicks) {
       this.events.shift();
       this.expiredEvents++;
+      oldest = this.events[0];
     }
     const delta = ext.floorDelta;
     for (let i = 0; i + 1 < delta.length; i += 2) this.floor.set(delta[i]!, delta[i + 1]!);

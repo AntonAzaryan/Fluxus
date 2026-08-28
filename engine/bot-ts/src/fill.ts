@@ -31,6 +31,17 @@
 export type FillSchedule = (run: () => void, delayMs: number) => unknown;
 
 /**
+ * Умолчания планировщика — обычные таймеры хоста. Живут рядом с типом и
+ * переиспользуются заместителем (`substitute.ts`): у двух политик ботов
+ * планировщик один, и разъехаться этим умолчаниям нечем.
+ */
+export const defaultSchedule: FillSchedule = (run, delayMs) => setTimeout(run, delayMs);
+
+export const defaultCancel = (handle: unknown): void => {
+  clearTimeout(handle as ReturnType<typeof setTimeout>);
+};
+
+/**
  * Посаженное место глазами заполнителя — структурный минимум `BotSeat`.
  *
  * Минимум, а не сам `BotSeat`, потому что хост ботов живёт вне потока сервера
@@ -88,12 +99,6 @@ export interface BotSlotFillerOptions {
   readonly schedule?: FillSchedule;
   readonly cancel?: (handle: unknown) => void;
 }
-
-const defaultSchedule: FillSchedule = (run, delayMs) => setTimeout(run, delayMs);
-
-const defaultCancel = (handle: unknown): void => {
-  clearTimeout(handle as ReturnType<typeof setTimeout>);
-};
 
 export class BotSlotFiller {
   private readonly options: BotSlotFillerOptions;
@@ -169,8 +174,8 @@ export class BotSlotFiller {
   prune(): number {
     let removed = 0;
     for (let i = this.attached.length - 1; i >= 0; i--) {
-      const seat = this.attached[i]!;
-      if (seat.client.closeReason !== 'rejected') continue;
+      const seat = this.attached[i];
+      if (seat?.client.closeReason !== 'rejected') continue;
       seat.dispose();
       this.attached.splice(i, 1);
       removed++;

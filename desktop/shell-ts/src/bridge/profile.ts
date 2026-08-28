@@ -166,6 +166,34 @@ function asArgs(value: unknown, where: string, service: string): readonly string
   return value.map((entry, index) => asText(entry, where, `services[${service}].args[${index}]`));
 }
 
+/**
+ * Корни профиля: разбор списка и согласованность с возможностью `write`.
+ *
+ * Согласованность здесь, а не отдельной проверкой рядом: корень с записью при
+ * профиле без возможности `write` — не мелочь, а ровно то расхождение, из-за
+ * которого «игра пытается писать» перестало бы быть невозможным (DSK-5).
+ */
+function asRoots(
+  value: unknown,
+  where: string,
+  capabilities: readonly BridgeCapability[],
+): readonly ProfileRoot[] {
+  if (!Array.isArray(value)) fail(where, 'поле "roots" — не массив');
+  const roots = value.map((entry, index) => asRoot(entry, where, index));
+  const seen = new Set<string>();
+  for (const root of roots) {
+    if (seen.has(root.id)) fail(where, `корень "${root.id}" объявлен дважды`);
+    seen.add(root.id);
+    if (root.writable && !capabilities.includes('write')) {
+      fail(where, `корень "${root.id}" объявлен на запись, а возможности "write" в профиле нет`);
+    }
+  }
+  if (capabilities.includes('write') && !roots.some((root) => root.writable)) {
+    fail(where, 'возможность "write" объявлена, а ни один корень не открыт на запись');
+  }
+  return roots;
+}
+
 function asService(value: unknown, where: string, index: number): ProfileService {
   const raw = asRecord(value, where, `сервис #${index}`);
   const id = asText(raw.id, where, `services[${index}].id`);
@@ -179,40 +207,20 @@ function asService(value: unknown, where: string, index: number): ProfileService
 }
 
 /**
- * Разбирает манифест профиля. `where` — имя манифеста для текста отказа.
+ * Сервисы профиля: разбор списка и согласованность с возможностью `service`.
  *
- * Проверяется и согласованность: корень с записью при профиле без возможности
- * `write` — не мелочь, а ровно то расхождение, из-за которого «игра пытается
- * писать» перестало бы быть невозможным (DSK-5).
+ * Согласованность в обе стороны — по тому же основанию, что и у корня с
+ * записью: набор сервисов и возможность их поднимать обязаны объявляться
+ * вместе, иначе профиль описывает доступ, которого не даёт, или даёт доступ,
+ * которым нечего открыть (DSK-5).
  */
-export function normalizeAppProfile(raw: unknown, where: string): AppProfile {
-  const record = asRecord(raw, where, 'манифест');
-  const capabilities = asCapabilities(record.capabilities, where);
-  const rootsRaw = record.roots;
-  if (!Array.isArray(rootsRaw)) fail(where, 'поле "roots" — не массив');
-  const roots = rootsRaw.map((entry, index) => asRoot(entry, where, index));
-
-  const seen = new Set<string>();
-  for (const root of roots) {
-    if (seen.has(root.id)) fail(where, `корень "${root.id}" объявлен дважды`);
-    seen.add(root.id);
-    if (root.writable && !capabilities.includes('write')) {
-      fail(where, `корень "${root.id}" объявлен на запись, а возможности "write" в профиле нет`);
-    }
-  }
-  if (capabilities.includes('write') && !roots.some((root) => root.writable)) {
-    fail(where, 'возможность "write" объявлена, а ни один корень не открыт на запись');
-  }
-
-  const servicesRaw = record.services;
-  if (servicesRaw !== undefined && !Array.isArray(servicesRaw)) {
-    fail(where, 'поле "services" — не массив');
-  }
-  const services = (servicesRaw ?? []).map((entry, index) => asService(entry, where, index));
-  // Согласованность в обе стороны — по тому же основанию, что и у корня с
-  // записью: набор сервисов и возможность их поднимать обязаны объявляться
-  // вместе, иначе профиль описывает доступ, которого не даёт, или даёт доступ,
-  // которым нечего открыть (DSK-5).
+function asServices(
+  value: unknown,
+  where: string,
+  capabilities: readonly BridgeCapability[],
+): readonly ProfileService[] {
+  if (value !== undefined && !Array.isArray(value)) fail(where, 'поле "services" — не массив');
+  const services = (value ?? []).map((entry, index) => asService(entry, where, index));
   const named = new Set<string>();
   for (const service of services) {
     if (named.has(service.id)) fail(where, `сервис "${service.id}" объявлен дважды`);
@@ -224,7 +232,20 @@ export function normalizeAppProfile(raw: unknown, where: string): AppProfile {
   if (capabilities.includes('service') && services.length === 0) {
     fail(where, 'возможность "service" объявлена, а ни одного сервиса профиль не объявил');
   }
+  return services;
+}
 
+/**
+ * Разбирает манифест профиля. `where` — имя манифеста для текста отказа.
+ *
+ * Порядок разбора — часть ответа: возможности читаются первыми, потому что с
+ * ними сверяются и корни (`asRoots`), и сервисы (`asServices`).
+ */
+export function normalizeAppProfile(raw: unknown, where: string): AppProfile {
+  const record = asRecord(raw, where, 'манифест');
+  const capabilities = asCapabilities(record.capabilities, where);
+  const roots = asRoots(record.roots, where, capabilities);
+  const services = asServices(record.services, where, capabilities);
   const windowRaw = record.window === undefined ? {} : asRecord(record.window, where, 'window');
   return {
     id: asText(record.id, where, 'id'),

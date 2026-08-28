@@ -18,7 +18,7 @@ import {
   world as coreWorld,
 } from '@fluxus/core';
 import { ViewBuffer, type RenderSubsystem, type TickView } from '@fluxus/render';
-import { RemoteHost, WorkerShell, shellPort, type TickEnvelope } from '../src/index.js';
+import { RemoteHost, WorkerShell, shellPort, type WorkerToMain } from '../src/index.js';
 import {
   PLAYER_ID,
   STEP,
@@ -328,8 +328,10 @@ describe('ноль аллокаций канала в устоявшемся р�
     // Подслушиваем конверты до RemoteHost: какие ArrayBuffer ходят по кругу.
     const spyPort: typeof workerPort = {
       post(message, transfer) {
-        const envelope = message as TickEnvelope;
-        // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- baseline
+        // Приводится к ВСЕМУ, что шлёт воркер-сторона, а не сразу к конверту
+        // тика: по каналу идут ещё handshake и конверт паузы, и проверка вида
+        // здесь настоящая, а не формальность (SHELL-4, SHELL-5).
+        const envelope = message as WorkerToMain;
         if (envelope.t === 'tick') seen.add(envelope.buffer);
         workerPort.post(message, transfer);
       },

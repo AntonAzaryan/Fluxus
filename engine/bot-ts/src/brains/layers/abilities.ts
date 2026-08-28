@@ -408,16 +408,7 @@ export class AbilityLayer {
     plan: BehaviorPlan,
   ): Candidate {
     const none: Candidate = { index, ability, score: 0, aim: undefined };
-    if (ability.weight <= 0) return none;
-    // Манёвр без направления симуляция игнорирует (LOC-4) либо выполняет на
-    // месте (LOC-5) — и в обоих случаях кулдаун сгорает впустую.
-    if (ability.requiresMoving === true && !this.moving(world, plan)) return none;
-    // Руки: сцена вправе развести два своих определения на одном бите условием
-    // на владельце, и профиль повторяет это условие (BOT-6). Мозг про
-    // определения по-прежнему не знает ничего — он сверяет требование документа
-    // со своим наблюдением, и жать бит «не в ту сторону» перестаёт.
-    if (ability.hands === 'full' && !world.carrying) return none;
-    if (ability.hands === 'free' && world.carrying) return none;
+    if (this.unusable(ability, world, plan)) return none;
 
     switch (ability.target) {
       case 'enemy': {
@@ -452,6 +443,28 @@ export class AbilityLayer {
         return { index, ability, score: ability.weight, aim: undefined };
       }
     }
+  }
+
+  /**
+   * Причины не рассматривать способность вовсе — до всякого счёта полезности.
+   *
+   * Манёвр без направления симуляция игнорирует (LOC-4) либо выполняет на месте
+   * (LOC-5) — и в обоих случаях кулдаун сгорает впустую. Руки: сцена вправе
+   * развести два своих определения на одном бите условием на владельце, и
+   * профиль повторяет это условие (BOT-6). Мозг про определения по-прежнему не
+   * знает ничего — он сверяет требование документа со своим наблюдением, и жать
+   * бит «не в ту сторону» перестаёт.
+   */
+  private unusable(
+    ability: BotAbilityProfile,
+    world: PerceivedWorld,
+    plan: BehaviorPlan,
+  ): boolean {
+    if (ability.weight <= 0) return true;
+    if (ability.requiresMoving === true && !this.moving(world, plan)) return true;
+    if (ability.hands === 'full' && !world.carrying) return true;
+    if (ability.hands === 'free' && world.carrying) return true;
+    return false;
   }
 
   /**

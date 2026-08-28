@@ -143,21 +143,9 @@ export function aimToRadians(aimDir: number): number {
 }
 
 /**
- * Поле компонента снапшота как float (BOT-5): единственное место, где мозг
- * встречается с Q16.16. `undefined` — компонента или поля на сущности нет.
+ * Целочисленное поле компонента снапшота (слот, маска, счётчик).
+ * `undefined` — компоненты или поля на сущности нет.
  */
-export function readFixedField(
-  world: WorldState,
-  entity: EntityId,
-  component: string,
-  field: string,
-): number | undefined {
-  if (coreWorld.componentId(world, component) === undefined) return undefined;
-  if (!coreWorld.hasComponent(world, entity, component)) return undefined;
-  return fixed.toFloat(coreWorld.getField(world, entity, component, field));
-}
-
-/** То же для целочисленного поля (слот, маска, счётчик): без Q16.16-конверсии. */
 export function readIntField(
   world: WorldState,
   entity: EntityId,
@@ -167,4 +155,19 @@ export function readIntField(
   if (coreWorld.componentId(world, component) === undefined) return undefined;
   if (!coreWorld.hasComponent(world, entity, component)) return undefined;
   return coreWorld.getField(world, entity, component, field);
+}
+
+/**
+ * То же поле как float (BOT-5): единственное место, где мозг встречается с
+ * Q16.16. Читается ТЕМ ЖЕ чтением, что и целое, — разница ровно в конверсии, и
+ * второго набора проверок «есть ли компонента» под неё не заводится.
+ */
+export function readFixedField(
+  world: WorldState,
+  entity: EntityId,
+  component: string,
+  field: string,
+): number | undefined {
+  const raw = readIntField(world, entity, component, field);
+  return raw === undefined ? undefined : fixed.toFloat(raw);
 }

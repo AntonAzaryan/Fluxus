@@ -26,8 +26,13 @@ import {
 import { browserSocket } from '@fluxus/server-agent/client';
 import type { StartParams } from '@fluxus/server-agent/protocol';
 
-const root = document.getElementById('manager-root');
-if (root === null) throw new Error('в документе нет корня приложения');
+function managerRoot(): HTMLElement {
+  const element = document.getElementById('manager-root');
+  if (element === null) throw new Error('в документе нет корня приложения');
+  return element;
+}
+
+const root = managerRoot();
 
 const style = document.createElement('style');
 style.textContent = MANAGER_STYLES;
@@ -122,7 +127,10 @@ function build(node: UiNode): Node {
     field.addEventListener('input', onEdit);
     field.addEventListener('change', onEdit);
   } else if (node.action !== undefined) {
-    element.addEventListener('click', () => { apply(node.action!, node.args ?? []); });
+    // Имя действия кладётся в локальную константу ДО обработчика: сужение типа
+    // внутрь замыкания не проходит, а действие узла к моменту клика неизменно.
+    const action = node.action;
+    element.addEventListener('click', () => { apply(action, node.args ?? []); });
   }
   if (node.tag === 'option') element.setAttribute('value', node.value ?? node.text ?? '');
   for (const child of node.children ?? []) element.append(build(child));
@@ -168,7 +176,7 @@ const KNOWN_ACTIONS = new Set([
 
 function draw(): void {
   const view = managerView(session.state);
-  root!.replaceChildren(build(view));
+  root.replaceChildren(build(view));
   // Названные действия обязаны существовать в переводе: узел с действием,
   // которого не знает `apply`, был бы кнопкой, ничего не делающей.
   for (const item of walk(view)) {

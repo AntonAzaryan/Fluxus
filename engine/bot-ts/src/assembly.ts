@@ -43,7 +43,15 @@ export class PortConnections implements TransportServer {
 
   onConnection(handler: (transport: Transport) => void): void {
     this.handler = handler;
-    while (this.pending.length > 0) handler(this.pending.shift()!);
+    // Очередь вычерпывается по одному: `shift()` до `undefined` — та же
+    // остановка «пока непусто», но без утверждения о непустоте.
+    for (
+      let waiting = this.pending.shift();
+      waiting !== undefined;
+      waiting = this.pending.shift()
+    ) {
+      handler(waiting);
+    }
   }
 
   /**

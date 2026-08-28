@@ -368,24 +368,32 @@ async function openSession(profile: AppProfile): Promise<Session> {
 
   // Ручка IPC заводится ТОЛЬКО под объявленную возможность: канала, которого
   // профиль не дал, нет и в главном процессе — не только в preload (DSK-5).
-  if (bridge.read !== undefined) {
-    ipcMain.handle(CHANNELS.read, (_e, root: BridgeRootId, path: string) => bridge.read!(root, path));
-    ipcMain.handle(CHANNELS.stat, (_e, root: BridgeRootId, path: string) => bridge.stat!(root, path));
-    ipcMain.handle(CHANNELS.list, (_e, root: BridgeRootId, path: string) => bridge.list!(root, path));
+  //
+  // Методы кладутся в локальные имена ДО обработчиков: сужение типа внутрь
+  // замыкания не проходит, а мост за время жизни окна не меняется. Тройка
+  // `read`/`stat`/`list` и пары `startService`… / `setTitle`… проверяются
+  // целиком: они приходят одной возможностью и по одной не бывают (DSK-5) —
+  // ручка на половине возможности была бы каналом, падающим при первом вызове.
+  const { read, stat, list, write, watch, startService, stopService, serviceState } = bridge;
+  const { choose, setTitle, setUnsaved } = bridge;
+  if (read !== undefined && stat !== undefined && list !== undefined) {
+    ipcMain.handle(CHANNELS.read, (_e, root: BridgeRootId, path: string) => read(root, path));
+    ipcMain.handle(CHANNELS.stat, (_e, root: BridgeRootId, path: string) => stat(root, path));
+    ipcMain.handle(CHANNELS.list, (_e, root: BridgeRootId, path: string) => list(root, path));
   }
-  if (bridge.write !== undefined) {
+  if (write !== undefined) {
     ipcMain.handle(CHANNELS.write, (_e, root: BridgeRootId, path: string, bytes: Uint8Array) =>
-      bridge.write!(root, path, bytes),
+      write(root, path, bytes),
     );
   }
-  if (bridge.watch !== undefined) {
+  if (watch !== undefined) {
     const stops = new Map<number, () => void>();
     let token = 0;
     ipcMain.handle(CHANNELS.watchOn, (event, root: BridgeRootId) => {
       const id = ++token;
       stops.set(
         id,
-        bridge.watch!(root, (change: BridgeChange) => {
+        watch(root, (change: BridgeChange) => {
           event.sender.send(CHANNELS.change, id, change);
         }),
       );
@@ -396,20 +404,20 @@ async function openSession(profile: AppProfile): Promise<Session> {
       stops.delete(id);
     });
   }
-  if (bridge.startService !== undefined) {
-    ipcMain.handle(CHANNELS.serviceStart, (_e, id: BridgeServiceId) => bridge.startService!(id));
-    ipcMain.handle(CHANNELS.serviceStop, (_e, id: BridgeServiceId) => bridge.stopService!(id));
-    ipcMain.handle(CHANNELS.serviceState, (_e, id: BridgeServiceId) => bridge.serviceState!(id));
+  if (startService !== undefined && stopService !== undefined && serviceState !== undefined) {
+    ipcMain.handle(CHANNELS.serviceStart, (_e, id: BridgeServiceId) => startService(id));
+    ipcMain.handle(CHANNELS.serviceStop, (_e, id: BridgeServiceId) => stopService(id));
+    ipcMain.handle(CHANNELS.serviceState, (_e, id: BridgeServiceId) => serviceState(id));
   }
-  if (bridge.choose !== undefined) {
-    ipcMain.handle(CHANNELS.choose, (_e, request: BridgeChoiceRequest) => bridge.choose!(request));
+  if (choose !== undefined) {
+    ipcMain.handle(CHANNELS.choose, (_e, request: BridgeChoiceRequest) => choose(request));
   }
-  if (bridge.setTitle !== undefined) {
+  if (setTitle !== undefined && setUnsaved !== undefined) {
     ipcMain.on(CHANNELS.title, (_event, title: string) => {
-      bridge.setTitle!(title);
+      setTitle(title);
     });
     ipcMain.on(CHANNELS.unsaved, (_event, unsaved: boolean) => {
-      bridge.setUnsaved!(unsaved);
+      setUnsaved(unsaved);
     });
   }
 

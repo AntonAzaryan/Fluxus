@@ -104,6 +104,13 @@ export class InputSampler {
    */
   private lastAimAt = 0;
   private lastTargetAt = 0;
+  /**
+   * Движение выборки: поля, а не локальные переменные, потому что свёртка
+   * вынесена отдельным методом. Выборку они НЕ переживают — свёртка обнуляет их
+   * первым делом: пропавший источник даёт нейтраль, а не залипание (INP-5).
+   */
+  private moveX = 0;
+  private moveY = 0;
 
   constructor(options: SamplerOptions) {
     for (const [action, bit] of Object.entries(options.actionBits)) {
@@ -165,81 +172,12 @@ export class InputSampler {
     // Удержания собираются заново каждую выборку: залипание невозможно по
     // построению — бит живёт ровно пока источник о нём сообщает (INP-2).
     let held = 0;
-    for (const t of this.tracked) {
-      const s = t.source.poll();
-      t.current = s;
-      // Свёртка удержаний нескольких источников — OR (INP-5): клавиатура и
-      // геймпад одного игрока дают одно и то же действие.
-      const heldActions = t.source.held?.();
-      if (heldActions != null) for (const action of heldActions) held |= this.bitOf(action);
-      if (s === null) continue;
-      if (s.moveX !== t.prevMoveX || s.moveY !== t.prevMoveY) t.moveChangedAt = this.counter;
-      if (s.aim !== t.prevAim) t.aimChangedAt = this.counter;
-      // Точка сравнивается по значению, а не по ссылке: запись источника
-      // переиспользуется, и одна и та же ссылка означает разные точки.
-      const hasTarget = s.target !== null;
-      if (
-        hasTarget !== t.prevHadTarget ||
-        (s.target !== null && (s.target.x !== t.prevTargetX || s.target.y !== t.prevTargetY))
-      ) {
-        t.targetChangedAt = this.counter;
-      }
-      t.prevMoveX = s.moveX;
-      t.prevMoveY = s.moveY;
-      t.prevAim = s.aim;
-      t.prevHadTarget = hasTarget;
-      if (s.target !== null) {
-        t.prevTargetX = s.target.x;
-        t.prevTargetY = s.target.y;
-      }
-    }
-
-    // Движение: ненулевое с самым свежим изменением; пропавший источник
-    // (current === null) не участвует — нейтраль, а не залипание (INP-5).
-    let moveX = 0;
-    let moveY = 0;
-    let moveAt = -1;
-    let aim = this.lastAim;
-    // Свежесть пережившего значения — та, с которой его приняли: источник
-    // перебивает его, только если менял своё ПОЗЖЕ (INP-5), а не самим фактом,
-    // что ему есть что сказать.
-    let aimAt = this.lastAimAt;
-    let targetX = this.lastTargetX;
-    let targetY = this.lastTargetY;
-    let hasTarget = this.hasTarget;
-    let targetAt = this.lastTargetAt;
-    for (const t of this.tracked) {
-      if (t.current === null) continue;
-      const { moveX: mx, moveY: my, aim: a, target: p } = t.current;
-      if ((mx !== 0 || my !== 0) && t.moveChangedAt > moveAt) {
-        moveAt = t.moveChangedAt;
-        moveX = mx;
-        moveY = my;
-      }
-      if (a !== null && t.aimChangedAt > aimAt) {
-        aimAt = t.aimChangedAt;
-        aim = a;
-      }
-      // Точка выбирается тем же правилом «последний менявший» (INP-5), что и
-      // направление, и по тому же основанию: игрок целится тем устройством,
-      // которым он только что шевелил.
-      if (p !== null && t.targetChangedAt > targetAt) {
-        targetAt = t.targetChangedAt;
-        // Значениями, а не ссылкой: запись принадлежит источнику и будет
-        // переписана следующим опросом, а держим мы её до следующей выборки.
-        targetX = p.x;
-        targetY = p.y;
-        hasTarget = true;
-      }
-    }
-    this.lastAim = aim;
-    this.lastAimAt = aimAt;
-    this.lastTargetX = targetX;
-    this.lastTargetY = targetY;
-    this.hasTarget = hasTarget;
-    this.lastTargetAt = targetAt;
+    for (const t of this.tracked) held |= this.pollSource(t);
+    this.foldContinuous();
 
     // Кламп единичным кругом: диагональ клавиатуры не быстрее стика (INP-3).
+    let moveX = this.moveX;
+    let moveY = this.moveY;
     const length = Math.hypot(moveX, moveY);
     if (length > 1) {
       moveX /= length;
@@ -252,10 +190,89 @@ export class InputSampler {
     this.latched = 0;
     return {
       move: { x: fixed.fromFloat(moveX), y: fixed.fromFloat(moveY) },
-      aimDir: Math.round(aim) & (TURN_UNITS - 1),
-      target: hasTarget ? { x: toWorldFixed(targetX), y: toWorldFixed(targetY) } : null,
+      aimDir: Math.round(this.lastAim) & (TURN_UNITS - 1),
+      target: this.hasTarget
+        ? { x: toWorldFixed(this.lastTargetX), y: toWorldFixed(this.lastTargetY) }
+        : null,
       buttons,
     };
+  }
+
+  /**
+   * Опрос одного источника: выборка запоминается, и отмечается, что в ней
+   * изменилось (правило свёртки D4). Возвращает удержания источника — их
+   * свёртка нескольких источников есть OR (INP-5): клавиатура и геймпад одного
+   * игрока дают одно и то же действие.
+   *
+   * Метод, а не стрелка внутри цикла: замыкания на источник за выборку здесь
+   * заводиться не должно.
+   */
+  private pollSource(t: TrackedSource): number {
+    const s = t.source.poll();
+    t.current = s;
+    let held = 0;
+    const heldActions = t.source.held?.();
+    if (heldActions != null) for (const action of heldActions) held |= this.bitOf(action);
+    if (s === null) return held;
+    if (s.moveX !== t.prevMoveX || s.moveY !== t.prevMoveY) t.moveChangedAt = this.counter;
+    if (s.aim !== t.prevAim) t.aimChangedAt = this.counter;
+    // Точка сравнивается по значению, а не по ссылке: запись источника
+    // переиспользуется, и одна и та же ссылка означает разные точки.
+    const hasTarget = s.target !== null;
+    if (
+      hasTarget !== t.prevHadTarget ||
+      (s.target !== null && (s.target.x !== t.prevTargetX || s.target.y !== t.prevTargetY))
+    ) {
+      t.targetChangedAt = this.counter;
+    }
+    t.prevMoveX = s.moveX;
+    t.prevMoveY = s.moveY;
+    t.prevAim = s.aim;
+    t.prevHadTarget = hasTarget;
+    if (s.target !== null) {
+      t.prevTargetX = s.target.x;
+      t.prevTargetY = s.target.y;
+    }
+    return held;
+  }
+
+  /**
+   * Свёртка непрерывных величин по правилу «последний менявший» (INP-5).
+   *
+   * Движение: ненулевое с самым свежим изменением; пропавший источник
+   * (`current === null`) не участвует — нейтраль, а не залипание. Направление и
+   * точка ПЕРЕЖИВАЮТ молчание источников, поэтому соревнуются со своей
+   * свежестью (`lastAimAt`, `lastTargetAt`), а не с нулевой: источник перебивает
+   * пережившее значение, только если менял своё ПОЗЖЕ, а не самим фактом, что
+   * ему есть что сказать.
+   */
+  private foldContinuous(): void {
+    this.moveX = 0;
+    this.moveY = 0;
+    let moveAt = -1;
+    for (const t of this.tracked) {
+      if (t.current === null) continue;
+      const { moveX: mx, moveY: my, aim: a, target: p } = t.current;
+      if ((mx !== 0 || my !== 0) && t.moveChangedAt > moveAt) {
+        moveAt = t.moveChangedAt;
+        this.moveX = mx;
+        this.moveY = my;
+      }
+      if (a !== null && t.aimChangedAt > this.lastAimAt) {
+        this.lastAimAt = t.aimChangedAt;
+        this.lastAim = a;
+      }
+      // Точка выбирается тем же правилом, что и направление, и по тому же
+      // основанию: игрок целится тем устройством, которым он только что шевелил.
+      if (p !== null && t.targetChangedAt > this.lastTargetAt) {
+        this.lastTargetAt = t.targetChangedAt;
+        // Значениями, а не ссылкой: запись принадлежит источнику и будет
+        // переписана следующим опросом, а держим мы её до следующей выборки.
+        this.lastTargetX = p.x;
+        this.lastTargetY = p.y;
+        this.hasTarget = true;
+      }
+    }
   }
 }
 
