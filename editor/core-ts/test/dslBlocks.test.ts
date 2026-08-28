@@ -78,7 +78,7 @@ const SCENE_VALUE = {
 const world = (): ReturnType<typeof loadScene>['world'] =>
   loadScene(SCENE_VALUE as unknown as SceneDef).world;
 
-const view = () => loadDslWorld(SCENE_VALUE as unknown as JsonValue)!;
+const view = () => loadDslWorld(SCENE_VALUE)!;
 
 /** Годна ли система по мнению ядра — единственный судья во всём этом файле. */
 function accepted(def: JsonValue): boolean {

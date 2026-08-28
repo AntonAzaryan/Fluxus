@@ -74,7 +74,7 @@ function scratchSession(): EditorSession {
   session.openDocument({
     id: FIXTURE_IDS.config,
     kind: SCENE_KINDS.config,
-    value: SCRATCH as unknown as JsonValue,
+    value: SCRATCH,
     lists: [PLACEMENT_LIST],
   });
   return session;

@@ -223,7 +223,7 @@ describe('ED-6: схема компонента правится там, где 
     session.openDocument({
       id: CONFIG,
       kind: 'scene',
-      value: structuredClone(SCENE) as unknown as JsonValue,
+      value: structuredClone(SCENE),
       lists: [COMPONENT_LIST, PREFAB_LIST, INITIAL],
     });
     session.openDocument({
@@ -382,7 +382,7 @@ describe('ED-6: порядок схем не переставляется ни �
     session.openDocument({
       id: CONFIG,
       kind: 'scene',
-      value: structuredClone(SCENE) as unknown as JsonValue,
+      value: structuredClone(SCENE),
       lists: [COMPONENT_LIST, PREFAB_LIST, INITIAL],
     });
     session.openDocument({

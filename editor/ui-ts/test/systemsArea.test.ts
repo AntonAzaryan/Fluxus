@@ -366,7 +366,7 @@ describe('ED-16: порядок систем не переставляется �
     session.openDocument({
       id: CONFIG,
       kind: 'scene',
-      value: structuredClone(ORDERED) as unknown as JsonValue,
+      value: structuredClone(ORDERED),
       lists: [SYSTEM_LIST],
     });
     return session;
@@ -451,7 +451,7 @@ describe('ED-29: без отслеживаемого перечня област
     fixture.session.openDocument({
       id: CONFIG,
       kind: 'scene',
-      value: structuredClone(SCENE) as unknown as JsonValue,
+      value: structuredClone(SCENE),
     });
     fixture.frame.activate(area.id);
     const state = fixture.frame.stateOf(area.id) as SystemsAreaState;

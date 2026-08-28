@@ -84,13 +84,13 @@ function scratch(): EditorSession {
   session.openDocument({
     id: FIXTURE_IDS.config,
     kind: SCENE_KINDS.config,
-    value: SCRATCH_SCENE as unknown as JsonValue,
+    value: SCRATCH_SCENE,
     lists: [PLACEMENT_LIST],
   });
   session.openDocument({
     id: FIXTURE_PRESENTATION_ID,
     kind: SCENE_KINDS.presentation,
-    value: structuredClone(FIXTURE_PRESENTATION) as unknown as JsonValue,
+    value: structuredClone(FIXTURE_PRESENTATION),
     lists: [DECORATION_LIST],
   });
   return session;
