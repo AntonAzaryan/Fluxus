@@ -11,14 +11,20 @@
  * вокруг измеряемого цикла, печать `[bench]` при КАЖДОМ прогоне, ассерт только
  * против деградации на порядок. Жёстких порогов здесь MUST NOT быть (PERF-5):
  * числа между машинами несравнимы, и порог «в притык» краснел бы на слабой
- * машине разработчика, ничего не поймав.
+ * машине разработчика, ничего не поймав. Поэтому ассертится не темп в тиках за
+ * секунду, а стоимость тика в ЭТАЛОННЫХ ЕДИНИЦАХ работы
+ * (`engine/tests/bench/calibration.ts`): та же фиксированная нагрузка, померенная
+ * в том же процессе, делит миллисекунды на скорость машины. Машина в отношении
+ * сокращается, подорожание тика — нет. Темп в тиках за секунду по-прежнему
+ * печатается: читать глазами удобнее его.
  *
  * Мерится чистый цикл тиков: сборка мира вынесена из замера, снапшоты не
  * строятся, диагностика не подключена — иначе сторож стерёг бы сериализацию
  * прогона, а не симуляцию.
  */
-import { describe, expect, it } from 'vitest';
+import { beforeAll, describe, expect, it } from 'vitest';
 import { NPC_STRESS, RECORDED_MATCHES, loadNpcStress, loadRecording, prepareRecording } from './benchLoad.js';
+import { benchUnits, calibrationLine } from '../../tests/bench/calibration.js';
 import type { ScenarioDef } from '@fluxus/core';
 
 /** Прогонов на прогрев JIT и прогонов под замером. */
@@ -34,40 +40,64 @@ const NPC_WARMUP = 2;
 const NPC_REPEATS = 4;
 
 /**
- * Сторожевой порог: наблюдаемое на машине разработчика — 30 000…50 000 тиков/с
- * (разброс между записями — постоянные затраты тика, а не их объём). Порог на
- * порядок ниже наблюдаемого: разница машин его не трогает, а замедление на
- * порядок краснеет (PERF-5). Жёстче ассертить wall-time MUST NOT.
+ * Сторожевой порог: наблюдаемое — 0.014…0.022 эталонной единицы работы на тик
+ * (разброс между записями — постоянные затраты тика, а не их объём). Под чужой
+ * нагрузкой на машине держатся те же числа: скорость машины сокращается в
+ * отношении, а всплески планировщика отсекает выбор лучшего прогона.
+ *
+ * Порог на порядок выше наблюдаемого: разница машин его не трогает, а
+ * замедление на порядок краснеет (PERF-5). Жёстче ассертить wall-time MUST NOT.
  */
-const MIN_TICKS_PER_SECOND = 3_000;
+const MAX_UNITS_PER_TICK = 0.25;
 
 /**
- * Тиков в секунду на одной записи. Миры собраны заранее и по одному на прогон:
- * замер обязан покрывать только цикл тиков, а повторный прогон — начинаться с
- * того же начального состояния, что и первый.
+ * Стоимость тика одной записи в эталонных единицах машины. Миры собраны заранее
+ * и по одному на прогон: замер обязан покрывать только цикл тиков, а повторный
+ * прогон — начинаться с того же начального состояния, что и первый.
+ *
+ * Берётся ЛУЧШИЙ прогон, а не сумма всех: чужая нагрузка на машине умеет
+ * сделать прогон только медленнее, никогда быстрее, — и на сумме её случайный
+ * всплеск виден как удорожание тика, которого не было. Особенно это про массу
+ * NPC: её прогонов всего четыре, и один отобранный планировщиком отрезок
+ * двигает среднее в разы (наблюдалось 2.7 против 18.8 эталонной единицы на
+ * одной машине). Той же логикой берётся минимум и в калибровке.
  */
-function ticksPerSecond(name: string, load?: ScenarioDef, warmup = WARMUP, repeats = REPEATS): number {
+function unitsPerTick(name: string, load?: ScenarioDef, warmup = WARMUP, repeats = REPEATS): number {
   const def = load ?? loadRecording(name);
   for (let i = 0; i < warmup; i++) prepareRecording(def).run();
 
   const prepared = Array.from({ length: repeats }, () => prepareRecording(def));
-  const t0 = performance.now();
-  for (const recording of prepared) recording.run();
-  const elapsedMs = performance.now() - t0;
+  let bestMs = Number.POSITIVE_INFINITY;
+  let totalMs = 0;
+  for (const recording of prepared) {
+    const started = performance.now();
+    recording.run();
+    const elapsedMs = performance.now() - started;
+    totalMs += elapsedMs;
+    if (elapsedMs < bestMs) bestMs = elapsedMs;
+  }
 
-  const ticks = def.ticks * repeats;
-  const rate = (ticks / elapsedMs) * 1000;
+  const perTickMs = bestMs / def.ticks;
+  const rate = 1000 / perTickMs;
+  const units = benchUnits(perTickMs);
   console.log(
     `[bench] тик ядра, ${name}: ${Math.round(rate).toLocaleString('ru-RU')} тиков/с ` +
-      `(${((elapsedMs / ticks) * 1000).toFixed(1)} мкс/тик, ${ticks} тиков за ${elapsedMs.toFixed(1)} мс)`,
+      `(${(perTickMs * 1000).toFixed(1)} мкс/тик, ${units.toFixed(3)} эталонной единицы; ` +
+      `лучший из ${repeats} прогонов, тиков в прогоне ${def.ticks}, все за ${totalMs.toFixed(1)} мс)`,
   );
-  return rate;
+  return units;
 }
 
 describe('замеры ядра на записанных матчах (информативно)', () => {
+  beforeAll(() => {
+    // Печать при каждом прогоне (PERF-5): по этой строке читаются остальные —
+    // тик печатается и в микросекундах, и в эталонных единицах машины.
+    console.log(calibrationLine());
+  });
+
   for (const match of RECORDED_MATCHES) {
-    it(`${match}: тиков в секунду выше порядка сторожевого порога`, () => {
-      expect(ticksPerSecond(match)).toBeGreaterThan(MIN_TICKS_PER_SECOND);
+    it(`${match}: тик дешевле сторожевого порога в эталонных единицах`, () => {
+      expect(unitsPerTick(match)).toBeLessThan(MAX_UNITS_PER_TICK);
     });
   }
 });
@@ -77,15 +107,18 @@ describe('замеры ядра на записанных матчах (инфо
  * арене — та же нагрузка, чью работу считает эталон стоимости, но замеряется
  * здесь ВРЕМЯ, которого счётчики не видят.
  *
- * Порог свой и много ниже матчевого: тик этой нагрузки делает работу за две
- * сотни агентов, а не за двоих героев. Как и у соседей выше, он сторожит
- * замедление на порядок, а не «сколько должно быть» (PERF-5).
+ * Порог свой и много выше матчевого: тик этой нагрузки делает работу за две
+ * сотни агентов, а не за двоих героев (наблюдаемое — 3 эталонных единицы на
+ * тик). Запас у него шире соседского не по вкусу, а по разбросу: прогонов
+ * здесь четыре, а не сорок, и каждый идёт полсекунды — на чужой нагрузке даже
+ * лучший из них ловит планировщик и уезжает до 8 единиц. Как и у соседей выше,
+ * он сторожит замедление на порядок, а не «сколько должно быть» (PERF-5).
  */
-const MIN_NPC_TICKS_PER_SECOND = 15;
+const MAX_NPC_UNITS_PER_TICK = 40;
 
 describe('замер массы NPC (информативно, NPC-9)', () => {
-  it(`${NPC_STRESS}: тиков в секунду выше порядка сторожевого порога`, () => {
-    const rate = ticksPerSecond(NPC_STRESS, loadNpcStress(), NPC_WARMUP, NPC_REPEATS);
-    expect(rate).toBeGreaterThan(MIN_NPC_TICKS_PER_SECOND);
+  it(`${NPC_STRESS}: тик дешевле сторожевого порога в эталонных единицах`, () => {
+    const units = unitsPerTick(NPC_STRESS, loadNpcStress(), NPC_WARMUP, NPC_REPEATS);
+    expect(units).toBeLessThan(MAX_NPC_UNITS_PER_TICK);
   });
 });

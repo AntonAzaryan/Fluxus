@@ -225,49 +225,74 @@ describe('детерминизм прогона (DET-1)', () => {
 });
 
 describe('DI (DI-3, DI-4)', () => {
-  it('ядро тикает без Physics API', () => {
-    const checker: System = {
-      name: 'Checker',
-      order: 10,
-      run: (ctx) => { expect(ctx.physics).toBeUndefined(); },
-    };
-    expect(() => tick(makeSim([checker]), freshState())).not.toThrow();
-  });
+  /** Что система увидела в контексте и сколько раз её вообще позвали. */
+  interface Watch {
+    readonly system: System;
+    readonly seen: { runs: number; context?: SystemContext };
+  }
 
-  it('переданный Physics API доходит до системы', () => {
-    const physics: PhysicsApi = { raycast: () => null, inradiusOf: () => undefined };
-    const checker: System = {
-      name: 'Checker',
-      order: 10,
-      run: (ctx) => { expect(ctx.physics).toBe(physics); },
-    };
-    tick(makeSim([checker], physics), freshState());
-  });
-
-  it('ядро тикает без Navigation API, и поля navigation в контексте нет', () => {
-    let seen: SystemContext | undefined;
-    const checker: System = {
-      name: 'Checker',
-      order: 10,
-      run: (ctx) => void (seen = ctx),
-    };
-    expect(() => tick(makeSim([checker]), freshState())).not.toThrow();
-    // Отсутствует, а не `undefined`: поле есть ровно при собранной зависимости (SYS-5).
-    expect(Object.hasOwn(seen!, 'navigation')).toBe(false);
-  });
-
-  it('переданный Navigation API доходит до системы (NAV-1)', () => {
-    const path = { status: 'found', waypoints: [{ x: 65536, y: 0 }] } as const;
-    const navigation: NavigationApi = { findPath: () => path };
-    const checker: System = {
+  /**
+   * Система-наблюдатель одного тика: выносит увиденный контекст НАРУЖУ и считает
+   * запуски.
+   *
+   * Счётчик здесь не украшение. Ассерт, живущий внутри `run`, не исполняется
+   * вовсе, если систему не позвали, — и тест остаётся зелёным, не доказав
+   * ничего: ни того, что зависимость дошла (DI-4), ни того, что её отсутствие
+   * тик переживает (DI-3). Поэтому «система запускалась» проверяется отдельным
+   * ассертом после тика, а не подразумевается.
+   */
+  function watch(): Watch {
+    const seen: { runs: number; context?: SystemContext } = { runs: 0 };
+    const system: System = {
       name: 'Checker',
       order: 10,
       run: (ctx) => {
-        expect(ctx.navigation).toBe(navigation);
-        expect(ctx.navigation!.findPath({ x: 0, y: 0 }, { x: 65536, y: 0 })).toBe(path);
+        seen.runs += 1;
+        seen.context = ctx;
       },
     };
-    tick(makeSim([checker], undefined, navigation), freshState());
+    return { system, seen };
+  }
+
+  it('ядро тикает без Physics API, и система это видит (DI-3)', () => {
+    const { system, seen } = watch();
+
+    expect(() => tick(makeSim([system]), freshState())).not.toThrow();
+
+    expect(seen.runs).toBe(1);
+    expect(seen.context?.physics).toBeUndefined();
+  });
+
+  it('переданный Physics API доходит до системы (DI-4)', () => {
+    const physics: PhysicsApi = { raycast: () => null, inradiusOf: () => undefined };
+    const { system, seen } = watch();
+
+    tick(makeSim([system], physics), freshState());
+
+    expect(seen.runs).toBe(1);
+    expect(seen.context?.physics).toBe(physics);
+  });
+
+  it('ядро тикает без Navigation API, и поля navigation в контексте нет (DI-3)', () => {
+    const { system, seen } = watch();
+
+    expect(() => tick(makeSim([system]), freshState())).not.toThrow();
+
+    expect(seen.runs).toBe(1);
+    // Отсутствует, а не `undefined`: поле есть ровно при собранной зависимости (SYS-5).
+    expect(Object.hasOwn(seen.context!, 'navigation')).toBe(false);
+  });
+
+  it('переданный Navigation API доходит до системы (DI-4, NAV-1)', () => {
+    const path = { status: 'found', waypoints: [{ x: 65536, y: 0 }] } as const;
+    const navigation: NavigationApi = { findPath: () => path };
+    const { system, seen } = watch();
+
+    tick(makeSim([system], undefined, navigation), freshState());
+
+    expect(seen.runs).toBe(1);
+    expect(seen.context?.navigation).toBe(navigation);
+    expect(seen.context?.navigation?.findPath({ x: 0, y: 0 }, { x: 65536, y: 0 })).toBe(path);
   });
 });
 

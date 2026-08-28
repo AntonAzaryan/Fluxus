@@ -8,14 +8,25 @@
  * прогрев JIT, `performance.now()` вокруг измеряемого цикла, печать `[bench]`
  * при каждом прогоне, ассерт ТОЛЬКО против деградации на порядок. Жёстких
  * порогов здесь MUST NOT быть (PERF-5): числа между машинами несравнимы, и
- * порог «в притык» краснел бы на слабой машине разработчика.
+ * порог «в притык» краснел бы на слабой машине разработчика — ровно это здесь и
+ * случилось, пороги в миллисекундах краснели в контейнере вдвое медленнее
+ * авторского. Поэтому ассерт идёт не по миллисекундам, а по ЭТАЛОННЫМ ЕДИНИЦАМ
+ * работы (`engine/tests/bench/calibration.ts`): та же нагрузка, померенная в том
+ * же процессе, делит миллисекунды на скорость машины, и остаётся отношение —
+ * «во сколько раз доставка дороже эталона». Машина в отношении сокращается,
+ * подорожание операции — нет. Совсем от условий прогона отношение не свободно:
+ * под чужой нагрузкой на машине оно наблюдалось втрое-вчетверо выше спокойного
+ * (замер длиннее калибровки, и планировщик отбирает у него больше). Порядок
+ * запаса это переживает, а деградация на порядок сквозь него проходит: правка,
+ * сделавшая перестройку маски в 20 раз дороже при неизменных счётчиках, красит
+ * все три оси разом — проверено.
  *
  * Оси — ровно те, по которым в рендер въехала регрессия пересборки маски
  * (proposal «Why»): разрешение маски 4/8, число наблюдателей, число cliff-
  * отрезков. Время печатается рядом с детерминированными счётчиками той же
  * нагрузки: «сколько работы» и «сколько это стоило» читаются одной строкой.
  */
-import { describe, expect, it } from 'vitest';
+import { beforeAll, describe, expect, it } from 'vitest';
 import {
   FogSubsystem,
   createCostCounters,
@@ -25,6 +36,7 @@ import {
   type RenderCostCounters,
   type TickView,
 } from '../src/index.js';
+import { benchUnits, calibrationLine } from '../../tests/bench/calibration.js';
 import {
   flatGrid,
   fogCanvasFactory,
@@ -108,6 +120,8 @@ function stand(axis: FogAxis): { fog: FogSubsystem; views: readonly TickView[] }
 
 interface BenchResult {
   readonly perDeliveryMs: number;
+  /** То же время в эталонных единицах машины (PERF-5) — величина, по которой ассерт. */
+  readonly perDeliveryUnits: number;
   readonly cost: RenderCostCounters;
 }
 
@@ -131,6 +145,7 @@ function benchFog(label: string, axis: FogAxis): BenchResult {
   const t0 = performance.now();
   for (let i = 0; i < DELIVERIES; i++) rebuild(views[WARMUP + i]!);
   const perDeliveryMs = (performance.now() - t0) / DELIVERIES;
+  const perDeliveryUnits = benchUnits(perDeliveryMs);
 
   const cost = createCostCounters();
   withCostSink(cost, () => {
@@ -138,15 +153,22 @@ function benchFog(label: string, axis: FogAxis): BenchResult {
   });
 
   console.log(
-    `[bench] маска FoW, ${label}: ${perDeliveryMs.toFixed(3)} мс/доставка; ` +
+    `[bench] маска FoW, ${label}: ${perDeliveryMs.toFixed(3)} мс/доставка ` +
+      `(${perDeliveryUnits.toFixed(2)} эталонной единицы); ` +
       `тексели ${cost.fogMaskTexels}, лучи теней ${cost.fogShadowRayTests}, ` +
       `блюр ${cost.fogMaskSmoothTexels}, растр ${cost.fogMaskClearTexels}, ` +
       `загрузка ${cost.fogMaskUploadBytes} байт`,
   );
-  return { perDeliveryMs, cost };
+  return { perDeliveryMs, perDeliveryUnits, cost };
 }
 
 describe('замеры рендера (информативно)', () => {
+  beforeAll(() => {
+    // Печать при каждом прогоне (PERF-5): по этой строке читаются все
+    // остальные — доставка печатается и в миллисекундах, и в её единицах.
+    console.log(calibrationLine());
+  });
+
   it('ось разрешения маски: 4 против 8 текселей на юнит (FOW-10)', () => {
     const low = benchFog('разрешение 4', { resolution: 4, observers: 4, pillarStep: 0 });
     const high = benchFog('разрешение 8', { resolution: 8, observers: 4, pillarStep: 0 });
@@ -155,10 +177,11 @@ describe('замеры рендера (информативно)', () => {
     expect(high.cost.fogMaskClearTexels).toBe(4 * low.cost.fogMaskClearTexels);
     // Блюр кромки идёт по всему растру двумя проходами — та же квадратичность.
     expect(high.cost.fogMaskSmoothTexels).toBe(4 * low.cost.fogMaskSmoothTexels);
-    // Сторожевые пороги: на порядок выше наблюдаемого (0.3 и 1.1 мс на машине
-    // разработчика) — ловят деградацию, а не разницу машин (PERF-5).
-    expect(low.perDeliveryMs).toBeLessThan(4);
-    expect(high.perDeliveryMs).toBeLessThan(15);
+    // Сторожевые пороги — в эталонных единицах машины (PERF-5): наблюдаемое
+    // отношение 0.4…0.5 и 1.7…1.9 единицы на доставку, порог на порядок выше.
+    // Разница машин в отношении сокращается, подорожание доставки — нет.
+    expect(low.perDeliveryUnits).toBeLessThan(5);
+    expect(high.perDeliveryUnits).toBeLessThan(20);
   });
 
   it('ось наблюдателей: 1 против 12 кругов на той же маске', () => {
@@ -166,9 +189,9 @@ describe('замеры рендера (информативно)', () => {
     const many = benchFog('12 наблюдателей', { resolution: 4, observers: 12, pillarStep: 0 });
 
     expect(many.cost.fogRevealCalls).toBe(12);
-    // Наблюдаемое — 0.2 и 0.6 мс на доставку; порог на порядок выше.
-    expect(one.perDeliveryMs).toBeLessThan(3);
-    expect(many.perDeliveryMs).toBeLessThan(8);
+    // Наблюдаемое — 0.25 и 0.6 эталонной единицы на доставку; порог на порядок выше.
+    expect(one.perDeliveryUnits).toBeLessThan(3);
+    expect(many.perDeliveryUnits).toBeLessThan(8);
   });
 
   it('ось сегментов укрытий: ровная арена против решётки обрывов (FOW-9)', () => {
@@ -181,9 +204,9 @@ describe('замеры рендера (информативно)', () => {
     // (`segmentCasts`, FOW-9, PHYS-13).
     expect(bare.cost.fogShadowRayTests).toBe(0);
     expect(dense.cost.fogShadowRayTests).toBeGreaterThan(0);
-    // Наблюдаемое — 0.3 мс против 8.8 мс: сама решётка обрывов и есть тот
-    // класс стоимости, ради которого сторож стоит; порог на порядок выше.
-    expect(bare.perDeliveryMs).toBeLessThan(4);
-    expect(dense.perDeliveryMs).toBeLessThan(100);
+    // Наблюдаемое — 0.36 эталонной единицы против 1.1: сама решётка обрывов и
+    // есть тот класс стоимости, ради которого сторож стоит; порог на порядок выше.
+    expect(bare.perDeliveryUnits).toBeLessThan(4);
+    expect(dense.perDeliveryUnits).toBeLessThan(10);
   });
 });

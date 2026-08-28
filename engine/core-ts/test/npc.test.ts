@@ -27,7 +27,11 @@ import {
   NPC_THREAT_COMPONENT,
 } from '../src/systems/npc/components.js';
 import { compileNpcCatalog } from '../src/systems/npc/document.js';
-import type { NpcPlatformDef } from '../src/systems/npc/model.js';
+import {
+  NPC_CONDITIONS,
+  NPC_INPUTS,
+  type NpcPlatformDef,
+} from '../src/systems/npc/model.js';
 import {
   FIXED_ONE,
   NO_ENTITY,
@@ -68,6 +72,19 @@ const PREFABS: NonNullable<SceneDef['prefabs']> = [
   {
     name: 'Hero',
     components: { Position: { x: 0, y: 0 }, Team: { id: 0 }, Health: { hp: 100, hpMax: 100 } },
+  },
+  // Крип БЕЗ компонента маршрута: им проверяется ветка «маршрута нет вовсе»
+  // условия `routeDone` (NPC-7) — она отвечает «пройден», а не «не знаю».
+  {
+    name: 'Loose',
+    components: {
+      Position: { x: 0, y: 0 },
+      Velocity: { x: 0, y: 0 },
+      Team: { id: 1 },
+      Health: { hp: 100, hpMax: 100 },
+      NpcAgent: {},
+      NpcThreat: {},
+    },
   },
   { name: 'Point', components: { Position: { x: 0, y: 0 }, Waypoint: {} } },
   { name: 'Director', components: { NpcDirector: {} } },
@@ -1125,5 +1142,323 @@ describe('Дисциплина аллокаций платформы NPC (NPC-4)
 
   it('число запросов к миру за тик не зависит от числа агентов', () => {
     expect(queriesFor(40)).toBe(queriesFor(4));
+  });
+});
+
+// --------------------------------------------------------- закрытые словари
+
+/**
+ * Словари условий переходов и входов скоринга ЗАКРЫТЫ (NPC-2, NPC-7), и
+ * закрытость — это обязанность, а не только запрет: контент вправе назвать
+ * ЛЮБОЕ имя из словаря, поэтому вычислено в гейте обязано быть каждое. Таблицы
+ * ниже индексируются самими словарями, и `Record` делает пропуск ошибкой
+ * ТИПИЗАЦИИ: имя, добавленное в `NPC_CONDITIONS`/`NPC_INPUTS` без разбора
+ * здесь, красит `npm run typecheck`, а не проезжает молча.
+ */
+
+/** Положение мира и время, за которое проба обязана ответить. */
+interface Probe {
+  /** Расстановка сцены до первого тика. */
+  readonly place: (h: Harness) => void;
+  /** Что сцена делает ПЕРЕД тиком номер `i` (нумерация с нуля). */
+  readonly during?: (h: Harness, i: number) => void;
+  /** Сколько тиков смотреть; по умолчанию четыре. */
+  readonly ticks?: number;
+}
+
+/** Типы событий пробы за отведённые ей тики. */
+function probeCast(behavior: Record<string, unknown>, probe: Probe): readonly string[] {
+  const h = harness({ behaviors: [behavior as never], bindings: BINDINGS });
+  probe.place(h);
+  const seen: string[] = [];
+  for (let i = 0; i < (probe.ticks ?? 4); i++) {
+    probe.during?.(h, i);
+    for (const event of h.step()) seen.push(event.type);
+  }
+  return seen;
+}
+
+/**
+ * Проба словаря условий: документ из двух фаз, где переход `probe → hit`
+ * сторожит РОВНО ОДНО проверяемое условие. Фаза читается шиной — каждая
+ * кастует своё событие (NPC-7), — а не внутренним полем платформы: проверяется,
+ * что условие ВЫЧИСЛЯЕТСЯ и меняет ротацию, а не как платформа хранит номер
+ * состояния. Тиков больше одного намеренно: смена фазы — переход следующего
+ * пересмотра, и проба на одном тике мерила бы момент входа в мир.
+ */
+function conditionProbe(when: Record<string, unknown>): Record<string, unknown> {
+  const always = { input: 'always', curve: { type: 'constant', value: ONE }, weight: ONE };
+  return {
+    schema: 1,
+    name: 'probe',
+    // `elite` с интервалом в тик: проба обязана пересматривать решение каждый
+    // тик, иначе зелёной её сделал бы каденс, а не условие.
+    tier: 'elite',
+    decision: { intervalTicks: 1 },
+    ranges: { sense: F(20), attack: F(20), arrive: F(1), separation: F(2) },
+    speed: F(1),
+    states: [
+      {
+        name: 'probe',
+        actions: [{ executor: 'cast', event: 'Probe', considerations: [always] }],
+        transitions: [{ to: 'hit', when }],
+      },
+      { name: 'hit', actions: [{ executor: 'cast', event: 'Hit', considerations: [always] }] },
+    ],
+  };
+}
+
+/**
+ * Проба словаря входов: состояние с ОДНИМ действием, вес которого даёт
+ * проверяемый вход. Каст означает ненулевую полезность, его отсутствие —
+ * нулевую: «нулевая полезность не выбирается вовсе» (NPC-3), и второго способа
+ * отличить их у документа нет.
+ */
+function inputProbe(
+  input: string,
+  curve: Record<string, unknown> = RISING,
+): Record<string, unknown> {
+  return {
+    schema: 1,
+    name: 'probe',
+    tier: 'elite',
+    decision: { intervalTicks: 1 },
+    ranges: { sense: F(20), attack: F(20), arrive: F(1), separation: F(2) },
+    speed: F(1),
+    states: [
+      {
+        name: 'weigh',
+        actions: [
+          { executor: 'cast', event: 'Weighed', considerations: [{ input, curve, weight: ONE }] },
+        ],
+      },
+    ],
+  };
+}
+
+describe('NPC-2, NPC-7: каждое условие закрытого словаря вычисляется', () => {
+  /** Сторож перехода вместе с миром, в котором проверяется его вердикт. */
+  interface Verdict extends Probe {
+    /** Условие, как его пишет документ. */
+    readonly when: Record<string, unknown>;
+  }
+
+  /** Разбор одного имени словаря: где условие истинно и где ложно. */
+  interface ConditionCase {
+    /** Мир, в котором условие ИСТИННО: проба обязана уйти в `hit`. */
+    readonly fires: Verdict;
+    /** Мир, в котором оно ЛОЖНО: проба обязана остаться в `probe`. */
+    readonly holds: Verdict;
+  }
+
+  const creep = (h: Harness): void => void h.place('Creep', { Position: { x: 0, y: 0 } });
+  const hurtCreep = (h: Harness): void => {
+    setField(h.world, h.place('Creep', { Position: { x: 0, y: 0 } }), 'Health', 'hp', 10);
+  };
+  const heroAt = (x: number) => (h: Harness): void => {
+    h.place('Hero', { Position: { x, y: 0 } });
+    creep(h);
+  };
+
+  const CASES: Record<(typeof NPC_CONDITIONS)[number], ConditionCase> = {
+    healthBelow: {
+      fires: { when: { kind: 'healthBelow', value: ONE / 2 }, place: hurtCreep },
+      holds: { when: { kind: 'healthBelow', value: ONE / 2 }, place: creep },
+    },
+    healthAbove: {
+      // Полное здоровье — доля единица, строго выше половины; раненый порог не
+      // берёт. Пара зеркальна `healthBelow`: у документа есть обе стороны.
+      fires: { when: { kind: 'healthAbove', value: ONE / 2 }, place: creep },
+      holds: { when: { kind: 'healthAbove', value: ONE / 2 }, place: hurtCreep },
+    },
+    elapsed: {
+      fires: { when: { kind: 'elapsed', ticks: 1 }, place: creep },
+      // Порог, до которого проба не доживает: таймер идёт, но не набран.
+      holds: { when: { kind: 'elapsed', ticks: 100 }, place: creep },
+    },
+    event: {
+      // Сигнал публикует система РАНЬШЕ поведения (EVT-2) и не на первом тике:
+      // на тике входа фаза только выбирается.
+      fires: {
+        when: { kind: 'event', event: 'Phase' },
+        place: creep,
+        during: (h, i) => {
+          if (i === 1) h.signal('Phase', {});
+        },
+      },
+      holds: { when: { kind: 'event', event: 'Phase' }, place: creep },
+    },
+    targetWithin: {
+      fires: { when: { kind: 'targetWithin', value: F(5) }, place: heroAt(F(2)) },
+      holds: { when: { kind: 'targetWithin', value: F(5) }, place: heroAt(F(10)) },
+    },
+    targetBeyond: {
+      fires: { when: { kind: 'targetBeyond', value: F(5) }, place: heroAt(F(10)) },
+      // Цели нет вовсе — «дальше порога» не истинно: условие о ЦЕЛИ, а её
+      // отсутствие называет `noTarget`.
+      holds: { when: { kind: 'targetBeyond', value: F(5) }, place: creep },
+    },
+    hasTarget: {
+      fires: { when: { kind: 'hasTarget' }, place: heroAt(F(3)) },
+      holds: { when: { kind: 'hasTarget' }, place: creep },
+    },
+    noTarget: {
+      fires: { when: { kind: 'noTarget' }, place: creep },
+      holds: { when: { kind: 'noTarget' }, place: heroAt(F(3)) },
+    },
+    routeDone: {
+      // Точек маршрута на арене нет — обход пройден.
+      fires: { when: { kind: 'routeDone' }, place: creep },
+      holds: {
+        when: { kind: 'routeDone' },
+        place: (h) => {
+          h.place('Point', { Position: { x: F(5), y: 0 }, Waypoint: { route: 0, index: 0 } });
+          h.place('Creep', { Position: { x: 0, y: 0 }, NpcRoute: { route: 0, index: 0 } });
+        },
+      },
+    },
+  };
+
+  for (const kind of NPC_CONDITIONS) {
+    const { fires, holds } = CASES[kind];
+    it(`«${kind}»: истинное условие переводит фазу, ложное — держит`, () => {
+      expect(probeCast(conditionProbe(fires.when), fires)).toContain('Hit');
+      const held = probeCast(conditionProbe(holds.when), holds);
+      expect(held).toContain('Probe');
+      expect(held).not.toContain('Hit');
+    });
+  }
+
+  it('«routeDone»: агент без компонента маршрута отвечает «пройден», а не молчит', () => {
+    // Ветка отдельным тестом: у пробы выше маршрут есть всегда, а документ
+    // вправе повесить `routeDone` на поведение, которому маршрут не выдают —
+    // и ответ там «обход кончился», а не «не знаю».
+    const events = probeCast(conditionProbe({ kind: 'routeDone' }), {
+      place: (h) => {
+        h.place('Point', { Position: { x: F(5), y: 0 }, Waypoint: { route: 0, index: 0 } });
+        h.place('Loose', { Position: { x: 0, y: 0 } });
+      },
+    });
+    expect(events).toContain('Hit');
+  });
+});
+
+describe('NPC-3: каждый вход закрытого словаря вычисляется', () => {
+  /** Мир пробы вместе с кривой отклика, на которой смотрят вход. */
+  interface Weighing extends Probe {
+    /** Кривая отклика; по умолчанию прямая `y = x`. */
+    readonly curve?: Record<string, unknown>;
+  }
+
+  /** Разбор одного имени словаря: где вход даёт вес и где — ноль. */
+  interface InputCase {
+    /** Мир, где вход даёт ненулевую полезность: действие выбирается. */
+    readonly weighs: Weighing | null;
+    /** Мир, где вход даёт ноль: действие не выбирается вовсе (NPC-3). */
+    readonly zero: Weighing | null;
+  }
+
+  const creep = (h: Harness): void => void h.place('Creep', { Position: { x: 0, y: 0 } });
+
+  const CASES: Record<(typeof NPC_INPUTS)[number], InputCase> = {
+    // Ось-константа: нулём не бывает по определению — на то она и «всегда».
+    always: { weighs: { curve: { type: 'constant', value: ONE }, place: creep }, zero: null },
+    targetKnown: {
+      weighs: {
+        place: (h) => {
+          h.place('Hero', { Position: { x: F(3), y: 0 } });
+          creep(h);
+        },
+      },
+      zero: { place: creep },
+    },
+    targetDistance: {
+      // Цель у дальнего края чувства — доля пути к нему почти единица.
+      weighs: {
+        place: (h) => {
+          h.place('Hero', { Position: { x: F(19), y: 0 } });
+          creep(h);
+        },
+      },
+      // Цель в той же точке — расстояние ноль, и вес нулевой.
+      zero: {
+        place: (h) => {
+          h.place('Hero', { Position: { x: 0, y: 0 } });
+          creep(h);
+        },
+      },
+    },
+    healthFraction: {
+      weighs: { place: creep },
+      zero: {
+        place: (h) => {
+          setField(h.world, h.place('Creep', { Position: { x: 0, y: 0 } }), 'Health', 'hp', 0);
+        },
+      },
+    },
+    crowding: {
+      weighs: {
+        place: (h) => {
+          creep(h);
+          h.place('Creep', { Position: { x: F(1), y: 0 } });
+        },
+      },
+      // Сосед один — сам агент; шкала расхождения его не считает.
+      zero: { place: creep },
+    },
+    stateElapsed: {
+      // Ненулевым вход становится со ВТОРОГО тика в состоянии; на тике входа он
+      // ровно ноль (проверено выше по файлу), и это единственный его нуль.
+      weighs: { place: creep },
+      zero: { place: creep, ticks: 1 },
+    },
+    routeRemaining: {
+      weighs: {
+        place: (h) => {
+          h.place('Point', { Position: { x: F(5), y: 0 }, Waypoint: { route: 0, index: 0 } });
+          h.place('Creep', { Position: { x: 0, y: 0 }, NpcRoute: { route: 0, index: 0 } });
+        },
+      },
+      zero: { place: creep },
+    },
+  };
+
+  for (const input of NPC_INPUTS) {
+    const { weighs, zero } = CASES[input];
+    it(`«${input}»: ненулевой вес выбирает действие, нулевой — не выбирает`, () => {
+      if (weighs !== null) {
+        expect(probeCast(inputProbe(input, weighs.curve), weighs)).toContain('Weighed');
+      }
+      if (zero !== null) {
+        expect(probeCast(inputProbe(input, zero.curve), zero)).not.toContain('Weighed');
+      }
+    });
+  }
+
+  it('«targetDistance»: цели нет — «дальше некуда», а не подмена расстояния нулём', () => {
+    // Отсутствие цели говорит вход `targetKnown`; расстояние в этом положении
+    // мира обязано быть максимальным, иначе документ, сближающийся по нему, на
+    // пустой арене замирал бы вместо поиска.
+    const alone = probeCast(inputProbe('targetDistance'), {
+      place: (h) => void h.place('Creep', { Position: { x: 0, y: 0 } }),
+    });
+    expect(alone).toContain('Weighed');
+  });
+
+  it('«healthFraction»: убывающая кривая делает раненого агента активнее целого', () => {
+    // Кривая с отрицательным наклоном — штатный способ записать убывание
+    // (NPC-3); ею документ выражает «чем хуже дела, тем нужнее действие».
+    const falling = { type: 'linear', slope: -ONE, intercept: ONE };
+    const hurt = probeCast(inputProbe('healthFraction', falling), {
+      place: (h) => {
+        setField(h.world, h.place('Creep', { Position: { x: 0, y: 0 } }), 'Health', 'hp', 10);
+      },
+    });
+    const whole = probeCast(inputProbe('healthFraction', falling), {
+      place: (h) => void h.place('Creep', { Position: { x: 0, y: 0 } }),
+    });
+    expect(hurt).toContain('Weighed');
+    // Целое здоровье на убывающей кривой — ровно ноль: действие не выбирается.
+    expect(whole).not.toContain('Weighed');
   });
 });

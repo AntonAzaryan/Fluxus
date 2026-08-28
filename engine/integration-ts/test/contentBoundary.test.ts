@@ -47,6 +47,12 @@ describe('guard: сканер границы контента ловит каж�
     writeFileSync(join(root, 'pkg-ts/src/duel.match.json'), '{}');
     writeFileSync(join(root, 'pkg-ts/src/manifest.json'), '{}');
     writeFileSync(join(root, 'pkg-ts/src/hero.mdx'), '');
+    // Та же модель в ТЕКУЩЕМ формате контента (ASSET-3, BLND-11) и авторский
+    // источник её сцены (CONT-6): знай сканер только `.mdx`, граница CONT-1
+    // держалась бы для исторического формата и протекала бы для рабочего.
+    writeFileSync(join(root, 'pkg-ts/src/hero.gltf'), '');
+    writeFileSync(join(root, 'pkg-ts/src/hero.glb'), '');
+    writeFileSync(join(root, 'pkg-ts/src/duel.blend'), '');
     writeFileSync(join(root, 'pkg-ts/src/skin.png'), '');
     // Не контент: исходники, манифест пакета, эталон прогона.
     writeFileSync(join(root, 'pkg-ts/src/index.ts'), '');
@@ -65,14 +71,28 @@ describe('guard: сканер границы контента ловит каж�
     const files = scanContentLocation({ rootDir: root }).map((v) => v.file);
     expect(files).toEqual([
       'pkg-ts/src/bots/easy.json',
+      'pkg-ts/src/duel.blend',
       'pkg-ts/src/duel.bots.json',
       'pkg-ts/src/duel.match.json',
       'pkg-ts/src/duel.presentation.json',
       'pkg-ts/src/duel.scene.json',
+      'pkg-ts/src/hero.glb',
+      'pkg-ts/src/hero.gltf',
       'pkg-ts/src/hero.mdx',
       'pkg-ts/src/manifest.json',
       'pkg-ts/src/skin.png',
     ]);
+  });
+
+  it('модель в РАБОЧЕМ формате контента граница ловит наравне с историческим', () => {
+    // Отдельным тестом, потому что это и была дыра: `.mdx` — исторический
+    // формат реестра (BLND-11), а модели контента приезжают glTF (ASSET-3), и
+    // словарь сканера обязан знать оба, иначе CONT-1 держится только для того
+    // формата, которым уже не пользуются.
+    const kinds = new Map(scanContentLocation({ rootDir: root }).map((v) => [v.file, v.message]));
+    for (const file of ['pkg-ts/src/hero.gltf', 'pkg-ts/src/hero.glb', 'pkg-ts/src/duel.blend']) {
+      expect(kinds.get(file), file).toContain('CONT-1');
+    }
   });
 
   it('исходники, манифест пакета и эталоны прогона не краснят', () => {

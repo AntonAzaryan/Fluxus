@@ -21,8 +21,8 @@
   ],
   "workspaces": {
     ".": {
-      "entry": [".claude/hooks/*.mjs", "engine/tests/guard/*.ts"],
-      "project": ["scripts/**", "engine/tests/guard/**", "*.ts", "*.js"]
+      "entry": [".claude/hooks/*.mjs", "engine/tests/guard/*.ts", "engine/tests/bench/*.ts"],
+      "project": ["scripts/**", "engine/tests/guard/**", "engine/tests/bench/**", "*.ts", "*.js"]
     },
     "engine/core-ts": {
       "entry": ["bin/*.mjs", "test/**/*.test.ts"]

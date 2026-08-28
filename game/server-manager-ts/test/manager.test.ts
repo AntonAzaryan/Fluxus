@@ -25,6 +25,7 @@ import {
   memoryStorage,
   walk,
   type ManagerSession,
+  type PageStorage,
   type UiNode,
 } from '../src/index.js';
 
@@ -65,8 +66,8 @@ async function liveAgent(matchDocs: readonly string[] = ['duel', 'training']): P
   return agent;
 }
 
-function manager(): ManagerSession {
-  const session = createManagerSession({ connect: nodeSocket, storage: memoryStorage(), label: 'тест' });
+function manager(storage: PageStorage = memoryStorage()): ManagerSession {
+  const session = createManagerSession({ connect: nodeSocket, storage, label: 'тест' });
   sessions.push(session);
   return session;
 }
@@ -430,5 +431,203 @@ describe('политика завершения менеджера (MGR-4)', () 
     // Локальные остановлены, удалённые — нет, и это не зависит от тумблера.
     expect(local.registry.list()).toEqual([]);
     expect(remote.registry.list()).toHaveLength(1);
+  });
+});
+
+/**
+ * Хост УБИРАЕТСЯ, и это операция книги, а не остановка серверов. MGR-1 говорит
+ * про добавление («удалённый добавляется адресом и пейрингом»), а убирание — его
+ * обратная сторона: то, что менеджер помнит, он обязан уметь забыть, иначе
+ * пейринг был бы билетом в одну сторону.
+ */
+describe('забытый хост (MGR-1)', () => {
+  it('уходит из списка и из книги, но его серверы продолжают работать', async () => {
+    const storage = memoryStorage();
+    const first = await liveAgent();
+    const second = await liveAgent();
+    const session = manager(storage);
+    await session.addRemote(first.controlUrl, first.tokens.issueCode(Date.now()), 'VPS-1');
+    await session.addRemote(second.controlUrl, second.tokens.issueCode(Date.now()), 'VPS-2');
+    const [one, two] = session.state.hosts.map((host) => host.id);
+
+    await session.start(two!, params());
+    await session.select(two!, session.state.servers[0]!.entry.id);
+    expect(session.state.details?.host).toBe(two);
+
+    // Забыт ЧУЖОЙ хост: детали выбранного сервера к нему отношения не имеют, и
+    // закрывать их незачем — сервер опознаётся парой «хост + идентификатор».
+    await session.forget(one!);
+    expect(session.state.hosts.map((host) => host.id)).toEqual([two]);
+    expect(session.state.details?.host).toBe(two);
+
+    await session.forget(two!);
+    expect(session.state.hosts).toEqual([]);
+    expect(session.state.servers).toEqual([]);
+    expect(session.state.details).toBeUndefined();
+    // Забыть хост — не то же, что остановить его серверы: матч идёт дальше, и
+    // политика завершения (MGR-4) тут ни при чём.
+    expect(second.registry.list()).toHaveLength(1);
+
+    // И книга его больше не помнит: следующий запуск менеджера сам к нему не идёт.
+    const next = manager(storage);
+    await next.restore();
+    expect(next.state.hosts).toEqual([]);
+  });
+
+  it('отписавшийся от смен состояния больше не уведомляется', async () => {
+    const agent = await liveAgent();
+    const session = manager();
+    await session.addRemote(agent.controlUrl, agent.tokens.issueCode(Date.now()), 'VPS');
+
+    let seen = 0;
+    const stop = session.onChange(() => { seen += 1; });
+    session.setKillOnExit(false);
+    expect(seen).toBe(1);
+
+    // Отписка — не пожелание: страница, ушедшая со сцены, перерисовываться не
+    // должна, иначе её узлы живут ровно столько, сколько живёт сессия.
+    stop();
+    await session.forget(session.state.hosts[0]!.id);
+    expect(seen).toBe(1);
+  });
+});
+
+/**
+ * Отказ ЛЮБОЙ операции наблюдаем как отказ с названной причиной (`server-control`
+ * SRV-2) — включая операции, до протокола не доехавшие. Канал вправе умереть
+ * между отрисовкой кнопки и нажатием на неё, и человек в этот момент видит
+ * прежний экран: кнопки на месте, хост в списке. Нажатие обязано ответить
+ * причиной, а не отклонённым промисом, который в странице не ловит никто.
+ */
+describe('операция без канала — названный отказ (MGR-2, MGR-3, SRV-2)', () => {
+  it('после смерти канала каждая кнопка называет причину', async () => {
+    const agent = await liveAgent();
+    const session = manager();
+    await session.addRemote(agent.controlUrl, agent.tokens.issueCode(Date.now()), 'VPS');
+    const host = session.state.hosts[0]!.id;
+    await session.start(host, params());
+    const server = session.state.servers[0]!.entry.id;
+
+    await agent.close();
+    await until(() => session.state.hosts[0]?.connected === false, 5000);
+
+    for (const operation of [
+      (): Promise<void> => session.start(host, params()),
+      (): Promise<void> => session.stop(host, server),
+      (): Promise<void> => session.select(host, server),
+      (): Promise<void> => session.admin(host, server, 'pause'),
+    ]) {
+      await operation();
+      expect(session.state.notice).toContain('не подключён');
+    }
+
+    // Строка сервера при этом ОСТАЁТСЯ: список показывает последнее известное
+    // состояние вместе с названной причиной, а не пустеет молча (MGR-2).
+    expect(session.state.servers).toHaveLength(1);
+    expect(nodesOf(managerView(session.state), 'mg-notice')[0]?.text).toContain('не подключён');
+  });
+
+  it('операция над хостом, которого в списке нет, названа отдельно', async () => {
+    const session = manager();
+    // Не «не подключён», а «в списке нет»: адрес, которого менеджер не знает,
+    // и хост, чей канал умер, чинятся по-разному.
+    await session.start('wss://127.0.0.1:1', params());
+    expect(session.state.notice).toContain('в списке нет');
+  });
+
+  it('обновление списка не срывается о мёртвый хост', async () => {
+    const alive = await liveAgent();
+    const dead = await liveAgent();
+    const session = manager();
+    await session.addRemote(alive.controlUrl, alive.tokens.issueCode(Date.now()), 'живой');
+    await session.addRemote(dead.controlUrl, dead.tokens.issueCode(Date.now()), 'мёртвый');
+    const [aliveId, deadId] = session.state.hosts.map((host) => host.id);
+    await session.start(aliveId!, params());
+
+    await dead.close();
+    await until(() => session.state.hosts[1]?.connected === false, 5000);
+
+    // Второй менеджер поднимает на живом хосте ещё один сервер: список первого
+    // устарел, и `refresh` обязан его догнать, а не отказать из-за соседа.
+    const other = manager();
+    await other.addRemote(alive.controlUrl, alive.tokens.issueCode(Date.now()), 'VPS');
+    await other.start(other.state.hosts[0]!.id, params());
+
+    await session.refresh();
+    expect(session.state.notice).toBe('');
+    expect(session.state.servers.filter((row) => row.host === aliveId)).toHaveLength(2);
+    expect(session.state.servers.filter((row) => row.host === deadId)).toEqual([]);
+  });
+});
+
+describe('переключение деталей (MGR-3, решение D9)', () => {
+  it('прежний сервер отписывается, а ушедший хост переключению не мешает', async () => {
+    const first = await liveAgent();
+    const second = await liveAgent();
+    const session = manager();
+    await session.addLocal(first.controlUrl, first.tokens.issueCode(Date.now()), '');
+    await session.addRemote(second.controlUrl, second.tokens.issueCode(Date.now()), 'VPS');
+    const [one, two] = session.state.hosts.map((host) => host.id);
+    await session.start(one!, params());
+    await session.start(two!, params());
+    const rows = session.state.servers;
+
+    await session.select(one!, rows[0]!.entry.id);
+    // Переключение на чужой сервер: подписка на прежний снимается — без
+    // читателя отчёт метрик не собирается (D9), и оставленная подписка держала
+    // бы сбор на сервере, деталей которого никто не смотрит.
+    await session.select(two!, rows[1]!.entry.id);
+    expect(session.state.notice).toBe('');
+    expect(session.state.details?.host).toBe(two);
+    await until(() => session.state.details?.metrics !== null);
+
+    // Хост деталей ушёл вместе со своим сервером: отписываться уже не от чего,
+    // и переключение на другой хост это не срывает.
+    await second.close();
+    await until(() => session.state.hosts[1]?.connected === false, 5000);
+    await session.select(one!, rows[0]!.entry.id);
+    expect(session.state.notice).toBe('');
+    expect(session.state.details?.host).toBe(one);
+  });
+});
+
+describe('добавление хоста дважды (MGR-1)', () => {
+  it('поздняя попытка вытесняет раннюю, и второго канала к агенту не остаётся', async () => {
+    const agent = await liveAgent();
+    const session = manager();
+    // Человек нажал «добавить» дважды — либо `restore()` пошёл по книге, пока
+    // добавление ещё идёт. Обе попытки настоящие: у каждой свой одноразовый код
+    // пейринга (SRV-3), обе доходят до рукопожатия.
+    await Promise.all([
+      session.addRemote(agent.controlUrl, agent.tokens.issueCode(Date.now()), 'VPS'),
+      session.addRemote(agent.controlUrl, agent.tokens.issueCode(Date.now()), 'VPS'),
+    ]);
+
+    // Хост ОДИН, и он рабочий: ранняя попытка ушла молча, не подменив исход
+    // поздней своим и не оставив открытым второй канал к тому же агенту.
+    expect(session.state.hosts).toHaveLength(1);
+    expect(session.state.hosts[0]?.connected).toBe(true);
+    await session.start(session.state.hosts[0]!.id, params());
+    expect(session.state.notice).toBe('');
+    expect(agent.registry.list()).toHaveLength(1);
+  });
+
+  it('хост подключён, даже если книга его не запомнила', async () => {
+    const agent = await liveAgent();
+    // Так ведёт себя хранилище с исчерпанной квотой: читается прекрасно, а
+    // пишется отказом.
+    const full: PageStorage = {
+      getItem: () => null,
+      setItem: () => { throw new Error('квота исчерпана'); },
+    };
+    const session = manager(full);
+    await session.addRemote(agent.controlUrl, agent.tokens.issueCode(Date.now()), 'VPS');
+
+    // Канал открыт, хост работает — потеряна только память о нём, и сказано об
+    // этом именно так, а не отказом подключения (MGR-1, SRV-2).
+    expect(session.state.hosts[0]?.connected).toBe(true);
+    expect(session.state.notice).toContain('не запомнен');
+    await session.start(session.state.hosts[0]!.id, params());
+    expect(agent.registry.list()).toHaveLength(1);
   });
 });

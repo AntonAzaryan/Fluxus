@@ -5,9 +5,10 @@
  * а не загружена из `content/` (CONT-4): ретюнинг контента не должен красить
  * этот тест.
  *
- * Все ожидаемые значения — целые Q16.16 (FP-1). TimeScale в сцене нет, поэтому
- * множитель интеграции равен единице (PHYS-8) и смещение за тик равно скорости
- * тика — равенства точные, без допусков.
+ * Все ожидаемые значения — целые Q16.16 (FP-1). По умолчанию TimeScale в сцене
+ * нет, поэтому множитель интеграции равен единице (PHYS-8) и смещение за тик
+ * равно скорости тика. Платформу TimeScale подключает только стенд LOC-6, и
+ * половинный множитель там тоже точен — равенства везде без допусков.
  */
 import { describe, expect, it } from 'vitest';
 import {
@@ -64,7 +65,7 @@ const BOLT_HALF = 6554;
  * 0` — ничто его не блокирует, `hitMask 2` — регистрирует пересечение с
  * героями событием `Overlap` (PHYS-12).
  */
-function movementScene(terrain?: TerrainDef): SceneDef {
+function movementScene(terrain?: TerrainDef, timeScale = false): SceneDef {
   return {
     components: [
       { name: 'Player', fields: { slot: 'i32' } },
@@ -136,6 +137,9 @@ function movementScene(terrain?: TerrainDef): SceneDef {
           },
           Locomotion: HERO_LOCOMOTION,
           LocomotionState: { dirX: 0, dirY: 0, state: 0, ticksLeft: 0 },
+          // Список источников замедления заводится только на сборке LOC-6:
+          // лишний компонент менял бы состав мира остальным тестам (SER-7).
+          ...(timeScale ? { TimeScaleModifiers: {} } : {}),
         },
         tags: ['Hero'],
       },
@@ -159,6 +163,8 @@ function movementScene(terrain?: TerrainDef): SceneDef {
       },
     ],
     ...(terrain !== undefined ? { terrain } : {}),
+    // Компоненты TimeScale и сведение источников подключает сама сцена (SER-7).
+    ...(timeScale ? { timeScale: true } : {}),
     capacity: 16,
   };
 }
@@ -222,7 +228,10 @@ function fieldAt(
   return value;
 }
 
-/** Смещение за тик; равно скорости тика — множитель интеграции единичный (PHYS-8). */
+/**
+ * Смещение за тик. При единичном множителе интеграции равно скорости тика; под
+ * TimeScale — скорости, умноженной на личный множитель сущности (PHYS-8).
+ */
 function stepX(out: RunOutput, tick: number, index: number): number {
   return fieldAt(out, tick, 'Position', 'x', index) - fieldAt(out, tick - 1, 'Position', 'x', index);
 }
@@ -326,6 +335,81 @@ describe('конвейер Input → Locomotion → Physics на живой сц
     expect(stateAt(roll, 24, HERO)).toBe(LOCOMOTION_NORMAL);
   });
 
+  /**
+   * LOC-6: длительности манёвров и окно даблтапа считаются в ГЛОБАЛЬНЫХ тиках и
+   * MUST NOT масштабироваться TimeScale — документированный отказ локомоушена от
+   * опт-ина (TIME-4, TIME-5). Замедление доходит до сущности другим путём:
+   * физика масштабирует её перемещение в точке интеграции (PHYS-8), поэтому
+   * «замедленный перекат длится те же тики, но покрывает меньшую дистанцию».
+   *
+   * Оба прогона идут по ОДНОЙ сборке сцены — с платформой TimeScale и с тем же
+   * вводом: различие ровно одно, источник замедления на герое. Иначе разошлись
+   * бы состав компонентов и порядок систем, и сравнивать таймлайны было бы не с
+   * чем.
+   */
+  describe('перекат в куполе замедления (LOC-6, TIME-4, TIME-5, PHYS-8)', () => {
+    /** Половина — точная доля Q16.16 (FP-1); id источника ненулевой (TIME-7). */
+    const HALF: number = fixed.fromFloat(0.5);
+    const SLOW_SOURCE = 1;
+    /** Ход переката под множителем: mul(8192, 32768) = 4096, без округления. */
+    const SLOW_ROLL_STEP = 4096;
+    /** Тик старта переката и последний тик манёвра — те же, что у обычного прогона. */
+    const ROLL_FROM = 7;
+    const ROLL_TO = 23;
+
+    const rollRun = (slowed: boolean): RunOutput =>
+      run(
+        slowed ? 'locomotion-roll-slowed' : 'locomotion-roll-normal',
+        25,
+        movementScene(undefined, true),
+        [
+          {
+            prefab: 'Hero',
+            overrides: {
+              Position: { x: fixed.fromInt(2), y: fixed.fromInt(2) },
+              // Источник живёт обычным компонентом-списком (TIME-7): сводит его
+              // `TimeScaleSystem`, а ставит — начальная расстановка прогона.
+              ...(slowed ? { TimeScaleModifiers: { id0: SLOW_SOURCE, value0: HALF } } : {}),
+            },
+          },
+        ],
+        // Тот же ввод, что у обычного переката: фронт уклона и повторный фронт
+        // внутри окна даблтапа (LOC-4).
+        [frame(1, STEP, DODGE_MASK), frame(7, 0, DODGE_MASK)],
+      );
+
+    it('замедленный перекат длится те же тики, но проходит половину дистанции', () => {
+      const normal = rollRun(false);
+      const slowed = rollRun(true);
+
+      // Множитель доехал до сущности штатным путём: список источников →
+      // `TimeScaleSystem` → компонент, который читает `getEffectiveDelta` (TIME-3).
+      expect(fieldAt(slowed, 1, 'TimeScale', 'value', HERO)).toBe(HALF);
+
+      // Тайминги глобальны: машина манёвров идёт тик-в-тик как без замедления —
+      // совпадают и состояние, и остаток тиков манёвра на каждом тике прогона.
+      const timeline = (out: RunOutput): number[][] =>
+        out.ticks.map((_, tick) => [
+          stateAt(out, tick, HERO),
+          fieldAt(out, tick, 'LocomotionState', 'ticksLeft', HERO),
+        ]);
+      expect(timeline(slowed)).toEqual(timeline(normal));
+      expect(stateAt(slowed, ROLL_FROM, HERO)).toBe(LOCOMOTION_ROLL);
+      expect(stateAt(slowed, ROLL_TO + 1, HERO)).toBe(LOCOMOTION_NORMAL);
+
+      // Перемещение — ровно половина: и потиково, и суммой за манёвр.
+      for (let tick = ROLL_FROM; tick <= ROLL_TO; tick++) {
+        expect(stepX(normal, tick, HERO)).toBe(HERO_LOCOMOTION.rollSpeed);
+        expect(stepX(slowed, tick, HERO)).toBe(SLOW_ROLL_STEP);
+      }
+      const travel = (out: RunOutput): number =>
+        fieldAt(out, ROLL_TO, 'Position', 'x', HERO) - fieldAt(out, ROLL_FROM - 1, 'Position', 'x', HERO);
+      expect(travel(normal)).toBe(17 * HERO_LOCOMOTION.rollSpeed);
+      expect(travel(slowed)).toBe(17 * SLOW_ROLL_STEP);
+      expect(travel(slowed) * 2).toBe(travel(normal));
+    });
+  });
+
   describe('прыжок через обрыв 0 → 1 (LOC-5, PHYS-11)', () => {
     // Сущность террейна спавнится первой (ID-2), герой — индекс 1.
     const HERO_T = 1;
@@ -353,6 +437,40 @@ describe('конвейер Input → Locomotion → Physics на живой сц
         },
       ]);
       expect(eventsAt(out, 4, 'Collision')).toHaveLength(0);
+    });
+
+    /**
+     * Вторая половина LOC-6: «летающая сущность собирается политикой из
+     * существующих механизмов ... нового механизма локомоушен не вводит». Здесь
+     * проверена та её деталь, которая живёт в этом конвейере, — ПОСТОЯННЫЙ
+     * `cliffRise` (PHYS-11): обрыв не блокирует, а машина манёвров при этом не
+     * трогается вовсе. Вторая деталь сборки, постоянный override уровня
+     * (ARENA-6), наблюдаема только через события арены и закреплена своим
+     * тестом в `arena.test.ts` («снаряд с override уровня над той же дырой не
+     * проваливается»); арены в этой сцене нет, и заводить её ради дубля незачем.
+     */
+    it('постоянный cliffRise пересекает обрыв без манёвра вовсе (LOC-6, PHYS-11)', () => {
+      const out = run(
+        'locomotion-cliff-constant-rise',
+        8,
+        movementScene(CLIFF_TERRAIN),
+        // Та же сущность, что и в тесте выше, с одним отличием: допуск подъёма
+        // задан контентом и не снимается — его никто не выставлял на манёвр.
+        [{ prefab: 'Hero', overrides: { ...JUMP_HERO.overrides, Collider: { cliffRise: 1 } } }],
+        walkRight(1, 8),
+      );
+
+      // 163840 + 8 × 16384: ни один шаг не погашен, герой за линией целиком.
+      expect(fieldAt(out, 8, 'Position', 'x', HERO_T)).toBe(294912);
+      expect(fieldAt(out, 8, 'Position', 'x', HERO_T) - HERO_HALF).toBeGreaterThan(CLIFF_LINE);
+      expect(countEvents(out, 'Collision')).toBe(0);
+
+      // Нового механизма нет: машина манёвров не покидала Normal, а допуск
+      // подъёма остался тем, что положил контент (LOC-3, LOC-6).
+      for (let tick = 0; tick <= 8; tick++) {
+        expect(stateAt(out, tick, HERO_T)).toBe(LOCOMOTION_NORMAL);
+        expect(fieldAt(out, tick, 'Collider', 'cliffRise', HERO_T)).toBe(1);
+      }
     });
 
     it('с прыжком jumpHeight = 1 гейт открыт: герой приземляется на верхнем уровне', () => {

@@ -21,14 +21,17 @@ import {
   HeldActions,
   InputSampler,
   KeyboardMouseSource,
+  POINTER_MODIFIERS,
   TouchSource,
   aimAngle,
+  navigatorGamepad,
   pointerAction,
   pointerSuppressed,
   validateBindings,
   type ContinuousSample,
   type GamepadLike,
   type InputSource,
+  type PointerModifier,
 } from '../src/index.js';
 
 const BITS = { cast: 0, kill: 1, dodge: 2, jump: 3 } as const;
@@ -94,6 +97,73 @@ class StubSource implements InputSource {
   }
   held(): ReadonlySet<string> {
     return this.heldActions;
+  }
+}
+
+/**
+ * Подписка окна-стенда: ТИП и ССЫЛКА на обработчик. Отписка обязана снять ровно
+ * ту пару, которую поставила подписка, — сравнение по ссылке и есть проверка
+ * симметрии `bind`.
+ */
+interface FakeSubscription {
+  readonly type: string;
+  readonly handler: (event: unknown) => void;
+}
+
+/**
+ * Окно-стенд вместо jsdom (design D8): ровно та поверхность, которую трогают
+ * `bind()` источников и `navigatorGamepad`, — подписка, отписка и `navigator`.
+ *
+ * Событие разносится только по ЖИВЫМ подпискам: снятый обработчик в браузере
+ * события не получает, и тест обязан видеть ровно это. Асимметрия `bind` и
+ * отписки — утечка, которую глазами не увидеть, и здесь она красная.
+ */
+class FakeWindow {
+  readonly added: FakeSubscription[] = [];
+  readonly removed: FakeSubscription[] = [];
+  /** Стенд Gamepad API: то, что отдаст `navigator.getGamepads()`. */
+  pads: (GamepadLike | null)[] = [];
+  /** Сколько раз обвязка спросила браузер — «устройства нет» её не будит. */
+  getGamepadsCalls = 0;
+  readonly navigator = {
+    getGamepads: (): (GamepadLike | null)[] => {
+      this.getGamepadsCalls += 1;
+      return this.pads;
+    },
+  };
+
+  addEventListener(type: string, handler: (event: unknown) => void): void {
+    this.added.push({ type, handler });
+  }
+
+  removeEventListener(type: string, handler: (event: unknown) => void): void {
+    this.removed.push({ type, handler });
+  }
+
+  /** Ещё не снятые подписки: снятие ищется по паре «тип + ссылка». */
+  live(): FakeSubscription[] {
+    const rest = [...this.added];
+    for (const gone of this.removed) {
+      const index = rest.findIndex((s) => s.type === gone.type && s.handler === gone.handler);
+      if (index !== -1) rest.splice(index, 1);
+    }
+    return rest;
+  }
+
+  /** Типы живых подписок — по ним читается, что именно источник слушает. */
+  liveTypes(): string[] {
+    return this.live()
+      .map((s) => s.type)
+      .sort();
+  }
+
+  /** Синтетическое событие: доходит только до живых подписок, как в браузере. */
+  dispatch(type: string, event: unknown = {}): void {
+    for (const s of this.live()) if (s.type === type) s.handler(event);
+  }
+
+  asWindow(): Window {
+    return this as unknown as Window;
   }
 }
 
@@ -565,6 +635,150 @@ describe('KeyboardMouseSource (INP-1, миграция heroMoveFromKeys)', () =>
   });
 });
 
+describe('KeyboardMouseSource: жизненный цикл и обвязка окна (INP-5, D8)', () => {
+  const kb = (): KeyboardMouseSource =>
+    new KeyboardMouseSource({
+      bindings: validateBindings(BINDINGS).keyboardMouse,
+      aimAt: (x, y) => ({ angle: aimAngle(1, 0), x, y }),
+    });
+
+  it('stop() снимает удержания и движение — залипания нет (INP-5)', () => {
+    const sampler = makeSampler();
+    const source = kb();
+    sampler.add(source);
+    source.handleKeyDown('Space');
+    source.handleKeyDown('KeyW');
+    source.handlePointerDown(0, 10, 20);
+    expect(sampler.sample().buttons).toBe((1 << BITS.jump) | (1 << BITS.cast));
+
+    sampler.remove(source); // `remove` зовёт `stop()` источника
+    expect([...source.held()]).toEqual([]);
+    expect(source.poll()).toMatchObject({ moveX: 0, moveY: 0 });
+
+    // Новый приёмник получает чистый источник: ни удержаний, ни фронтов.
+    const pressed: string[] = [];
+    source.start((a) => pressed.push(a));
+    expect(pressed).toEqual([]);
+    expect([...source.held()]).toEqual([]);
+  });
+
+  it('остановленный источник фронтов не рождает: приёмник снят вместе с ним', () => {
+    const source = kb();
+    const pressed: string[] = [];
+    source.start((a) => pressed.push(a));
+    source.handleKeyDown('Space');
+    expect(pressed).toEqual(['jump']);
+
+    // Пары «`stop()` без отписки» в рантайме нет (`bind` снимает подписки
+    // вместе с источником), и события приходят сюда нарочно: приёмника у
+    // остановленного источника нет, значит и фронта нет — ни от клавиши, ни от
+    // кнопки указателя.
+    source.stop();
+    source.handleKeyDown('KeyK');
+    source.handlePointerDown(0, 10, 20);
+    expect(pressed).toEqual(['jump']);
+  });
+
+  it('bind симметричен: отписка снимает ровно те подписки, которые поставила', () => {
+    const win = new FakeWindow();
+    const unbind = kb().bind(win.asWindow());
+    expect(win.liveTypes()).toEqual(['blur', 'keydown', 'keyup', 'mousedown', 'mouseup']);
+    expect(win.removed).toEqual([]);
+
+    unbind();
+    // Снято ровно то, что поставлено, — и по типу, и по ССЫЛКЕ на обработчик:
+    // пережившая отписку подписка это утечка, которой не видно глазами.
+    expect(win.live()).toEqual([]);
+    expect(win.removed).toHaveLength(win.added.length);
+  });
+
+  it('события окна дают тот же фронт, что прямой вызов обработчика; отписка их обрывает', () => {
+    const win = new FakeWindow();
+    const source = kb();
+    const pressed: string[] = [];
+    source.start((a) => pressed.push(a));
+    const unbind = source.bind(win.asWindow());
+
+    win.dispatch('keydown', { code: 'Space', repeat: false });
+    expect(pressed).toEqual(['jump']);
+    // Автоповтор ОС приезжает флагом события — второго фронта нет (INP-2).
+    win.dispatch('keydown', { code: 'Space', repeat: true });
+    expect(pressed).toEqual(['jump']);
+
+    win.dispatch('keydown', { code: 'KeyW', repeat: false });
+    expect(source.poll()).toMatchObject({ moveX: 0, moveY: 1 });
+    expect([...source.held()]).toEqual(['jump']);
+    win.dispatch('keyup', { code: 'KeyW' });
+    expect(source.poll()).toMatchObject({ moveX: 0, moveY: 0 });
+
+    // Все четыре направления раскладки едут одним обработчиком.
+    win.dispatch('keydown', { code: 'KeyS', repeat: false });
+    win.dispatch('keydown', { code: 'KeyA', repeat: false });
+    const back = source.poll();
+    expect(back.moveX).toBeLessThan(0);
+    expect(back.moveY).toBeLessThan(0);
+    expect(Math.hypot(back.moveX, back.moveY)).toBeCloseTo(1, 6);
+    win.dispatch('keyup', { code: 'KeyS' });
+    win.dispatch('keyup', { code: 'KeyA' });
+    expect(source.poll()).toMatchObject({ moveX: 0, moveY: 0 });
+
+    // Потеря фокуса окна — нейтраль вместо залипания (INP-5).
+    win.dispatch('blur');
+    expect([...source.held()]).toEqual([]);
+
+    unbind();
+    win.dispatch('keydown', { code: 'KeyK', repeat: false });
+    expect(pressed).toEqual(['jump']); // снятый обработчик события не получает
+  });
+
+  it('mousedown несёт флаги модификаторов поимённо (INP-4)', () => {
+    // Каждому флагу события — свой модификатор раскладки: перепутанная пара
+    // отдала бы миру тот самый клик, который приложение заняло собой.
+    const flagOf: Record<PointerModifier, string> = {
+      Alt: 'altKey',
+      Ctrl: 'ctrlKey',
+      Shift: 'shiftKey',
+      Meta: 'metaKey',
+    };
+    const event = (flag: string): object => ({
+      button: 0,
+      clientX: 10,
+      clientY: 20,
+      altKey: flag === 'altKey',
+      ctrlKey: flag === 'ctrlKey',
+      shiftKey: flag === 'shiftKey',
+      metaKey: flag === 'metaKey',
+    });
+
+    for (const modifier of POINTER_MODIFIERS) {
+      const source = new KeyboardMouseSource({
+        bindings: validateBindings({
+          ...(BINDINGS as object),
+          keyboardMouse: {
+            ...BINDINGS.keyboardMouse,
+            pointerButtons: { 0: { action: 'cast', suppressedBy: [modifier] } },
+          },
+        }).keyboardMouse,
+        aimAt: (x, y) => ({ angle: aimAngle(1, 0), x, y }),
+      });
+      const pressed: string[] = [];
+      source.start((a) => pressed.push(a));
+      const win = new FakeWindow();
+      source.bind(win.asWindow());
+
+      win.dispatch('mousedown', event(flagOf[modifier]));
+      expect(pressed).toEqual([]); // свой флаг гасит нажатие
+      expect([...source.held()]).toEqual([]);
+
+      win.dispatch('mousedown', event(modifier === 'Alt' ? 'ctrlKey' : 'altKey'));
+      expect(pressed).toEqual(['cast']); // чужой флаг оговорки не касается
+      expect(source.poll().target).toEqual({ x: 10, y: 20 }); // точка клика доехала
+      win.dispatch('mouseup', { button: 0 });
+      expect([...source.held()]).toEqual([]);
+    }
+  });
+});
+
 describe('TouchSource (INP-1, INP-2, D6)', () => {
   const bindings = validateBindings(BINDINGS).touch!;
   const viewport = { width: 1000, height: 500 };
@@ -642,6 +856,142 @@ describe('TouchSource (INP-1, INP-2, D6)', () => {
     for (let i = 0; i < 3; i++) expect(sampler.sample().buttons).toBe(1 << BITS.jump);
     source.handlePointerUp(1);
     expect(sampler.sample().buttons).toBe(0);
+  });
+});
+
+describe('TouchSource: жизненный цикл, накладка и обвязка окна (INP-5, D6, D8)', () => {
+  const bindings = validateBindings(BINDINGS).touch!;
+  const viewport = { width: 1000, height: 500 };
+  const make = (): TouchSource => new TouchSource(bindings, () => viewport);
+  // Ход стика: 0.12 × min(1000, 500) = 60 px.
+  const STICK_PX = 60;
+
+  it('stop() снимает и удержания, и живые стики: палец через остановку не рулит (INP-5)', () => {
+    const sampler = makeSampler();
+    const source = make();
+    sampler.add(source);
+    source.handlePointerDown(1, 200, 400); // палец на стике движения
+    source.handlePointerMove(1, 200 + STICK_PX, 400);
+    source.handlePointerDown(3, 900, 40); // второй палец на кнопке jump
+    expect(sampler.sample().buttons).toBe(1 << BITS.jump);
+    expect(source.poll()).toMatchObject({ moveX: 1, moveY: 0 });
+
+    sampler.remove(source); // `remove` зовёт `stop()` источника
+    expect([...source.held()]).toEqual([]);
+    expect(source.poll()).toMatchObject({ moveX: 0, moveY: 0 });
+    expect(source.overlay()).toEqual({ moveStick: null, aimStick: null });
+
+    // Пальцы с экрана не поднимали, но стика больше нет: движение он не ведёт.
+    source.handlePointerMove(1, 200 + STICK_PX, 400);
+    expect(source.poll()).toMatchObject({ moveX: 0, moveY: 0 });
+
+    const pressed: string[] = [];
+    source.start((a) => pressed.push(a));
+    expect(pressed).toEqual([]);
+    expect([...source.held()]).toEqual([]);
+  });
+
+  it('остановленный источник фронтов не рождает: отпускание стика прицела молчит', () => {
+    const source = make();
+    const pressed: string[] = [];
+    source.start((a) => pressed.push(a));
+    source.handlePointerDown(2, 800, 400);
+    source.handlePointerMove(2, 800, 400 - STICK_PX); // стик прицела отклонён до упора
+
+    // События в остановленный источник — нарочно: в рантайме их приносит
+    // подписка, которую снимают вместе с ним (см. `bind`).
+    source.stop();
+    source.handlePointerUp(2); // каст «отпустил — выстрелил» не случается
+    expect(pressed).toEqual([]);
+    source.handlePointerDown(3, 900, 40); // и кнопка действия молчит тоже
+    expect(pressed).toEqual([]);
+  });
+
+  it('overlay отдаёт накладке центр и головку стиков в пикселях клиента (D6)', () => {
+    const source = make();
+    expect(source.overlay()).toEqual({ moveStick: null, aimStick: null });
+
+    // Плавающий стик: центр — точка касания, головка пока в центре.
+    source.handlePointerDown(1, 200, 400);
+    expect(source.overlay().moveStick).toEqual({
+      centerX: 200,
+      centerY: 400,
+      knobX: 200,
+      knobY: 400,
+    });
+
+    // Оси накладки ЭКРАННЫЕ (Y вниз): рисуется она на экране, а не в мире.
+    source.handlePointerMove(1, 200, 400 - STICK_PX / 2);
+    expect(source.overlay().moveStick).toEqual({
+      centerX: 200,
+      centerY: 400,
+      knobX: 200,
+      knobY: 400 - STICK_PX / 2,
+    });
+
+    // За упор головка не уезжает — тот же кламп кругом, что у сэмпла (INP-3).
+    source.handlePointerMove(1, 200 + STICK_PX * 3, 400);
+    expect(source.overlay().moveStick).toEqual({
+      centerX: 200,
+      centerY: 400,
+      knobX: 200 + STICK_PX,
+      knobY: 400,
+    });
+
+    // Мультитач: у стика прицела своя головка и свой центр.
+    source.handlePointerDown(2, 800, 400);
+    source.handlePointerMove(2, 800 + STICK_PX, 400);
+    expect(source.overlay().aimStick).toEqual({
+      centerX: 800,
+      centerY: 400,
+      knobX: 800 + STICK_PX,
+      knobY: 400,
+    });
+
+    source.handlePointerUp(1);
+    expect(source.overlay().moveStick).toBeNull();
+    expect(source.overlay().aimStick).not.toBeNull(); // чужой отрыв стик прицела не гасит
+  });
+
+  it('bind симметричен, события окна доезжают до жестов, а чужой указатель — не тач', () => {
+    const win = new FakeWindow();
+    const source = make();
+    const pressed: string[] = [];
+    source.start((a) => pressed.push(a));
+    const unbind = source.bind(win.asWindow());
+    expect(win.liveTypes()).toEqual(['pointercancel', 'pointerdown', 'pointermove', 'pointerup']);
+
+    // Мышь тач-источнику не принадлежит: у неё свой источник (INP-1).
+    win.dispatch('pointerdown', { pointerId: 1, clientX: 900, clientY: 40, pointerType: 'mouse' });
+    expect(pressed).toEqual([]);
+    expect(source.poll()).toBeNull(); // источник даже не «появился» (INP-5)
+
+    win.dispatch('pointerdown', { pointerId: 1, clientX: 200, clientY: 400, pointerType: 'touch' });
+    win.dispatch('pointermove', {
+      pointerId: 1,
+      clientX: 200 + STICK_PX,
+      clientY: 400,
+      pointerType: 'touch',
+    });
+    expect(source.poll()).toMatchObject({ moveX: 1, moveY: 0 });
+
+    // Фильтр стоит на КАЖДОМ обработчике: мышь стика не ведёт и жеста не рвёт.
+    win.dispatch('pointermove', { pointerId: 1, clientX: 200, clientY: 400, pointerType: 'mouse' });
+    win.dispatch('pointerup', { pointerId: 1, pointerType: 'mouse' });
+    expect(source.poll()).toMatchObject({ moveX: 1, moveY: 0 });
+
+    win.dispatch('pointerdown', { pointerId: 2, clientX: 900, clientY: 40, pointerType: 'touch' });
+    expect(pressed).toEqual(['jump']);
+    // `pointercancel` идёт тем же путём, что `pointerup`.
+    win.dispatch('pointercancel', { pointerId: 2, pointerType: 'touch' });
+    expect([...source.held()]).toEqual([]);
+
+    unbind();
+    expect(win.live()).toEqual([]);
+    expect(win.removed).toHaveLength(win.added.length);
+    // Отписанное окно жестов не приносит: отрыв пальца до источника не дошёл.
+    win.dispatch('pointerup', { pointerId: 1, pointerType: 'touch' });
+    expect(source.poll()).toMatchObject({ moveX: 1, moveY: 0 });
   });
 });
 
@@ -735,6 +1085,97 @@ describe('GamepadSource (INP-3, INP-5, D7)', () => {
     expect(fixed.toFloat(sampler.sample().move.x)).toBeCloseTo(1, 4);
     current = null;
     expect(sampler.sample().move.x).toBe(0);
+  });
+});
+
+describe('GamepadSource: жизненный цикл и обвязка Gamepad API (INP-5, D7, D8)', () => {
+  const bindings = validateBindings(BINDINGS).gamepad!;
+  const pad = (axes: number[], pressedIdx: number[] = []): GamepadLike => ({
+    axes,
+    buttons: Array.from({ length: 10 }, (_, i) => ({ pressed: pressedIdx.includes(i) })),
+  });
+
+  it('stop() объявляет источник неактивным: удержаний нет — залипания нет (INP-5)', () => {
+    const current = pad([1, 0, 0, 0], [5]);
+    const sampler = makeSampler();
+    const source = new GamepadSource(bindings, () => current);
+    sampler.add(source);
+    expect(sampler.sample().buttons).toBe(1 << BITS.cast);
+
+    sampler.remove(source); // `remove` зовёт `stop()` источника
+    expect(source.held()).toBeNull(); // ровно то же, что при отключении устройства
+  });
+
+  it('остановленный источник фронтов не рождает, а новый приёмник берёт кнопку заново', () => {
+    const current = pad([0, 0, 0, 0], [5]);
+    const source = new GamepadSource(bindings, () => current);
+    const first: string[] = [];
+    source.start((a) => first.push(a));
+    source.poll();
+    expect(first).toEqual(['cast']);
+
+    source.stop();
+    source.poll(); // устройство на месте и кнопка та же, приёмника нет
+    expect(first).toEqual(['cast']);
+
+    const second: string[] = [];
+    source.start((a) => second.push(a));
+    source.poll();
+    // Кнопку не отпускали, но для нового приёмника это её первое нажатие:
+    // `stop()` сбросил детектор фронтов ровно так же, как отключение пэда.
+    expect(second).toEqual(['cast']);
+  });
+
+  it('navigatorGamepad дремлет без устройства и оживает по gamepadconnected', () => {
+    const win = new FakeWindow();
+    const getPad = navigatorGamepad(win.asWindow());
+    expect(win.liveTypes()).toEqual(['gamepadconnected', 'gamepaddisconnected']);
+
+    // Устройства нет — браузер не опрашивается вовсе.
+    expect(getPad()).toBeNull();
+    expect(win.getGamepadsCalls).toBe(0);
+
+    const first = pad([1, 0, 0, 0]);
+    win.pads = [null, first];
+    win.dispatch('gamepadconnected', { gamepad: { index: 1 } });
+    expect(getPad()).toBe(first);
+
+    // Второй пэд первого не отбирает: играет тот, кто подключился раньше.
+    const second = pad([0, 1, 0, 0]);
+    win.pads = [null, first, null, second];
+    win.dispatch('gamepadconnected', { gamepad: { index: 3 } });
+    expect(getPad()).toBe(first);
+
+    // Отключение ЧУЖОГО индекса свой пэд не роняет.
+    win.dispatch('gamepaddisconnected', { gamepad: { index: 3 } });
+    expect(getPad()).toBe(first);
+
+    // Дыра в массиве браузера — то же «устройства нет», а не падение.
+    win.pads = [null, null];
+    expect(getPad()).toBeNull();
+
+    win.pads = [null, first];
+    win.dispatch('gamepaddisconnected', { gamepad: { index: 1 } });
+    expect(getPad()).toBeNull();
+  });
+
+  it('пэд подключается посреди матча и пропадает — через обвязку браузера (INP-5)', () => {
+    const win = new FakeWindow();
+    const sampler = makeSampler();
+    sampler.add(new GamepadSource(bindings, navigatorGamepad(win.asWindow())));
+    expect(sampler.sample().buttons).toBe(0);
+
+    win.pads = [pad([1, 0, 0, 0], [5])];
+    win.dispatch('gamepadconnected', { gamepad: { index: 0 } });
+    const connected = sampler.sample();
+    expect(connected.buttons).toBe(1 << BITS.cast);
+    expect(fixed.toFloat(connected.move.x)).toBeCloseTo(1, 4);
+
+    // Пропажа активного устройства — нейтраль, а не последние значения.
+    win.dispatch('gamepaddisconnected', { gamepad: { index: 0 } });
+    const gone = sampler.sample();
+    expect(gone.buttons).toBe(0);
+    expect(gone.move.x).toBe(0);
   });
 });
 

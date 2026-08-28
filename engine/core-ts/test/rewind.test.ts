@@ -1,15 +1,18 @@
 import { describe, expect, it } from 'vitest';
+import * as fixed from '../src/math/fixed.js';
 import { mathApi } from '../src/math/mathApi.js';
 import { SystemRegistry } from '../src/systems/registry.js';
 import { initialState, restoreSnapshot, takeSnapshot, tick, type Simulation } from '../src/sim/tick.js';
 import { RingHistory } from '../src/sim/history.js';
 import { createInputLog, createRewindController } from '../src/sim/rewind.js';
 import { EvaluatedSystem } from '../src/dsl/evaluatedSystem.js';
+import { loadScene, type SceneDef } from '../src/sim/scene.js';
 import { snapshotToPlain } from '../src/sim/serialization.js';
 import { createWorld, getField, listAlive, setField, spawn, toPlain } from '../src/ecs/world.js';
 import { indexOf as rawIndexOf } from '../src/ecs/entityIndex.js';
 import { InputSystem } from '../src/systems/inputSystem.js';
-import type { ComponentSchema, InputFrame, SimulationState, System } from '../src/types.js';
+import { FIXED_ONE, TIME_SCALE_COMPONENT } from '../src/types.js';
+import type { ComponentSchema, EntityId, InputFrame, SimulationState, System } from '../src/types.js';
 import type { PrefabDef } from '../src/ecs/world.js';
 
 const WORLD_SEED = 4242;
@@ -799,6 +802,169 @@ describe('база восстановления — ближайший снап�
 
     expect(h.state.tick).toBe(23);
     expect(h.counter.ticks - before).toBe(3); // снапшот тика 20 + три тика реплея
+  });
+});
+
+/**
+ * Стенд TIME-9: сцена с платформой TimeScale (SER-7) и три носителя РАЗНЫХ
+ * темпов — половинного, обычного и удвоенного. Отдельно от общего harness,
+ * потому что остальным тестам платформа не нужна, а её компоненты меняли бы их
+ * снапшоты (SER-7).
+ *
+ * Источники ставятся overrides спавна, а не системой: список источников —
+ * обычный компонент (TIME-7), и постоянный на весь прогон множитель есть его
+ * начальное значение, а не эффект, который кто-то навешивает по ходу.
+ */
+const TIME_SCALE_SCENE: SceneDef = {
+  components: [
+    { name: 'Position', fields: { x: 'fixed', y: 'fixed' } },
+    { name: 'Velocity', fields: { x: 'fixed', y: 'fixed' } },
+  ],
+  // Компоненты `TimeScale`/`TimeScaleModifiers` и сведение источников
+  // подключает сама сцена (SER-7, TIME-2, TIME-7).
+  timeScale: true,
+  prefabs: [
+    {
+      name: 'scaledMover',
+      components: {
+        Position: { x: 0, y: 0 },
+        Velocity: { x: FIXED_ONE, y: 0 },
+        TimeScaleModifiers: {},
+      },
+    },
+  ],
+};
+
+/** Половина и удвоение — точные доли Q16.16, а не округления (FP-3). */
+const HALF_SCALE = fixed.fromFloat(0.5);
+const DOUBLE_SCALE = fixed.fromInt(2);
+
+/**
+ * Потребитель времени, опт-инувшийся в TimeScale (TIME-4): точка интеграции
+ * физики (PHYS-8) в миниатюре — за тик сущность проходит свою скорость,
+ * умноженную на личный множитель.
+ */
+const scaledMoveSystem: System = {
+  name: 'ScaledMove',
+  order: 20,
+  run(ctx) {
+    for (const entity of ctx.query({ all: ['Position', 'Velocity'] })) {
+      const step = ctx.math.mul(
+        ctx.get(entity, 'Velocity', 'x'),
+        ctx.getEffectiveDelta(entity, FIXED_ONE),
+      );
+      ctx.commands.setField(entity, 'Position', 'x', ctx.math.add(ctx.get(entity, 'Position', 'x'), step));
+    }
+  },
+};
+
+function timeScaleHarness(interval = 5, capacity = 8) {
+  const { world, systems, modifiers } = loadScene(TIME_SCALE_SCENE);
+  // Тот же бросок RNG в состояние, что и в общем harness: без него реплей не
+  // проверил бы восстановление стримов.
+  systems.register(rollSystem);
+  systems.register(scaledMoveSystem);
+
+  const half = spawn(world, 'scaledMover', { TimeScaleModifiers: { id0: 1, value0: HALF_SCALE } });
+  // Без источников: произведение нейтрально, компонент не заводится (TIME-3).
+  const normal = spawn(world, 'scaledMover');
+  const double = spawn(world, 'scaledMover', { TimeScaleModifiers: { id0: 1, value0: DOUBLE_SCALE } });
+
+  const sim: Simulation = { systems, worldSeed: WORLD_SEED, math: mathApi, modifiers };
+  const state = initialState(world, WORLD_SEED);
+  const history = new RingHistory({ interval, capacity });
+  const inputs = createInputLog();
+  history.record(state);
+
+  return {
+    sim,
+    state,
+    history,
+    inputs,
+    half,
+    normal,
+    double,
+    /** Пройденный путь всех трёх темпов — то, чем половинный отличается от удвоенного. */
+    xs: (): number[] => [half, normal, double].map((entity) => getField(world, entity, 'Position', 'x')),
+    scaleOf: (entity: EntityId): number => getField(world, entity, TIME_SCALE_COMPONENT, 'value'),
+    runTo(target: number) {
+      while (state.tick < target) {
+        inputs.record(state.tick + 1, []);
+        tick(sim, state);
+        history.record(state);
+      }
+    },
+  };
+}
+
+/**
+ * TIME-9 и его граница. Норма — про ФАЗУ ОЖИДАНИЯ команды перемотки: «перемотка
+ * идёт единым темпом rewind-механизма, без учёта индивидуальных скоростей».
+ * На внутренний реплей вперёд внутри `seekTo` она MUST NOT распространяться
+ * (REW-2, REW-4): там TimeScale каждой сущности читается и применяется штатно,
+ * ровно как в исходном проходе, иначе реплей не восстановил бы бит-в-бит то же
+ * состояние (DET-1, SNAP-1).
+ */
+describe('TimeScale и перемотка (TIME-9, REW-2, REW-4, DET-1)', () => {
+  const controller = (h: Pick<Harness, 'sim' | 'state' | 'history' | 'inputs'>) =>
+    createRewindController(h.sim, h.state, { history: h.history, inputs: h.inputs });
+
+  it('в фазе ожидания личные темпы ни на что не влияют, а темп задаёт rewind-механизм (TIME-9)', () => {
+    const h = timeScaleHarness();
+    h.runTo(6);
+
+    // Источники доехали до сущностей штатным путём (TIME-7), и темпы разошлись:
+    // без расхождения «мир стоит» было бы неотличимо от «TimeScale тут нет».
+    expect(h.scaleOf(h.half)).toBe(HALF_SCALE);
+    expect(h.scaleOf(h.double)).toBe(DOUBLE_SCALE);
+    const frozen = h.xs();
+    expect(frozen).toEqual([fixed.fromInt(3), fixed.fromInt(6), fixed.fromInt(12)]);
+
+    const wsm = controller(h);
+    wsm.pause();
+    wsm.beginRewind();
+    // Мир ждёт команду: тик вперёд не идёт вообще, и TimeScale не на что
+    // влиять — ни половинной сущности, ни удвоенной (TIME-9, REW-4).
+    tick(h.sim, h.state);
+    tick(h.sim, h.state);
+    expect(h.state.tick).toBe(6);
+    expect(h.xs()).toEqual(frozen);
+
+    // Ведёт мир один только rewind-механизм, и ведёт его единым темпом: один
+    // `seekTo` уводит на целевой тик и половинную сущность, и удвоенную разом.
+    wsm.seekTo(2);
+    expect(h.state.tick).toBe(2);
+    expect(h.xs()).toEqual([fixed.fromInt(1), fixed.fromInt(2), fixed.fromInt(4)]);
+  });
+
+  it('реплей внутри seekTo применяет личный TimeScale и восстанавливает состояние бит-в-бит (REW-2, DET-1)', () => {
+    // Цель между снапшотами: интервал 5, ближайший снапшот — тик 10, дальше
+    // три тика реплея, каждый из которых обязан читать личный темп сущности.
+    const TARGET = 13;
+    const h = timeScaleHarness(5, 8);
+    h.runTo(TARGET);
+
+    const expected = snapshotToPlain(takeSnapshot(h.state));
+    const positions = h.xs();
+    expect(positions).toEqual([fixed.fromFloat(6.5), fixed.fromInt(13), fixed.fromInt(26)]);
+
+    h.runTo(20);
+    const wsm = controller(h);
+    wsm.pause();
+    wsm.beginRewind();
+    wsm.seekTo(TARGET);
+
+    // Побитово то же состояние целиком — мир, шина, стримы RNG и номер тика
+    // (SNAP-1): реплей прошёл теми же темпами, что исходный проход. Режим мира
+    // восстанавливаемым содержимым не является (REW-2) — скраб остаётся в
+    // `Rewinding`, и только он один отличает восстановленный снапшот от
+    // исходного.
+    expect(snapshotToPlain(takeSnapshot(h.state))).toEqual({ ...expected, mode: 'Rewinding' });
+    // Отдельно — сами расхождения темпов: реплей, игнорирующий TimeScale,
+    // провёл бы три тика от снапшота тика 10 одним общим шагом, и красным был
+    // бы именно этот список — половинная сущность уехала бы вперёд, удвоенная
+    // отстала.
+    expect(h.xs()).toEqual(positions);
   });
 });
 
