@@ -68,11 +68,10 @@ export type CameraEffectType = ImpulseEffectType | LastingEffectType;
  * константы умолчаний у эффекта нет: она жила бы рядом с дескриптором и
  * разошлась бы с ним при первой правке.
  */
-// eslint-disable-next-line @typescript-eslint/no-unnecessary-type-parameters -- baseline
-export function defaults<T>(spec: CameraEffectTypeSpec): T {
+export function defaults(spec: CameraEffectTypeSpec): Record<string, number> {
   const out: Record<string, number> = {};
   for (const param of spec.params) out[param.name] = param.defaultValue;
-  return out as T;
+  return out;
 }
 
 /** Неотрицательное число — самая частая граница осмысленности параметра. */
@@ -134,7 +133,12 @@ export const SHAKE_TYPE: ImpulseEffectType = Object.freeze({
 });
 
 /** Умолчания тряски выведены из дескриптора: второго места у умолчания нет. */
-export const DEFAULT_SHAKE: ShakeParams = Object.freeze(defaults<ShakeParams>(SHAKE_TYPE));
+// Параметры типа — те же числа, что перечисляет его дескриптор, поэтому имя
+// формы ставит место употребления: пара «дескриптор ↔ форма» видна здесь, а не
+// прячется за параметром типа, который выбирает вызывающий.
+export const DEFAULT_SHAKE: ShakeParams = Object.freeze(
+  defaults(SHAKE_TYPE) as unknown as ShakeParams,
+);
 
 /**
  * Тряска по trauma (Squirrel Eiserloh, GDC «Juicing Your Cameras With Math»):
@@ -199,7 +203,9 @@ export const SWAY_TYPE: LastingEffectType = Object.freeze({
     new SwayEffect(params as unknown as Partial<SwayParams>),
 });
 
-export const DEFAULT_SWAY: SwayParams = Object.freeze(defaults<SwayParams>(SWAY_TYPE));
+export const DEFAULT_SWAY: SwayParams = Object.freeze(
+  defaults(SWAY_TYPE) as unknown as SwayParams,
+);
 
 /**
  * Длящийся эффект качания: активен, пока состояние присутствует на цели

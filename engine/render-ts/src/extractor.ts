@@ -354,51 +354,10 @@ export class Extractor {
     // адресуют спутника владельца, и искать его на каждую запись каждой
     // сущности значило бы обходить слоты по разу на стат.
     this.stats.beginFrame(state);
-    // eslint-disable-next-line @typescript-eslint/prefer-for-of -- baseline
-    for (let i = 0; i < alive.length; i++) {
-      const entity = alive[i]!;
+    for (const entity of alive) {
       if (!world.hasComponent(state, entity, POSITION_COMPONENT)) continue;
       seen.add(entity);
-
-      const fx = world.getField(state, entity, POSITION_COMPONENT, 'x');
-      const fy = world.getField(state, entity, POSITION_COMPONENT, 'y');
-      // Точка конверсии Q16.16 → float для потока тиков — его входная граница
-      // (REND-1). Глубже fixed-point не проникает: всё presentation-состояние
-      // ниже — float в мировых единицах.
-      out.id[count] = entity;
-      out.kind[count] = this.resolveKind(state, entity);
-      out.x[count] = fx / FIXED_ONE;
-      out.y[count] = fy / FIXED_ONE;
-      out.level[count] =
-        this.grid === undefined ? 0 : this.grid.levels[cellAt(this.grid, { x: fx, y: fy })]!;
-
-      let moving = false;
-      let yaw = Number.NaN;
-      if (world.hasComponent(state, entity, this.velocityComponent)) {
-        const vx = world.getField(state, entity, this.velocityComponent, 'x') / FIXED_ONE;
-        const vy = world.getField(state, entity, this.velocityComponent, 'y') / FIXED_ONE;
-        moving = vx * vx + vy * vy > this.moveEpsilonSq;
-        if (moving) yaw = Math.atan2(vy, vx);
-      }
-      let flags = moving ? ENTITY_MOVING : 0;
-      if (world.hasComponent(state, entity, LEVEL_OVERRIDE_COMPONENT)) {
-        flags |= ENTITY_LEVEL_OVERRIDE;
-      }
-      for (let bit = 0; bit < this.stateComponents.length; bit++) {
-        if (world.hasComponent(state, entity, this.stateComponents[bit]!)) {
-          flags |= 1 << (bit + STATE_BITS_SHIFT);
-        }
-      }
-      out.flags[count] = flags;
-      out.facingYaw[count] = yaw;
-      this.readMotion(state, entity, count);
-      out.flightPhase[count] = flightPhaseOf(state, entity, this.flight);
-      this.stats.read(state, entity, count, out);
-
-      const aim = this.aim.get(entity);
-      out.aimYaw[count] =
-        aim !== undefined && tick - aim.tick <= this.aimHoldTicks ? aim.yaw : Number.NaN;
-
+      this.copyEntity(state, entity, count, tick);
       count++;
     }
     out.count = count;
@@ -409,6 +368,57 @@ export class Extractor {
         this.aim.delete(id);
       }
     }
+  }
+
+  /** Одна сущность в колонки плоской формы под индексом `count`. */
+  private copyEntity(state: WorldState, entity: EntityId, count: number, tick: number): void {
+    const out = this.out;
+    const fx = world.getField(state, entity, POSITION_COMPONENT, 'x');
+    const fy = world.getField(state, entity, POSITION_COMPONENT, 'y');
+    // Точка конверсии Q16.16 → float для потока тиков — его входная граница
+    // (REND-1). Глубже fixed-point не проникает: всё presentation-состояние
+    // ниже — float в мировых единицах.
+    out.id[count] = entity;
+    out.kind[count] = this.resolveKind(state, entity);
+    out.x[count] = fx / FIXED_ONE;
+    out.y[count] = fy / FIXED_ONE;
+    out.level[count] =
+      this.grid === undefined ? 0 : this.grid.levels[cellAt(this.grid, { x: fx, y: fy })]!;
+
+    let moving = false;
+    let yaw = Number.NaN;
+    if (world.hasComponent(state, entity, this.velocityComponent)) {
+      const vx = world.getField(state, entity, this.velocityComponent, 'x') / FIXED_ONE;
+      const vy = world.getField(state, entity, this.velocityComponent, 'y') / FIXED_ONE;
+      moving = vx * vx + vy * vy > this.moveEpsilonSq;
+      if (moving) yaw = Math.atan2(vy, vx);
+    }
+    out.flags[count] = this.entityFlags(state, entity, moving);
+    out.facingYaw[count] = yaw;
+    this.readMotion(state, entity, count);
+    out.flightPhase[count] = flightPhaseOf(state, entity, this.flight);
+    this.stats.read(state, entity, count, out);
+
+    const aim = this.aim.get(entity);
+    out.aimYaw[count] =
+      aim !== undefined && tick - aim.tick <= this.aimHoldTicks ? aim.yaw : Number.NaN;
+  }
+
+  /**
+   * Колонка флагов сущности: движение, override уровня и биты компонентов
+   * состояния по порядку их списка (CAM-6).
+   */
+  private entityFlags(state: WorldState, entity: EntityId, moving: boolean): number {
+    let flags = moving ? ENTITY_MOVING : 0;
+    if (world.hasComponent(state, entity, LEVEL_OVERRIDE_COMPONENT)) {
+      flags |= ENTITY_LEVEL_OVERRIDE;
+    }
+    for (let bit = 0; bit < this.stateComponents.length; bit++) {
+      if (world.hasComponent(state, entity, this.stateComponents[bit]!)) {
+        flags |= 1 << (bit + STATE_BITS_SHIFT);
+      }
+    }
+    return flags;
   }
 
   private ensureCapacity(n: number): void {

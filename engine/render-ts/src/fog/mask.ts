@@ -43,6 +43,7 @@
 import { FIXED_ONE, type TerrainGrid } from '@fluxus/core';
 import { costSink } from '../cost.js';
 import type { FogDirtyBlocks } from './dirty.js';
+import { ShadowDepth, binOf, type FogSegment } from './shadowDepth.js';
 
 /** Прямоугольник мира, который покрывает маска, — прямоугольник террейна. */
 export interface FogWorldRect {
@@ -50,25 +51,6 @@ export interface FogWorldRect {
   readonly y: number;
   readonly width: number;
   readonly height: number;
-}
-
-/**
- * Отрезок укрытия в мировых float-координатах — производная `TerrainGrid.cliffs`
- * (TERR-5). Уровни сторон переезжают из `CliffEdge` как есть: `levelNeg` —
- * сторона меньшей координаты по оси нормали, `levelPos` — большей. По ним тень
- * становится направленной (FOW-9, PHYS-13).
- *
- * Отрезок обязан быть осевым (`x1 === x2` либо `y1 === y2`): других TERR-5 не
- * порождает, и полярная растеризация на это опирается. Диагональный отрезок —
- * ошибка вызова, а не молча неверная тень: `reveal` его отвергает.
- */
-export interface FogSegment {
-  readonly x1: number;
-  readonly y1: number;
-  readonly x2: number;
-  readonly y2: number;
-  readonly levelNeg: number;
-  readonly levelPos: number;
 }
 
 /**
@@ -143,45 +125,6 @@ function penumbraOf(shadowDistance: number, edgeWidth: number): number {
 }
 
 /**
- * Отбрасывает ли ребро тень для наблюдателя этого уровня (FOW-9): только если
- * верхний уровень ребра строго выше уровня наблюдателя — зеркало перекрытия
- * луча по высоте в симуляции (PHYS-13, FOW-5). Рёбра своего уровня и ниже
- * прозрачны: с плато открыт и низ за собственным ребром, и плато того же
- * уровня за низиной; снизу вверх ребро перекрывает.
- */
-export function segmentCasts(level: number, segment: FogSegment): boolean {
-  return (segment.levelNeg > segment.levelPos ? segment.levelNeg : segment.levelPos) > level;
-}
-
-/** Квадрат расстояния от точки до отрезка — отбор укрытий в радиусе наблюдателя. */
-function distanceSqToSegment(px: number, py: number, segment: FogSegment): number {
-  const vx = segment.x2 - segment.x1;
-  const vy = segment.y2 - segment.y1;
-  const wx = px - segment.x1;
-  const wy = py - segment.y1;
-  const lengthSq = vx * vx + vy * vy;
-  const t = lengthSq <= 0 ? 0 : Math.max(0, Math.min(1, (wx * vx + wy * vy) / lengthSq));
-  const dx = wx - t * vx;
-  const dy = wy - t * vy;
-  return dx * dx + dy * dy;
-}
-
-/**
- * Число бинов полярного depth-буфера (design D3). С запасом к дискретности
- * растра: на радиусе 22 юнита (предел PHYS-6 с хвостом) дуга бина ≈ 0.13
- * юнита ≈ тексель разрешения 8 — угловая дискретность не грубее прежней
- * растеризации субсэмплами.
- */
-const SHADOW_BINS = 1024;
-const TWO_PI = Math.PI * 2;
-
-/** Бин по углу `atan2` (−π, π]; края зажимаются в диапазон индексов. */
-function binOf(angle: number): number {
-  const bin = Math.floor(((angle + Math.PI) / TWO_PI) * SHADOW_BINS);
-  return bin < 0 ? 0 : bin >= SHADOW_BINS ? SHADOW_BINS - 1 : bin;
-}
-
-/**
  * Проход разделяемого блюра кромки (FOW-7): горизонталь пишет промежуточный
  * буфер, вертикаль читает только его. Порционная перестройка идёт ими по
  * очереди — сперва весь горизонтальный, затем весь вертикальный (design D1).
@@ -212,37 +155,20 @@ export class VisibilityMask {
   /** Задний растр порционной перестройки; null — порционного пути не было. */
   private backing: Uint8Array | null = null;
 
-  /** Переиспользуемый список укрытий, затеняющих текущего наблюдателя. */
-  private readonly near: FogSegment[] = [];
   /**
-   * Полярный depth-буфер текущего наблюдателя (design D3): дистанция ближайшей
-   * тени по углу. Переиспользуется между наблюдателями и доставками — горячий
-   * путь перестройки не аллоцирует. Порционный reveal его переживает: буфер
-   * готовится при входе в наблюдателя и читается его строками, а наблюдатели
-   * идут строго по одному — второго claim'а на буфер в этот момент нет.
+   * Полярный depth-буфер теней текущего наблюдателя (design D3). Один на маску
+   * и переиспользуемый: наблюдатели идут строго по одному, и горячий путь
+   * перестройки не аллоцирует.
    */
-  private readonly depth = new Float32Array(SHADOW_BINS);
-  /**
-   * Тот же буфер, уже свёрнутый минимумом по тройке соседних бинов, — то, что
-   * и читает цикл по текселям (консервативность FOW-9). Свёртка живёт здесь, а
-   * не в цикле, потому что бинов тысяча, а текселей — сотня тысяч: одна и та же
-   * тройка иначе пересчитывалась бы сотнями раз.
-   */
-  private readonly depthMin = new Float32Array(SHADOW_BINS);
-  /**
-   * Тот же `depthMin`, но ЛИНЕЙНОЙ дистанцией: полутень фронта (`writeReveal`)
-   * считает долю кромки, а доля — величина линейная, и квадратами её не
-   * выразить. Корень берётся на бин, а не на тексель: бинов тысяча, текселей
-   * сотня тысяч. Срез тени при этом остаётся на квадратах — сравнение с ним
-   * идёт по `depthMin` и корня не требует вовсе.
-   *
-   * Заполняется, только когда полутень считается (`staged.penumbra`), — при
-   * нулевой кромке буфер держит числа ПРОШЛОГО наблюдателя, и это безопасно
-   * ровно потому, что единственный его читатель стоит под тем же условием.
-   */
-  private readonly depthEdge = new Float32Array(SHADOW_BINS);
+  private readonly shadow = new ShadowDepth();
   /** Переиспользуемый буфер разделяемого блюра `smooth()`. */
   private temp: Uint8Array | null = null;
+  /**
+   * Счётчики текущего `writeReveal`, копящиеся по строкам (PERF-3). Поля по
+   * той же причине: строка отчитывается вызывающему, не создавая объекта.
+   */
+  private revealWritten = 0;
+  private revealShadowTests = 0;
 
   /**
    * Подготовленный наблюдатель порционного reveal (design D1): границы его
@@ -377,57 +303,15 @@ export class VisibilityMask {
     const y1 = Math.min(this.height - 1, Math.ceil((observer.y + radius - this.rect.y) * scale));
     if (x1 < x0 || y1 < y0) return 0;
 
-    // Тени отбрасывают только укрытия в радиусе (FOW-9): дальние в круг не
-    // дотягиваются. Высота — здесь же (PHYS-13): ребро не выше уровня
-    // наблюдателя прозрачно и в буфер не попадает.
-    const near = this.near;
-    near.length = 0;
     const radiusSq = radius * radius;
-    for (const segment of segments) {
-      if (segment.x1 !== segment.x2 && segment.y1 !== segment.y2) {
-        throw new Error(
-          'FOW-9: отрезок укрытия обязан быть осевым (TERR-5) — ' +
-            'диагональную тень полярная растеризация не считает',
-        );
-      }
-      if (!segmentCasts(observer.level, segment)) continue;
-      if (distanceSqToSegment(observer.x, observer.y, segment) <= radiusSq) near.push(segment);
-    }
-
-    // Полярный depth-буфер наблюдателя (design D3): бины, пройденные
-    // растеризацией, возвращаются наверх числом — счёт идёт не в цикле по
-    // бинам, а сложением на отрезок (PERF-3). Дистанции лежат в КВАДРАТАХ —
-    // см. `rasterizeArc`: сравнение с текселем тогда идёт по `distSq`, и
-    // корень из него не берётся вовсе.
-    const depth = this.depth;
-    const depthMin = this.depthMin;
-    const depthEdge = this.depthEdge;
-    let shadowRays = 0;
-    // Ближайшая тень ЛЮБОГО направления: тексель ближе неё не затенён ничем, и
-    // спрашивать у него угол незачем — а угол здесь единственный `atan2` на
-    // тексель, самая дорогая операция цикла.
-    let nearestShadowSq = Number.POSITIVE_INFINITY;
+    const shadow = this.shadow;
+    shadow.collect(observer.x, observer.y, observer.level, segments, radiusSq);
     // Считать ли полутень фронта вообще (FOW-7). Решается ДО свёртки: при
     // нулевой кромке (законная конфигурация FOW-10) полутени нет, линейные
     // дистанции никто не прочтёт — и тысяча корней на наблюдателя не берётся,
     // тем более что на нетронутых бинах это корни из бесконечности.
-    const penumbra = edgeWidth > 0 && near.length > 0;
-    if (near.length > 0) {
-      depth.fill(Number.POSITIVE_INFINITY);
-      for (const segment of near) {
-        shadowRays += this.rasterizeSegment(observer.x, observer.y, segment);
-      }
-      for (let bin = 0; bin < SHADOW_BINS; bin++) {
-        const value = Math.min(
-          depth[bin]!,
-          depth[bin === 0 ? SHADOW_BINS - 1 : bin - 1]!,
-          depth[bin === SHADOW_BINS - 1 ? 0 : bin + 1]!,
-        );
-        depthMin[bin] = value;
-        if (penumbra) depthEdge[bin] = Math.sqrt(value);
-        if (value < nearestShadowSq) nearestShadowSq = value;
-      }
-    }
+    const penumbra = edgeWidth > 0 && shadow.casting;
+    const shadowRays = shadow.build(observer.x, observer.y, penumbra);
 
     // Сток читается один раз на наблюдателя, не на тексель (PERF-3): объём
     // просмотра — арифметика границ прямоугольника, а не счёт в цикле.
@@ -435,7 +319,7 @@ export class VisibilityMask {
     if (cost !== undefined) {
       cost.fogRevealCalls++;
       cost.fogSegmentRangeTests += segments.length;
-      cost.fogNearSegments += near.length;
+      cost.fogNearSegments += shadow.nearCount;
       cost.fogShadowRayTests += shadowRays;
       cost.fogMaskTexels += (x1 - x0 + 1) * (y1 - y0 + 1);
     }
@@ -459,7 +343,7 @@ export class VisibilityMask {
     staged.radiusSq = radiusSq;
     staged.innerSq = edgeWidth <= 0 ? radiusSq : inner > 0 ? inner * inner : -1;
     staged.edgeWidth = edgeWidth;
-    staged.shadowed = near.length > 0;
+    staged.shadowed = shadow.casting;
     staged.penumbra = penumbra;
     // Порог, за которым тексель обязан спросить у полярного буфера свой угол.
     // Прежде им была ближайшая тень ЛЮБОГО направления — ближе неё затенения
@@ -471,6 +355,7 @@ export class VisibilityMask {
     // значит и начало полосы растёт вместе с ней: минимум по бинам достигается
     // на ближайшей тени, и одного числа на наблюдателя хватает. Тени нет вовсе
     // — порог бесконечен, и ветка мертва.
+    const nearestShadowSq = shadow.nearestShadowSq;
     const nearestShadow = Math.sqrt(nearestShadowSq);
     staged.penumbraStartSq = penumbra
       ? (nearestShadow - penumbraOf(nearestShadow, edgeWidth)) ** 2
@@ -501,87 +386,114 @@ export class VisibilityMask {
     const staged = this.staged;
     if (y1 > staged.y1) y1 = staged.y1;
     if (y1 < y0) return 0;
-    const { x0, x1, ox, oy, radius, radiusSq, innerSq, edgeWidth, shadowed, penumbra } = staged;
-    const penumbraStartSq = staged.penumbraStartSq;
-    const depthMin = this.depthMin;
-    const depthEdge = this.depthEdge;
     const scale = this.texelsPerUnit;
-    const width = this.width;
-    // Центр наблюдателя и начало растра — в локальных, а не полями объекта:
-    // цикл читает их сотню тысяч раз за перестройку.
-    const rectX = this.rect.x;
     const rectY = this.rect.y;
-    let written = 0;
-    // Счёт в локальных, а не в стоке: инкремент в поле объекта на тексель —
-    // ровно та цена в цикле, которой `cost.ts` не платит (PERF-3).
-    let shadowTests = 0;
+    const oy = staged.oy;
+    this.revealWritten = 0;
+    this.revealShadowTests = 0;
     for (let ty = y0; ty <= y1; ty++) {
       const wy = rectY + (ty + 0.5) / scale;
-      const dy = wy - oy;
-      const dySq = dy * dy;
-      const row = ty * width;
-      for (let tx = x0; tx <= x1; tx++) {
-        const dx = rectX + (tx + 0.5) / scale - ox;
-        const distSq = dx * dx + dySq;
-        if (distSq >= radiusSq) continue;
-        const current = target[row + tx]!;
-        if (current === 255) continue; // уже полностью открыт другим наблюдателем
-        // Корень берут не все тексели: во внутреннем круге полного света он
-        // ничего не уточняет. Отрицательное значение — «ещё не брали».
-        let dist = -1;
-        let value: number;
-        if (distSq <= innerSq) {
-          value = 255;
-        } else {
-          dist = Math.sqrt(distSq);
-          value = Math.round(edgeGradient(dist, radius, edgeWidth) * 255);
-        }
-        // Ранний выход до самой дорогой операции цикла: тексель, чьё значение и
-        // без гашения не превосходит лежащего, не стоит ни угла, ни корня.
-        if (value <= current) continue;
-        if (shadowed && distSq >= penumbraStartSq) {
-          // Дистанция тени — минимум своего и соседних бинов: консервативность
-          // на разрыве силуэта (интерполяция дала бы свет в тени), тень шире, а
-          // не уже (FOW-9). Тройка свёрнута до цикла (`depthMin`), сравнение
-          // идёт в КВАДРАТАХ — буфер хранит их же: возведение монотонно на
-          // неотрицательных, и срез тот же самый.
-          shadowTests++;
-          const bin = binOf(Math.atan2(dy, dx));
-          if (distSq >= depthMin[bin]!) continue; // за фронтом — срез жёсткий
-          // Полутень фронта укрытия (FOW-7): свет гаснет ТОЙ ЖЕ кромкой, что и
-          // на границе круга обзора, — потому и считает её `edgeGradient`, где
-          // роль радиуса играет дистанция тени. Своего числа в конфигурации у
-          // полутени нет намеренно: кромка обзора и кромка тени — одна ширина
-          // размытия границы видимого (FOW-10), и вторая ручка расходилась бы
-          // с первой; глубину же её ограничивает путь до укрытия (`penumbraOf`),
-          // иначе близкое укрытие гасило бы свет под ногами наблюдателя.
-          //
-          // Гасить — только гасить: сторона тени этой веткой не светлеет ни на
-          // единицу (за фронтом стоит `continue` выше), а освещённая сторона к
-          // фронту темнеет. Расхождение приближения остаётся в сторону тумана,
-          // а не света (FOW-9). Новой ручки качества полутень не требует
-          // (QUAL-3): её объём правит тот же потолок `fog.maskResolution`, что
-          // и весь растр маски.
-          if (penumbra) {
-            const shadow = depthEdge[bin]!;
-            dist = dist < 0 ? Math.sqrt(distSq) : dist;
-            value = Math.round(value * edgeGradient(dist, shadow, penumbraOf(shadow, edgeWidth)));
-          }
-        }
-        // Монотонность записи: значение кладётся, только пока растёт, — иначе
-        // погашенный полутенью тексель затирал бы более светлый вклад соседнего
-        // наблюдателя (максимум по наблюдателям, FOW-7).
-        if (value <= current) continue;
-        target[row + tx] = value;
-        written++;
-      }
+      this.revealRow(target, ty, wy - oy);
     }
     const cost = costSink();
     if (cost !== undefined) {
-      cost.fogMaskTexelsWritten += written;
-      cost.fogShadowTexelTests += shadowTests;
+      cost.fogMaskTexelsWritten += this.revealWritten;
+      cost.fogShadowTexelTests += this.revealShadowTests;
     }
-    return (y1 - y0 + 1) * (x1 - x0 + 1);
+    return (y1 - y0 + 1) * (staged.x1 - staged.x0 + 1);
+  }
+
+  /**
+   * Одна строка reveal-полигона подготовленного наблюдателя; `dy` — её отступ
+   * от центра наблюдателя по мировой оси Y.
+   *
+   * Всё, что цикл по текселям читает сотню тысяч раз за перестройку, лежит в
+   * локальных, а не в полях объекта; счёт записей и углов копится тоже в
+   * локальных и уходит в поля один раз на строку, а не на тексель (PERF-3).
+   */
+  private revealRow(target: Uint8Array, ty: number, dy: number): void {
+    const staged = this.staged;
+    const { x0, x1, ox, radius, radiusSq, innerSq, edgeWidth, shadowed, penumbra } = staged;
+    const penumbraStartSq = staged.penumbraStartSq;
+    const scale = this.texelsPerUnit;
+    const rectX = this.rect.x;
+    const dySq = dy * dy;
+    const row = ty * this.width;
+    let written = 0;
+    let shadowTests = 0;
+    for (let tx = x0; tx <= x1; tx++) {
+      const dx = rectX + (tx + 0.5) / scale - ox;
+      const distSq = dx * dx + dySq;
+      if (distSq >= radiusSq) continue;
+      const current = target[row + tx]!;
+      if (current === 255) continue; // уже полностью открыт другим наблюдателем
+      // Корень берут не все тексели: во внутреннем круге полного света он
+      // ничего не уточняет. Отрицательное значение — «ещё не брали».
+      let dist = -1;
+      let value = 255;
+      if (distSq > innerSq) {
+        dist = Math.sqrt(distSq);
+        value = Math.round(edgeGradient(dist, radius, edgeWidth) * 255);
+      }
+      // Ранний выход до самой дорогой операции цикла: тексель, чьё значение и
+      // без гашения не превосходит лежащего, не стоит ни угла, ни корня.
+      if (value <= current) continue;
+      if (shadowed && distSq >= penumbraStartSq) {
+        shadowTests++;
+        value = this.shadeTexel(value, dist, distSq, dx, dy, edgeWidth, penumbra);
+      }
+      // Монотонность записи: значение кладётся, только пока растёт, — иначе
+      // погашенный полутенью тексель затирал бы более светлый вклад соседнего
+      // наблюдателя (максимум по наблюдателям, FOW-7). Ноль полного среза
+      // (`shadeTexel`) этой же проверкой и отсеивается.
+      if (value <= current) continue;
+      target[row + tx] = value;
+      written++;
+    }
+    this.revealWritten += written;
+    this.revealShadowTests += shadowTests;
+  }
+
+  /**
+   * Гашение текселя тенью укрытия: жёсткий срез за фронтом и полутень перед ним
+   * (FOW-9, FOW-7). Возвращает новое значение текселя; 0 — тексель за фронтом,
+   * и монотонная запись строки его отбросит.
+   *
+   * Дистанция тени — минимум своего и соседних бинов: консервативность на
+   * разрыве силуэта (интерполяция дала бы свет в тени), тень шире, а не уже
+   * (FOW-9). Тройка свёрнута до цикла (`depthMin`), сравнение идёт в КВАДРАТАХ
+   * — буфер хранит их же: возведение монотонно на неотрицательных, и срез тот
+   * же самый.
+   *
+   * Полутень фронта укрытия (FOW-7): свет гаснет ТОЙ ЖЕ кромкой, что и на
+   * границе круга обзора, — потому и считает её `edgeGradient`, где роль
+   * радиуса играет дистанция тени. Своего числа в конфигурации у полутени нет
+   * намеренно: кромка обзора и кромка тени — одна ширина размытия границы
+   * видимого (FOW-10), и вторая ручка расходилась бы с первой; глубину же её
+   * ограничивает путь до укрытия (`penumbraOf`), иначе близкое укрытие гасило
+   * бы свет под ногами наблюдателя.
+   *
+   * Гасить — только гасить: сторона тени этой веткой не светлеет ни на единицу
+   * (за фронтом стоит ноль), а освещённая сторона к фронту темнеет. Расхождение
+   * приближения остаётся в сторону тумана, а не света (FOW-9). Новой ручки
+   * качества полутень не требует (QUAL-3): её объём правит тот же потолок
+   * `fog.maskResolution`, что и весь растр маски.
+   */
+  private shadeTexel(
+    value: number,
+    dist: number,
+    distSq: number,
+    dx: number,
+    dy: number,
+    edgeWidth: number,
+    penumbra: boolean,
+  ): number {
+    const bin = binOf(Math.atan2(dy, dx));
+    if (distSq >= this.shadow.depthMin[bin]!) return 0; // за фронтом — срез жёсткий
+    if (!penumbra) return value;
+    const shadow = this.shadow.depthEdge[bin]!;
+    const linear = dist < 0 ? Math.sqrt(distSq) : dist;
+    return Math.round(value * edgeGradient(linear, shadow, penumbraOf(shadow, edgeWidth)));
   }
 
   /** Обнуление строк [y0, y1] растра `target` — общий шов обоих путей. */
@@ -604,114 +516,6 @@ export class VisibilityMask {
       throw new Error('порционная перестройка маски не начата: beginBuild() не вызван');
     }
     return back;
-  }
-
-  /**
-   * Растеризация отрезка в полярный буфер (design D3): угловой интервал по
-   * концам отрезка, в каждый бин — минимум дистанции пересечения луча бина с
-   * линией отрезка. Интервал, накрывающий разрыв `atan2` (±π), пишется двумя
-   * дугами. Дистанция до бесконечной линии, а не до отрезка: бины внутри
-   * интервала пересекают сам отрезок, а краевой бин, чей центр вышел за конец,
-   * получает дистанцию края — расхождение на ширину бина в сторону тени.
-   *
-   * Возвращает число пройденных бинов — тестов «луч бина × линия отрезка»
-   * (`fogShadowRayTests`, PERF-3). Величина арифметическая: цикл по бинам
-   * счётчика не касается, его складывает вызывающий.
-   */
-  private rasterizeSegment(ox: number, oy: number, segment: FogSegment): number {
-    // Наблюдатель ровно на линии ребра: угловая растеризация вырождается
-    // (offset = 0, все t = 0), и без отдельной ветки тень исчезала бы вовсе —
-    // протечка света ровно там, где FOW-9 требует туман.
-    const onLineVertical = segment.x1 === segment.x2 && segment.x1 === ox;
-    const onLineHorizontal = segment.y1 === segment.y2 && segment.y1 === oy;
-    if (onLineVertical || onLineHorizontal) {
-      return this.rasterizeOnLine(ox, oy, segment, onLineVertical);
-    }
-    const a0 = Math.atan2(segment.y1 - oy, segment.x1 - ox);
-    const a1 = Math.atan2(segment.y2 - oy, segment.x2 - ox);
-    const lo = Math.min(a0, a1);
-    const hi = Math.max(a0, a1);
-    if (hi - lo <= Math.PI) {
-      return this.rasterizeArc(ox, oy, segment, binOf(lo), binOf(hi));
-    }
-    // Отрезок субтендирует меньше π, значит интервал [lo, hi] шире π — это
-    // дополнение: дуга идёт через разрыв ±π двумя половинами.
-    return (
-      this.rasterizeArc(ox, oy, segment, 0, binOf(lo)) +
-      this.rasterizeArc(ox, oy, segment, binOf(hi), SHADOW_BINS - 1)
-    );
-  }
-
-  /**
-   * Одна дуга интервала: бины подряд, в бин — минимум дистанции (design D3).
-   * Возвращает число пройденных бинов — объём работы дуги (PERF-3).
-   *
-   * Хранится КВАДРАТ дистанции, а не она сама: единственный читатель буфера —
-   * цикл по текселям `reveal`, а у него на руках квадрат расстояния до
-   * наблюдателя. Возведение монотонно на неотрицательных, поэтому срез тени
-   * тот же самый, зато корень не берётся ни разу на тексель. Бины сравниваются
-   * между собой тем же минимумом — порядок квадраты не меняют.
-   */
-  private rasterizeArc(
-    ox: number,
-    oy: number,
-    segment: FogSegment,
-    binLo: number,
-    binHi: number,
-  ): number {
-    const depth = this.depth;
-    const vertical = segment.x1 === segment.x2;
-    const offset = vertical ? segment.x1 - ox : segment.y1 - oy;
-    for (let bin = binLo; bin <= binHi; bin++) {
-      const angle = ((bin + 0.5) / SHADOW_BINS) * TWO_PI - Math.PI;
-      const along = vertical ? Math.cos(angle) : Math.sin(angle);
-      if (along === 0) continue;
-      const t = offset / along;
-      // Пересечение позади луча — краевой бин смотрит от линии; тени нет.
-      if (t <= 0) continue;
-      const tSq = t * t;
-      if (tSq < depth[bin]!) depth[bin] = tSq;
-    }
-    return binHi - binLo + 1;
-  }
-
-  /**
-   * Тень наблюдателя, стоящего на линии ребра (side === 0, FOW-9). Стоя на
-   * самом отрезке, наблюдатель перекрыт целиком — симуляция для такой позиции
-   * даёт hit на нулевой дистанции любому лучу поперёк ребра — и весь буфер
-   * получает ноль. Вне пролёта отрезка тень занимает только направления вдоль
-   * линии до ближайшего конца (бин направления и его соседи — консервативно).
-   *
-   * Возвращает число тронутых бинов (PERF-3): весь буфер, когда наблюдатель в
-   * пролёте отрезка, и три бина — когда вне его.
-   */
-  private rasterizeOnLine(
-    ox: number,
-    oy: number,
-    segment: FogSegment,
-    vertical: boolean,
-  ): number {
-    const depth = this.depth;
-    const lo = vertical ? Math.min(segment.y1, segment.y2) : Math.min(segment.x1, segment.x2);
-    const hi = vertical ? Math.max(segment.y1, segment.y2) : Math.max(segment.x1, segment.x2);
-    const at = vertical ? oy : ox;
-    if (at >= lo && at <= hi) {
-      depth.fill(0);
-      return SHADOW_BINS;
-    }
-    const dist = at < lo ? lo - at : at - hi;
-    // В буфере — квадраты (см. `rasterizeArc`); ноль полного перекрытия выше
-    // квадратом и остаётся нулём.
-    const distSq = dist * dist;
-    const toward = at < lo ? 1 : -1;
-    const angle = vertical ? Math.atan2(toward, 0) : Math.atan2(0, toward);
-    const bin = binOf(angle);
-    const prev = bin === 0 ? SHADOW_BINS - 1 : bin - 1;
-    const next = bin === SHADOW_BINS - 1 ? 0 : bin + 1;
-    if (distSq < depth[bin]!) depth[bin] = distSq;
-    if (distSq < depth[prev]!) depth[prev] = distSq;
-    if (distSq < depth[next]!) depth[next] = distSq;
-    return 3;
   }
 
   /**
@@ -745,32 +549,41 @@ export class VisibilityMask {
    */
   private smoothInto(target: Uint8Array, pass: FogSmoothPass, y0: number, y1: number): number {
     if (y1 < y0) return 0;
-    const { width, height } = this;
     const cost = costSink();
-    const texels = (y1 - y0 + 1) * width;
+    const texels = (y1 - y0 + 1) * this.width;
     if (cost !== undefined) cost.fogMaskSmoothTexels += texels;
     if (this.temp?.length !== target.length) {
       this.temp = new Uint8Array(target.length);
     }
     const temp = this.temp;
-    if (pass === 'horizontal') {
-      const last = width - 1;
-      for (let y = y0; y <= y1; y++) {
-        const row = y * width;
-        // Скользящее окно вместо трёх чтений на тексель: горизонтальный проход
-        // читает подряд, и сосед слева — это середина прошлого шага. Края
-        // повторяют себя ровно как прежние зажимы индекса.
-        let left = target[row]!;
-        let mid = left;
-        for (let x = 0; x < width; x++) {
-          const right = x === last ? mid : target[row + x + 1]!;
-          temp[row + x] = (left + mid + right + 1) / 3;
-          left = mid;
-          mid = right;
-        }
+    if (pass === 'horizontal') this.smoothHorizontal(target, temp, y0, y1);
+    else this.smoothVertical(target, temp, y0, y1);
+    return texels;
+  }
+
+  /** Горизонтальная половина блюра: читает `target`, пишет промежуточный буфер. */
+  private smoothHorizontal(target: Uint8Array, temp: Uint8Array, y0: number, y1: number): void {
+    const width = this.width;
+    const last = width - 1;
+    for (let y = y0; y <= y1; y++) {
+      const row = y * width;
+      // Скользящее окно вместо трёх чтений на тексель: горизонтальный проход
+      // читает подряд, и сосед слева — это середина прошлого шага. Края
+      // повторяют себя ровно как прежние зажимы индекса.
+      let left = target[row]!;
+      let mid = left;
+      for (let x = 0; x < width; x++) {
+        const right = x === last ? mid : target[row + x + 1]!;
+        temp[row + x] = (left + mid + right + 1) / 3;
+        left = mid;
+        mid = right;
       }
-      return texels;
     }
+  }
+
+  /** Вертикальная половина блюра: читает только промежуточный буфер. */
+  private smoothVertical(target: Uint8Array, temp: Uint8Array, y0: number, y1: number): void {
+    const { width, height } = this;
     for (let y = y0; y <= y1; y++) {
       const row = y * width;
       const up = (y === 0 ? 0 : y - 1) * width;
@@ -779,7 +592,6 @@ export class VisibilityMask {
         target[row + x] = (temp[up + x]! + temp[row + x]! + temp[down + x]! + 1) / 3;
       }
     }
-    return texels;
   }
 
   /** Доля света в мировой точке [0, 1] — ближайший тексель; вне маски — туман. */

@@ -79,7 +79,7 @@ import type {
   ShadowCasterTier,
   ShadowPhase,
 } from '../types.js';
-import { costSink } from '../cost.js';
+import { costSink, type RenderCostCounters } from '../cost.js';
 import { LIGHTING_MAX_LOCAL_LIGHTS, LocalLightPool, localLightsKnob } from '../lighting/localLights.js';
 import type { DebugSource } from '../debug/contract.js';
 import { lightingSceneDebugSource, type DebugLightingState } from '../debug/lightingSource.js';
@@ -334,15 +334,11 @@ export class LightingSubsystem
     const cost = costSink();
     const mode = this.current.shadowMode;
     if (mode !== 'blob') this.blobs.hide();
-    if (mode === 'none') {
-      this.applyPhase('none');
-      return;
-    }
-    if (mode === 'blob') {
-      // Карт теней в режиме нет вовсе: фаза `none` снимает флаги кастеров обоих
-      // ярусов — статика теней не отбрасывает, динамика рисуется пятнами
-      // (REND-30). Приёмник пятен — террейн, и приходит изображение к нему
-      // основным проходом сцены, а не теневым.
+    if (mode === 'none' || mode === 'blob') {
+      // Карт теней в обоих режимах нет вовсе: фаза `none` снимает флаги кастеров
+      // обоих ярусов. В `blob` статика теней не отбрасывает, а динамика
+      // рисуется пятнами (REND-30); приёмник пятен — террейн, и приходит
+      // изображение к нему основным проходом сцены, а не теневым.
       //
       // Сами пятна пишутся не здесь, а в `blobCastersPosed`: позы кадра ставит
       // владелец инстансов, зарегистрированный ПОЗЖЕ этой подсистемы, и написать
@@ -351,41 +347,40 @@ export class LightingSubsystem
       return;
     }
     if (mode === 'full') {
-      this.applyPhase('full');
-      this.sun.shadow.needsUpdate = true;
-      this.staticStale = false;
-      if (cost !== undefined) {
-        // Карта одна и покадровая: оба яруса платят каждым кадром — ровно эта
-        // разница с `hybrid` и читается диффом эталона (PERF-2).
-        cost.lightingStaticCasters += this.staticRoots.size;
-        cost.lightingDynamicCasters += this.dynamicRoots.size;
-      }
+      this.updateFullShadows(cost);
       return;
     }
-    // Перерисовка кэша MUST NOT голодить динамическую карту (REND-30): кадр
-    // статики допустим, только если предыдущий ею не был или динамики нет
-    // вовсе. Под непрерывным потоком событий инвалидации (мутация пола каждый
-    // тик, TERR-6, перетаскивание декорации в редакторе) фазы чередуются, и
-    // каждая карта отстаёт не более чем на один свой пропущенный кадр. Без этих
-    // ворот статика вытесняла бы динамику каждым кадром, и тени юнитов
-    // застывали бы на всё время мутаций (`lightingDynamicCasters = 0` в
-    // perf-секциях эталонов стоимости).
+    this.updateHybridShadows(cost, cycleMoved);
+  }
+
+  /**
+   * Кадр режима `full`: карта одна и покадровая — оба яруса платят каждым
+   * кадром, и ровно эта разница с `hybrid` читается диффом эталона (PERF-2).
+   */
+  private updateFullShadows(cost: RenderCostCounters | undefined): void {
+    this.applyPhase('full');
+    this.sun.shadow.needsUpdate = true;
+    this.staticStale = false;
+    if (cost === undefined) return;
+    cost.lightingStaticCasters += this.staticRoots.size;
+    cost.lightingDynamicCasters += this.dynamicRoots.size;
+  }
+
+  /**
+   * Кадр режима `hybrid`: кэш статики и покадровая карта динамики чередуются.
+   *
+   * Перерисовка кэша MUST NOT голодить динамическую карту (REND-30): кадр
+   * статики допустим, только если предыдущий ею не был или динамики нет
+   * вовсе. Под непрерывным потоком событий инвалидации (мутация пола каждый
+   * тик, TERR-6, перетаскивание декорации в редакторе) фазы чередуются, и
+   * каждая карта отстаёт не более чем на один свой пропущенный кадр. Без этих
+   * ворот статика вытесняла бы динамику каждым кадром, и тени юнитов
+   * застывали бы на всё время мутаций (`lightingDynamicCasters = 0` в
+   * perf-секциях эталонов стоимости).
+   */
+  private updateHybridShadows(cost: RenderCostCounters | undefined, cycleMoved: boolean): void {
     if (this.staticStale && (this.phase !== 'static' || this.dynamicRoots.size === 0)) {
-      // Кадр перерисовки кэша: динамическая карта его пропускает и остаётся
-      // кадром старше — «двигая декорацию, автор видит её тень» (ED-15).
-      const reflagged = this.applyPhase('static');
-      this.sun.shadow.needsUpdate = true;
-      this.sunDynamic.shadow.needsUpdate = false;
-      this.staticStale = false;
-      this.rebuilds++;
-      if (cost !== undefined) {
-        cost.lightingStaticCasters += this.staticRoots.size;
-        cost.lightingStaticRebuilds++;
-        // Кадр, на котором цикл сдвинул источник, переставил флаги и ярусу, чью
-        // карту не рисовал: работа по числу его корней реальная, и эталон её
-        // видит (PERF-3, см. `quality`).
-        if (reflagged && cycleMoved) cost.lightingDynamicCasters += this.dynamicRoots.size;
-      }
+      this.rebuildStaticShadow(cost, cycleMoved);
       return;
     }
     const reflagged = this.applyPhase('dynamic');
@@ -404,6 +399,25 @@ export class LightingSubsystem
     // режима, поток инвалидаций пола), сюда не попадает — за неё платят те же
     // счётчики яруса, чья карта в этом кадре и рисуется.
     if (reflagged && cycleMoved) cost.lightingStaticCasters += this.staticRoots.size;
+  }
+
+  /**
+   * Кадр перерисовки кэша статики: динамическая карта его пропускает и остаётся
+   * кадром старше — «двигая декорацию, автор видит её тень» (ED-15).
+   */
+  private rebuildStaticShadow(cost: RenderCostCounters | undefined, cycleMoved: boolean): void {
+    const reflagged = this.applyPhase('static');
+    this.sun.shadow.needsUpdate = true;
+    this.sunDynamic.shadow.needsUpdate = false;
+    this.staticStale = false;
+    this.rebuilds++;
+    if (cost === undefined) return;
+    cost.lightingStaticCasters += this.staticRoots.size;
+    cost.lightingStaticRebuilds++;
+    // Кадр, на котором цикл сдвинул источник, переставил флаги и ярусу, чью
+    // карту не рисовал: работа по числу его корней реальная, и эталон её
+    // видит (PERF-3, см. `quality`).
+    if (reflagged && cycleMoved) cost.lightingDynamicCasters += this.dynamicRoots.size;
   }
 
   // ------------------------------------------------------- реестр кастеров

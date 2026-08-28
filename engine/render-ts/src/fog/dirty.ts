@@ -158,18 +158,23 @@ export class FogDirtyBlocks {
   unionInto(rect: FogTexelRect): void {
     if (this.live === 0) return;
     for (let row = 0; row < this.rows; row++) {
-      const y0 = row * FOG_DIRTY_BLOCK;
-      const y1 = Math.min(y0 + FOG_DIRTY_BLOCK, this.height) - 1;
       for (let column = 0; column < this.cols; column++) {
         if (this.flags[row * this.cols + column] !== 1) continue;
-        const x0 = column * FOG_DIRTY_BLOCK;
-        const x1 = Math.min(x0 + FOG_DIRTY_BLOCK, this.width) - 1;
-        if (x0 < rect.x0) rect.x0 = x0;
-        if (x1 > rect.x1) rect.x1 = x1;
-        if (y0 < rect.y0) rect.y0 = y0;
-        if (y1 > rect.y1) rect.y1 = y1;
+        this.unionBlock(rect, column, row);
       }
     }
+  }
+
+  /** Тексельный прямоугольник одного грязного блока — в накопитель окна. */
+  private unionBlock(rect: FogTexelRect, column: number, row: number): void {
+    const x0 = column * FOG_DIRTY_BLOCK;
+    const y0 = row * FOG_DIRTY_BLOCK;
+    const x1 = Math.min(x0 + FOG_DIRTY_BLOCK, this.width) - 1;
+    const y1 = Math.min(y0 + FOG_DIRTY_BLOCK, this.height) - 1;
+    if (x0 < rect.x0) rect.x0 = x0;
+    if (x1 > rect.x1) rect.x1 = x1;
+    if (y0 < rect.y0) rect.y0 = y0;
+    if (y1 > rect.y1) rect.y1 = y1;
   }
 
   /** Снимает с набора блоки, устоявшиеся с прошлого `flushSettled`. */
@@ -246,20 +251,62 @@ function differs(
   y0: number,
   y1: number,
 ): boolean {
-  if ((width & 3) === 0 && (x0 & 3) === 0 && ((x1 - x0) & 3) === 0 && (previous.byteOffset & 3) === 0 && (next.byteOffset & 3) === 0) {
-    const p = wordsOf(previous);
-    const n = wordsOf(next);
-    const rowWords = width >> 2;
-    const from = x0 >> 2;
-    const count = (x1 - x0) >> 2;
-    for (let y = y0; y < y1; y++) {
-      const row = y * rowWords + from;
-      for (let i = 0; i < count; i++) {
-        if (p[row + i] !== n[row + i]) return true;
-      }
+  return wordAligned(previous, next, width, x0, x1)
+    ? differsByWord(previous, next, width, x0, x1, y0, y1)
+    : differsByByte(previous, next, width, x0, x1, y0, y1);
+}
+
+/** Ложатся ли строка растра и границы блока на 32-битное слово без остатка. */
+function wordAligned(
+  previous: Uint8Array,
+  next: Uint8Array,
+  width: number,
+  x0: number,
+  x1: number,
+): boolean {
+  return (
+    (width & 3) === 0 &&
+    (x0 & 3) === 0 &&
+    ((x1 - x0) & 3) === 0 &&
+    (previous.byteOffset & 3) === 0 &&
+    (next.byteOffset & 3) === 0
+  );
+}
+
+/** Быстрый путь: сравнение по четыре текселя словом. */
+function differsByWord(
+  previous: Uint8Array,
+  next: Uint8Array,
+  width: number,
+  x0: number,
+  x1: number,
+  y0: number,
+  y1: number,
+): boolean {
+  const p = wordsOf(previous);
+  const n = wordsOf(next);
+  const rowWords = width >> 2;
+  const from = x0 >> 2;
+  const count = (x1 - x0) >> 2;
+  for (let y = y0; y < y1; y++) {
+    const row = y * rowWords + from;
+    for (let i = 0; i < count; i++) {
+      if (p[row + i] !== n[row + i]) return true;
     }
-    return false;
   }
+  return false;
+}
+
+/** Кромочные блоки с границами не по слову — побайтово. */
+function differsByByte(
+  previous: Uint8Array,
+  next: Uint8Array,
+  width: number,
+  x0: number,
+  x1: number,
+  y0: number,
+  y1: number,
+): boolean {
   for (let y = y0; y < y1; y++) {
     const row = y * width;
     for (let x = x0; x < x1; x++) {

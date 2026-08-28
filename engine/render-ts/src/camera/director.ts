@@ -43,7 +43,7 @@ import {
   type LastingEffectType,
 } from './effects.js';
 import { CAMERA_EFFECTS_DESCRIPTION, type CameraEffectsCatalog } from './effectTypes.js';
-import { createWarnOnce } from '../warnOnce.js';
+import { createWarnOnce, type WarnOnce } from '../warnOnce.js';
 
 export interface CameraEffectsDirectorOptions {
   /** Таблицы «событие/состояние → эффект» из манифеста (ASSET-8). */
@@ -99,8 +99,7 @@ function bindingValue(
   def: CameraEffectDef,
   name: string,
 ): number {
-  // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- baseline
-  const spec = description.binding[kind]?.find((param) => param.name === name);
+  const spec = description.binding[kind].find((param) => param.name === name);
   const value = def[name];
   if (typeof value !== 'number' || !Number.isFinite(value)) return spec?.defaultValue ?? 0;
   return spec === undefined ? value : clampCameraEffectParam(spec, value);
@@ -116,7 +115,7 @@ export class CameraEffectsDirector {
   private readonly impulses = new Map<string, ImpulseEffect>();
   private readonly lastings = new Map<string, LastingEffect>();
   /** Предупреждение на запись — один раз (ASSET-8); механизм общий с подсистемами. */
-  private readonly warnOnce: (key: string, message: string) => void;
+  private readonly warnOnce: WarnOnce;
 
   constructor(options: CameraEffectsDirectorOptions = {}) {
     this.tables = options.tables ?? {};

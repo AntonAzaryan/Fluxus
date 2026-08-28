@@ -290,16 +290,40 @@ export function createVisualSurface(
   };
   computeCells(0, 0, width - 1, height - 1);
 
-  /** Клетка и локальные (u, v) точки; за краем — ближайшая клетка (как TERR-4). */
-  const scratch = { cell: 0, u: 0, v: 0 };
+  /**
+   * Адрес выборки: клетка, её координаты в клетках и локальные (u, v) точки.
+   * Скретч один на поверхность — выборка идёт по одной точке за вызов, и
+   * вложенных выборок нет; аллокаций на выборку поэтому не бывает.
+   */
+  const scratch = { cell: 0, cx: 0, cy: 0, u: 0, v: 0 };
+
+  /** Точка мира → адрес выборки; за краем — ближайшая клетка (как TERR-4). */
   const locate = (wx: number, wy: number): void => {
     const gx = wx / tile;
     const gy = wy / tile;
     const cx = Math.min(Math.max(Math.floor(gx), 0), width - 1);
     const cy = Math.min(Math.max(Math.floor(gy), 0), height - 1);
+    scratch.cx = cx;
+    scratch.cy = cy;
     scratch.cell = cy * width + cx;
     scratch.u = Math.min(Math.max(gx - cx, 0), 1);
     scratch.v = Math.min(Math.max(gy - cy, 0), 1);
+  };
+
+  /**
+   * Тот же адрес, но клетка названа вызывающим: точка клампится в её пределы, а
+   * сама клетка — в пределы сетки. Одна запись этого клампа на все четыре
+   * `*InCell`: разойдись они, выборка высоты и выборка нормали отвечали бы про
+   * разные точки одной клетки (REND-9).
+   */
+  const locateInCell = (cellX: number, cellY: number, wx: number, wy: number): void => {
+    const cx = Math.min(Math.max(cellX, 0), width - 1);
+    const cy = Math.min(Math.max(cellY, 0), height - 1);
+    scratch.cx = cx;
+    scratch.cy = cy;
+    scratch.cell = cy * width + cx;
+    scratch.u = Math.min(Math.max(wx / tile - cx, 0), 1);
+    scratch.v = Math.min(Math.max(wy / tile - cy, 0), 1);
   };
 
   /**
@@ -366,11 +390,43 @@ export function createVisualSurface(
   };
 
   /**
-   * Быстрый отвод мимо walkable-ветви: пустой реестр или ненакрытая клетка —
-   * и выборка идёт ровно прежним кодом, побитово (REND-9).
+   * Реестр walkable, накрывающий клетку, либо null — быстрый отвод мимо
+   * walkable-ветви: пустой реестр или ненакрытая клетка, и выборка идёт ровно
+   * прежним кодом, побитово (REND-9). Отдаётся сам реестр, а не флаг: иначе
+   * каждый вызывающий доставал бы его второй раз и утверждал, что он есть.
    */
-  const walkableCovers = (cell: number): boolean =>
-    walkable !== null && walkable.size > 0 && walkable.coversCell(cell);
+  const walkableIn = (cell: number): WalkableField | null =>
+    walkable !== null && walkable.size > 0 && walkable.coversCell(cell) ? walkable : null;
+
+  /**
+   * Высота поля в уже адресованной точке (`scratch`): террейн-форма, а поверх
+   * неё правило верха — max (REND-9), юнит стоит на самой верхней поверхности.
+   * `wx`/`wy` — мировая точка, в которой спрашивается walkable-вклад.
+   */
+  const heightHere = (wx: number, wy: number): number => {
+    const h = sample(scratch.cell, scratch.u, scratch.v);
+    const field = walkableIn(scratch.cell);
+    if (field === null) return h;
+    const top = field.topInCell(scratch.cell, wx, wy, null);
+    return top > h ? top : h;
+  };
+
+  /**
+   * Нормаль поля в уже адресованной точке. Победил walkable — нормаль поля есть
+   * нормаль треугольника меша (REND-9); геометрического сглаживания по рёбрам
+   * нет, резкие грани честные.
+   */
+  const normalHere = (wx: number, wy: number, out: SurfaceNormal): SurfaceNormal => {
+    const field = walkableIn(scratch.cell);
+    if (field === null) return normalOf(scratch.cell, scratch.u, scratch.v, out);
+    const h = sample(scratch.cell, scratch.u, scratch.v);
+    const top = field.topInCell(scratch.cell, wx, wy, walkableNormal);
+    if (top <= h) return normalOf(scratch.cell, scratch.u, scratch.v, out);
+    out.x = walkableNormal.x;
+    out.y = walkableNormal.y;
+    out.z = walkableNormal.z;
+    return out;
+  };
 
   /** Скретч нормали walkable-победителя — аллокаций на выборку нет. */
   const walkableNormal: SurfaceNormal = { x: 0, y: 0, z: 1 };
@@ -413,38 +469,18 @@ export function createVisualSurface(
 
     heightAt(wx: number, wy: number): number {
       locate(wx, wy);
-      const h = sample(scratch.cell, scratch.u, scratch.v);
-      if (!walkableCovers(scratch.cell)) return h;
-      // Правило верха — max (REND-9): юнит стоит на самой верхней поверхности.
-      const top = walkable!.topInCell(scratch.cell, wx, wy, null);
-      return top > h ? top : h;
+      return heightHere(wx, wy);
     },
 
     heightInCell(cellX: number, cellY: number, wx: number, wy: number): number {
-      const cx = Math.min(Math.max(cellX, 0), width - 1);
-      const cy = Math.min(Math.max(cellY, 0), height - 1);
-      const u = Math.min(Math.max(wx / tile - cx, 0), 1);
-      const v = Math.min(Math.max(wy / tile - cy, 0), 1);
-      const cell = cy * width + cx;
-      const h = sample(cell, u, v);
-      if (!walkableCovers(cell)) return h;
+      locateInCell(cellX, cellY, wx, wy);
       // Walkable спрашивается в той же клампленной точке, что и террейн-форма.
-      const top = walkable!.topInCell(cell, (cx + u) * tile, (cy + v) * tile, null);
-      return top > h ? top : h;
+      return heightHere((scratch.cx + scratch.u) * tile, (scratch.cy + scratch.v) * tile);
     },
 
     normalAt(wx: number, wy: number, out: SurfaceNormal): SurfaceNormal {
       locate(wx, wy);
-      if (!walkableCovers(scratch.cell)) return normalOf(scratch.cell, scratch.u, scratch.v, out);
-      const h = sample(scratch.cell, scratch.u, scratch.v);
-      const top = walkable!.topInCell(scratch.cell, wx, wy, walkableNormal);
-      if (top <= h) return normalOf(scratch.cell, scratch.u, scratch.v, out);
-      // Победил walkable: нормаль поля — нормаль треугольника меша (REND-9);
-      // геометрического сглаживания по рёбрам нет — резкие грани честные.
-      out.x = walkableNormal.x;
-      out.y = walkableNormal.y;
-      out.z = walkableNormal.z;
-      return out;
+      return normalHere(wx, wy, out);
     },
 
     normalInCell(
@@ -454,19 +490,8 @@ export function createVisualSurface(
       wy: number,
       out: SurfaceNormal,
     ): SurfaceNormal {
-      const cx = Math.min(Math.max(cellX, 0), width - 1);
-      const cy = Math.min(Math.max(cellY, 0), height - 1);
-      const u = Math.min(Math.max(wx / tile - cx, 0), 1);
-      const v = Math.min(Math.max(wy / tile - cy, 0), 1);
-      const cell = cy * width + cx;
-      if (!walkableCovers(cell)) return normalOf(cell, u, v, out);
-      const h = sample(cell, u, v);
-      const top = walkable!.topInCell(cell, (cx + u) * tile, (cy + v) * tile, walkableNormal);
-      if (top <= h) return normalOf(cell, u, v, out);
-      out.x = walkableNormal.x;
-      out.y = walkableNormal.y;
-      out.z = walkableNormal.z;
-      return out;
+      locateInCell(cellX, cellY, wx, wy);
+      return normalHere((scratch.cx + scratch.u) * tile, (scratch.cy + scratch.v) * tile, out);
     },
 
     terrainFormHeightAt(wx: number, wy: number): number {
@@ -475,11 +500,8 @@ export function createVisualSurface(
     },
 
     terrainFormHeightInCell(cellX: number, cellY: number, wx: number, wy: number): number {
-      const cx = Math.min(Math.max(cellX, 0), width - 1);
-      const cy = Math.min(Math.max(cellY, 0), height - 1);
-      const u = Math.min(Math.max(wx / tile - cx, 0), 1);
-      const v = Math.min(Math.max(wy / tile - cy, 0), 1);
-      return sample(cy * width + cx, u, v);
+      locateInCell(cellX, cellY, wx, wy);
+      return sample(scratch.cell, scratch.u, scratch.v);
     },
 
     terrainFormNormalAt(wx: number, wy: number, out: SurfaceNormal): SurfaceNormal {
@@ -494,11 +516,8 @@ export function createVisualSurface(
       wy: number,
       out: SurfaceNormal,
     ): SurfaceNormal {
-      const cx = Math.min(Math.max(cellX, 0), width - 1);
-      const cy = Math.min(Math.max(cellY, 0), height - 1);
-      const u = Math.min(Math.max(wx / tile - cx, 0), 1);
-      const v = Math.min(Math.max(wy / tile - cy, 0), 1);
-      return normalOf(cy * width + cx, u, v, out);
+      locateInCell(cellX, cellY, wx, wy);
+      return normalOf(scratch.cell, scratch.u, scratch.v, out);
     },
 
     hasCellCurvature(x: number, y: number): boolean {
@@ -514,7 +533,7 @@ export function createVisualSurface(
 
     hasCellWalkable(x: number, y: number): boolean {
       if (x < 0 || y < 0 || x >= width || y >= height) return false;
-      return walkableCovers(y * width + x);
+      return walkableIn(y * width + x) !== null;
     },
   };
 }

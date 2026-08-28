@@ -25,7 +25,8 @@
  */
 import { costSink } from '../cost.js';
 import type { FogDirtyBlocks } from './dirty.js';
-import type { FogSegment, VisibilityMask } from './mask.js';
+import type { VisibilityMask } from './mask.js';
+import type { FogSegment } from './shadowDepth.js';
 
 /**
  * Слоты конфига в голове сигнатуры входов (design D4): ширина градиента —

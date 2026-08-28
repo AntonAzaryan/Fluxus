@@ -49,21 +49,9 @@ export class RenderHost implements TickObserver, PresentationProducer {
 
   constructor(context: RenderContext, config: RenderHostConfig) {
     this.presentation = config.stage ?? new PresentationStage(context);
-    this.extractor = new Extractor({
-      kindOf: config.kindOf,
-      ...(config.velocityComponent !== undefined
-        ? { velocityComponent: config.velocityComponent }
-        : {}),
-      ...(config.moveEpsilon !== undefined ? { moveEpsilon: config.moveEpsilon } : {}),
-      ...(config.terrainGrid !== undefined ? { terrainGrid: config.terrainGrid } : {}),
-      ...(config.aimEvents !== undefined ? { aimEvents: config.aimEvents } : {}),
-      ...(config.aimHoldTicks !== undefined ? { aimHoldTicks: config.aimHoldTicks } : {}),
-      ...(config.stateComponents !== undefined
-        ? { stateComponents: config.stateComponents }
-        : {}),
-      ...(config.locomotion !== undefined ? { locomotion: config.locomotion } : {}),
-      ...(config.flight !== undefined ? { flight: config.flight } : {}),
-    });
+    // Конфиг хоста РАСШИРЯЕТ конфиг сборки (`RenderHostConfig`), поэтому едет
+    // в неё целиком: пересказ полей по одному был бы вторым их списком.
+    this.extractor = new Extractor(config);
     this.buffer = new ViewBuffer({
       tickSeconds: config.tickSeconds,
       ...(config.snapDistance !== undefined ? { snapDistance: config.snapDistance } : {}),

@@ -73,6 +73,86 @@ export interface TerrainDebugAccess {
   curvatureTessellation(): number;
 }
 
+/**
+ * Агрегаты обхода клеток. Заводятся один раз на источник и переиспользуются:
+ * дамп снимается покадрово, пока наложение открыто.
+ */
+interface CellCounts {
+  ramps: number;
+  holes: number;
+  curved: number;
+  walkable: number;
+}
+
+/**
+ * Обход клеток сетки: гистограмма уровней и агрегаты — по всем клеткам, а в
+ * перечень строк идут только ЗНАЧИМЫЕ (см. `CELL_CAP`).
+ */
+function scanCells(
+  grid: TerrainGrid,
+  floor: Uint8Array,
+  surface: VisualSurface,
+  rows: DebugRows<DebugCellRow>,
+  levels: number[],
+  counts: CellCounts,
+): void {
+  counts.ramps = 0;
+  counts.holes = 0;
+  counts.curved = 0;
+  counts.walkable = 0;
+  for (let y = 0; y < grid.height; y += 1) {
+    for (let x = 0; x < grid.width; x += 1) {
+      scanCell(grid, floor, surface, rows, levels, counts, x, y);
+    }
+  }
+}
+
+/** Одна клетка обхода: счёт в агрегаты и, если клетка значимая, строка перечня. */
+function scanCell(
+  grid: TerrainGrid,
+  floor: Uint8Array,
+  surface: VisualSurface,
+  rows: DebugRows<DebugCellRow>,
+  levels: number[],
+  counts: CellCounts,
+  x: number,
+  y: number,
+): void {
+  const cell = y * grid.width + x;
+  const level = grid.levels[cell] ?? 0;
+  levels[level] = (levels[level] ?? 0) + 1;
+  const ramp = grid.ramps[cell] === 1;
+  const floored = hasFloor(grid, floor, x, y);
+  const onSurface = surface.hasCellWalkable(x, y);
+  const bent = surface.hasCellCurvature(x, y);
+  if (ramp) counts.ramps += 1;
+  if (!floored) counts.holes += 1;
+  if (bent) counts.curved += 1;
+  if (onSurface) counts.walkable += 1;
+  // Кромка провала: клетка без пола, у которой сосед с полом есть.
+  const edge =
+    !floored &&
+    (hasFloor(grid, floor, x - 1, y) ||
+      hasFloor(grid, floor, x + 1, y) ||
+      hasFloor(grid, floor, x, y - 1) ||
+      hasFloor(grid, floor, x, y + 1));
+  if (!ramp && !onSurface && !edge) return;
+  const row = rows.next();
+  if (row === null) return;
+  row.cellX = x;
+  row.cellY = y;
+  row.level = level;
+  row.ramp = ramp;
+  row.floor = floored;
+  row.walkable = onSurface;
+  row.curved = bent;
+}
+
+/** Пол в клетке; вне сетки — «пола нет», как и на её краю. */
+function hasFloor(grid: TerrainGrid, floor: Uint8Array, x: number, y: number): boolean {
+  return x >= 0 && y >= 0 && x < grid.width && y < grid.height && floor[y * grid.width + x] === 1;
+}
+
 export function terrainSurfaceDebugSource(
   access: TerrainDebugAccess,
 ): DebugSource<DebugTerrainProbe> {
@@ -85,6 +165,7 @@ export function terrainSurfaceDebugSource(
     walkable: false,
     curved: false,
   }));
+  const counts: CellCounts = { ramps: 0, holes: 0, curved: 0, walkable: 0 };
   const probe = {
     widthCells: 0,
     heightCells: 0,
@@ -114,45 +195,10 @@ export function terrainSurfaceDebugSource(
       const grid = access.grid();
       const floorBits = access.floorBits();
       const floor = floorBits ?? grid.floor;
-      /** Пол в клетке; вне сетки — «пола нет», как и на её краю. */
-      const hasFloor = (x: number, y: number): boolean =>
-        x >= 0 && y >= 0 && x < grid.width && y < grid.height && floor[y * grid.width + x] === 1;
       const levels: number[] = probe.cellsByLevel;
       levels.length = 0;
-      let ramps = 0;
-      let holes = 0;
-      let curved = 0;
-      let walkable = 0;
       rows.begin();
-      for (let y = 0; y < grid.height; y += 1) {
-        for (let x = 0; x < grid.width; x += 1) {
-          const cell = y * grid.width + x;
-          const level = grid.levels[cell] ?? 0;
-          levels[level] = (levels[level] ?? 0) + 1;
-          const ramp = grid.ramps[cell] === 1;
-          const floored = hasFloor(x, y);
-          const onSurface = surface.hasCellWalkable(x, y);
-          const bent = surface.hasCellCurvature(x, y);
-          if (ramp) ramps += 1;
-          if (!floored) holes += 1;
-          if (bent) curved += 1;
-          if (onSurface) walkable += 1;
-          // Кромка провала: клетка без пола, у которой сосед с полом есть.
-          const edge =
-            !floored &&
-            (hasFloor(x - 1, y) || hasFloor(x + 1, y) || hasFloor(x, y - 1) || hasFloor(x, y + 1));
-          if (!ramp && !onSurface && !edge) continue;
-          const row = rows.next();
-          if (row === null) continue;
-          row.cellX = x;
-          row.cellY = y;
-          row.level = level;
-          row.ramp = ramp;
-          row.floor = floored;
-          row.walkable = onSurface;
-          row.curved = bent;
-        }
-      }
+      scanCells(grid, floor, surface, rows, levels, counts);
       rows.end();
       for (let i = 0; i < levels.length; i += 1) levels[i] ??= 0;
       probe.widthCells = grid.width;
@@ -160,10 +206,10 @@ export function terrainSurfaceDebugSource(
       probe.tileWorldUnits = access.tileWorldUnits();
       probe.heightStepWorldUnits = access.heightStepWorldUnits();
       probe.curvatureTessellation = access.curvatureTessellation();
-      probe.rampCells = ramps;
-      probe.holeCells = holes;
-      probe.curvedCells = curved;
-      probe.walkableCells = walkable;
+      probe.rampCells = counts.ramps;
+      probe.holeCells = counts.holes;
+      probe.curvedCells = counts.curved;
+      probe.walkableCells = counts.walkable;
       probe.cliffSegments = grid.cliffs.length;
       return probe;
     },

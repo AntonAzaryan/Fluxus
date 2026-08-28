@@ -22,7 +22,13 @@
  * (переподача документа, догрузка ассета) — события правки, не кадра.
  */
 import * as THREE from 'three';
-import { modelSurfaceIndex, type ModelSurfaceHit, type ModelSurfaceIndex, type NormalizedModel } from '@fluxus/assets';
+import {
+  modelSurfaceIndex,
+  type ModelSurfaceBounds,
+  type ModelSurfaceHit,
+  type ModelSurfaceIndex,
+  type NormalizedModel,
+} from '@fluxus/assets';
 import { orientFromTiltYaw, tiltTarget, type TiltVector } from './model/surfaceAlign.js';
 import type { SurfaceNormal } from './visualSurface.js';
 
@@ -320,50 +326,24 @@ export class WalkableSurfaceRegistry implements WalkableField {
     if (bounds === null || p.scale === 0) {
       // Модель без треугольников (ASSET-11) или схлопнутый масштаб: рисовать
       // нечего — и вклада в поле нет.
-      entry.cx0 = 0;
-      entry.cy0 = 0;
-      entry.cx1 = -1;
-      entry.cy1 = -1;
+      clearCells(entry);
       return;
     }
-    // Мировой AABB — восемь углов канонических границ под матрицей инстанса.
-    let minX = Number.POSITIVE_INFINITY;
-    let minY = Number.POSITIVE_INFINITY;
-    let minZ = Number.POSITIVE_INFINITY;
-    let maxX = Number.NEGATIVE_INFINITY;
-    let maxY = Number.NEGATIVE_INFINITY;
-    let maxZ = Number.NEGATIVE_INFINITY;
-    for (let corner = 0; corner < 8; corner++) {
-      SCRATCH_A.set(
-        (corner & 1) === 0 ? bounds.min[0] : bounds.max[0],
-        (corner & 2) === 0 ? bounds.min[1] : bounds.max[1],
-        (corner & 4) === 0 ? bounds.min[2] : bounds.max[2],
-      ).applyMatrix4(entry.matrix);
-      if (SCRATCH_A.x < minX) minX = SCRATCH_A.x;
-      if (SCRATCH_A.y < minY) minY = SCRATCH_A.y;
-      if (SCRATCH_A.z < minZ) minZ = SCRATCH_A.z;
-      if (SCRATCH_A.x > maxX) maxX = SCRATCH_A.x;
-      if (SCRATCH_A.y > maxY) maxY = SCRATCH_A.y;
-      if (SCRATCH_A.z > maxZ) maxZ = SCRATCH_A.z;
-    }
-    entry.minX = minX;
-    entry.minY = minY;
-    entry.minZ = minZ;
-    entry.maxX = maxX;
-    entry.maxY = maxY;
-    entry.maxZ = maxZ;
+    worldAabb(entry, bounds);
     // bbox → клетки; инстанс целиком вне арены клеток не получает.
-    if (maxX < 0 || maxY < 0 || minX > this.width * this.tile || minY > this.height * this.tile) {
-      entry.cx0 = 0;
-      entry.cy0 = 0;
-      entry.cx1 = -1;
-      entry.cy1 = -1;
+    const outside =
+      entry.maxX < 0 ||
+      entry.maxY < 0 ||
+      entry.minX > this.width * this.tile ||
+      entry.minY > this.height * this.tile;
+    if (outside) {
+      clearCells(entry);
       return;
     }
-    entry.cx0 = clampIndex(Math.floor(minX / this.tile), this.width);
-    entry.cy0 = clampIndex(Math.floor(minY / this.tile), this.height);
-    entry.cx1 = clampIndex(Math.floor(maxX / this.tile), this.width);
-    entry.cy1 = clampIndex(Math.floor(maxY / this.tile), this.height);
+    entry.cx0 = clampIndex(Math.floor(entry.minX / this.tile), this.width);
+    entry.cy0 = clampIndex(Math.floor(entry.minY / this.tile), this.height);
+    entry.cx1 = clampIndex(Math.floor(entry.maxX / this.tile), this.width);
+    entry.cy1 = clampIndex(Math.floor(entry.maxY / this.tile), this.height);
   }
 
   private attachCells(entry: WalkableEntry): void {
@@ -397,6 +377,42 @@ export class WalkableSurfaceRegistry implements WalkableField {
   }
 }
 
+/** Пустой диапазон клеток: запись есть, вклада в поле нет. */
+function clearCells(entry: WalkableEntry): void {
+  entry.cx0 = 0;
+  entry.cy0 = 0;
+  entry.cx1 = -1;
+  entry.cy1 = -1;
+}
+
+/** Мировой AABB записи — восемь углов канонических границ под её матрицей. */
+function worldAabb(entry: WalkableEntry, bounds: ModelSurfaceBounds): void {
+  entry.minX = Number.POSITIVE_INFINITY;
+  entry.minY = Number.POSITIVE_INFINITY;
+  entry.minZ = Number.POSITIVE_INFINITY;
+  entry.maxX = Number.NEGATIVE_INFINITY;
+  entry.maxY = Number.NEGATIVE_INFINITY;
+  entry.maxZ = Number.NEGATIVE_INFINITY;
+  for (let corner = 0; corner < 8; corner++) {
+    SCRATCH_A.set(
+      (corner & 1) === 0 ? bounds.min[0] : bounds.max[0],
+      (corner & 2) === 0 ? bounds.min[1] : bounds.max[1],
+      (corner & 4) === 0 ? bounds.min[2] : bounds.max[2],
+    ).applyMatrix4(entry.matrix);
+    growAabb(entry, SCRATCH_A);
+  }
+}
+
+/** Расширение мирового AABB записи точкой. */
+function growAabb(entry: WalkableEntry, point: THREE.Vector3): void {
+  if (point.x < entry.minX) entry.minX = point.x;
+  if (point.y < entry.minY) entry.minY = point.y;
+  if (point.z < entry.minZ) entry.minZ = point.z;
+  if (point.x > entry.maxX) entry.maxX = point.x;
+  if (point.y > entry.maxY) entry.maxY = point.y;
+  if (point.z > entry.maxZ) entry.maxZ = point.z;
+}
+
 /** Один и тот же вклад: те же место, курс, наклон, масштаб, ассет и набор частей. */
 function samePlacement(a: WalkablePlacement, b: WalkablePlacement): boolean {
   return (
@@ -419,6 +435,12 @@ function sameHiddenParts(a?: readonly number[], b?: readonly number[]): boolean 
   return before.length === after.length && before.every((part) => after.includes(part));
 }
 
+/**
+ * Скретч слэб-теста: `slabAxis` сужает им диапазон параметра луча по одной оси.
+ * Модульный, а не создаваемый на луч, — наведение зовут по кадру на курсор.
+ */
+const SLAB_RANGE = { tMin: 0, tMax: 0 };
+
 /** Пересечение луча с мировым AABB записи (слэбы); ближе `tBest` — иначе false. */
 function slabHit(
   entry: WalkableEntry,
@@ -430,51 +452,33 @@ function slabHit(
   dz: number,
   tBest: number,
 ): boolean {
-  let tMin = 0;
-  let tMax = tBest;
-  if (dx === 0) {
-    if (ox < entry.minX || ox > entry.maxX) return false;
-  } else {
-    const inv = 1 / dx;
-    let t1 = (entry.minX - ox) * inv;
-    let t2 = (entry.maxX - ox) * inv;
-    if (t1 > t2) {
-      const swap = t1;
-      t1 = t2;
-      t2 = swap;
-    }
-    if (t1 > tMin) tMin = t1;
-    if (t2 < tMax) tMax = t2;
+  SLAB_RANGE.tMin = 0;
+  SLAB_RANGE.tMax = tBest;
+  return (
+    slabAxis(ox, dx, entry.minX, entry.maxX) &&
+    slabAxis(oy, dy, entry.minY, entry.maxY) &&
+    slabAxis(oz, dz, entry.minZ, entry.maxZ) &&
+    SLAB_RANGE.tMin <= SLAB_RANGE.tMax
+  );
+}
+
+/**
+ * Сужение `SLAB_RANGE` слэбом одной оси. `false` — луч параллелен слэбу и лежит
+ * вне него: дальше считать нечего, остальные оси не смотрим.
+ */
+function slabAxis(origin: number, dir: number, lo: number, hi: number): boolean {
+  if (dir === 0) return origin >= lo && origin <= hi;
+  const inv = 1 / dir;
+  let t1 = (lo - origin) * inv;
+  let t2 = (hi - origin) * inv;
+  if (t1 > t2) {
+    const swap = t1;
+    t1 = t2;
+    t2 = swap;
   }
-  if (dy === 0) {
-    if (oy < entry.minY || oy > entry.maxY) return false;
-  } else {
-    const inv = 1 / dy;
-    let t1 = (entry.minY - oy) * inv;
-    let t2 = (entry.maxY - oy) * inv;
-    if (t1 > t2) {
-      const swap = t1;
-      t1 = t2;
-      t2 = swap;
-    }
-    if (t1 > tMin) tMin = t1;
-    if (t2 < tMax) tMax = t2;
-  }
-  if (dz === 0) {
-    if (oz < entry.minZ || oz > entry.maxZ) return false;
-  } else {
-    const inv = 1 / dz;
-    let t1 = (entry.minZ - oz) * inv;
-    let t2 = (entry.maxZ - oz) * inv;
-    if (t1 > t2) {
-      const swap = t1;
-      t1 = t2;
-      t2 = swap;
-    }
-    if (t1 > tMin) tMin = t1;
-    if (t2 < tMax) tMax = t2;
-  }
-  return tMin <= tMax;
+  if (t1 > SLAB_RANGE.tMin) SLAB_RANGE.tMin = t1;
+  if (t2 < SLAB_RANGE.tMax) SLAB_RANGE.tMax = t2;
+  return true;
 }
 
 function clampIndex(value: number, size: number): number {

@@ -76,6 +76,7 @@ import {
   SHAPE_CIRCLE,
   STEP_NONE,
   type AbilityCatalog,
+  type CompiledAbility,
   type EntityId,
 } from '@fluxus/core';
 import type {
@@ -93,6 +94,7 @@ import {
 } from '../debug/abilityPreviewSource.js';
 import type { VisualSurfaceSource } from '../surfaceSource.js';
 import { createShellPose, poseShell } from './shellSupport.js';
+import { statOf, type AbilitySlotStatNames } from './abilitySlots.js';
 import {
   circleGeometry,
   drawableShape,
@@ -121,32 +123,6 @@ export interface AbilityPreviewColors {
 
 const DEFAULT_COLORS: AbilityPreviewColors = { confirmed: 0x6fa8ff, current: 0x8affc8 };
 
-/**
- * Имена статов доставки одного подтверждённого шага (HUD-8): точка шага и
- * сущность шага — те же три поля слота, что называет ABIL-1
- * (`step{N}x`/`step{N}y`/`step{N}e`).
- */
-export interface AbilityStepStatNames {
-  readonly x: string;
-  readonly y: string;
-  readonly entity: string;
-}
-
-/**
- * Имена статов доставки одного слота способности (HUD-8). Объявляет их сборка:
- * какое имя несёт фазу каста — знание контента, а не рендера.
- */
-export interface AbilitySlotStatNames {
-  /** Индекс определения в каталоге — поле `abilityId` слота (ABIL-1). */
-  readonly ability: string;
-  /** Индекс фазы; отрицательное значение либо отсутствие стата — каста нет. */
-  readonly phase: string;
-  /** Сколько шагов уже подтверждено — поле `staged` (ABIL-5). */
-  readonly staged: string;
-  /** Имена статов шагов по их индексу; не более `ABILITY_STEPS` записей. */
-  readonly steps: readonly AbilityStepStatNames[];
-}
-
 export interface AbilityPreviewOptions {
   /**
    * Слоты своего игрока в том виде, в каком их доставляет сборка. Пустой список
@@ -165,9 +141,16 @@ export interface AbilityPreviewOptions {
   readonly fillOpacity?: number;
 }
 
-/** Стат сущности по имени; нет стата — `NaN`, то есть «нет данных», а не ноль. */
-function statOf(view: EntityView, name: string): number {
-  return view.stats?.get(name) ?? Number.NaN;
+/**
+ * Активный слот кадра: имена статов слота, РАЗРЕШЁННОЕ определение способности
+ * и число подтверждённых шагов (ABIL-1). `null` в обоих полях — каста в этом
+ * кадре не нашлось; запись переиспользуется и переживает такой кадр, поэтому
+ * «идёт ли каст» отвечает `casting`, а не она.
+ */
+interface ActiveCast {
+  names: AbilitySlotStatNames | null;
+  ability: CompiledAbility | null;
+  staged: number;
 }
 
 export class AbilityPreviewSubsystem implements RenderSubsystem {
@@ -211,8 +194,12 @@ export class AbilityPreviewSubsystem implements RenderSubsystem {
    * (REND-26). `entity === NO_ENTITY` — сэмпла не было вовсе.
    */
   private readonly local = { entity: NO_ENTITY as EntityId, x: 0, y: 0, aiming: false };
-  /** Активный слот текущего кадра; та же причина держать запись — аллокации. */
-  private readonly active = { ability: -1, staged: 0, names: null as AbilitySlotStatNames | null };
+  /**
+   * Активный слот текущего кадра; та же причина держать запись — аллокации.
+   * Определение способности лежит здесь РАЗРЕШЁННЫМ: индекс из доставленного
+   * стата проверяется один раз, при поиске слота, а не при каждом чтении.
+   */
+  private readonly active: ActiveCast = { ability: null, staged: 0, names: null };
   /**
    * Решение ЭТОГО кадра: идущий каст найден. Записью `active` его не заменить —
    * она переживает кадр, на котором каста не нашлось, и отладка приняла бы
@@ -439,10 +426,11 @@ export class AbilityPreviewSubsystem implements RenderSubsystem {
     for (const names of this.slots) {
       // Одно сравнение отсекает и «каста нет» (`NO_PHASE`), и «стата нет» (NaN).
       if (!(statOf(owner, names.phase) >= 0)) continue;
-      const ability = statOf(owner, names.ability);
-      if (!Number.isInteger(ability) || ability < 0 || ability >= this.catalog.abilities.length) {
-        continue;
-      }
+      const index = statOf(owner, names.ability);
+      // Отсутствие определения по индексу покрывает разом и «не целое», и
+      // «вне таблицы»: каталог плотный, и другого способа не найтись у него нет.
+      const ability = Number.isInteger(index) ? this.catalog.abilities[index] : undefined;
+      if (ability === undefined) continue;
       const staged = statOf(owner, names.staged);
       this.active.names = names;
       this.active.ability = ability;
@@ -458,9 +446,11 @@ export class AbilityPreviewSubsystem implements RenderSubsystem {
    * изображении и никуда больше не идут.
    */
   private drawChain(owner: EntityView, alpha: number): void {
-    const names = this.active.names!;
-    const ability = this.catalog.abilities[this.active.ability]!;
-    const view = this.view!;
+    const { names, ability } = this.active;
+    const view = this.view;
+    // Втроём они и есть условие рисования, проверенное `updateFrame`; читается
+    // это здесь ещё раз потому, что сужение типов через вызов не переносится.
+    if (names === null || ability === null || view === null) return;
     const heightStep = this.ctx?.config.heightStep ?? 1;
     const surface = this.options.surface?.current ?? null;
     // Начало шага — владелец: от него считается направление и им же
@@ -630,9 +620,8 @@ export class AbilityPreviewSubsystem implements RenderSubsystem {
     out.aimWorldY = this.local.aiming ? this.local.y : Number.NaN;
     out.shapeCount = this.used;
     out.objectCount = this.objectCount;
-    const names = this.active.names;
-    const ability = this.catalog.abilities[this.active.ability];
-    if (!this.casting || names === null || ability === undefined) {
+    const { names, ability } = this.active;
+    if (!this.casting || names === null || ability === null) {
       out.abilityId = '';
       out.slotIndex = -1;
       out.stepCount = 0;

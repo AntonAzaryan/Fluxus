@@ -127,26 +127,23 @@ export type { FrameTiming, ViewBufferConfig } from './viewBuffer.js';
 
 // Камера (camera CAM-1..8): rig режимов и вход кадрирования, слой эффектов,
 // диспетчер по манифесту, общее применение позы к THREE-камере.
-export {
-  CameraRig,
-  DEFAULT_CAMERA_CONFIG,
-  createCameraInput,
-  resetCameraInput,
-  edgePanAxes,
-  terrainGroundApi,
-} from './camera/rig.js';
+export { CameraRig, DEFAULT_CAMERA_CONFIG } from './camera/rig.js';
 export type {
   CameraBounds,
   CameraConfig,
   CameraFraming,
-  CameraInput,
   CameraMode,
   CameraPose,
   CameraRigOptions,
   CameraSources,
   FollowTarget,
-  TerrainCameraSource,
 } from './camera/rig.js';
+// Сэмпл ввода камеры и edge-pan — вход рига, заполняемый обвязкой окна (CAM-1).
+export { createCameraInput, resetCameraInput, edgePanAxes } from './camera/input.js';
+export type { CameraInput } from './camera/input.js';
+// Источник поверхности и границ камеры над сеткой террейна (CAM-2, CAM-7).
+export { terrainGroundApi } from './camera/terrainSource.js';
+export type { TerrainCameraSource } from './camera/terrainSource.js';
 export {
   EffectStack,
   SwayEffect,
@@ -204,13 +201,14 @@ export { jumpArc, jumpBase, maneuverEnds, advanceFall } from './model/verticalOf
 export type { ManeuverEnds } from './model/verticalOffset.js';
 
 // Подсистема террейна (REND-7, REND-9) и её чистые генераторы геометрии.
+export { TerrainSubsystem } from './subsystems/terrain.js';
+export type { TerrainOptions } from './subsystems/terrain.js';
 export {
-  TerrainSubsystem,
   buildFloorGeometry,
   buildWallGeometry,
   toBufferGeometry,
-} from './subsystems/terrain.js';
-export type { CellRect, TerrainGeometryData, TerrainOptions } from './subsystems/terrain.js';
+} from './subsystems/terrainGeometry.js';
+export type { CellRect, TerrainGeometryData } from './subsystems/terrainGeometry.js';
 
 // Подсистема моделей (REND-3..6) и переподача манифеста визуалов (REND-17).
 // Наружу инстанс виден преобразованием и границами, а не узлом сцены (REND-3).
@@ -229,14 +227,13 @@ export { DEFAULT_FOG_CONFIG, resolveFogConfig } from './fog/config.js';
 export type { FogRenderConfig } from './fog/config.js';
 export type { FogRendererLike, FogStatNames, FogSubsystemOptions } from './fog/contract.js';
 export type { FogLayerCanvas, FogLayerContext, FogMinimapLayer } from './fog/layer.js';
-export {
-  VisibilityMask,
-  edgeGradient,
-  fogRectOf,
-  fogSegmentsOf,
-  segmentCasts,
-} from './fog/mask.js';
-export type { FogObserver, FogSegment, FogSmoothPass, FogWorldRect } from './fog/mask.js';
+export { VisibilityMask, edgeGradient, fogRectOf, fogSegmentsOf } from './fog/mask.js';
+export type { FogObserver, FogSmoothPass, FogWorldRect } from './fog/mask.js';
+// Полярный depth-буфер теней укрытий (design D3): наружу отданы только отрезок
+// укрытия и его тест по высоте — то, из чего маску строит вызывающий. Бины,
+// растеризация дуг и свёртка остаются внутренностями пакета.
+export { segmentCasts } from './fog/shadowDepth.js';
+export type { FogSegment } from './fog/shadowDepth.js';
 // Грязное окно рассеивания (design D5): наружу отдан только сам набор блоков —
 // он входит в контракт `VisibilityMask.commit`. Сторона блока и проход
 // схождения остаются внутренностями пакета.
@@ -339,9 +336,10 @@ export { AbilityPreviewSubsystem } from './subsystems/abilityPreview.js';
 export type {
   AbilityPreviewColors,
   AbilityPreviewOptions,
-  AbilitySlotStatNames,
-  AbilityStepStatNames,
 } from './subsystems/abilityPreview.js';
+// Имена статов слотов способностей — ВХОД подсистемы, объявляемый сборкой
+// (HUD-8, ABIL-1), а не её устройство.
+export type { AbilitySlotStatNames, AbilityStepStatNames } from './subsystems/abilitySlots.js';
 
 // Подсистема частиц (REND-24): эмиттеры по записям манифеста поверх эмиттерных
 // ассетов (ASSET-14) — оболочки от доставленного состояния, one-shot'ы от
@@ -352,19 +350,19 @@ export type { ParticlesOptions, SocketSource } from './subsystems/particles.js';
 // Сервисы вьюпорта редактора: picking по видимому изображению (REND-15) и
 // служебные наложения подсистемой рендера (REND-16). Игровой клиент ни того, ни
 // другого не собирает — наложений в его кадре нет по конструкции.
-export { ViewportPicking, createPickProxy, createPickRay } from './picking.js';
+export { ViewportPicking, createPickProxy } from './picking.js';
 export type {
   InstanceProxySource,
-  PickHit,
-  PickKind,
   PickProxy,
   PickProxySource,
   PickProxyVisitor,
-  PickRay,
   ViewportPickingOptions,
-  ViewportPoint,
 } from './picking.js';
+// Контракты наведения: их разделяют сервис и марш по полю высот (REND-15).
+export { createPickRay } from './pickContracts.js';
+export type { PickHit, PickKind, PickRay, ViewportPoint } from './pickContracts.js';
 export { OverlaySubsystem } from './subsystems/overlays.js';
+// Словарь наложений — вход подсистемы, составляемый инструментом редактора.
 export type {
   OverlayAxis,
   OverlayCells,
@@ -376,7 +374,7 @@ export type {
   OverlayHighlight,
   OverlayItem,
   OverlayOptions,
-} from './subsystems/overlays.js';
+} from './subsystems/overlayItems.js';
 
 // Построение инстансов из нормализованных данных ассета (THREE-половина mdxModel).
 export {

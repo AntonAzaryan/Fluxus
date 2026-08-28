@@ -41,6 +41,7 @@ import {
   WATER_SPECULAR,
   type WaterBodyConfig,
 } from './config.js';
+import { uniformOf } from '../uniforms.js';
 
 /** Позиция меша — уже мировая (меш строится в мировых координатах, REND-7). */
 const WATER_VERTEX = /* glsl */ `
@@ -353,26 +354,25 @@ function applyWaterUniforms(
   textured: boolean,
 ): void {
   const { body, heightStep } = input;
-  const u = material.uniforms;
-  setColor(u.uShallowColor!, body.shallowColor);
-  setColor(u.uDeepColor!, body.deepColor);
-  setColor(u.uFoamColor!, body.foamColor);
-  setColor(u.uSkyTint!, WATER_SKY_TINT);
-  u.tDepth!.value = input.depth;
-  u.uDepthRect!.value = input.depthRect;
+  setColor(uniformOf(material, 'uShallowColor'), body.shallowColor);
+  setColor(uniformOf(material, 'uDeepColor'), body.deepColor);
+  setColor(uniformOf(material, 'uFoamColor'), body.foamColor);
+  setColor(uniformOf(material, 'uSkyTint'), WATER_SKY_TINT);
+  uniformOf(material, 'tDepth').value = input.depth;
+  uniformOf(material, 'uDepthRect').value = input.depthRect;
   // Величины секции — в ШКАЛЕ УРОВНЕЙ (REND-35); в мировую их переводит рендер
   // своим шагом высоты (REND-7), и это единственная точка перевода.
-  u.uMaxDepth!.value = body.maxDepth * heightStep;
-  u.uFoamWidth!.value = body.foamWidth * heightStep;
-  u.uBanding!.value = body.banding;
-  u.uFoamHardness!.value = body.foamHardness;
-  u.uDetailScale!.value = body.detail.scale;
-  u.uDetailSpeed!.value = body.detail.speed;
-  u.uDetailStrength!.value = body.detail.strength;
-  u.tDetailNormal!.value = textured ? (input.detailNormal ?? null) : null;
-  u.tDetailFoam!.value = textured ? (input.detailFoam ?? null) : null;
-  u.tDetailFlow!.value = textured ? (input.detailFlow ?? null) : null;
-  const wave = u.uRippleWave!.value as THREE.Vector3;
+  uniformOf(material, 'uMaxDepth').value = body.maxDepth * heightStep;
+  uniformOf(material, 'uFoamWidth').value = body.foamWidth * heightStep;
+  uniformOf(material, 'uBanding').value = body.banding;
+  uniformOf(material, 'uFoamHardness').value = body.foamHardness;
+  uniformOf(material, 'uDetailScale').value = body.detail.scale;
+  uniformOf(material, 'uDetailSpeed').value = body.detail.speed;
+  uniformOf(material, 'uDetailStrength').value = body.detail.strength;
+  uniformOf(material, 'tDetailNormal').value = textured ? (input.detailNormal ?? null) : null;
+  uniformOf(material, 'tDetailFoam').value = textured ? (input.detailFoam ?? null) : null;
+  uniformOf(material, 'tDetailFlow').value = textured ? (input.detailFlow ?? null) : null;
+  const wave = uniformOf(material, 'uRippleWave').value as THREE.Vector3;
   wave.set(
     (2 * Math.PI) / Math.max(body.ripples.wavelength, 1e-4),
     body.ripples.speed,

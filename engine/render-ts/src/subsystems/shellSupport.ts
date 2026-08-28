@@ -15,8 +15,15 @@
  * вещи для того, кто это предупреждение читает. Сам приём «сказать один раз» —
  * `warnOnce.ts`: им пользуется и камера, подсистемой не являющаяся.
  */
-import type { EntityView } from '../types.js';
+import { FIXED_ONE } from '@fluxus/core';
+import type { EntityView, TickView } from '../types.js';
 import type { VisualSurface } from '../visualSurface.js';
+
+/**
+ * Читатель бита состояния доставки — форма, которую держат у себя обе
+ * подсистемы-оболочки. Имя типа, а не переписанная в каждом месте подпись.
+ */
+export type StateReader = (view: EntityView, name: string) => boolean;
 
 /**
  * Читатель бита состояния: несёт ли доставленное состояние сущности названное
@@ -27,7 +34,7 @@ import type { VisualSurface } from '../visualSurface.js';
 export function createStateReader(
   stateComponents: readonly string[],
   onUnmirrored: (name: string) => void,
-): (view: EntityView, name: string) => boolean {
+): StateReader {
   // Словарь «имя → бит» строится один раз на сборку: читатель зовётся на
   // каждый источник каждой сущности каждой доставки (30 Гц), и линейный поиск
   // по списку был бы работой по числу состояний сборки на каждый такой вызов.
@@ -78,4 +85,36 @@ export function poseShell(
     surface !== null && !view.levelOverride
       ? surface.heightAt(x, y)
       : (view.prevLevel + (view.currLevel - view.prevLevel) * t) * heightStep;
+}
+
+/** Мировая точка события; переиспользуется — аллокаций на событие нет. */
+export interface EventPoint {
+  x: number;
+  y: number;
+}
+
+/**
+ * Точка события в мировых координатах (REND-23, REND-24): координатные поля
+ * события, а нет их — позиция сущности события. `false` — играть событие негде.
+ *
+ * Fixed-point приходится делить здесь, потому что схему события задаёт контент
+ * (см. `RenderEvent.data` в `types.ts`). Разбор один на обе подсистемы-оболочки:
+ * второй его записью «нет координат — возьми сущность» разошлось бы с первой.
+ */
+export function eventPointOf(
+  data: Readonly<Record<string, number>>,
+  view: TickView,
+  out: EventPoint,
+): boolean {
+  if (data.x !== undefined && data.y !== undefined) {
+    out.x = data.x / FIXED_ONE;
+    out.y = data.y / FIXED_ONE;
+    return true;
+  }
+  const entity = data.entity ?? data.source;
+  const entityView = entity === undefined ? undefined : view.entities.get(entity);
+  if (entityView === undefined) return false;
+  out.x = entityView.currX;
+  out.y = entityView.currY;
+  return true;
 }

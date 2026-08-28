@@ -41,6 +41,7 @@ import {
   type ValueGenerator,
 } from 'three.quarks';
 import type { ParticleEffectDocument } from '@fluxus/assets';
+import type { WarnOnce } from './warnOnce.js';
 
 /** Генератор числа частиц — эмиссия во времени и счёт единовременного выброса. */
 type EmissionGenerator = ValueGenerator | FunctionValueGenerator;
@@ -81,11 +82,11 @@ export interface EffectInstance {
 
 export class ParticleEffectPool {
   private readonly batchRenderer: BatchedRenderer;
-  private readonly warnOnce: (key: string, message: string) => void;
+  private readonly warnOnce: WarnOnce;
   /** Развёрнутые эффекты по ИДЕНТИЧНОСТИ документа (REND-24). */
   private readonly effects = new Map<ParticleEffectDocument, EffectEntry>();
 
-  constructor(batchRenderer: BatchedRenderer, warnOnce: (key: string, message: string) => void) {
+  constructor(batchRenderer: BatchedRenderer, warnOnce: WarnOnce) {
     this.batchRenderer = batchRenderer;
     this.warnOnce = warnOnce;
   }

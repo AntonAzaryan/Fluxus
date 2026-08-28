@@ -92,10 +92,7 @@ export class VisualSurfaceSource {
   /** Идемпотентна: зовут обе подсистемы из своих init, работа делается один раз. */
   init(ctx: RenderContext): void {
     this.heightStep = ctx.config.heightStep;
-    // eslint-disable-next-line @typescript-eslint/prefer-nullish-coalescing -- baseline
-    if (this.surface === null) {
-      this.surface = createVisualSurface(this.grid, this.heightStep, this.curvature, this.walkable);
-    }
+    this.surface ??= createVisualSurface(this.grid, this.heightStep, this.curvature, this.walkable);
     // Карта из памяти уже есть — ассет ей не нужен и запрашивать его нечего.
     if (this.requested || this.curvatureMapId === undefined || this.overridden) return;
     this.requested = true;

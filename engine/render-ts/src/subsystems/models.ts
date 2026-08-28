@@ -1,4 +1,17 @@
-/* eslint-disable max-lines -- baseline */
+/* eslint-disable max-lines --
+   Подсистема моделей — самый большой модуль рендера, и метрика права: делить
+   его пора. Но деление здесь — не перенос функций, а разбор ЖИЗНЕННОГО ЦИКЛА
+   записи инстанса (`InstanceRecord`), вокруг которой в одном классе сошлись пул
+   и сведение с доставкой (REND-3), два яруса отрисовки (REND-20), скины
+   (REND-6), анимация с событиями (REND-4), поза с посадкой на поверхность
+   (REND-9..REND-13), отсечение с выбором уровня (REND-22), fade (FOW-8),
+   контактные пятна (REND-30) и прогрев программ (REND-31). Все они пишут в ОДНУ
+   запись и читают её поля друг у друга, и граница между модулями прошла бы
+   прямо по ней — сделав внутренность записи межмодульным контрактом. Это
+   отдельная работа со своим планом и ревью, а не побочный результат прохода по
+   линту: модуль оставлен целым намеренно, а его функции при этом приведены под
+   порог когнитивной сложности.
+*/
 /**
  * Подсистема моделей (REND-3..6, REND-20..22): пул инстансов по сущностям
  * presentation-состояния.
@@ -577,6 +590,18 @@ interface AnchorPlan {
 }
 
 /**
+ * Накопитель обхода видов манифеста при прогреве: пять списков, которые обход
+ * заполняет, — одной записью, чтобы шаг вида не тянул их пятью аргументами.
+ */
+interface WarmCollect {
+  readonly roots: THREE.Object3D[];
+  readonly textures: THREE.Texture[];
+  readonly warmBatches: BatchEntry[];
+  readonly warmDetailed: ModelInstance[];
+  readonly plan: AnchorPlan[];
+}
+
+/**
  * Батч записей одной записи манифеста (REND-20): `InstancedMesh`-ы, материалы с
  * VAT-патчем и набор вариантов скина. Ключ включает запись, а не только модель,
  * потому что скины и скрытые части — свойства ЗАПИСИ: две записи на одну модель
@@ -1105,77 +1130,120 @@ export class ModelsSubsystem implements RenderSubsystem, InstanceProxySource {
     for (const entityView of entities.values()) {
       let record = pool.get(entityView.id);
       if (record === undefined) {
-        record = this.create(ctx, entityView, decoration, fadeSeconds > 0);
+        record = this.createRecord(ctx, entityView, decoration, fadeSeconds > 0, isDeadState, cost);
         pool.set(entityView.id, record);
-        // «Появился уже мёртвым» — единственный случай, в котором фиксацию
-        // смерти ставит СОСТОЯНИЕ, а не событие (REND-4). Разделение несущее:
-        // сведение пула идёт до разбора событий тика, и на тике гибели маркер
-        // в мире уже стоит — фиксируй мы по состоянию всякий инстанс, гибель
-        // на глазах перестала бы играть клип, потому что `handleEvent` под
-        // фиксацией no-op.
-        //
-        // Флаг живёт на записи, а не в этой переменной, потому что контроллера
-        // на создании ещё может не быть: модель — разделяемый ассет и вправе
-        // ехать сколько угодно (`assets` ASSET-4), а фиксировать поведение
-        // нужно тому контроллеру, который в итоге появится.
-        record.bornDead = isDeadState?.(entityView) === true;
-        if (cost !== undefined) cost.modelsInstancesCreated++;
       }
-      // Сущность снова в доставленном состоянии: начатый fade-out отменяется,
-      // проявление доигрывается от текущей доли — объект в кадре не мигает.
-      record.fadingOut = false;
-      record.view = entityView;
-      record.snapPending ||= entityView.snap;
-      // Разрыв непрерывности возвращает инстанс на поверхность (REND-12):
-      // телепорт, респавн, rewind — снижение отменено, а не доигрывается.
-      if (entityView.snap) {
-        record.falling = false;
-        record.fallOffset = 0;
-      }
-      // Скин и масштаб из набора инстансов (REND-11, REND-18): правка поля
-      // обновляет существующий инстанс — материалы скина, фаза анимации и
-      // сглаженный наклон при этом не теряются, потому что инстанс тот же.
-      if (entityView.skin !== record.viewSkin) {
-        record.viewSkin = entityView.skin;
-        record.skinChosen = entityView.skin !== undefined;
-        this.assignSkin(record, entityView.skin ?? record.visual?.defaultSkin);
-      }
-      if (entityView.scale !== record.viewScale) {
-        record.viewScale = entityView.scale;
-        record.scale = entityView.scale ?? 1;
-        // След контактного пятна — производная габарита И масштаба (REND-30):
-        // правленый масштаб двигает размер пятна тем же кадром, каким двигает
-        // саму картинку и walkable-вклад ниже (REND-17, ED-15). Без этого пятно
-        // держало бы прежний радиус до пересборки инстанса.
-        this.syncBlobCaster(record);
-      }
-      this.applyAnimation(record);
-      // Фиксация смерти следует доставленному состоянию (REND-4): появившийся
-      // уже мёртвым встаёт последним кадром клипа смерти, потерявший маркер
-      // выходит из фиксации — каким бы событием сцена ни назвала возрождение
-      // (FOW-8; событие возрождения продолжает работать и находит контроллер
-      // уже живым, что REND-4 прямо называет no-op'ом).
-      if (isDeadState !== null) {
-        if (isDeadState(entityView)) {
-          // Флаг не гасится удачей: контроллер сменить ярус (REND-20) или
-          // появиться позже вправе, а сущность всё это время мертва — новый
-          // контроллер обязан встать трупом так же, как встал бы первый.
-          if (record.bornDead) record.controller?.enterDeath();
-        } else {
-          record.bornDead = false;
-          record.controller?.releaseDeath();
-        }
-      }
-      // Правка walkable-записи (позиция, курс, масштаб, сам флаг) доводит
-      // walkable-вклад поля до нового размещения (REND-9, REND-18); правка
-      // не-walkable полей (скин) реестр не трогает — вклад тот же.
-      if (decoration) this.syncWalkable(record);
+      this.syncRecord(record, entityView, decoration, isDeadState);
     }
+    this.sweepPool(pool, entities, fadeSeconds, view);
+  }
 
-    // Исчезнувшие: инстанс убирается, разделяемый ассет остаётся в кэше (REND-3).
-    // С включённым fade исчезновение БЕЗ события смерти — «ушла в туман»
-    // (FOW-8, NET-14): инстанс остаётся дожить fade-out; `EntityDied` того же
-    // тика идёт существующим путём смерти — немедленное снятие, как и прежде.
+  /**
+   * Новый инстанс появившейся сущности (REND-3).
+   *
+   * «Появился уже мёртвым» — единственный случай, в котором фиксацию смерти
+   * ставит СОСТОЯНИЕ, а не событие (REND-4). Разделение несущее: сведение пула
+   * идёт до разбора событий тика, и на тике гибели маркер в мире уже стоит —
+   * фиксируй мы по состоянию всякий инстанс, гибель на глазах перестала бы
+   * играть клип, потому что `handleEvent` под фиксацией no-op.
+   *
+   * Флаг живёт на записи, а не в локальной переменной, потому что контроллера
+   * на создании ещё может не быть: модель — разделяемый ассет и вправе ехать
+   * сколько угодно (`assets` ASSET-4), а фиксировать поведение нужно тому
+   * контроллеру, который в итоге появится.
+   */
+  private createRecord(
+    ctx: RenderContext,
+    entityView: EntityView,
+    decoration: boolean,
+    fading: boolean,
+    isDeadState: ((view: EntityView) => boolean) | null,
+    cost: RenderCostCounters | undefined,
+  ): InstanceRecord {
+    const record = this.create(ctx, entityView, decoration, fading);
+    record.bornDead = isDeadState?.(entityView) === true;
+    if (cost !== undefined) cost.modelsInstancesCreated++;
+    return record;
+  }
+
+  /** Существующая запись пула под доставленное состояние (REND-3, REND-11). */
+  private syncRecord(
+    record: InstanceRecord,
+    entityView: EntityView,
+    decoration: boolean,
+    isDeadState: ((view: EntityView) => boolean) | null,
+  ): void {
+    // Сущность снова в доставленном состоянии: начатый fade-out отменяется,
+    // проявление доигрывается от текущей доли — объект в кадре не мигает.
+    record.fadingOut = false;
+    record.view = entityView;
+    record.snapPending ||= entityView.snap;
+    // Разрыв непрерывности возвращает инстанс на поверхность (REND-12):
+    // телепорт, респавн, rewind — снижение отменено, а не доигрывается.
+    if (entityView.snap) {
+      record.falling = false;
+      record.fallOffset = 0;
+    }
+    // Скин и масштаб из набора инстансов (REND-11, REND-18): правка поля
+    // обновляет существующий инстанс — материалы скина, фаза анимации и
+    // сглаженный наклон при этом не теряются, потому что инстанс тот же.
+    if (entityView.skin !== record.viewSkin) {
+      record.viewSkin = entityView.skin;
+      record.skinChosen = entityView.skin !== undefined;
+      this.assignSkin(record, entityView.skin ?? record.visual?.defaultSkin);
+    }
+    if (entityView.scale !== record.viewScale) {
+      record.viewScale = entityView.scale;
+      record.scale = entityView.scale ?? 1;
+      // След контактного пятна — производная габарита И масштаба (REND-30):
+      // правленый масштаб двигает размер пятна тем же кадром, каким двигает
+      // саму картинку и walkable-вклад ниже (REND-17, ED-15). Без этого пятно
+      // держало бы прежний радиус до пересборки инстанса.
+      this.syncBlobCaster(record);
+    }
+    this.applyAnimation(record);
+    if (isDeadState !== null) this.syncDeath(record, entityView, isDeadState);
+    // Правка walkable-записи (позиция, курс, масштаб, сам флаг) доводит
+    // walkable-вклад поля до нового размещения (REND-9, REND-18); правка
+    // не-walkable полей (скин) реестр не трогает — вклад тот же.
+    if (decoration) this.syncWalkable(record);
+  }
+
+  /**
+   * Фиксация смерти следует доставленному состоянию (REND-4): появившийся уже
+   * мёртвым встаёт последним кадром клипа смерти, потерявший маркер выходит из
+   * фиксации — каким бы событием сцена ни назвала возрождение (FOW-8; событие
+   * возрождения продолжает работать и находит контроллер уже живым, что REND-4
+   * прямо называет no-op'ом).
+   */
+  private syncDeath(
+    record: InstanceRecord,
+    entityView: EntityView,
+    isDeadState: (view: EntityView) => boolean,
+  ): void {
+    if (isDeadState(entityView)) {
+      // Флаг не гасится удачей: контроллер сменить ярус (REND-20) или
+      // появиться позже вправе, а сущность всё это время мертва — новый
+      // контроллер обязан встать трупом так же, как встал бы первый.
+      if (record.bornDead) record.controller?.enterDeath();
+      return;
+    }
+    record.bornDead = false;
+    record.controller?.releaseDeath();
+  }
+
+  /**
+   * Исчезнувшие: инстанс убирается, разделяемый ассет остаётся в кэше (REND-3).
+   * С включённым fade исчезновение БЕЗ события смерти — «ушла в туман»
+   * (FOW-8, NET-14): инстанс остаётся дожить fade-out; `EntityDied` того же
+   * тика идёт существующим путём смерти — немедленное снятие, как и прежде.
+   */
+  private sweepPool(
+    pool: Map<EntityId, InstanceRecord>,
+    entities: ReadonlyMap<EntityId, EntityView>,
+    fadeSeconds: number,
+    view: TickView | null,
+  ): void {
     const died = fadeSeconds > 0 && view !== null ? diedIn(view, this.options.deathEvent) : null;
     // `values()` вместо деструктуризации пар: ключ лежит в самой записи, а
     // кортеж на каждую запись пула 30 раз в секунду — мусор на ровном месте
@@ -1278,40 +1346,50 @@ export class ModelsSubsystem implements RenderSubsystem, InstanceProxySource {
     cost: RenderCostCounters | undefined,
   ): void {
     for (const record of pool.values()) {
-      const bounds = cullBoundsOf(record) ?? boundsOf(record);
-      // Рисовать нечего — и отсекать нечего: невизуальная сущность в кадре не
-      // участвует вовсе, а не «участвует невидимой».
-      if (bounds === null || !record.posed) continue;
-      const scale = record.scale;
-      // Центр габаритов в осях инстанса → мировые оси тем же преобразованием,
-      // которым инстанс нарисован; радиус — половина диагонали. Запас берётся
-      // ВСЕГДА, а не только к границам bind-позы: консервативность запечённых
-      // границ (ASSET-12) отвечает за позы клипов, но не за то, чего в границах
-      // модели нет вовсе, — оверлеи (REND-16), контроль костей (REND-5) и
-      // погрешность самой сферы у вытянутых моделей.
-      this.cullCenter
-        .set((bounds.minX + bounds.maxX) / 2, (bounds.minY + bounds.maxY) / 2, (bounds.minZ + bounds.maxZ) / 2)
-        .multiplyScalar(scale)
-        .applyQuaternion(record.quat)
-        .add(record.pos);
-      const radius =
-        (Math.hypot(bounds.maxX - bounds.minX, bounds.maxY - bounds.minY, bounds.maxZ - bounds.minZ) / 2) *
-        Math.abs(scale) *
-        (1 + margin);
-      this.cullSphere.center.copy(this.cullCenter);
-      this.cullSphere.radius = radius;
-      record.visible = this.frustum.intersectsSphere(this.cullSphere);
-      // Сток уже в локальной переменной: на инстансе остаётся сравнение и
-      // целочисленное сложение, а не чтение стока (PERF-3).
-      if (cost !== undefined) {
-        cost.modelsCullTests++;
-        if (!record.visible) cost.modelsCulled++;
-      }
-      if (record.holder !== null) record.holder.visible = record.visible;
-      if (record.batch !== null) {
-        record.batch.batch.setVisible(record.slot, record.visible);
-        if (record.visible && screen !== null) this.selectLod(record, radius, screen, cost);
-      }
+      this.cullRecord(record, margin, screen, cost);
+    }
+  }
+
+  /** Отсечение одной записи: сфера её габаритов против пирамиды кадра (REND-22). */
+  private cullRecord(
+    record: InstanceRecord,
+    margin: number,
+    screen: ScreenScale | null,
+    cost: RenderCostCounters | undefined,
+  ): void {
+    const bounds = cullBoundsOf(record) ?? boundsOf(record);
+    // Рисовать нечего — и отсекать нечего: невизуальная сущность в кадре не
+    // участвует вовсе, а не «участвует невидимой».
+    if (bounds === null || !record.posed) return;
+    const scale = record.scale;
+    // Центр габаритов в осях инстанса → мировые оси тем же преобразованием,
+    // которым инстанс нарисован; радиус — половина диагонали. Запас берётся
+    // ВСЕГДА, а не только к границам bind-позы: консервативность запечённых
+    // границ (ASSET-12) отвечает за позы клипов, но не за то, чего в границах
+    // модели нет вовсе, — оверлеи (REND-16), контроль костей (REND-5) и
+    // погрешность самой сферы у вытянутых моделей.
+    this.cullCenter
+      .set((bounds.minX + bounds.maxX) / 2, (bounds.minY + bounds.maxY) / 2, (bounds.minZ + bounds.maxZ) / 2)
+      .multiplyScalar(scale)
+      .applyQuaternion(record.quat)
+      .add(record.pos);
+    const radius =
+      (Math.hypot(bounds.maxX - bounds.minX, bounds.maxY - bounds.minY, bounds.maxZ - bounds.minZ) / 2) *
+      Math.abs(scale) *
+      (1 + margin);
+    this.cullSphere.center.copy(this.cullCenter);
+    this.cullSphere.radius = radius;
+    record.visible = this.frustum.intersectsSphere(this.cullSphere);
+    // Сток уже в локальной переменной: на инстансе остаётся сравнение и
+    // целочисленное сложение, а не чтение стока (PERF-3).
+    if (cost !== undefined) {
+      cost.modelsCullTests++;
+      if (!record.visible) cost.modelsCulled++;
+    }
+    if (record.holder !== null) record.holder.visible = record.visible;
+    if (record.batch !== null) {
+      record.batch.batch.setVisible(record.slot, record.visible);
+      if (record.visible && screen !== null) this.selectLod(record, radius, screen, cost);
     }
   }
 
@@ -1373,113 +1451,72 @@ export class ModelsSubsystem implements RenderSubsystem, InstanceProxySource {
     const settle = Math.abs(dt);
     const fadeSeconds = this.options.fadeSeconds ?? 0;
     for (const record of pool.values()) {
-      // Fade идёт по кадрам, как снижение при провале (FOW-8, design D7):
-      // угасание — полной длительностью конфига, проявление — короткое
-      // (`FADE_IN_RATIO`). Модуль часов: направление задаёт состояние, а не
-      // знак хода мира — на обратном ходе угасание не «проявляет» обратно.
-      if (fadeSeconds > 0 && !record.decoration) {
-        if (record.fadingOut) {
-          record.fade = Math.max(0, record.fade - settle / fadeSeconds);
-        } else if (record.fade < 1) {
-          record.fade = Math.min(1, record.fade + settle / (fadeSeconds * FADE_IN_RATIO));
-        }
-      } else {
-        record.fade = 1;
-      }
-      const view = record.view;
-      // Интерполяция между двумя последними тиками; snap-тик рисуется без неё (REND-2).
-      const t = view.snap ? 1 : alpha;
-      const x = view.prevX + (view.currX - view.prevX) * t;
-      const y = view.prevY + (view.currY - view.prevY) * t;
-      // Walkable-инстанс сажается и наклоняется по террейн-форме — без
-      // walkable-вкладов, в том числе чужих: иначе два моста сажались бы друг
-      // на друга по кругу (REND-9). Все прочие читают поле целиком — юнит на
-      // настиле стоит на настиле (REND-10).
-      const walkableSeat = record.decoration && view.walkable === true;
-      // Сущность на поверхности стоит на визуальной поверхности (рампы и
-      // кривизна, REND-9); с override уровня (TERR-4) — на высоте уровня.
-      // Летящая — на переходе между высотами отрыва и приземления (REND-12):
-      // дискретный уровень под ней в высоте прыжка не участвует, иначе
-      // пересечение границы обрыва сдвигало бы инстанс на ступень.
-      let base: number;
-      if (surface !== null && isAirborne(view)) {
-        // Фаза манёвра до первого его тика — ноль: на том тике манёвра ещё не
-        // было, и `prevMotionPhase` пришла как NaN.
-        const phasePrev = Number.isFinite(view.prevMotionPhase) ? view.prevMotionPhase : 0;
-        const phase = phasePrev + (view.currMotionPhase - phasePrev) * t;
-        maneuverEnds(
-          x,
-          y,
-          view.currX - view.prevX,
-          view.currY - view.prevY,
-          phase,
-          view.currMotionPhase - phasePrev,
-          SCRATCH_ENDS,
-        );
-        base = jumpBase(
-          surface.heightAt(SCRATCH_ENDS.takeoffX, SCRATCH_ENDS.takeoffY),
-          surface.heightAt(SCRATCH_ENDS.landingX, SCRATCH_ENDS.landingY),
-          phase,
-        );
-      } else if (surface !== null && !view.levelOverride) {
-        base = walkableSeat ? surface.terrainFormHeightAt(x, y) : surface.heightAt(x, y);
-      } else {
-        base = (view.prevLevel + (view.currLevel - view.prevLevel) * t) * heightStep;
-      }
-      // Вертикальное смещение — чистое представление (REND-12): дуга манёвра
-      // смешивается по тем же двум тикам, что позиция, снижение идёт по кадрам.
-      // Высота КАЖДОГО вклада берётся по виду манёвра ЕГО тика: прыжковая
-      // высота к уклону не переносится, а тик приземления (манёвра уже нет)
-      // доигрывает спуск прошлого тика вместо мгновенного обнуления.
-      const arcPrev = jumpArc(view.prevMotionPhase, arcHeightOf(record, view.prevMotion));
-      const arcCurr = jumpArc(view.currMotionPhase, arcHeightOf(record, view.motion));
-      // Полётная дуга — по фазе полёта плоской формы (REND-12): её приносит
-      // сборка воркера (SHELL-2), и без неё дуги нет независимо от манифеста.
-      const flightArc = jumpArc(view.flightPhase, record.flightArcHeight);
-      if (record.falling) {
-        record.fallOffset = advanceFall(record.fallOffset, record.fallSpeed, record.fallDepth, dt);
-      }
-      record.pos.set(
-        x,
-        y,
-        base + arcPrev + (arcCurr - arcPrev) * t + flightArc + record.fallOffset,
-      );
-
-      // Курс: цель из данных тика, доворот сглажен по кадрам; при snap —
-      // мгновенно. Поправка на перёд модели — своя у каждой записи (REND-13).
-      const targetYaw = view.facingYaw + record.facingOffset;
-      record.yaw = record.snapPending
-        ? targetYaw
-        : smoothYaw(record.yaw, targetYaw, turnRate, settle);
-
-      // Наклон по нормали поверхности (REND-10): только для сущностей на
-      // поверхности; сглажен по кадрам, при snap — мгновенно (REND-2).
-      if (surface !== null && record.tiltFactor > 0 && !view.levelOverride) {
-        if (walkableSeat) surface.terrainFormNormalAt(x, y, SCRATCH_NORMAL);
-        else surface.normalAt(x, y, SCRATCH_NORMAL);
-        tiltTarget(SCRATCH_NORMAL, record.tiltFactor, record.tiltMaxRad, SCRATCH_TILT);
-        if (record.snapPending) {
-          record.tilt.x = SCRATCH_TILT.x;
-          record.tilt.y = SCRATCH_TILT.y;
-        } else {
-          smoothTilt(record.tilt, SCRATCH_TILT, tiltRate, settle);
-        }
-      } else {
-        record.tilt.x = 0;
-        record.tilt.y = 0;
-      }
-      record.snapPending = false;
-      record.posed = true;
-      // Ориентация: сперва курс вокруг вертикали, поверх — наклон в мировых
-      // осях. Композиция общая с walkable-реестром поля (REND-9): трансформ
-      // walkable-поверхности — тот же, каким инстанс нарисован.
-      orientFromTiltYaw(record.tilt, record.yaw, record.quat);
-
-      // Анимационное время — единственное, что берёт ЗНАК: клип идёт вперёд,
-      // стоит либо отматывается вместе с миром (REND-25).
-      record.controller?.update(dt);
-      this.applyPose(record, settle);
+      this.poseRecord(record, dt, settle, alpha, heightStep, turnRate, tiltRate, surface, fadeSeconds);
     }
+  }
+
+  /** Поза одной записи в кадре: место, курс, наклон и время анимации. */
+  private poseRecord(
+    record: InstanceRecord,
+    dt: number,
+    settle: number,
+    alpha: number,
+    heightStep: number,
+    turnRate: number,
+    tiltRate: number,
+    surface: VisualSurface | null,
+    fadeSeconds: number,
+  ): void {
+    advanceFade(record, settle, fadeSeconds);
+    const view = record.view;
+    // Интерполяция между двумя последними тиками; snap-тик рисуется без неё (REND-2).
+    const t = view.snap ? 1 : alpha;
+    const x = view.prevX + (view.currX - view.prevX) * t;
+    const y = view.prevY + (view.currY - view.prevY) * t;
+    // Walkable-инстанс сажается и наклоняется по террейн-форме — без
+    // walkable-вкладов, в том числе чужих: иначе два моста сажались бы друг
+    // на друга по кругу (REND-9). Все прочие читают поле целиком — юнит на
+    // настиле стоит на настиле (REND-10).
+    const walkableSeat = record.decoration && view.walkable === true;
+    const base = baseHeightOf(view, t, x, y, heightStep, surface, walkableSeat);
+    // Вертикальное смещение — чистое представление (REND-12): дуга манёвра
+    // смешивается по тем же двум тикам, что позиция, снижение идёт по кадрам.
+    // Высота КАЖДОГО вклада берётся по виду манёвра ЕГО тика: прыжковая
+    // высота к уклону не переносится, а тик приземления (манёвра уже нет)
+    // доигрывает спуск прошлого тика вместо мгновенного обнуления.
+    const arcPrev = jumpArc(view.prevMotionPhase, arcHeightOf(record, view.prevMotion));
+    const arcCurr = jumpArc(view.currMotionPhase, arcHeightOf(record, view.motion));
+    // Полётная дуга — по фазе полёта плоской формы (REND-12): её приносит
+    // сборка воркера (SHELL-2), и без неё дуги нет независимо от манифеста.
+    const flightArc = jumpArc(view.flightPhase, record.flightArcHeight);
+    if (record.falling) {
+      record.fallOffset = advanceFall(record.fallOffset, record.fallSpeed, record.fallDepth, dt);
+    }
+    record.pos.set(
+      x,
+      y,
+      base + arcPrev + (arcCurr - arcPrev) * t + flightArc + record.fallOffset,
+    );
+
+    // Курс: цель из данных тика, доворот сглажен по кадрам; при snap —
+    // мгновенно. Поправка на перёд модели — своя у каждой записи (REND-13).
+    const targetYaw = view.facingYaw + record.facingOffset;
+    record.yaw = record.snapPending
+      ? targetYaw
+      : smoothYaw(record.yaw, targetYaw, turnRate, settle);
+
+    poseTilt(record, x, y, surface, walkableSeat, tiltRate, settle);
+    record.snapPending = false;
+    record.posed = true;
+    // Ориентация: сперва курс вокруг вертикали, поверх — наклон в мировых
+    // осях. Композиция общая с walkable-реестром поля (REND-9): трансформ
+    // walkable-поверхности — тот же, каким инстанс нарисован.
+    orientFromTiltYaw(record.tilt, record.yaw, record.quat);
+
+    // Анимационное время — единственное, что берёт ЗНАК: клип идёт вперёд,
+    // стоит либо отматывается вместе с миром (REND-25).
+    record.controller?.update(dt);
+    this.applyPose(record, settle);
   }
 
   /**
@@ -1888,6 +1925,80 @@ export class ModelsSubsystem implements RenderSubsystem, InstanceProxySource {
     return { materials, skin: applySkin(targets, sources, this.requireCtx().assets) };
   }
 
+  /**
+   * Прогрев одного вида манифеста. Ярус решается тем же объявлением, что и у
+   * живой записи (REND-20): батчевый греется группой батча, детальный —
+   * образцом инстанса.
+   */
+  private warmKind(kind: string, out: WarmCollect): void {
+    const visual = resolveVisual(this.manifest, kind);
+    if (visual === undefined) return;
+    const entry = this.shared.get(visual.model);
+    const data = entry?.data ?? null;
+    if (entry === undefined || data === null) return;
+    // Происхождение вида нужно ОБОИМ ярусам: батчевому — как ярус кастера,
+    // детальному — как ответ на вопрос, бывает ли у вида угасание вообще.
+    const decoration = this.manifest.entities[kind] === undefined;
+    const derivatives = entry.derivatives;
+    if (declaredTier(visual, this.defaultTier) === 'batched' && derivatives !== null) {
+      this.warmBatchedKind(visual, kind, data, entry, derivatives, decoration, out);
+      return;
+    }
+    this.warmDetailedKind(visual, data, entry, decoration, out);
+  }
+
+  /** Батчевый ярус вида: группа батча и его VAT-текстура (REND-20). */
+  private warmBatchedKind(
+    visual: EntityVisual,
+    kind: string,
+    data: SharedModelData,
+    entry: SharedEntry,
+    derivatives: BakedDerivatives,
+    decoration: boolean,
+    out: WarmCollect,
+  ): void {
+    // Ярус кастера — та же производная данных, что у живой записи
+    // (`casterTierOf`): вид сущности динамичен всегда, decoration статичен,
+    // пока запись не объявила анимаций.
+    const tier: ShadowCasterTier = decoration && !animatedVisual(visual) ? 'static' : 'dynamic';
+    const key = batchKey(visual, kind, tier);
+    const batchEntry =
+      this.batches.get(key) ?? this.buildBatch(visual, key, data, derivatives);
+    if (entry.vatTexture !== null) out.textures.push(entry.vatTexture);
+    if (batchEntry.batch.group.parent === null) {
+      out.roots.push(batchEntry.batch.group);
+      out.warmBatches.push(batchEntry);
+    }
+  }
+
+  /**
+   * Детальный ярус строится на инстанс — прогревается образец: скелет,
+   * SkinnedMesh-биндинги и программы его материалов, плюс кэш границ.
+   */
+  private warmDetailedKind(
+    visual: EntityVisual,
+    data: SharedModelData,
+    entry: SharedEntry,
+    decoration: boolean,
+    out: WarmCollect,
+  ): void {
+    const options: { scale?: number; hiddenParts?: readonly number[] } = {};
+    if (visual.scale !== undefined) options.scale = visual.scale;
+    if (visual.hiddenParts !== undefined) options.hiddenParts = visual.hiddenParts;
+    const instance = createModelInstance(data, options);
+    out.roots.push(instance.root);
+    out.warmDetailed.push(instance);
+    // Якорям нужны ещё и текстуры скина — они уходят во ВТОРУЮ ступень
+    // (`anchoredRoots`), чтобы застрявшая текстура не отменила эту.
+    out.plan.push({
+      entry,
+      data,
+      options,
+      decoration,
+      sources: skinTextureSources(data.model, visual, visual.defaultSkin),
+    });
+  }
+
   /** Тёплые корни по доехавшим моделям — низ `prewarm`, после ожидания моделей. */
   private collectWarm(): ModelsPrewarm {
     const roots: THREE.Object3D[] = [];
@@ -1895,47 +2006,9 @@ export class ModelsSubsystem implements RenderSubsystem, InstanceProxySource {
     const warmBatches: BatchEntry[] = [];
     const warmDetailed: ModelInstance[] = [];
     const plan: AnchorPlan[] = [];
+    const collect: WarmCollect = { roots, textures, warmBatches, warmDetailed, plan };
     for (const kind of visualKinds(this.manifest)) {
-      const visual = resolveVisual(this.manifest, kind);
-      if (visual === undefined) continue;
-      const entry = this.shared.get(visual.model);
-      const data = entry?.data ?? null;
-      if (entry === undefined || data === null) continue;
-      // Происхождение вида нужно ОБОИМ ярусам: батчевому — как ярус кастера,
-      // детальному — как ответ на вопрос, бывает ли у вида угасание вообще.
-      const decoration = this.manifest.entities[kind] === undefined;
-      if (declaredTier(visual, this.defaultTier) === 'batched' && entry.derivatives !== null) {
-        // Ярус кастера — та же производная данных, что у живой записи
-        // (`casterTierOf`): вид сущности динамичен всегда, decoration статичен,
-        // пока запись не объявила анимаций.
-        const tier: ShadowCasterTier =
-          decoration && !animatedVisual(visual) ? 'static' : 'dynamic';
-        const key = batchKey(visual, kind, tier);
-        const batchEntry = this.batches.get(key) ?? this.buildBatch(visual, key, data, entry.derivatives);
-        if (entry.vatTexture !== null) textures.push(entry.vatTexture);
-        if (batchEntry.batch.group.parent === null) {
-          roots.push(batchEntry.batch.group);
-          warmBatches.push(batchEntry);
-        }
-      } else {
-        // Детальный ярус строится на инстанс — прогревается образец: скелет,
-        // SkinnedMesh-биндинги и программы его материалов, плюс кэш границ.
-        const options: { scale?: number; hiddenParts?: readonly number[] } = {};
-        if (visual.scale !== undefined) options.scale = visual.scale;
-        if (visual.hiddenParts !== undefined) options.hiddenParts = visual.hiddenParts;
-        const instance = createModelInstance(data, options);
-        roots.push(instance.root);
-        warmDetailed.push(instance);
-        // Якорям нужны ещё и текстуры скина — они уходят во ВТОРУЮ ступень
-        // (`anchoredRoots`), чтобы застрявшая текстура не отменила эту.
-        plan.push({
-          entry,
-          data,
-          options,
-          decoration,
-          sources: skinTextureSources(data.model, visual, visual.defaultSkin),
-        });
-      }
+      this.warmKind(kind, collect);
     }
     let finished = false;
     return {
@@ -3347,6 +3420,98 @@ function batchSkinListener(
  * делить с ней текстуру базового цвета нельзя. Созданные массивы собираются в
  * `created`: освобождать их — дело того, кто их поставил.
  */
+/**
+ * Ход доли проявления/угасания записи по кадрам, как снижение при провале
+ * (FOW-8, design D7): угасание — полной длительностью конфига, проявление —
+ * короткое (`FADE_IN_RATIO`). Модуль часов: направление задаёт состояние, а не
+ * знак хода мира — на обратном ходе угасание не «проявляет» обратно. Decoration
+ * не угасает никогда (REND-18) — его доля единица.
+ */
+function advanceFade(record: InstanceRecord, settle: number, fadeSeconds: number): void {
+  if (fadeSeconds <= 0 || record.decoration) {
+    record.fade = 1;
+    return;
+  }
+  if (record.fadingOut) {
+    record.fade = Math.max(0, record.fade - settle / fadeSeconds);
+    return;
+  }
+  if (record.fade < 1) {
+    record.fade = Math.min(1, record.fade + settle / (fadeSeconds * FADE_IN_RATIO));
+  }
+}
+
+/**
+ * Опорная высота записи в кадре. Сущность на поверхности стоит на визуальной
+ * поверхности (рампы и кривизна, REND-9); с override уровня (TERR-4) — на
+ * высоте уровня. Летящая — на переходе между высотами отрыва и приземления
+ * (REND-12): дискретный уровень под ней в высоте прыжка не участвует, иначе
+ * пересечение границы обрыва сдвигало бы инстанс на ступень.
+ */
+function baseHeightOf(
+  view: EntityView,
+  t: number,
+  x: number,
+  y: number,
+  heightStep: number,
+  surface: VisualSurface | null,
+  walkableSeat: boolean,
+): number {
+  if (surface !== null && isAirborne(view)) {
+    // Фаза манёвра до первого его тика — ноль: на том тике манёвра ещё не
+    // было, и `prevMotionPhase` пришла как NaN.
+    const phasePrev = Number.isFinite(view.prevMotionPhase) ? view.prevMotionPhase : 0;
+    const phase = phasePrev + (view.currMotionPhase - phasePrev) * t;
+    maneuverEnds(
+      x,
+      y,
+      view.currX - view.prevX,
+      view.currY - view.prevY,
+      phase,
+      view.currMotionPhase - phasePrev,
+      SCRATCH_ENDS,
+    );
+    return jumpBase(
+      surface.heightAt(SCRATCH_ENDS.takeoffX, SCRATCH_ENDS.takeoffY),
+      surface.heightAt(SCRATCH_ENDS.landingX, SCRATCH_ENDS.landingY),
+      phase,
+    );
+  }
+  if (surface !== null && !view.levelOverride) {
+    return walkableSeat ? surface.terrainFormHeightAt(x, y) : surface.heightAt(x, y);
+  }
+  return (view.prevLevel + (view.currLevel - view.prevLevel) * t) * heightStep;
+}
+
+/**
+ * Наклон по нормали поверхности (REND-10): только для сущностей на поверхности;
+ * сглажен по кадрам, при snap — мгновенно (REND-2).
+ */
+function poseTilt(
+  record: InstanceRecord,
+  x: number,
+  y: number,
+  surface: VisualSurface | null,
+  walkableSeat: boolean,
+  tiltRate: number,
+  settle: number,
+): void {
+  if (surface === null || record.tiltFactor <= 0 || record.view.levelOverride) {
+    record.tilt.x = 0;
+    record.tilt.y = 0;
+    return;
+  }
+  if (walkableSeat) surface.terrainFormNormalAt(x, y, SCRATCH_NORMAL);
+  else surface.normalAt(x, y, SCRATCH_NORMAL);
+  tiltTarget(SCRATCH_NORMAL, record.tiltFactor, record.tiltMaxRad, SCRATCH_TILT);
+  if (record.snapPending) {
+    record.tilt.x = SCRATCH_TILT.x;
+    record.tilt.y = SCRATCH_TILT.y;
+    return;
+  }
+  smoothTilt(record.tilt, SCRATCH_TILT, tiltRate, settle);
+}
+
 function applySkinArrays(
   model: NormalizedModel,
   materials: readonly VatMaterial[],
@@ -3354,31 +3519,55 @@ function applySkinArrays(
   created: THREE.DataArrayTexture[],
 ): void {
   const cache = new Map<string, THREE.DataArrayTexture | null>();
-  const slotOf = (source: NormalizedModel['materials'][number], kind: VatMapKind): number | null => {
-    if (kind === 'base') return source.baseColorTexture;
-    if (kind === 'normal') return source.normalTexture;
-    return source.emissiveTexture;
-  };
   model.materials.forEach((source, index) => {
     const material = materials[index];
-    if (material === undefined) return;
-    for (const kind of VAT_MAP_KINDS) {
-      if (!material.maps.has(kind)) continue;
-      const slot = slotOf(source, kind);
-      if (slot === null) continue;
-      const cacheKey = `${slot}:${kind}`;
-      let texture = cache.get(cacheKey);
-      if (texture === undefined) {
-        texture = skinArrayTexture(set, slot, kind);
-        cache.set(cacheKey, texture);
-        if (texture !== null) created.push(texture);
-      }
-      if (texture === null) continue;
-      if (kind === 'base') material.uniforms.vatSkinBase.value = texture;
-      else if (kind === 'normal') material.uniforms.vatSkinNormal.value = texture;
-      else material.uniforms.vatSkinEmissive.value = texture;
-    }
+    if (material !== undefined) applySkinMaps(source, material, set, cache, created);
   });
+}
+
+/** Карты одного материала: слот записи → массивная текстура скина, через кэш. */
+function applySkinMaps(
+  source: NormalizedModel['materials'][number],
+  material: VatMaterial,
+  set: BakedSkinSet,
+  cache: Map<string, THREE.DataArrayTexture | null>,
+  created: THREE.DataArrayTexture[],
+): void {
+  for (const kind of VAT_MAP_KINDS) {
+    if (!material.maps.has(kind)) continue;
+    const slot = slotOfMap(source, kind);
+    if (slot === null) continue;
+    const cacheKey = `${slot}:${kind}`;
+    let texture = cache.get(cacheKey);
+    if (texture === undefined) {
+      texture = skinArrayTexture(set, slot, kind);
+      cache.set(cacheKey, texture);
+      if (texture !== null) created.push(texture);
+    }
+    if (texture === null) continue;
+    setSkinMap(material, kind, texture);
+  }
+}
+
+/** Слот текстуры записи материала под вид карты; null — карты у записи нет. */
+function slotOfMap(
+  source: NormalizedModel['materials'][number],
+  kind: VatMapKind,
+): number | null {
+  if (kind === 'base') return source.baseColorTexture;
+  if (kind === 'normal') return source.normalTexture;
+  return source.emissiveTexture;
+}
+
+/** Массивная текстура скина — в тот униформ материала, которому она адресована. */
+function setSkinMap(
+  material: VatMaterial,
+  kind: VatMapKind,
+  texture: THREE.DataArrayTexture,
+): void {
+  if (kind === 'base') material.uniforms.vatSkinBase.value = texture;
+  else if (kind === 'normal') material.uniforms.vatSkinNormal.value = texture;
+  else material.uniforms.vatSkinEmissive.value = texture;
 }
 
 /** Метрика экранного размера камеры — то, что от неё нужно выбору уровня. */

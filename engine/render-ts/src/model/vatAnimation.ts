@@ -107,43 +107,57 @@ export class VatAnimationBackend implements AnimationBackend {
       this.blend = 0;
       return;
     }
-    if (!this.clamped) {
-      this.phase += dt;
-      if (this.once) {
-        if (this.phase >= clip.duration) {
-          this.phase = clip.duration;
-          this.once = false;
-          this.clamped = true;
-          // Машина может тут же переключить клип — строки считаются ПОСЛЕ.
-          this.onOneShotFinished?.();
-        } else if (this.phase < 0) {
-          // Обратный ход: one-shot отступил за своё начало и уступает клипу
-          // состояния (REND-25) — та же развязка, что у конца вперёд. Граница
-          // СТРОГАЯ, и это паритет ярусов (REND-20): микшер three.js на
-          // обратном ходе шлёт `finished`, когда время действия уходит ЗА ноль,
-          // а не когда его касается. Заодно строгая граница снимает нужду в
-          // гарде по знаку `dt`: сразу после `start()` фаза тоже ноль, и
-          // нестрогое сравнение «доигрывало» бы клип, не начав его, — на
-          // нулевом кадре паузы.
-          this.phase = 0;
-          this.once = false;
-          this.clamped = true;
-          this.onOneShotFinished?.();
-        }
-      } else if (clip.duration > 0) {
-        // Заворот в обе стороны. `%` в JS сохраняет знак делимого, и голого
-        // остатка хватает только прямому ходу — назад он давал бы отрицательную
-        // фазу, то есть кадр до начала клипа. Поэтому остаток берётся всегда, а
-        // длительность добавляется только к отрицательному: фаза, уже лежащая в
-        // `[0, duration)`, остатком не меняется вовсе, и лишней арифметики над
-        // ней не производится.
-        this.phase %= clip.duration;
-        if (this.phase < 0) this.phase += clip.duration;
-      } else {
-        this.phase = 0;
-      }
-    }
+    if (!this.clamped) this.advancePhase(clip, dt);
     this.recompute();
+  }
+
+  /** Ход фазы клипа за шаг презентации: конец one-shot'а либо заворот петли. */
+  private advancePhase(clip: BakedClip, dt: number): void {
+    this.phase += dt;
+    if (this.once) {
+      this.clampOneShot(clip);
+      return;
+    }
+    if (clip.duration <= 0) {
+      this.phase = 0;
+      return;
+    }
+    // Заворот в обе стороны. `%` в JS сохраняет знак делимого, и голого
+    // остатка хватает только прямому ходу — назад он давал бы отрицательную
+    // фазу, то есть кадр до начала клипа. Поэтому остаток берётся всегда, а
+    // длительность добавляется только к отрицательному: фаза, уже лежащая в
+    // `[0, duration)`, остатком не меняется вовсе, и лишней арифметики над
+    // ней не производится.
+    this.phase %= clip.duration;
+    if (this.phase < 0) this.phase += clip.duration;
+  }
+
+  /**
+   * Развязка one-shot'а на границе клипа — вперёд и назад (REND-25). Машина
+   * может тут же переключить клип: строки считаются ПОСЛЕ вызова.
+   */
+  private clampOneShot(clip: BakedClip): void {
+    if (this.phase >= clip.duration) {
+      this.phase = clip.duration;
+      this.once = false;
+      this.clamped = true;
+      this.onOneShotFinished?.();
+      return;
+    }
+    if (this.phase < 0) {
+      // Обратный ход: one-shot отступил за своё начало и уступает клипу
+      // состояния (REND-25) — та же развязка, что у конца вперёд. Граница
+      // СТРОГАЯ, и это паритет ярусов (REND-20): микшер three.js на
+      // обратном ходе шлёт `finished`, когда время действия уходит ЗА ноль,
+      // а не когда его касается. Заодно строгая граница снимает нужду в
+      // гарде по знаку `dt`: сразу после `start()` фаза тоже ноль, и
+      // нестрогое сравнение «доигрывало» бы клип, не начав его, — на
+      // нулевом кадре паузы.
+      this.phase = 0;
+      this.once = false;
+      this.clamped = true;
+      this.onOneShotFinished?.();
+    }
   }
 
   private start(index: number, crossfade: number, once: boolean): void {

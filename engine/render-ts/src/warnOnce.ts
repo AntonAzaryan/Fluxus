@@ -8,10 +8,15 @@
  * одно и то же явление под разными формулировками остаётся одним.
  */
 
+/**
+ * «Сказать один раз» по ключу — форма, которую держат у себя подсистемы,
+ * камера и цепочка пост-обработки. Имя типа, а не переписанная в каждом месте
+ * подпись: место употребления тогда читается смыслом, а не формой.
+ */
+export type WarnOnce = (key: string, message: string) => void;
+
 /** Канал предупреждений и память сказанного; канал не задан — `console.warn`. */
-export function createWarnOnce(
-  warn: ((message: string) => void) | undefined,
-): (key: string, message: string) => void {
+export function createWarnOnce(warn: ((message: string) => void) | undefined): WarnOnce {
   const sink = warn ?? ((message: string): void => { console.warn(message); });
   const warned = new Set<string>();
   return (key: string, message: string): void => {

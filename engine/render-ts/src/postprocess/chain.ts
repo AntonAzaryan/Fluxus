@@ -30,7 +30,8 @@
 import * as THREE from 'three';
 import type { ColorLut } from '@fluxus/assets';
 import { costSink, type RenderCostCounters } from '../cost.js';
-import { createWarnOnce } from '../warnOnce.js';
+import { createWarnOnce, type WarnOnce } from '../warnOnce.js';
+import { uniformOf } from '../uniforms.js';
 import type { PostRendererLike, ScenePostFrame } from '../types.js';
 import {
   DEFAULT_POSTPROCESS_CONFIG,
@@ -93,7 +94,7 @@ export class PostprocessChain {
   /** Доступен ли half-float (design D6); проверяется на первом кадре цепочки. */
   private hdr = true;
   private checked = false;
-  private readonly warnOnce: (key: string, message: string) => void;
+  private readonly warnOnce: WarnOnce;
   private readonly size = new THREE.Vector2();
   /** Тексели кадра этой отрисовки — знаменатель прохода, пишущего на канвас. */
   private frameTexels = 0;
@@ -263,14 +264,14 @@ export class PostprocessChain {
   ): void {
     const levels = this.ensurePyramid(width, height);
     const threshold = this.ensureThreshold();
-    threshold.uniforms.tScene!.value = this.sceneTarget?.texture ?? null;
+    uniformOf(threshold, 'tScene').value = this.sceneTarget?.texture ?? null;
     this.draw(renderer, threshold, levels[0]?.target ?? null, cost);
     for (let index = 1; index < levels.length; index++) {
       const level = levels[index];
       const source = levels[index - 1];
       if (level === undefined || source === undefined || level.material === null) continue;
       const material = level.material;
-      material.uniforms.tSource!.value = source.target.texture;
+      uniformOf(material, 'tSource').value = source.target.texture;
       (material.uniforms.uTexel as { value: THREE.Vector2 }).value.set(
         1 / source.target.width,
         1 / source.target.height,
@@ -408,7 +409,7 @@ export class PostprocessChain {
         lutAmount: config.lutAmount,
       });
     this.resolveMaterial = material;
-    material.uniforms.tScene!.value = sceneTarget.texture;
+    uniformOf(material, 'tScene').value = sceneTarget.texture;
     if (config.bloomEnabled) {
       for (let index = 0; index < BLOOM_LEVELS; index++) {
         const uniform = material.uniforms[`tBloom${index}`];
@@ -423,7 +424,7 @@ export class PostprocessChain {
     const config = this.config;
     const threshold = this.thresholdMaterial;
     if (threshold !== null) {
-      threshold.uniforms.uThreshold!.value = config.bloomThreshold;
+      uniformOf(threshold, 'uThreshold').value = config.bloomThreshold;
     }
     const resolve = this.resolveMaterial;
     if (resolve === null) return;

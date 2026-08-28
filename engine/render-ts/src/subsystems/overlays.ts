@@ -1,4 +1,3 @@
-/* eslint-disable max-lines -- baseline */
 /**
  * Подсистема служебных наложений вьюпорта (REND-16): подсветка выделения,
  * ручки gizmo, набор клеток по поверхности и сетка по поверхности.
@@ -31,7 +30,6 @@
  * документный инстанс в игровом кадре.
  */
 import * as THREE from 'three';
-import { FIXED_ONE, type EntityId } from '@fluxus/core';
 import {
   DEFAULT_CURVATURE_TESSELLATION,
   type QualityDeclaration,
@@ -39,138 +37,32 @@ import {
   type RenderSubsystem,
   type TickView,
 } from '../types.js';
-import type { VisualSurfaceSource } from '../surfaceSource.js';
-import type { VisualSurface } from '../visualSurface.js';
 import {
   createPickProxy,
-  type InstanceProxySource,
   type PickProxy,
   type PickProxySource,
   type PickProxyVisitor,
 } from '../picking.js';
+import { cellsGeometry, gridGeometry } from './overlaySurface.js';
+import {
+  DEFAULT_COLORS,
+  DEFAULT_HANDLE_SIZE,
+  DEFAULT_LIFT,
+  sameItem,
+  type OverlayCells,
+  type OverlayColors,
+  type OverlayGizmo,
+  type OverlayGrid,
+  type OverlayHandle,
+  type OverlayHighlight,
+  type OverlayItem,
+  type OverlayOptions,
+} from './overlayItems.js';
 
-// ------------------------------------------------------------ словарь видов
-
-/** Ось наложения в мировых осях сцены. */
-export type OverlayAxis = 'x' | 'y' | 'z';
-
-/** Форма ручки gizmo: перемещение вдоль оси либо поворот вокруг неё. */
-export type OverlayHandleForm = 'translate' | 'rotate';
-
-/**
- * Ручка gizmo. `id` — её идентичность: им же picking называет попадание
- * (REND-15). Что произойдёт при захвате, рендеру неизвестно (ED-16, ED-29).
- */
-export interface OverlayHandle {
-  readonly id: string;
-  readonly axis: OverlayAxis;
-  readonly form: OverlayHandleForm;
-  /** Курсор наведён на ручку. */
-  readonly hovered?: boolean;
-  /** Ручка захвачена. */
-  readonly active?: boolean;
-}
-
-/** Подсветка инстанса в его видимой позе. */
-export interface OverlayHighlight {
-  readonly kind: 'highlight';
-  readonly key: string;
-  readonly entity: EntityId;
-  /**
-   * Подсвечивается decoration-инстанс (REND-18), а не сущность
-   * presentation-состояния. Признак, а не отдельный вид наложения: подсветка у
-   * сим-объекта и у декорации одна и та же — этого требует единообразие
-   * выделения (`editor` ED-17), — а различаются только наборы, в которых
-   * ищется инстанс.
-   */
-  readonly decoration?: boolean;
-}
-
-/** Ручки gizmo в заданной позе. */
-export interface OverlayGizmo {
-  readonly kind: 'gizmo';
-  readonly key: string;
-  readonly x: number;
-  readonly y: number;
-  readonly z: number;
-  /** Разворот набора ручек вокруг вертикали, радианы; нет — мировые оси. */
-  readonly yaw?: number;
-  /**
-   * Множитель размера ручек поверх размера подсистемы; нет — 1. Поле набора, а
-   * не настройка сборки: экранно-постоянный gizmo — состояние инструмента,
-   * зависящее от дистанции камеры, и держать его в конструкторе значило бы
-   * лишить редактора (ED-16) единственного способа его назначить.
-   */
-  readonly scale?: number;
-  readonly handles: readonly OverlayHandle[];
-}
-
-/** Набор клеток, лежащий на визуальной поверхности. */
-export interface OverlayCells {
-  readonly kind: 'cells';
-  readonly key: string;
-  /** Индексы клеток сетки (row-major), как их называет picking (REND-15). */
-  readonly cells: readonly number[];
-}
-
-/** Сетка по визуальной поверхности; без прямоугольника — вся арена. */
-export interface OverlayGrid {
-  readonly kind: 'grid';
-  readonly key: string;
-  readonly x0?: number;
-  readonly y0?: number;
-  /** Включительно. */
-  readonly x1?: number;
-  readonly y1?: number;
-}
-
-export type OverlayItem = OverlayHighlight | OverlayGizmo | OverlayCells | OverlayGrid;
-
-// ------------------------------------------------------------------ опции
-
-/** Цвета наложений — настройка вьюпорта, а не норма: словарь видов закрыт, палитра нет. */
-export interface OverlayColors {
-  readonly highlight: number;
-  readonly cells: number;
-  readonly grid: number;
-  readonly axisX: number;
-  readonly axisY: number;
-  readonly axisZ: number;
-  readonly hovered: number;
-  readonly active: number;
-}
-
-const DEFAULT_COLORS: OverlayColors = {
-  highlight: 0xffffff,
-  cells: 0x9fd0ff,
-  grid: 0x8fa0b0,
-  axisX: 0xd05050,
-  axisY: 0x50c050,
-  axisZ: 0x5080d0,
-  hovered: 0xffffff,
-  active: 0xffe070,
-};
-
-export interface OverlayOptions {
-  /** Визуальная поверхность (REND-9): на неё ложатся клетки и сетка. */
-  readonly surface?: VisualSurfaceSource;
-  /** Прокси инстансов — по ним рисуется подсветка в видимой позе (REND-16). */
-  readonly instances?: InstanceProxySource;
-  readonly colors?: Partial<OverlayColors>;
-  /** Базовый размер ручек gizmo в мировых единицах; набор множит его своим `scale`. */
-  readonly handleSize?: number;
-  /** Подъём наложений над поверхностью, чтобы они не спорили с полом по глубине. */
-  readonly lift?: number;
-}
-
-const DEFAULT_HANDLE_SIZE = 1;
-const DEFAULT_LIFT = 0.02;
 /** Толщина ручки как доля её длины. */
 const HANDLE_THICKNESS = 0.08;
 /** Вырожденная по оси рамка всё же должна быть видна. */
 const MIN_BOX_SIZE = 1e-4;
-
-// ------------------------------------------------------ внутреннее хозяйство
 
 interface HandleNode {
   readonly id: string;
@@ -320,8 +212,9 @@ export class OverlaySubsystem implements RenderSubsystem, PickProxySource {
    * читают. Исчезновение подсвеченной сущности видно через её прокси (REND-15),
    * а не через `view` — источник прокси и есть то, что рисуется.
    */
-  // eslint-disable-next-line @typescript-eslint/no-empty-function -- baseline
-  syncTick(_view: TickView): void {}
+  syncTick(_view: TickView): void {
+    // намеренно пусто: наложения кладёт инструмент, а не доставленный тик
+  }
 
   /**
    * Стоимость подсистемы объявлена КОНСТАНТНОЙ (`render-quality` QUAL-3), и
@@ -376,8 +269,7 @@ export class OverlaySubsystem implements RenderSubsystem, PickProxySource {
       }
       seen.add(item.key);
       const existing = this.nodes.get(item.key);
-      // eslint-disable-next-line @typescript-eslint/prefer-optional-chain -- baseline
-      if (existing !== undefined && existing.item.kind === item.kind) {
+      if (existing?.item.kind === item.kind) {
         if (sameItem(existing.item, item)) continue;
         existing.item = item;
         this.rebuild(existing);
@@ -592,87 +484,34 @@ export class OverlaySubsystem implements RenderSubsystem, PickProxySource {
    * плоский квад на сглаженном холме провалился бы в него серединой. Наложений
    * в кадре единицы, поэтому отдельного параметра плотности у них нет.
    */
+  /** Заливка набора клеток на визуальной поверхности (REND-16, REND-9). */
   private buildCells(node: OverlayNode, item: OverlayCells): void {
     const source = this.options.surface;
     const surface = source?.current;
     const material = this.cellsMaterial;
     if (source === undefined || surface == null || material === null) return;
-    const grid = source.terrain;
-    // Приём сетки — точка входной границы рендера (REND-1, TERR-2).
-    const tile = grid.tileSize / FIXED_ONE;
-    const positions: number[] = [];
-    const indices: number[] = [];
-    for (const cell of item.cells) {
-      if (cell < 0 || cell >= grid.width * grid.height) continue;
-      const x = cell % grid.width;
-      const y = Math.floor(cell / grid.width);
-      // Быстрый путь по углам клетки не годится ни при кривизне, ни под
-      // walkable-поверхностью (REND-9): в накрытой клетке высота поля не
-      // выводится из углов — ячейка ложится на настил той же выборкой поля.
-      if (!surface.hasCellCurvature(x, y) && !surface.hasCellWalkable(x, y)) {
-        const [h00, h10, h11, h01] = surface.cornerHeights(x, y);
-        const base = positions.length / 3;
-        positions.push(
-          x * tile, y * tile, h00 + this.lift,
-          (x + 1) * tile, y * tile, h10 + this.lift,
-          (x + 1) * tile, (y + 1) * tile, h11 + this.lift,
-          x * tile, (y + 1) * tile, h01 + this.lift,
-        );
-        indices.push(base, base + 1, base + 2, base, base + 2, base + 3);
-        continue;
-      }
-      const divisions = this.tessellation;
-      for (let j = 0; j < divisions; j++) {
-        for (let i = 0; i < divisions; i++) {
-          const ax = (x + i / divisions) * tile;
-          const bx = (x + (i + 1) / divisions) * tile;
-          const ay = (y + j / divisions) * tile;
-          const by = (y + (j + 1) / divisions) * tile;
-          const base = positions.length / 3;
-          pushLiftedPoint(positions, surface, x, y, ax, ay, this.lift);
-          pushLiftedPoint(positions, surface, x, y, bx, ay, this.lift);
-          pushLiftedPoint(positions, surface, x, y, bx, by, this.lift);
-          pushLiftedPoint(positions, surface, x, y, ax, by, this.lift);
-          indices.push(base, base + 1, base + 2, base, base + 2, base + 3);
-        }
-      }
-    }
-    if (indices.length === 0) return;
-    const geometry = new THREE.BufferGeometry();
-    geometry.setAttribute('position', new THREE.BufferAttribute(new Float32Array(positions), 3));
-    geometry.setIndex(new THREE.BufferAttribute(new Uint32Array(indices), 1));
+    const geometry = cellsGeometry(item.cells, surface, source.terrain, this.lift, this.tessellation);
+    if (geometry === null) return;
     node.owned.push(geometry);
     const mesh = new THREE.Mesh(geometry, material);
     mesh.name = 'cells';
     node.object.add(mesh);
   }
 
-  /** Сетка идёт по углам клеток той же поверхности — контур клетки, а не плоскости. */
+  /** Контурная сетка прямоугольника клеток (REND-16, REND-9). */
   private buildGrid(node: OverlayNode, item: OverlayGrid): void {
     const source = this.options.surface;
     const surface = source?.current;
     const material = this.gridMaterial;
     if (source === undefined || surface == null || material === null) return;
-    const grid = source.terrain;
-    const tile = grid.tileSize / FIXED_ONE;
-    const x0 = Math.max(item.x0 ?? 0, 0);
-    const y0 = Math.max(item.y0 ?? 0, 0);
-    const x1 = Math.min(item.x1 ?? grid.width - 1, grid.width - 1);
-    const y1 = Math.min(item.y1 ?? grid.height - 1, grid.height - 1);
-    const positions: number[] = [];
-    for (let y = y0; y <= y1; y++) {
-      for (let x = x0; x <= x1; x++) {
-        pushCellOutline(positions, surface, x, y, tile, this.lift, this.tessellation);
-      }
-    }
-    if (positions.length === 0) return;
-    const geometry = new THREE.BufferGeometry();
-    geometry.setAttribute('position', new THREE.BufferAttribute(new Float32Array(positions), 3));
+    const geometry = gridGeometry(item, surface, source.terrain, this.lift, this.tessellation);
+    if (geometry === null) return;
     node.owned.push(geometry);
     const lines = new THREE.LineSegments(geometry, material);
     lines.name = 'grid';
     node.object.add(lines);
   }
+
 }
 
 // ---------------------------------------------------------------- хелперы
@@ -688,115 +527,4 @@ function orientHandle(mesh: THREE.Mesh, handle: OverlayHandle): void {
   // Кольцо построено в плоскости XY, то есть нормалью вдоль Z.
   if (handle.axis === 'x') mesh.rotation.set(0, Math.PI / 2, 0);
   else if (handle.axis === 'y') mesh.rotation.set(Math.PI / 2, 0, 0);
-}
-
-/**
- * Четыре ребра клетки по визуальной поверхности. Клетка с кривизной даёт
- * ломаную по той же выборке поля, что и её пол (REND-9): прямой контур на
- * сглаженном холме резал бы его насквозь.
- */
-function pushCellOutline(
-  out: number[],
-  surface: VisualSurface,
-  x: number,
-  y: number,
-  tile: number,
-  lift: number,
-  tessellation: number,
-): void {
-  const x0 = x * tile;
-  const y0 = y * tile;
-  const x1 = (x + 1) * tile;
-  const y1 = (y + 1) * tile;
-  // Как у ячеек: под walkable-поверхностью контур идёт выборкой поля (REND-9).
-  if (!surface.hasCellCurvature(x, y) && !surface.hasCellWalkable(x, y)) {
-    const [h00, h10, h11, h01] = surface.cornerHeights(x, y);
-    const z00 = h00 + lift;
-    const z10 = h10 + lift;
-    const z11 = h11 + lift;
-    const z01 = h01 + lift;
-    out.push(
-      x0, y0, z00, x1, y0, z10,
-      x1, y0, z10, x1, y1, z11,
-      x1, y1, z11, x0, y1, z01,
-      x0, y1, z01, x0, y0, z00,
-    );
-    return;
-  }
-  // Рёбра в том же порядке: юг (y0), восток (x1), север (y1), запад (x0).
-  pushOutlineEdge(out, surface, x, y, lift, tessellation, x0, y0, x1, y0);
-  pushOutlineEdge(out, surface, x, y, lift, tessellation, x1, y0, x1, y1);
-  pushOutlineEdge(out, surface, x, y, lift, tessellation, x1, y1, x0, y1);
-  pushOutlineEdge(out, surface, x, y, lift, tessellation, x0, y1, x0, y0);
-}
-
-/** Ребро контура ломаной по полю: `tessellation` отрезков вместо одного. */
-function pushOutlineEdge(
-  out: number[],
-  surface: VisualSurface,
-  cellX: number,
-  cellY: number,
-  lift: number,
-  tessellation: number,
-  ax: number,
-  ay: number,
-  bx: number,
-  by: number,
-): void {
-  let px = ax;
-  let py = ay;
-  let pz = surface.heightInCell(cellX, cellY, ax, ay) + lift;
-  for (let i = 1; i <= tessellation; i++) {
-    const t = i / tessellation;
-    const qx = ax + (bx - ax) * t;
-    const qy = ay + (by - ay) * t;
-    const qz = surface.heightInCell(cellX, cellY, qx, qy) + lift;
-    out.push(px, py, pz, qx, qy, qz);
-    px = qx;
-    py = qy;
-    pz = qz;
-  }
-}
-
-/** Точка ячейки наложения на поле, поднятая над ним на `lift`. */
-function pushLiftedPoint(
-  out: number[],
-  surface: VisualSurface,
-  cellX: number,
-  cellY: number,
-  wx: number,
-  wy: number,
-  lift: number,
-): void {
-  out.push(wx, wy, surface.heightInCell(cellX, cellY, wx, wy) + lift);
-}
-
-/** Наложение не изменилось — сценовые объекты пересобирать нечего. */
-function sameItem(a: OverlayItem, b: OverlayItem): boolean {
-  if (a.kind !== b.kind) return false;
-  if (a.kind === 'highlight' && b.kind === 'highlight') {
-    return a.entity === b.entity && (a.decoration ?? false) === (b.decoration ?? false);
-  }
-  if (a.kind === 'gizmo' && b.kind === 'gizmo') {
-    if (a.x !== b.x || a.y !== b.y || a.z !== b.z || (a.yaw ?? 0) !== (b.yaw ?? 0)) return false;
-    if ((a.scale ?? 1) !== (b.scale ?? 1)) return false;
-    if (a.handles.length !== b.handles.length) return false;
-    return a.handles.every((handle, i) => {
-      const other = b.handles[i]!;
-      return (
-        handle.id === other.id &&
-        handle.axis === other.axis &&
-        handle.form === other.form &&
-        (handle.hovered ?? false) === (other.hovered ?? false) &&
-        (handle.active ?? false) === (other.active ?? false)
-      );
-    });
-  }
-  if (a.kind === 'cells' && b.kind === 'cells') {
-    return a.cells.length === b.cells.length && a.cells.every((cell, i) => cell === b.cells[i]);
-  }
-  if (a.kind === 'grid' && b.kind === 'grid') {
-    return a.x0 === b.x0 && a.y0 === b.y0 && a.x1 === b.x1 && a.y1 === b.y1;
-  }
-  return false;
 }

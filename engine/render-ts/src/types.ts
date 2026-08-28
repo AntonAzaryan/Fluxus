@@ -35,9 +35,9 @@
  * записи в документ и вне этого пакета (`editor` ED-1, ED-16).
  */
 import type * as THREE from 'three';
-import type { EntityId, TerrainGrid, WorldMode, WorldState } from '@fluxus/core';
+import type { EntityId, WorldMode } from '@fluxus/core';
 import type { AssetService, ResolvedVisualLight } from '@fluxus/assets';
-import type { FlightPhaseSource } from './statSources.js';
+import type { ExtractorConfig } from './extractor.js';
 // Только тип: цикл `types` ↔ `stage` стирается компиляцией и в рантайме не существует.
 import type { PresentationStage } from './stage.js';
 // То же — контракт отладочного источника (REND-27): тип, а не значение.
@@ -714,7 +714,14 @@ export interface RenderSubsystem {
 
 // ------------------------------------------------------------ конфиг хоста
 
-export interface RenderHostConfig {
+/**
+ * Конфиг хоста рендера. Все входы СБОРКИ плоской формы (`ExtractorConfig`)
+ * входят сюда как есть и уезжают в `Extractor` без пересказа: второй список тех
+ * же полей разошёлся бы с первым молча — новый вход сборки появлялся бы у
+ * экстрактора и не доезжал бы до хоста. Здесь остаётся только то, чего у
+ * сборки нет: шаг тика, разделяемая сцена и часы буфера видов.
+ */
+export interface RenderHostConfig extends ExtractorConfig {
   /** Длительность тика в секундах — знаменатель альфы интерполяции (REND-2). */
   readonly tickSeconds: number;
   /**
@@ -724,30 +731,8 @@ export interface RenderHostConfig {
    * второго продюсера не существует.
    */
   readonly stage?: PresentationStage;
-  /**
-   * Визуальный тип сущности — ключ манифеста визуалов; null — не рисовать.
-   * Ядро не хранит имя prefab'а на сущности, поэтому связь задаёт вызывающий;
-   * практичный резолвер — `kindByTags` по тегам prefab'а.
-   */
-  readonly kindOf: (state: WorldState, entity: EntityId) => string | null;
-  /** Компонент скорости; конвенция физики ядра — 'Velocity' с полями x/y. */
-  readonly velocityComponent?: string;
   /** Скачок позиции за тик больше этого (мировых единиц) — телепорт, snap (REND-2). */
   readonly snapDistance?: number;
-  /** Порог скорости (мировых единиц за тик) для состояния `move` (REND-4). */
-  readonly moveEpsilon?: number;
-  /** Сетка террейна сцены — уровень под сущностями и зеркало карты пола (REND-7). */
-  readonly terrainGrid?: TerrainGrid;
-  /** Типы событий, несущие направление атаки/каста для bone-контроля (REND-5). */
-  readonly aimEvents?: readonly string[];
-  /** Сколько тиков держится направление каста, прежде чем цель протухнет. */
-  readonly aimHoldTicks?: number;
-  /** Компоненты, зеркалируемые в `EntityView.states` (эффекты камеры, CAM-6). */
-  readonly stateComponents?: readonly string[];
-  /** Имена компонентов локомоушена (LOC-1); дефолты — как у системы ядра. */
-  readonly locomotion?: { readonly stateComponent?: string; readonly configComponent?: string };
-  /** Источник фазы полёта снаряда (REND-12) — конфигурация сборки, не конвенция ядра. */
-  readonly flight?: FlightPhaseSource;
   /** Часы в миллисекундах; по умолчанию performance.now — параметр ради тестов. */
   readonly clock?: () => number;
 }

@@ -407,11 +407,14 @@ export class WaterSubsystem implements RenderSubsystem {
     if (section === undefined) return true;
     const errors: string[] = [];
     validateWater(section, errors, { width: this.grid.width, height: this.grid.height });
-    if (errors.length === 0) return true;
+    // Первая находка — и признак того, что секция не легла, и текст причины:
+    // спросить длину, а потом ещё раз элемент, значило бы два вопроса об одном.
+    const reason = errors[0];
+    if (reason === undefined) return true;
     this.warnOnce(
       `grid:${this.grid.width}x${this.grid.height}`,
       `render: секция water не ложится на сетку террейна ${this.grid.width}×${this.grid.height}: ` +
-        `${errors[0]} — сцена рисуется без воды (REND-35)`,
+        `${reason} — сцена рисуется без воды (REND-35)`,
     );
     return false;
   }

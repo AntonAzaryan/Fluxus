@@ -1,4 +1,3 @@
-/* eslint-disable max-lines -- baseline */
 /**
  * Picking вьюпорта (REND-15): разрешение точки экрана в то, что автор видит под
  * курсором, — ручку служебного наложения (REND-16), размещённый объект или
@@ -36,7 +35,16 @@ import { FIXED_ONE, type EntityId } from '@fluxus/core';
 import { applyCameraPose } from './camera/apply.js';
 import type { CameraPose } from './camera/rig.js';
 import type { VisualSurfaceSource } from './surfaceSource.js';
-import type { VisualSurface } from './visualSurface.js';
+import {
+  createPickRay,
+  type MutablePickHit,
+  type PickHit,
+  type PickKind,
+  type PickRay,
+  type ViewportPoint,
+} from './pickContracts.js';
+import { SurfaceMarch, clampIndex, writeSurfaceHit } from './surfaceMarch.js';
+import { SLAB_RANGE, slabAxis } from './slab.js';
 
 // ------------------------------------------------------------------- прокси
 
@@ -130,86 +138,6 @@ export function createPickProxy(): PickProxy {
   };
 }
 
-// -------------------------------------------------------------- контракты
-
-/**
- * Точка вьюпорта: положение указателя относительно левого верхнего угла
- * прямоугольника и его размеры, пиксели. Прямоугольник — вход луча наравне с
- * позой: без него неизвестно соотношение сторон (REND-15).
- */
-export interface ViewportPoint {
-  readonly x: number;
-  readonly y: number;
-  readonly width: number;
-  readonly height: number;
-}
-
-/** Мировой луч picking'а; направление единичное. */
-export interface PickRay {
-  originX: number;
-  originY: number;
-  originZ: number;
-  dirX: number;
-  dirY: number;
-  dirZ: number;
-}
-
-export function createPickRay(): PickRay {
-  return { originX: 0, originY: 0, originZ: 0, dirX: 0, dirY: 0, dirZ: 0 };
-}
-
-/** Во что разрешился курсор (REND-15). */
-export type PickKind = 'handle' | 'entity' | 'surface';
-
-/**
- * Попадание. Объект переиспользуется сервисом и валиден до следующего запроса —
- * потребитель, которому нужно пережить кадр, копирует нужные поля.
- */
-export interface PickHit {
-  readonly kind: PickKind;
-  /** Ручка наложения; null — попадание не в ручку. */
-  readonly handle: string | null;
-  /** Сущность presentation-состояния; 0 — попадание не в объект. Ключ документа даёт `DocumentSource.keyOf` (REND-11). */
-  readonly entity: EntityId;
-  /**
-   * Попадание пришлось на decoration-инстанс (REND-18): ключ документа тогда
-   * даёт `DecorationSet.keyOf`, а не документный источник, — наборы разные, и
-   * нумерация у них своя.
-   */
-  readonly decoration: boolean;
-  /** Расстояние по лучу от точки наблюдения, мировые единицы. */
-  readonly distance: number;
-  /** Мировая точка попадания, float (REND-1). */
-  readonly x: number;
-  readonly y: number;
-  readonly z: number;
-  /** Индекс клетки сетки; -1 — попадание не в поверхность. Целое число сетки, не fixed-point. */
-  readonly cell: number;
-  readonly cellX: number;
-  readonly cellY: number;
-  /** В клетке нет пола (REND-7): дыра, но клетка — кисть пола ED-10 в неё попадает. */
-  readonly noFloor: boolean;
-  /** Попадание пришлось на вертикальную стенку обрыва; клетка — верхняя (REND-7). */
-  readonly wall: boolean;
-}
-
-/** Внутренняя мутабельная форма `PickHit`. */
-interface MutablePickHit {
-  kind: PickKind;
-  handle: string | null;
-  entity: EntityId;
-  decoration: boolean;
-  distance: number;
-  x: number;
-  y: number;
-  z: number;
-  cell: number;
-  cellX: number;
-  cellY: number;
-  noFloor: boolean;
-  wall: boolean;
-}
-
 export interface ViewportPickingOptions {
   /** Источник визуальной поверхности (REND-9): поле высот берётся текущее, а не захваченное. */
   readonly surface: VisualSurfaceSource;
@@ -236,23 +164,15 @@ export interface ViewportPickingOptions {
 
 // ------------------------------------------------------------------ числа
 
-/** Направление считается вырожденным по оси ниже этого модуля. */
-const EPS_DIR = 1e-12;
-/**
- * Насколько глубоко под поверхностью клетки должен оказаться луч на её границе,
- * чтобы попадание считалось стенкой обрыва, а не касанием пола на стыке.
- */
-const WALL_EPS = 1e-6;
+/** Подшагов на клетку при марше по полю высот по умолчанию. */
 const DEFAULT_CELL_STEPS = 4;
-/** Итераций уточнения корня внутри клетки: 24 деления отрезка клетки пополам. */
-const REFINE_ITERATIONS = 24;
 
 // ---------------------------------------------------------------- сервис
 
 export class ViewportPicking {
   private readonly options: ViewportPickingOptions;
   private readonly camera: THREE.PerspectiveCamera;
-  private readonly cellSteps: number;
+  private readonly march: SurfaceMarch;
 
   /** Переиспользуемые: луч, попадание и скретчи преобразования прокси. */
   private readonly rayScratch: PickRay = createPickRay();
@@ -279,6 +199,23 @@ export class ViewportPicking {
   private readonly proxyPosition = new THREE.Vector3();
   private readonly proxyQuaternion = new THREE.Quaternion();
   private readonly proxyScale = new THREE.Vector3();
+
+  /**
+   * Состояние DDA-марша по клеткам поля высот — поле, а не локальные
+   * переменные: переход в следующую клетку вынесен в свой шаг, а луч в луч не
+   * вкладывается, поэтому одной записи на сервис хватает и марш не аллоцирует.
+   */
+  private readonly walk = {
+    cx: 0,
+    cy: 0,
+    t: 0,
+    stepX: 0,
+    stepY: 0,
+    deltaX: 0,
+    deltaY: 0,
+    nextX: 0,
+    nextY: 0,
+  };
 
   /** Состояние поиска ближайшего прокси — поля, а не замыкание: визит зовётся на каждый инстанс. */
   private searchRay: PickRay = this.rayScratch;
@@ -311,7 +248,10 @@ export class ViewportPicking {
     } else {
       this.camera = options.camera;
     }
-    this.cellSteps = Math.max(1, Math.floor(options.cellSteps ?? DEFAULT_CELL_STEPS));
+    this.march = new SurfaceMarch(
+      options.surface,
+      Math.max(1, Math.floor(options.cellSteps ?? DEFAULT_CELL_STEPS)),
+    );
   }
 
   /**
@@ -388,7 +328,7 @@ export class ViewportPicking {
       ray.dirX, ray.dirY, ray.dirZ,
     );
     const limit = tWalk < 0 ? Number.POSITIVE_INFINITY : tWalk;
-    if (this.marchSurface(ray, limit)) return true;
+    if (this.march.pick(ray, this.hit, limit)) return true;
     if (tWalk < 0) return false;
     // Walkable-победа: surface-hit с клеткой сетки ПОД мировой точкой попадания
     // (REND-15) — noFloor из неё же, стенкой обрыва попадание не является.
@@ -398,7 +338,7 @@ export class ViewportPicking {
     const wy = ray.originY + ray.dirY * tWalk;
     const cx = clampIndex(Math.floor(wx / tile), grid.width);
     const cy = clampIndex(Math.floor(wy / tile), grid.height);
-    this.writeSurfaceHit(ray, tWalk, cx, cy, false);
+    writeSurfaceHit(this.hit, grid, ray, tWalk, cx, cy, false);
     return true;
   }
 
@@ -468,243 +408,16 @@ export class ViewportPicking {
     // (REND-15).
     if (!Number.isFinite(ox + oy + oz + dx + dy + dz)) return -1;
 
-    let tMin = 0;
-    let tMax = Number.POSITIVE_INFINITY;
     // Слэбы по трём осям; вырожденная по оси коробка отсекает всё, что не лежит
     // ровно в её плоскости, — и это верно: рисовать там нечего.
-    if (Math.abs(dx) < EPS_DIR) {
-      if (ox < proxy.minX || ox > proxy.maxX) return -1;
-    } else {
-      let t1 = (proxy.minX - ox) / dx;
-      let t2 = (proxy.maxX - ox) / dx;
-      if (t1 > t2) {
-        const swap = t1;
-        t1 = t2;
-        t2 = swap;
-      }
-      if (t1 > tMin) tMin = t1;
-      if (t2 < tMax) tMax = t2;
-    }
-    if (Math.abs(dy) < EPS_DIR) {
-      if (oy < proxy.minY || oy > proxy.maxY) return -1;
-    } else {
-      let t1 = (proxy.minY - oy) / dy;
-      let t2 = (proxy.maxY - oy) / dy;
-      if (t1 > t2) {
-        const swap = t1;
-        t1 = t2;
-        t2 = swap;
-      }
-      if (t1 > tMin) tMin = t1;
-      if (t2 < tMax) tMax = t2;
-    }
-    if (Math.abs(dz) < EPS_DIR) {
-      if (oz < proxy.minZ || oz > proxy.maxZ) return -1;
-    } else {
-      let t1 = (proxy.minZ - oz) / dz;
-      let t2 = (proxy.maxZ - oz) / dz;
-      if (t1 > t2) {
-        const swap = t1;
-        t1 = t2;
-        t2 = swap;
-      }
-      if (t1 > tMin) tMin = t1;
-      if (t2 < tMax) tMax = t2;
-    }
-    return tMin > tMax ? -1 : tMin;
-  }
-
-  // --------------------------------------------------------- поверхность
-
-  /**
-   * Марш луча по ТЕРРЕЙН-ФОРМЕ поля (REND-9): по клеткам, с уточнением корня
-   * внутри клетки. Walkable-высота внутри клетки не гладкая функция углов, и
-   * аналитическому маршу не поддаётся — walkable-ветвь считается рейкастом по
-   * мешам в `pickSurfaceRay`, а `tLimit` (ближайший walkable-`t`) обрезает марш
-   * сверху: террейн-попадание дальше walkable уже не победит (REND-15).
-   * Поверхность и сетка читаются ТЕКУЩИЕ — правка кистью меняет ответ,
-   * пересоздания сервиса для этого не требуется.
-   *
-   * Вход в клетку, чья поверхность уже выше луча, — это пересечение вертикальной
-   * стенки обрыва: попадание разрешается в ЭТУ клетку, то есть в верхнюю, чью
-   * площадку стенка подпирает (REND-7, REND-15).
-   */
-  private marchSurface(ray: PickRay, tLimit = Number.POSITIVE_INFINITY): boolean {
-    const source = this.options.surface;
-    const surface = source.current;
-    if (surface === null) return false;
-    const grid = source.terrain;
-    // Приём сетки — точка входной границы рендера (REND-1, TERR-2).
-    const tile = grid.tileSize / FIXED_ONE;
-    const spanX = grid.width * tile;
-    const spanY = grid.height * tile;
-
-    // Луч обрезается прямоугольником арены: клеток вне сетки не нарисовано.
-    let tEnter = 0;
-    let tExit = Number.POSITIVE_INFINITY;
-    if (Math.abs(ray.dirX) < EPS_DIR) {
-      if (ray.originX < 0 || ray.originX > spanX) return false;
-    } else {
-      let t1 = (0 - ray.originX) / ray.dirX;
-      let t2 = (spanX - ray.originX) / ray.dirX;
-      if (t1 > t2) {
-        const swap = t1;
-        t1 = t2;
-        t2 = swap;
-      }
-      if (t1 > tEnter) tEnter = t1;
-      if (t2 < tExit) tExit = t2;
-    }
-    if (Math.abs(ray.dirY) < EPS_DIR) {
-      if (ray.originY < 0 || ray.originY > spanY) return false;
-    } else {
-      let t1 = (0 - ray.originY) / ray.dirY;
-      let t2 = (spanY - ray.originY) / ray.dirY;
-      if (t1 > t2) {
-        const swap = t1;
-        t1 = t2;
-        t2 = swap;
-      }
-      if (t1 > tEnter) tEnter = t1;
-      if (t2 < tExit) tExit = t2;
-    }
-    if (tEnter > tExit) return false;
-    // Walkable ближе входа в арену — терренной ветви уже не победить.
-    if (tEnter > tLimit) return false;
-
-    let t = tEnter;
-    let px = ray.originX + ray.dirX * t;
-    let py = ray.originY + ray.dirY * t;
-    let cx = clampIndex(Math.floor(px / tile), grid.width);
-    let cy = clampIndex(Math.floor(py / tile), grid.height);
-    let f = ray.originZ + ray.dirZ * t - surface.terrainFormHeightInCell(cx, cy, px, py);
-    if (f <= 0) {
-      this.writeSurfaceHit(ray, t, cx, cy, f < -WALL_EPS);
-      return true;
-    }
-
-    const stepX = ray.dirX > EPS_DIR ? 1 : ray.dirX < -EPS_DIR ? -1 : 0;
-    const stepY = ray.dirY > EPS_DIR ? 1 : ray.dirY < -EPS_DIR ? -1 : 0;
-    if (stepX === 0 && stepY === 0) {
-      // Отвесный луч клетки не меняет: высота под ним постоянна, и корень
-      // находится прямо, без марша. Отдельная ветка нужна ещё и потому, что
-      // прямоугольник арены такой луч не ограничивает — выхода из него нет.
-      if (ray.dirZ >= 0) return false;
-      const t = (surface.terrainFormHeightInCell(cx, cy, px, py) - ray.originZ) / ray.dirZ;
-      if (t > tLimit) return false;
-      this.writeSurfaceHit(ray, t, cx, cy, false);
-      return true;
-    }
-    const deltaX = stepX === 0 ? Number.POSITIVE_INFINITY : tile / Math.abs(ray.dirX);
-    const deltaY = stepY === 0 ? Number.POSITIVE_INFINITY : tile / Math.abs(ray.dirY);
-    let nextX =
-      stepX === 0
-        ? Number.POSITIVE_INFINITY
-        : t + ((cx + (stepX > 0 ? 1 : 0)) * tile - px) / ray.dirX;
-    let nextY =
-      stepY === 0
-        ? Number.POSITIVE_INFINITY
-        : t + ((cy + (stepY > 0 ? 1 : 0)) * tile - py) / ray.dirY;
-
-    // Клеток вдоль луча не больше периметра арены; запас закрывает вырожденные
-    // случаи вроде входа ровно в узел сетки.
-    const maxSteps = grid.width + grid.height + 4;
-    for (let step = 0; step < maxSteps; step++) {
-      const tNext = Math.min(nextX, nextY, tExit);
-      let tPrev = t;
-      // Подшаги: вдоль отрезка внутри клетки высота — квадратичная, и выпуклость
-      // может уйти под луч и вернуться между концами отрезка.
-      for (let i = 1; i <= this.cellSteps; i++) {
-        let ts = t + ((tNext - t) * i) / this.cellSteps;
-        // Подшаг обрезается walkable-`t`: корень за ним террейну не отдаётся,
-        // а корень ДО него марш обязан найти (REND-15) — поэтому кламп, а не
-        // немедленный выход.
-        const capped = ts >= tLimit;
-        if (capped) ts = tLimit;
-        px = ray.originX + ray.dirX * ts;
-        py = ray.originY + ray.dirY * ts;
-        const fs = ray.originZ + ray.dirZ * ts - surface.terrainFormHeightInCell(cx, cy, px, py);
-        if (fs <= 0) {
-          const tHit = this.refine(ray, surface, cx, cy, tPrev, ts);
-          this.writeSurfaceHit(ray, tHit, cx, cy, false);
-          return true;
-        }
-        if (capped) return false;
-        tPrev = ts;
-      }
-      if (tNext >= tExit) return false;
-
-      if (nextX <= nextY) {
-        cx += stepX;
-        t = nextX;
-        nextX += deltaX;
-      } else {
-        cy += stepY;
-        t = nextY;
-        nextY += deltaY;
-      }
-      if (cx < 0 || cy < 0 || cx >= grid.width || cy >= grid.height) return false;
-
-      px = ray.originX + ray.dirX * t;
-      py = ray.originY + ray.dirY * t;
-      f = ray.originZ + ray.dirZ * t - surface.terrainFormHeightInCell(cx, cy, px, py);
-      if (f <= 0) {
-        this.writeSurfaceHit(ray, t, cx, cy, f < -WALL_EPS);
-        return true;
-      }
-    }
-    return false;
-  }
-
-  /** Деление пополам между точкой над поверхностью и точкой под ней. */
-  private refine(
-    ray: PickRay,
-    surface: VisualSurface,
-    cx: number,
-    cy: number,
-    tAbove: number,
-    tBelow: number,
-  ): number {
-    let lo = tAbove;
-    let hi = tBelow;
-    for (let i = 0; i < REFINE_ITERATIONS; i++) {
-      const mid = (lo + hi) / 2;
-      const mx = ray.originX + ray.dirX * mid;
-      const my = ray.originY + ray.dirY * mid;
-      if (ray.originZ + ray.dirZ * mid - surface.terrainFormHeightInCell(cx, cy, mx, my) > 0) lo = mid;
-      else hi = mid;
-    }
-    return hi;
-  }
-
-  /** Попадание в поверхность: точка, клетка, признак отсутствия пола (REND-15). */
-  private writeSurfaceHit(
-    ray: PickRay,
-    t: number,
-    cx: number,
-    cy: number,
-    wall: boolean,
-  ): void {
-    const grid = this.options.surface.terrain;
-    const cell = cy * grid.width + cx;
-    const hit = this.hit;
-    hit.kind = 'surface';
-    hit.handle = null;
-    hit.entity = 0;
-    hit.decoration = false;
-    hit.distance = t;
-    hit.x = ray.originX + ray.dirX * t;
-    hit.y = ray.originY + ray.dirY * t;
-    hit.z = ray.originZ + ray.dirZ * t;
-    hit.cell = cell;
-    hit.cellX = cx;
-    hit.cellY = cy;
-    // Дыра — клетка сетки, а не отсутствие клетки: кисть пола ED-10 в неё бьёт.
-    hit.noFloor = grid.floor[cell] === 0;
-    hit.wall = wall;
+    SLAB_RANGE.tMin = 0;
+    SLAB_RANGE.tMax = Number.POSITIVE_INFINITY;
+    const inside =
+      slabAxis(ox, dx, proxy.minX, proxy.maxX) &&
+      slabAxis(oy, dy, proxy.minY, proxy.maxY) &&
+      slabAxis(oz, dz, proxy.minZ, proxy.maxZ);
+    if (!inside) return -1;
+    return SLAB_RANGE.tMin > SLAB_RANGE.tMax ? -1 : SLAB_RANGE.tMin;
   }
 }
 
-function clampIndex(value: number, size: number): number {
-  return Math.min(Math.max(value, 0), size - 1);
-}

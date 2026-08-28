@@ -19,6 +19,7 @@ import type { EffectInstance } from '../particleEffects.js';
 import { resolveSocketNode, type SocketSource } from '../particleSockets.js';
 import type { EntityView } from '../types.js';
 import type { VisualSurface } from '../visualSurface.js';
+import type { WarnOnce } from '../warnOnce.js';
 import { poseShell, type ShellPose } from './shellSupport.js';
 
 /**
@@ -78,7 +79,7 @@ export function poseEmitterShell(
   heightStep: number,
   surface: VisualSurface | null,
   sockets: SocketSource | undefined,
-  warnOnce: (key: string, message: string) => void,
+  warnOnce: WarnOnce,
   pose: ShellPose,
 ): void {
   const object = shell.instance.object;

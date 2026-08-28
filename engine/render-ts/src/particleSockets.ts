@@ -14,6 +14,7 @@
 import type * as THREE from 'three';
 import type { EntityId } from '@fluxus/core';
 import type { VisualTier } from '@fluxus/assets';
+import type { WarnOnce } from './warnOnce.js';
 
 /**
  * Инстанс глазами подсистемы частиц (REND-24): ярус, которым он нарисован, и
@@ -74,7 +75,7 @@ export function resolveSocketNode(
   binding: SocketBinding,
   entity: EntityId,
   sockets: SocketSource | undefined,
-  warnOnce: (key: string, message: string) => void,
+  warnOnce: WarnOnce,
 ): THREE.Object3D | null {
   const name = binding.socketName;
   if (name === undefined) return null;

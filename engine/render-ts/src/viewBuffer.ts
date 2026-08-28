@@ -344,94 +344,140 @@ export class ViewBuffer {
     for (let i = 0; i < ext.count; i++) {
       const id = ext.id[i]!;
       seen.add(id);
-      const x = ext.x[i]!;
-      const y = ext.y[i]!;
-      const level = ext.level[i]!;
-      // Фаза манёвра скользит по тем же двум тикам, что позиция (REND-12):
-      // дуга манёвра интерполируется вместе с ней, а не ступеньками по тикам.
-      const phase = ext.motionPhase[i]!;
-      // Вид манёвра скользит ВМЕСТЕ с фазой: высота дуги задана на вид, и
-      // вклад прошлого тика обязан считаться высотой того манёвра, который на
-      // нём и шёл (REND-12).
-      const motion = ext.motion[i]!;
-
       let record = this.records.get(id);
       if (record === undefined) {
-        const kindIndex = ext.kind[i]!;
-        record = {
-          id,
-          kind: kindIndex < 0 ? null : (ext.kindTable[kindIndex] ?? null),
-          prevX: x,
-          prevY: y,
-          currX: x,
-          currY: y,
-          prevLevel: level,
-          currLevel: level,
-          snap: true,
-          spawned: true,
-          moving: false,
-          levelOverride: false,
-          // Ноль — только для сущности, курса которой не знали никогда:
-          // новорождённой либо не сделавшей ни шага (см. `facingMemory`).
-          facingYaw: this.facingMemory.get(id) ?? 0,
-          aimYaw: null,
-          states: 0,
-          motion: LOCOMOTION_NORMAL,
-          prevMotion: LOCOMOTION_NORMAL,
-          prevMotionPhase: phase,
-          currMotionPhase: phase,
-          flightPhase: Number.NaN,
-        };
+        record = this.spawnRecord(ext, i, id);
         this.records.set(id, record);
-      } else if (snapAll) {
-        record.prevX = record.currX = x;
-        record.prevY = record.currY = y;
-        record.prevLevel = record.currLevel = level;
-        record.prevMotionPhase = record.currMotionPhase = phase;
-        record.prevMotion = motion;
-        record.snap = true;
-        record.spawned = false;
-      } else if (!tickAdvanced) {
-        // Замороженный тик (Paused): мир не изменился, буфер не двигаем.
-        record.spawned = false;
       } else {
-        const dx = x - record.currX;
-        const dy = y - record.currY;
-        const teleport = dx * dx + dy * dy > teleportSq;
-        record.prevX = teleport ? x : record.currX;
-        record.prevY = teleport ? y : record.currY;
-        record.prevLevel = teleport ? level : record.currLevel;
-        record.prevMotionPhase = teleport ? phase : record.currMotionPhase;
-        record.prevMotion = teleport ? motion : record.motion;
-        record.currX = x;
-        record.currY = y;
-        record.currLevel = level;
-        record.currMotionPhase = phase;
-        record.snap = teleport;
-        record.spawned = false;
+        this.advanceRecord(record, ext, i, tickAdvanced, snapAll, teleportSq);
       }
-
-      record.motion = motion;
-      // Фаза полёта — величина последнего доставленного тика, а не пара для
-      // интерполяции (REND-12): дуга производна от неё, и conflation (SHELL-4)
-      // ей не вредит — пропущенный тик просто не был показан.
-      record.flightPhase = ext.flightPhase[i]!;
-      statAt = this.applyStats(ext, record, i, statAt);
-      record.moving = (ext.flags[i]! & ENTITY_MOVING) !== 0;
-      record.levelOverride = (ext.flags[i]! & ENTITY_LEVEL_OVERRIDE) !== 0;
-      record.states = ext.flags[i]! >>> STATE_BITS_SHIFT;
-      const facing = ext.facingYaw[i]!;
-      if (!Number.isNaN(facing)) {
-        record.facingYaw = facing;
-        this.rememberFacing(id, facing);
-      }
-      const aim = ext.aimYaw[i]!;
-      record.aimYaw = Number.isNaN(aim) ? null : aim;
+      statAt = this.applyTickFields(record, ext, i, statAt, id);
     }
 
     for (const id of this.records.keys()) {
       if (!seen.has(id)) this.records.delete(id);
     }
+  }
+
+  /**
+   * Запись появившейся сущности: обе стороны интерполяции — доставленный тик,
+   * `snap` поднят (REND-2). Фаза манёвра берётся в обе стороны по той же
+   * причине: показывать нечего, кроме этого тика.
+   */
+  private spawnRecord(ext: ExtractedTick, i: number, id: EntityId): EntityRecord {
+    const x = ext.x[i]!;
+    const y = ext.y[i]!;
+    const level = ext.level[i]!;
+    const phase = ext.motionPhase[i]!;
+    const kindIndex = ext.kind[i]!;
+    return {
+      id,
+      kind: kindIndex < 0 ? null : (ext.kindTable[kindIndex] ?? null),
+      prevX: x,
+      prevY: y,
+      currX: x,
+      currY: y,
+      prevLevel: level,
+      currLevel: level,
+      snap: true,
+      spawned: true,
+      moving: false,
+      levelOverride: false,
+      // Ноль — только для сущности, курса которой не знали никогда:
+      // новорождённой либо не сделавшей ни шага (см. `facingMemory`).
+      facingYaw: this.facingMemory.get(id) ?? 0,
+      aimYaw: null,
+      states: 0,
+      motion: LOCOMOTION_NORMAL,
+      prevMotion: LOCOMOTION_NORMAL,
+      prevMotionPhase: phase,
+      currMotionPhase: phase,
+      flightPhase: Number.NaN,
+    };
+  }
+
+  /**
+   * Существующая запись под доставленный тик: пара тиков интерполяции (REND-2).
+   *
+   * Фаза манёвра скользит по тем же двум тикам, что позиция (REND-12): дуга
+   * манёвра интерполируется вместе с ней, а не ступеньками по тикам. Вид
+   * манёвра скользит ВМЕСТЕ с фазой: высота дуги задана на вид, и вклад
+   * прошлого тика обязан считаться высотой того манёвра, который на нём и шёл.
+   */
+  private advanceRecord(
+    record: EntityRecord,
+    ext: ExtractedTick,
+    i: number,
+    tickAdvanced: boolean,
+    snapAll: boolean,
+    teleportSq: number,
+  ): void {
+    const x = ext.x[i]!;
+    const y = ext.y[i]!;
+    const level = ext.level[i]!;
+    const phase = ext.motionPhase[i]!;
+    const motion = ext.motion[i]!;
+    if (snapAll) {
+      record.prevX = record.currX = x;
+      record.prevY = record.currY = y;
+      record.prevLevel = record.currLevel = level;
+      record.prevMotionPhase = record.currMotionPhase = phase;
+      record.prevMotion = motion;
+      record.snap = true;
+      record.spawned = false;
+      return;
+    }
+    if (!tickAdvanced) {
+      // Замороженный тик (Paused): мир не изменился, буфер не двигаем.
+      record.spawned = false;
+      return;
+    }
+    const dx = x - record.currX;
+    const dy = y - record.currY;
+    const teleport = dx * dx + dy * dy > teleportSq;
+    record.prevX = teleport ? x : record.currX;
+    record.prevY = teleport ? y : record.currY;
+    record.prevLevel = teleport ? level : record.currLevel;
+    record.prevMotionPhase = teleport ? phase : record.currMotionPhase;
+    record.prevMotion = teleport ? motion : record.motion;
+    record.currX = x;
+    record.currY = y;
+    record.currLevel = level;
+    record.currMotionPhase = phase;
+    record.snap = teleport;
+    record.spawned = false;
+  }
+
+  /**
+   * Поля, которые доставленный тик задаёт целиком, — без пары для
+   * интерполяции: они одинаковы у появившейся записи и у продолжающейся.
+   * Возвращает сдвинутый курсор разреженной секции статов (HUD-8).
+   */
+  private applyTickFields(
+    record: EntityRecord,
+    ext: ExtractedTick,
+    i: number,
+    statAt: number,
+    id: EntityId,
+  ): number {
+    record.motion = ext.motion[i]!;
+    // Фаза полёта — величина последнего доставленного тика, а не пара для
+    // интерполяции (REND-12): дуга производна от неё, и conflation (SHELL-4)
+    // ей не вредит — пропущенный тик просто не был показан.
+    record.flightPhase = ext.flightPhase[i]!;
+    const next = this.applyStats(ext, record, i, statAt);
+    const flags = ext.flags[i]!;
+    record.moving = (flags & ENTITY_MOVING) !== 0;
+    record.levelOverride = (flags & ENTITY_LEVEL_OVERRIDE) !== 0;
+    record.states = flags >>> STATE_BITS_SHIFT;
+    const facing = ext.facingYaw[i]!;
+    if (!Number.isNaN(facing)) {
+      record.facingYaw = facing;
+      this.rememberFacing(id, facing);
+    }
+    const aim = ext.aimYaw[i]!;
+    record.aimYaw = Number.isNaN(aim) ? null : aim;
+    return next;
   }
 
   /**

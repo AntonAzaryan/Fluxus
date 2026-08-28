@@ -76,13 +76,8 @@ import {
   REBUILD_BUDGET_MASK_AREAS,
   SIGNATURE_PREFIX,
 } from '../fog/rebuild.js';
-import {
-  VisibilityMask,
-  fogRectOf,
-  fogSegmentsOf,
-  type FogSegment,
-  type FogWorldRect,
-} from '../fog/mask.js';
+import { VisibilityMask, fogRectOf, fogSegmentsOf, type FogWorldRect } from '../fog/mask.js';
+import type { FogSegment } from '../fog/shadowDepth.js';
 
 /**
  * Ручка качества подсистемы (`render-quality` QUAL-1, FOW-10): разрешение маски

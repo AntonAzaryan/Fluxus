@@ -55,8 +55,12 @@ export interface SharedModelData {
 export function geometryFromMesh(mesh: NormalizedMesh): THREE.BufferGeometry {
   const geometry = new THREE.BufferGeometry();
   geometry.setAttribute('position', new THREE.BufferAttribute(mesh.positions, 3));
-  if (mesh.normals !== null && mesh.normals.length === mesh.positions.length) {
-    geometry.setAttribute('normal', new THREE.BufferAttribute(mesh.normals, 3));
+  // Нормали ассета годятся, только если их ровно столько же, сколько вершин:
+  // иначе атрибут описывал бы другую геометрию. Условие считается ОДИН раз —
+  // второе его написание для `computeVertexNormals` разошлось бы с первым.
+  const normals = mesh.normals?.length === mesh.positions.length ? mesh.normals : null;
+  if (normals !== null) {
+    geometry.setAttribute('normal', new THREE.BufferAttribute(normals, 3));
   }
   if (mesh.uvs !== null) {
     geometry.setAttribute('uv', new THREE.BufferAttribute(mesh.uvs, 2));
@@ -64,8 +68,7 @@ export function geometryFromMesh(mesh: NormalizedMesh): THREE.BufferGeometry {
   geometry.setAttribute('skinIndex', new THREE.Uint16BufferAttribute(mesh.skinIndices, 4));
   geometry.setAttribute('skinWeight', new THREE.Float32BufferAttribute(mesh.skinWeights, 4));
   geometry.setIndex(new THREE.BufferAttribute(mesh.indices, 1));
-  // eslint-disable-next-line @typescript-eslint/prefer-optional-chain -- baseline
-  if (mesh.normals === null || mesh.normals.length !== mesh.positions.length) {
+  if (normals === null) {
     geometry.computeVertexNormals();
   }
   return geometry;
@@ -288,29 +291,35 @@ export function modelBounds(
   hiddenParts?: readonly number[],
 ): ModelBounds {
   const hidden = hiddenParts === undefined ? null : new Set(hiddenParts);
-  let minX = Number.POSITIVE_INFINITY;
-  let minY = Number.POSITIVE_INFINITY;
-  let minZ = Number.POSITIVE_INFINITY;
-  let maxX = Number.NEGATIVE_INFINITY;
-  let maxY = Number.NEGATIVE_INFINITY;
-  let maxZ = Number.NEGATIVE_INFINITY;
+  const box: ModelBounds = {
+    minX: Number.POSITIVE_INFINITY,
+    minY: Number.POSITIVE_INFINITY,
+    minZ: Number.POSITIVE_INFINITY,
+    maxX: Number.NEGATIVE_INFINITY,
+    maxY: Number.NEGATIVE_INFINITY,
+    maxZ: Number.NEGATIVE_INFINITY,
+  };
   for (const mesh of model.meshes) {
     if (hidden?.has(mesh.partId) === true) continue;
-    const positions = mesh.positions;
-    for (let i = 0; i + 2 < positions.length; i += 3) {
-      const x = positions[i]!;
-      const y = positions[i + 1]!;
-      const z = positions[i + 2]!;
-      if (x < minX) minX = x;
-      if (y < minY) minY = y;
-      if (z < minZ) minZ = z;
-      if (x > maxX) maxX = x;
-      if (y > maxY) maxY = y;
-      if (z > maxZ) maxZ = z;
-    }
+    growBounds(box, mesh.positions);
   }
-  if (minX > maxX) return { minX: 0, minY: 0, minZ: 0, maxX: 0, maxY: 0, maxZ: 0 };
-  return { minX, minY, minZ, maxX, maxY, maxZ };
+  if (box.minX > box.maxX) return { minX: 0, minY: 0, minZ: 0, maxX: 0, maxY: 0, maxZ: 0 };
+  return box;
+}
+
+/** Расширение габаритов вершинами одного меша (тройками x, y, z). */
+function growBounds(box: ModelBounds, positions: Float32Array): void {
+  for (let i = 0; i + 2 < positions.length; i += 3) {
+    const x = positions[i]!;
+    const y = positions[i + 1]!;
+    const z = positions[i + 2]!;
+    if (x < box.minX) box.minX = x;
+    if (y < box.minY) box.minY = y;
+    if (z < box.minZ) box.minZ = z;
+    if (x > box.maxX) box.maxX = x;
+    if (y > box.maxY) box.maxY = y;
+    if (z > box.maxZ) box.maxZ = z;
+  }
 }
 
 // ----------------------------------------------------------------- инстанс

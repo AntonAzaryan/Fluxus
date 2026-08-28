@@ -68,7 +68,7 @@
  */
 import * as THREE from 'three';
 import { BatchedRenderer } from 'three.quarks';
-import { FIXED_ONE, type EntityId } from '@fluxus/core';
+import type { EntityId } from '@fluxus/core';
 import {
   resolveParticlesByEvent,
   resolveParticlesByKind,
@@ -90,7 +90,7 @@ import {
   type EffectInstance,
 } from '../particleEffects.js';
 import { dropSocketCache, type SocketSource } from '../particleSockets.js';
-import { createWarnOnce } from '../warnOnce.js';
+import { createWarnOnce, type WarnOnce } from '../warnOnce.js';
 import { effectIdsOf, settleEffects } from './particlePrewarm.js';
 import {
   poseEmitterShell,
@@ -99,7 +99,13 @@ import {
   type EmitterRecord,
   type Shell,
 } from './particleShell.js';
-import { createShellPose, createStateReader } from './shellSupport.js';
+import {
+  createShellPose,
+  createStateReader,
+  eventPointOf,
+  type EventPoint,
+  type StateReader,
+} from './shellSupport.js';
 
 export type { SocketSource } from '../particleSockets.js';
 
@@ -158,9 +164,11 @@ export class ParticlesSubsystem implements RenderSubsystem {
    * один на всех; своё здесь только предупреждение. Пустой список сюда не
    * доходит вовсе — его отсекает `syncShells`.
    */
-  private readonly hasState: (view: EntityView, name: string) => boolean;
+  private readonly hasState: StateReader;
   /** О недоступном ассете и битом документе сказано один раз, а не на кадр. */
-  private readonly warnOnce: (key: string, message: string) => void;
+  private readonly warnOnce: WarnOnce;
+  /** Точка разбираемого события; переиспользуется — аллокаций на выстрел нет. */
+  private readonly eventPoint: EventPoint = { x: 0, y: 0 };
 
   private ctx: RenderContext | null = null;
   private readonly group = new THREE.Group();
@@ -593,18 +601,10 @@ export class ParticlesSubsystem implements RenderSubsystem {
     view: TickView,
     cost: RenderCostCounters | undefined,
   ): void {
-    let x: number;
-    let y: number;
-    if (data.x !== undefined && data.y !== undefined) {
-      x = data.x / FIXED_ONE;
-      y = data.y / FIXED_ONE;
-    } else {
-      const entity = data.entity ?? data.source;
-      const entityView = entity === undefined ? undefined : view.entities.get(entity);
-      if (entityView === undefined) return;
-      x = entityView.currX;
-      y = entityView.currY;
-    }
+    const point = this.eventPoint;
+    if (!eventPointOf(data, view, point)) return;
+    const x = point.x;
+    const y = point.y;
     const instance = this.acquire(effect, cost);
     if (instance === null) return;
     const surface = this.options.surface?.current ?? null;

@@ -22,6 +22,7 @@ import {
 import { createWaterMaterial, type WaterMaterialInput } from './material.js';
 import { waterGeometryOf, type WaterRegion } from './region.js';
 import { WaterRippleField, type WaterRippleOptions } from './ripples.js';
+import { uniformOf } from '../uniforms.js';
 
 /**
  * Место воды среди прозрачных (design D6): ниже частиц и превью каста, поэтому
@@ -95,7 +96,7 @@ export class WaterBodyView {
 
     this.rippleUniform = new Float32Array(4 * Math.max(1, options.limits.rippleSources));
     this.material = createWaterMaterial(this.materialInput());
-    this.material.uniforms.uRipples!.value = this.rippleUniform;
+    uniformOf(this.material, 'uRipples').value = this.rippleUniform;
     this.mesh = new THREE.Mesh(this.geometry, this.material);
     this.mesh.name = `water:body:${region.body}`;
     this.mesh.renderOrder = WATER_RENDER_ORDER;
@@ -180,7 +181,7 @@ export class WaterBodyView {
    * источников — счётчик стоимости кадра (PERF-3).
    */
   updateFrame(clock: number, view: TickView | null, alpha: number, dt: number): number {
-    this.material.uniforms.uTime!.value = clock;
+    uniformOf(this.material, 'uTime').value = clock;
     if (this.rippleOptions.limit <= 0) return 0;
     this.ripples.update(view, alpha, dt, this.rippleOptions);
     return this.ripples.writeUniform(this.rippleUniform, this.rippleOptions.limit);

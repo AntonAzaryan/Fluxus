@@ -47,7 +47,7 @@
  * эффект нельзя по построению — эффект есть изображение, а не сущность.
  */
 import * as THREE from 'three';
-import { FIXED_ONE, type EntityId } from '@fluxus/core';
+import type { EntityId } from '@fluxus/core';
 import {
   resolveEffectByEvent,
   resolveEffectByKind,
@@ -64,8 +64,15 @@ import type {
 } from '../types.js';
 import type { VisualSurfaceSource } from '../surfaceSource.js';
 import { jumpArc } from '../model/verticalOffset.js';
-import { createWarnOnce } from '../warnOnce.js';
-import { createShellPose, createStateReader, poseShell } from './shellSupport.js';
+import { createWarnOnce, type WarnOnce } from '../warnOnce.js';
+import {
+  createShellPose,
+  createStateReader,
+  eventPointOf,
+  poseShell,
+  type EventPoint,
+  type StateReader,
+} from './shellSupport.js';
 
 /** Примитивы, которые умеет рисовать подсистема; перечень принадлежит рендеру. */
 const PRIMITIVE_SPHERE = 'sphere';
@@ -161,9 +168,11 @@ export class EffectsSubsystem implements RenderSubsystem {
    * Читатель общий с подсистемой частиц (`shellSupport.ts`) — словарь битов
    * `EntityView.states` один на всех (CAM-6); своё здесь только предупреждение.
    */
-  private readonly hasState: (view: EntityView, name: string) => boolean;
+  private readonly hasState: StateReader;
   /** Об неизвестном примитиве/кривой сказано один раз на имя, а не на кадр. */
-  private readonly warnOnce: (key: string, message: string) => void;
+  private readonly warnOnce: WarnOnce;
+  /** Точка разбираемого события; переиспользуется — аллокаций на вспышку нет. */
+  private readonly eventPoint: EventPoint = { x: 0, y: 0 };
 
   private ctx: RenderContext | null = null;
   private readonly group = new THREE.Group();
@@ -330,24 +339,33 @@ export class EffectsSubsystem implements RenderSubsystem {
     const stateNames = (this.stateNames ??=
       states === undefined ? NO_STATE_NAMES : Object.keys(states));
     for (const entityView of view.entities.values()) {
-      // Оболочка визуального типа: живёт, пока жива сущность такого типа.
-      if (entityView.kind !== null) {
-        const record = resolveEffectByKind(this.manifest, entityView.kind);
-        if (record !== undefined) {
-          this.ensureShell(entityView, `kind:${entityView.kind}`, record, live);
-        }
-      }
-      // Оболочка состояния: живёт, пока состояние доставляется (REND-23).
-      for (const name of stateNames) {
-        if (!this.hasState(entityView, name)) continue;
-        const record = resolveEffectByState(this.manifest, name);
-        if (record !== undefined) this.ensureShell(entityView, `state:${name}`, record, live);
-      }
+      this.syncEntityShells(entityView, stateNames, live);
     }
     for (const [key, shell] of this.shells) {
       if (live.has(key)) continue;
       this.release(shell.node);
       this.shells.delete(key);
+    }
+  }
+
+  /** Оболочки одной сущности: по её визуальному типу и по каждому состоянию. */
+  private syncEntityShells(
+    entityView: EntityView,
+    stateNames: readonly string[],
+    live: Set<string>,
+  ): void {
+    // Оболочка визуального типа: живёт, пока жива сущность такого типа.
+    if (entityView.kind !== null) {
+      const record = resolveEffectByKind(this.manifest, entityView.kind);
+      if (record !== undefined) {
+        this.ensureShell(entityView, `kind:${entityView.kind}`, record, live);
+      }
+    }
+    // Оболочка состояния: живёт, пока состояние доставляется (REND-23).
+    for (const name of stateNames) {
+      if (!this.hasState(entityView, name)) continue;
+      const record = resolveEffectByState(this.manifest, name);
+      if (record !== undefined) this.ensureShell(entityView, `state:${name}`, record, live);
     }
   }
 
@@ -404,18 +422,10 @@ export class EffectsSubsystem implements RenderSubsystem {
     data: Readonly<Record<string, number>>,
     view: TickView,
   ): void {
-    let x: number;
-    let y: number;
-    if (data.x !== undefined && data.y !== undefined) {
-      x = data.x / FIXED_ONE;
-      y = data.y / FIXED_ONE;
-    } else {
-      const entity = data.entity ?? data.source;
-      const entityView = entity === undefined ? undefined : view.entities.get(entity);
-      if (entityView === undefined) return;
-      x = entityView.currX;
-      y = entityView.currY;
-    }
+    const point = this.eventPoint;
+    if (!eventPointOf(data, view, point)) return;
+    const x = point.x;
+    const y = point.y;
     const node = this.acquire(record);
     if (node === null) return;
     const surface = this.options.surface?.current ?? null;

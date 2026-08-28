@@ -46,6 +46,20 @@ export interface WaterGeometryData {
 }
 
 /**
+ * Накопитель одного тела при разборе карты: маска, число занятых клеток и
+ * охват. Три параллельных массива (маски, счётчики, границы) свелись в один —
+ * индекс тела проверяется ровно один раз, наличием записи.
+ */
+interface WaterBodyAccum {
+  readonly mask: Uint8Array;
+  cells: number;
+  minX: number;
+  minY: number;
+  maxX: number;
+  maxY: number;
+}
+
+/**
  * Регионы всех тел карты (REND-35). Карта к этому моменту уже проверена
  * валидацией секции (PRES-2): символы в алфавите, ряды по сетке, индексы
  * разрешаются, — поэтому разбор здесь прямой, а клетка вне алфавита просто
@@ -57,45 +71,61 @@ export function waterRegionsOf(
   height: number,
   bodies: number,
 ): WaterRegion[] {
-  const masks = Array.from({ length: bodies }, () => new Uint8Array(width * height));
-  const counts = new Int32Array(bodies);
-  const bounds = Array.from({ length: bodies }, () => ({
-    minX: width,
-    minY: height,
-    maxX: -1,
-    maxY: -1,
-  }));
-  const rows = Math.min(cells.length, height);
-  for (let y = 0; y < rows; y++) {
-    const row = cells[y]!;
-    const columns = Math.min(row.length, width);
-    for (let x = 0; x < columns; x++) {
-      const symbol = row[x]!;
-      if (symbol === WATER_EMPTY_CELL) continue;
-      const index = symbol.codePointAt(0)! - 0x30;
-      if (index < 0 || index >= bodies) continue;
-      masks[index]![y * width + x] = 1;
-      counts[index]!++;
-      const box = bounds[index]!;
-      if (x < box.minX) box.minX = x;
-      if (x > box.maxX) box.maxX = x;
-      if (y < box.minY) box.minY = y;
-      if (y > box.maxY) box.maxY = y;
-    }
+  const accums = Array.from(
+    { length: bodies },
+    (): WaterBodyAccum => ({
+      mask: new Uint8Array(width * height),
+      cells: 0,
+      minX: width,
+      minY: height,
+      maxX: -1,
+      maxY: -1,
+    }),
+  );
+  for (const [y, row] of cells.entries()) {
+    if (y >= height) break;
+    markRow(accums, row, y, width);
   }
-  return masks.map((mask, body) => {
-    const box = bounds[body]!;
-    return {
-      body,
-      mask,
-      cells: counts[body]!,
-      minX: box.minX,
-      minY: box.minY,
-      maxX: box.maxX,
-      maxY: box.maxY,
-      rects: greedyRects(mask, width, height),
-    };
-  });
+  return accums.map((accum, body) => ({
+    body,
+    mask: accum.mask,
+    cells: accum.cells,
+    minX: accum.minX,
+    minY: accum.minY,
+    maxX: accum.maxX,
+    maxY: accum.maxY,
+    rects: greedyRects(accum.mask, width, height),
+  }));
+}
+
+/**
+ * Разметка одного ряда карты. Индекс тела — цифра символа; отсутствие записи в
+ * `accums` покрывает разом и «символ не цифра», и «такого тела в секции нет».
+ */
+function markRow(
+  accums: readonly WaterBodyAccum[],
+  row: string,
+  y: number,
+  width: number,
+): void {
+  const columns = Math.min(row.length, width);
+  for (let x = 0; x < columns; x++) {
+    const symbol = row[x]!;
+    if (symbol === WATER_EMPTY_CELL) continue;
+    const accum = accums[symbol.codePointAt(0)! - 0x30];
+    if (accum === undefined) continue;
+    accum.mask[y * width + x] = 1;
+    accum.cells++;
+    growBounds(accum, x, y);
+  }
+}
+
+/** Расширение охвата тела занятой клеткой. */
+function growBounds(accum: WaterBodyAccum, x: number, y: number): void {
+  if (x < accum.minX) accum.minX = x;
+  if (x > accum.maxX) accum.maxX = x;
+  if (y < accum.minY) accum.minY = y;
+  if (y > accum.maxY) accum.maxY = y;
 }
 
 /**
@@ -111,17 +141,34 @@ export function greedyRects(mask: Uint8Array, width: number, height: number): Wa
     for (let x = 0; x < width; x++) {
       const at = y * width + x;
       if (mask[at] !== 1 || taken[at] === 1) continue;
-      let w = 1;
-      while (x + w < width && mask[at + w] === 1 && taken[at + w] !== 1) w++;
-      let h = 1;
-      while (y + h < height && rowFree(mask, taken, (y + h) * width + x, w)) h++;
-      for (let j = 0; j < h; j++) {
-        taken.fill(1, (y + j) * width + x, (y + j) * width + x + w);
-      }
+      const w = strideRight(mask, taken, at, width - x);
+      const h = strideDown(mask, taken, at, w, width, height - y);
+      for (let j = 0; j < h; j++) taken.fill(1, at + j * width, at + j * width + w);
       rects.push({ x0: x, y0: y, w, h });
     }
   }
   return rects;
+}
+
+/** Длина свободной полосы вправо от `at`, не длиннее `limit` клеток. */
+function strideRight(mask: Uint8Array, taken: Uint8Array, at: number, limit: number): number {
+  let w = 1;
+  while (w < limit && mask[at + w] === 1 && taken[at + w] !== 1) w++;
+  return w;
+}
+
+/** Высота прямоугольника шириной `w` от `at` вниз, не выше `limit` рядов. */
+function strideDown(
+  mask: Uint8Array,
+  taken: Uint8Array,
+  at: number,
+  w: number,
+  width: number,
+  limit: number,
+): number {
+  let h = 1;
+  while (h < limit && rowFree(mask, taken, at + h * width, w)) h++;
+  return h;
 }
 
 /** Вся полоса длиной `w` от `start` — в маске и ещё не занята. */
