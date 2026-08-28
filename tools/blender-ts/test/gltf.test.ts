@@ -68,6 +68,23 @@ describe('BLND-9/BLND-10: позиции вершин grid-меша', () => {
     expect(() => readMeshGeometry(parseGltf(packGlb(source.json, source.binary)), 0)).toThrow(/mode 4/);
   });
 
+  it('примитив без атрибутов пропускается, а не роняет разбор безымянным TypeError', () => {
+    // Формат объявляет `attributes` обязательным, но документ приезжает
+    // разбором чужого JSON: сломанный экспорт вправе его не иметь. Такой
+    // примитив проходит той же веткой, что и примитив без `POSITION`, —
+    // пропускается; о непокрытых адресах сообщает вызывающий находкой (BLND-6),
+    // а не средой исполнения.
+    const source = gridSource([TERRAIN_GRID]);
+    const meshes = source.json.meshes as { primitives: Record<string, unknown>[] }[];
+    delete meshes[0]!.primitives[0]!.attributes;
+    const geometry = readMeshGeometry(parseGltf(packGlb(source.json, source.binary)), 0);
+
+    // Все клетки сетки лежат в одном примитиве, поэтому без его атрибутов меш
+    // отдаёт пустую геометрию — но отдаёт, а не роняет разбор.
+    expect(geometry.positions).toHaveLength(0);
+    expect(geometry.triangles).toHaveLength(0);
+  });
+
   it('буфер внешним файлом — честный отказ с причиной, а не молчаливые нули', () => {
     const document = {
       json: {

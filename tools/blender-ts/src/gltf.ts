@@ -66,7 +66,16 @@ export interface GltfBuffer {
 }
 
 export interface GltfPrimitive {
-  readonly attributes: Readonly<Record<string, number>>;
+  /**
+   * Тот же случай, что у `primitives` меша: форматом поле обязательно, а типом
+   * — нет. Документ приезжает разбором чужого JSON, и примитив без атрибутов
+   * означает не невозможное, а сломанный экспорт. С обязательным типом такой
+   * экспорт кончался бы безымянным `TypeError` при чтении `attributes.POSITION`
+   * — а BLND-6 требует внятной находки. С опциональным примитив без атрибутов
+   * проходит той же веткой, что и примитив без `POSITION`: пропускается, и о
+   * непокрытых адресах сообщает уже вызывающий.
+   */
+  readonly attributes?: Readonly<Record<string, number>>;
   readonly indices?: number;
   readonly mode?: number;
 }
@@ -340,7 +349,7 @@ export function meshPositions(document: GltfDocument, mesh: number): readonly (r
   if (def === undefined) throw new GltfParseError(`glTF: меш #${mesh} не объявлен`);
   const rows: (readonly number[])[] = [];
   for (const primitive of def.primitives ?? []) {
-    const accessor = primitive.attributes.POSITION;
+    const accessor = primitive.attributes?.POSITION;
     if (accessor === undefined) continue;
     for (const row of readAccessor(document, accessor)) rows.push(row);
   }
@@ -385,7 +394,7 @@ function appendPrimitiveChannels(
   vertices: number,
 ): void {
   for (const [name, values] of channels) {
-    const index = primitive.attributes[name];
+    const index = primitive.attributes?.[name];
     if (index === undefined) {
       for (let i = 0; i < vertices; i++) values.push(null);
       continue;
@@ -437,7 +446,7 @@ export function readMeshGeometry(
         `glTF: меш #${mesh}: примитив режима ${mode} — клеточные данные читаются с треугольников (mode 4)`,
       );
     }
-    const accessor = primitive.attributes.POSITION;
+    const accessor = primitive.attributes?.POSITION;
     if (accessor === undefined) continue;
     const offset = positions.length;
     const rows = readAccessor(document, accessor);

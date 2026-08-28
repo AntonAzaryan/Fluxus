@@ -27,6 +27,7 @@ import {
   flagCells,
   gridGlb,
   gridGltf,
+  gridSource,
   levelHeights,
   objectsOf,
   packGlb,
@@ -263,6 +264,23 @@ describe('BLND-9: клетки без граней и грани мимо сет
 
     expect(read.grid).toBeNull();
     expect(read.errors.join('\n')).toMatch(/не попадает в центр клетки|вне сетки/);
+  });
+
+  it('примитив без атрибутов — та же находка о непокрытых клетках, а не TypeError', () => {
+    // `attributes` объявлен форматом обязательным, но документ приезжает
+    // разбором чужого JSON. Сломанный экспорт не должен кончаться безымянной
+    // ошибкой среды: BLND-6 требует внятной находки, и она здесь та же самая,
+    // что у сетки без граней, — потому что для конвейера это одно и то же.
+    const source = gridSource([TERRAIN_GRID]);
+    const meshes = source.json.meshes as { primitives: Record<string, unknown>[] }[];
+    delete meshes[0]!.primitives[0]!.attributes;
+    const document = parseGltf(packGlb(source.json, source.binary));
+    const objects = normalizeDocument(document);
+
+    const read = readCellGrid(document, objects[0]!, { width: 4, height: 4, cellSize: 1 });
+
+    expect(read.grid).toBeNull();
+    expect(read.errors.join('\n')).toContain('не покрыта гранями целиком');
   });
 
   it('сетка мельче ассета — отказ, называющий непокрытые клетки', () => {
