@@ -9,7 +9,7 @@
     "arriveTolerance": 0.4,
     "edgeMargin": 2,
     "engageRange": 8,
-    "strafe": 0.5,
+    "strafe": 0.33,
     "strafePeriodTicks": 34
   },
   "behavior": "bots/behaviors/classic.json",

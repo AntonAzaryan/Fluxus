@@ -9,7 +9,7 @@
     "arriveTolerance": 0.6,
     "edgeMargin": 3,
     "engageRange": 6,
-    "strafe": 0.2,
+    "strafe": 0.13,
     "strafePeriodTicks": 60
   },
   "behavior": "bots/behaviors/cautious.json",
