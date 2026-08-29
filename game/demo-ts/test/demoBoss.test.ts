@@ -98,13 +98,14 @@ const WAVE_TICKS = 10;
 /** Взрыв слэма — три радиуса тела. */
 const SLAM_RADIUS = 3 * BOSS_RADIUS;
 /**
- * Пятно огня — РОВНО половина шага рывка: пятна ложатся по одному на тик, и
- * при этом радиусе соседние касаются, не перекрываясь. Шире — герой на стыке
- * горел бы вдвое, уже — между пятнами оставалась бы щель, которую оболочка
- * манифеста всё равно рисует сплошной полосой.
+ * Пятно огня вдвое меньше тела босса, а шаг рывка — РОВНО его диаметр: пятна
+ * ложатся по одному на тик и соседние касаются, не перекрываясь. Шире шаг —
+ * между пятнами щель, которую оболочка манифеста всё равно рисует сплошной
+ * полосой; уже — нахлёст, и стоящий на стыке горит вдвое, потому что каждое
+ * пятно жжёт своим кастером.
  */
-const DASH_SPEED = 32768;
-const FIRE_RADIUS = DASH_SPEED / 2;
+const FIRE_RADIUS = 19661;
+const DASH_SPEED = 2 * FIRE_RADIUS;
 
 const STRIKE_WINDUP = 48; // 800 мс
 const STRIKE_CD = 60; // 1 с
@@ -114,8 +115,16 @@ const SLAM_DAMAGE = 500;
 const CHARGE_AIM = 120; // 2 с
 const DASH_DAMAGE = 500;
 const FIRE_LIFE = 240; // 4 с
-const FIRE_PERIOD = 60; // 1 с
-const FIRE_DAMAGE = 100;
+/**
+ * «Сто урона в секунду» — СКОРОСТЬ, а не проба раз в секунду: полоса шириной в
+ * 0.6 единицы пересекается бегущим героем за семь-восемь тиков, и проба раз в
+ * шестьдесят ловила бы его один раз из десяти. Десять проб в секунду по
+ * десятке дают ту же сотню стоящему и честную долю пробегающему.
+ */
+const FIRE_PERIOD = 6;
+const FIRE_DAMAGE = 10;
+/** Та самая сотня в секунду, которую эта пара обязана давать. */
+const FIRE_DPS = (FIRE_DAMAGE * 60) / FIRE_PERIOD;
 const REPEL_DAMAGE = 200;
 const REPEL_CD = 45;
 /** Микровзрыв в упор — радиальный: разлетается всё, что стоит вплотную. */
@@ -747,11 +756,15 @@ describe('разгон: наводка, рывок и полоса огня', ()
       coreWorld.getField(a.state.world, patches[0]!, 'AbilityDuration', 'remaining'),
     ).toBeGreaterThan(FIRE_LIFE - patches.length - 2);
 
-    // Тики огня: ровно по сотне и ровно раз в секунду, источник — пятно, а не
-    // сам босс.
+    // Тики огня: по десятке десять раз в секунду, источник — пятно, а не сам
+    // босс. Считается СКОРОСТЬ: стоящему в полосе она обязана дать ровно сто
+    // за секунду, и меряется это на целой секунде, а не на одной пробе.
     const burns = new Map<EntityId, number[]>();
+    const perSecond: number[] = [];
     let total = 0;
-    while (a.at() < ended + 3 * FIRE_PERIOD) {
+    const measureFrom = a.at();
+    let second = 0;
+    while (a.at() < ended + 4 * 60) {
       const t = a.at() + 1;
       a.step();
       for (const event of a.last.events) {
@@ -763,10 +776,15 @@ describe('разгон: наводка, рывок и полоса огня', ()
         const source = event.data.source!;
         expect(coreWorld.hasTag(a.state.world, source, 'BossFire')).toBe(true);
         burns.set(source, [...(burns.get(source) ?? []), t]);
+        second += event.data.amount!;
+      }
+      if ((a.at() - measureFrom) % 60 === 0) {
+        perSecond.push(second);
+        second = 0;
       }
     }
     expect(total).toBeGreaterThanOrEqual(2);
-    // Каждое пятно жжёт своим счётом — ровно раз в секунду.
+    // Каждое пятно жжёт своим счётом — ровно десять раз в секунду.
     let periodic = 0;
     for (const ticks of burns.values()) {
       for (let i = 1; i < ticks.length; i++) {
@@ -775,6 +793,11 @@ describe('разгон: наводка, рывок и полоса огня', ()
       }
     }
     expect(periodic).toBeGreaterThan(0);
+    // Целая секунда стояния в полосе стоит ровно объявленной сотни. Секунды
+    // на краях окна неполные — берётся та, где герой простоял всю.
+    expect(perSecond.some((sum) => sum === FIRE_DPS), `посекундно: ${perSecond.join(',')}`).toBe(
+      true,
+    );
 
     // И полоса гаснет ровно через четыре секунды после последнего пятна.
     for (let t = 1; t <= FIRE_LIFE; t++) a.step();
@@ -799,24 +822,46 @@ describe('босс, арена и собственная шкура', () => {
 
   it('не идёт за падающим и не делает шага в пустоту', () => {
     // Улетевший с арены герой мёртв не сразу: `FallDeath` копит глубину триста
-    // тиков, и всё это время он остаётся живой целью. Босс, который его
-    // преследует, уходит с обрыва следом и платит за это десятью секундами
-    // возрождения — ровно та «тупость», которой в задании нет.
+    // тиков, и всё это время он остаётся ЖИВОЙ целью. Отказаться от него сцена
+    // не может: `NpcAgent.target` принадлежит платформе, и `chooseTarget`
+    // (NPC-5) переписывает поле каждый тик, а про полёт не знает — её запасной
+    // `nearestEnemy` фильтрует только по команде и смерти. Поэтому отказ
+    // выражается не полем, а ДЕЙСТВИЯМИ: босс не шагает к падающему и не
+    // кастует по нему.
     const a = stand([[44.5, 24]]);
     const hero = a.heroes[0]!;
     let fell = -1;
-    for (let t = 1; t <= 900; t++) {
+    while (a.at() < 900 && fell < 0) {
       a.step();
-      if (fell < 0 && coreWorld.hasComponent(a.state.world, hero, 'Falling')) fell = t;
-      expect(coreWorld.hasComponent(a.state.world, a.boss, 'Falling'), `тик ${t}`).toBe(false);
-      expect(coreWorld.hasComponent(a.state.world, a.boss, 'Dead'), `тик ${t}`).toBe(false);
+      if (coreWorld.hasComponent(a.state.world, hero, 'Falling')) fell = a.at();
     }
     // Контроль: герой действительно улетел с арены — иначе проверялся бы
     // сценарий, в котором падать было некому.
     expect(fell).toBeGreaterThan(0);
-    // И цель босс отпустил: держать падающего значило бы стоять к нему лицом
-    // до самой его смерти вместо того, чтобы искать живого.
-    expect(coreWorld.getField(a.state.world, a.boss, 'NpcAgent', 'target')).toBe(-1);
+
+    // Платформа цель ДЕРЖИТ — вот то самое, чего сцена изменить не может:
+    // запись `target = -1` из `BossTarget` (-796) переписывается обратно
+    // системой поведения на -795 тем же тиком. Отпустит она падающего сама,
+    // и не скоро — когда тело улетит за радиус чутья. Поэтому проверки ниже
+    // меряют ШАГ и КАСТ, а не поле.
+    expect(coreWorld.getField(a.state.world, a.boss, 'NpcAgent', 'target')).toBe(hero);
+
+    // С тика падения босс СТОИТ: ни единицы Q16.16 в сторону улетающего тела.
+    const frozen = { x: px(a.state, a.boss), y: py(a.state, a.boss) };
+    const asked: string[] = [];
+    for (let t = 1; t <= 120; t++) {
+      for (const type of a.step()) {
+        if (type.startsWith('Boss') && (type.endsWith('Ready') || type.endsWith('Windup'))) {
+          asked.push(type);
+        }
+      }
+      expect(px(a.state, a.boss), `тик ${a.at()}`).toBe(frozen.x);
+      expect(py(a.state, a.boss), `тик ${a.at()}`).toBe(frozen.y);
+      expect(coreWorld.hasComponent(a.state.world, a.boss, 'Falling')).toBe(false);
+      expect(coreWorld.hasComponent(a.state.world, a.boss, 'Dead')).toBe(false);
+    }
+    // И не замахивается по нему: сенсор готовности падающую цель не считает.
+    expect(asked).toEqual([]);
   });
 
   it('бегущего к краю догоняет, но за край не выходит', () => {
@@ -1011,12 +1056,21 @@ describe('числа и картинка босса: ретюн виден в д
     expect((boss.components.Collider as Record<string, number>).cliffRise).toBe(BOSS_CLIFF_RISE);
     // Слот — чужой обоим игрокам матча: снаряд каждого видит в боссе цель.
     expect(boss.components.Player!.slot).toBe(MATCH.players.length);
-    // Взрыв слэма — ровно три радиуса тела; пятно огня — ровно половина шага
-    // рывка, и оба множителя обязаны стоять в сцене, а не только здесь.
-    expect(SLAM_RADIUS).toBe(3 * BOSS_RADIUS);
-    expect(numbers(systemDef('BossDashDrive'))).toContain(DASH_SPEED);
+    // Оба множителя проверяются ПРОТИВ СЦЕНЫ, а не сами против себя: радиус
+    // тела и шаг рывка читаются из документа, и производные от них величины
+    // обязаны сойтись с тем, что там же и записано.
+    const bodyRadius = (boss.components.Collider as Record<string, number>).radius!;
+    expect(numbers(abilityDef('bossSlam'))).toContain(3 * bodyRadius);
+    const dashStep = numbers(systemDef('BossDashDrive')).find((value) => value === DASH_SPEED);
+    expect(dashStep, 'шаг рывка не найден в BossDashDrive').toBe(DASH_SPEED);
     expect(numbers(abilityDef('bossFireAura'))).toContain(FIRE_RADIUS);
-    expect(2 * FIRE_RADIUS).toBe(DASH_SPEED);
+    // Полоса сплошная и без нахлёста ровно тогда, когда шаг равен диаметру.
+    expect(dashStep).toBe(2 * FIRE_RADIUS);
+    // И «сто в секунду» — произведение периода на урон, а не отдельное число.
+    expect(FIRE_DPS).toBe(100);
+    expect(numbers(abilityDef('bossFireAura'))).toEqual(
+      expect.arrayContaining([FIRE_DAMAGE, FIRE_PERIOD]),
+    );
     // Таблица угрозы остаётся на боссе, хотя политики угрозы у него нет:
     // `chooseTarget` (NPC-5) читает её слоты безусловно, и без компонента это
     // четыре чтения без владения за тик (ECS-7) — трейс тонет в записях
@@ -1082,7 +1136,7 @@ describe('числа и картинка босса: ретюн виден в д
     expect(MANIFEST.effects.byEvent.BossSlamLanded!.radiusTo).toBe(SLAM_RADIUS / FIXED_ONE);
     // Волна и полоса огня рисуются записями по ВИДУ: моделей у них нет, как у
     // купола. Оболочка вправе быть ЧУТЬ шире зоны урона — пятна огня ложатся с
-    // шагом в 0.8 единицы, и полоса обязана читаться сплошной, — но не уже её:
+    // шагом в 0.6 единицы, и полоса обязана читаться сплошной, — но не уже её:
     // невидимый урон под ногами учит игрока ровно неверному.
     expect(MANIFEST.effects.byKind.BossWave!.radius).toBeGreaterThanOrEqual(
       WAVE_RADIUS / FIXED_ONE,

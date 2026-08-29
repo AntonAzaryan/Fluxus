@@ -300,7 +300,7 @@
       "name": "SlotBossFire",
       "components": {
         "AbilitySlot": { "abilityId": 12, "slotIndex": 0 },
-        "AbilityCooldown": { "remaining": 0, "total": 60 }
+        "AbilityCooldown": { "remaining": 0, "total": 6 }
       }
     },
     {
@@ -1623,9 +1623,14 @@
                       { "==": [{ "var": "busy" }, 0] },
                       {
                         "and": [
-                          { ">=": [{ "var": "t" }, 0] },
-                          { "isAlive": [{ "var": "t" }] },
-                          { "!": [{ "hasComponent": [{ "var": "t" }, "Dead"] }] }
+                          {
+                            "and": [
+                              { ">=": [{ "var": "t" }, 0] },
+                              { "isAlive": [{ "var": "t" }] },
+                              { "!": [{ "hasComponent": [{ "var": "t" }, "Dead"] }] }
+                            ]
+                          },
+                          { "!": [{ "hasComponent": [{ "var": "t" }, "Falling"] }] }
                         ]
                       }
                     ]
@@ -2028,9 +2033,14 @@
                 "if": {
                   "cond": {
                     "and": [
-                      { ">=": [{ "var": "t" }, 0] },
-                      { "isAlive": [{ "var": "t" }] },
-                      { "!": [{ "hasComponent": [{ "var": "t" }, "Dead"] }] }
+                      {
+                        "and": [
+                          { ">=": [{ "var": "t" }, 0] },
+                          { "isAlive": [{ "var": "t" }] },
+                          { "!": [{ "hasComponent": [{ "var": "t" }, "Dead"] }] }
+                        ]
+                      },
+                      { "!": [{ "hasComponent": [{ "var": "t" }, "Falling"] }] }
                     ]
                   },
                   "then": [
@@ -2268,10 +2278,10 @@
                         "component": "Velocity",
                         "values": {
                           "x": {
-                            "*": [{ "getComponent": [{ "var": "b" }, "BossDash", "dirX"] }, 32768]
+                            "*": [{ "getComponent": [{ "var": "b" }, "BossDash", "dirX"] }, 39322]
                           },
                           "y": {
-                            "*": [{ "getComponent": [{ "var": "b" }, "BossDash", "dirY"] }, 32768]
+                            "*": [{ "getComponent": [{ "var": "b" }, "BossDash", "dirY"] }, 39322]
                           }
                         }
                       }
@@ -2394,7 +2404,8 @@
           "let": {
             "bindings": {
               "vx": { "getComponent": [{ "var": "b" }, "Velocity", "x"] },
-              "vy": { "getComponent": [{ "var": "b" }, "Velocity", "y"] }
+              "vy": { "getComponent": [{ "var": "b" }, "Velocity", "y"] },
+              "t": { "getComponent": [{ "var": "b" }, "NpcAgent", "target"] }
             },
             "do": [
               {
@@ -2403,25 +2414,36 @@
                     "and": [
                       { "or": [{ "!=": [{ "var": "vx" }, 0] }, { "!=": [{ "var": "vy" }, 0] }] },
                       {
-                        "!": [
+                        "or": [
                           {
-                            "hasFloorAt": [
+                            "!": [
                               {
-                                "vec": [
+                                "hasFloorAt": [
                                   {
-                                    "+": [
-                                      { "getComponent": [{ "var": "b" }, "Position", "x"] },
-                                      { "var": "vx" }
-                                    ]
-                                  },
-                                  {
-                                    "+": [
-                                      { "getComponent": [{ "var": "b" }, "Position", "y"] },
-                                      { "var": "vy" }
+                                    "vec": [
+                                      {
+                                        "+": [
+                                          { "getComponent": [{ "var": "b" }, "Position", "x"] },
+                                          { "var": "vx" }
+                                        ]
+                                      },
+                                      {
+                                        "+": [
+                                          { "getComponent": [{ "var": "b" }, "Position", "y"] },
+                                          { "var": "vy" }
+                                        ]
+                                      }
                                     ]
                                   }
                                 ]
                               }
+                            ]
+                          },
+                          {
+                            "and": [
+                              { ">=": [{ "var": "t" }, 0] },
+                              { "isAlive": [{ "var": "t" }] },
+                              { "hasComponent": [{ "var": "t" }, "Falling"] }
                             ]
                           }
                         ]
@@ -4067,7 +4089,7 @@
                                     58982
                                   ]
                                 },
-                                32768
+                                39322
                               ]
                             }
                           ]
@@ -4289,7 +4311,7 @@
     {
       "id": "bossFireAura",
       "trigger": { "always": true },
-      "cooldownTicks": 60,
+      "cooldownTicks": 6,
       "effects": [
         {
           "forEach": {
@@ -4304,7 +4326,7 @@
                     { "getComponent": [{ "var": "owner" }, "Position", "y"] }
                   ]
                 },
-                "radius": 16384
+                "radius": 19661
               }
             },
             "as": "v",
@@ -4312,7 +4334,7 @@
               {
                 "emitEvent": {
                   "type": "Damage",
-                  "data": { "amount": 100, "entity": { "var": "v" }, "source": { "var": "owner" } }
+                  "data": { "amount": 10, "entity": { "var": "v" }, "source": { "var": "owner" } }
                 }
               },
               {
