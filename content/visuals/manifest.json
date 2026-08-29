@@ -174,7 +174,7 @@
       "BossFire": {
         "primitive": "sphere",
         "color": "#ff5f1f",
-        "radius": 0.4,
+        "radius": 0.25,
         "alpha": 0.4,
         "height": 0.1
       }
@@ -258,7 +258,7 @@
         "primitive": "sphere",
         "color": "#ffb347",
         "radius": 0.5,
-        "radiusTo": 1.8,
+        "radiusTo": 1.5,
         "alpha": 0.5,
         "alphaTo": 0,
         "durationMs": 300,

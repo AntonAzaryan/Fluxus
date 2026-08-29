@@ -73,7 +73,7 @@
       "name": "BossDash",
       "fields": { "dirX": "fixed", "dirY": "fixed", "startTick": "i32", "ticksLeft": "i32" }
     },
-    { "name": "DashMark", "fields": { "tick": "i32" } }
+    { "name": "HitMark", "fields": { "dash": "i32", "wave": "entity" } }
   ],
   "prefabs": [
     {
@@ -122,7 +122,7 @@
         "Vision": { "radius": 1572864 },
         "Team": { "id": 0 },
         "Visibility": { "visibleTo": 0 },
-        "DashMark": { "tick": -1 }
+        "HitMark": { "dash": -1, "wave": -1 }
       },
       "tags": ["Hero"]
     },
@@ -261,6 +261,7 @@
         "Team": { "id": 2 },
         "Visibility": { "visibleTo": 0 },
         "NpcAgent": {},
+        "NpcThreat": {},
         "BossHunt": { "bumped": -1, "hunted": -1, "untilTick": 0 },
         "BossAim": { "dirX": 65536, "dirY": 0 },
         "BossDash": { "dirX": 0, "dirY": 0, "startTick": -1, "ticksLeft": 0 }
@@ -312,7 +313,7 @@
           "cliffRise": 0,
           "halfX": 39321,
           "halfY": 39321,
-          "hitMask": 0,
+          "hitMask": 2,
           "layer": 0,
           "radius": 39321,
           "shape": 0
@@ -1282,7 +1283,7 @@
           "LocomotionState",
           "Collider",
           "Health",
-          "DashMark"
+          "HitMark"
         ]
       },
       "as": "e",
@@ -1400,8 +1401,8 @@
               {
                 "modifyComponent": {
                   "entity": { "var": "e" },
-                  "component": "DashMark",
-                  "values": { "tick": -1 }
+                  "component": "HitMark",
+                  "values": { "dash": -1, "wave": -1 }
                 }
               },
               {
@@ -1482,6 +1483,267 @@
       ]
     },
     {
+      "name": "BossReady",
+      "order": -797,
+      "query": { "all": ["NpcAgent", "BossDash", "BossHunt", "Position"], "not": ["Dead"] },
+      "as": "b",
+      "do": [
+        {
+          "let": {
+            "bindings": {
+              "t": { "getComponent": [{ "var": "b" }, "NpcAgent", "target"] },
+              "busy": 0,
+              "strike": -1,
+              "slam": -1,
+              "charge": -1,
+              "near": 0
+            },
+            "do": [
+              {
+                "if": {
+                  "cond": {
+                    ">": [{ "getComponent": [{ "var": "b" }, "BossDash", "ticksLeft"] }, 0]
+                  },
+                  "then": [{ "set": { "name": "busy", "value": 1 } }]
+                }
+              },
+              {
+                "if": {
+                  "cond": { ">=": [{ "getComponent": [{ "var": "b" }, "BossHunt", "bumped"] }, 0] },
+                  "then": [{ "set": { "name": "busy", "value": 1 } }]
+                }
+              },
+              {
+                "forEach": {
+                  "query": { "all": ["AbilitySlot", "AbilityCooldown"] },
+                  "as": "s",
+                  "do": [
+                    {
+                      "if": {
+                        "cond": {
+                          "==": [
+                            { "getComponent": [{ "var": "s" }, "AbilitySlot", "owner"] },
+                            { "var": "b" }
+                          ]
+                        },
+                        "then": [
+                          {
+                            "if": {
+                              "cond": {
+                                ">=": [
+                                  { "getComponent": [{ "var": "s" }, "AbilitySlot", "phase"] },
+                                  0
+                                ]
+                              },
+                              "then": [{ "set": { "name": "busy", "value": 1 } }]
+                            }
+                          },
+                          {
+                            "if": {
+                              "cond": {
+                                "==": [
+                                  { "getComponent": [{ "var": "s" }, "AbilitySlot", "abilityId"] },
+                                  8
+                                ]
+                              },
+                              "then": [
+                                {
+                                  "set": {
+                                    "name": "strike",
+                                    "value": {
+                                      "getComponent": [
+                                        { "var": "s" },
+                                        "AbilityCooldown",
+                                        "remaining"
+                                      ]
+                                    }
+                                  }
+                                }
+                              ]
+                            }
+                          },
+                          {
+                            "if": {
+                              "cond": {
+                                "==": [
+                                  { "getComponent": [{ "var": "s" }, "AbilitySlot", "abilityId"] },
+                                  9
+                                ]
+                              },
+                              "then": [
+                                {
+                                  "set": {
+                                    "name": "slam",
+                                    "value": {
+                                      "getComponent": [
+                                        { "var": "s" },
+                                        "AbilityCooldown",
+                                        "remaining"
+                                      ]
+                                    }
+                                  }
+                                }
+                              ]
+                            }
+                          },
+                          {
+                            "if": {
+                              "cond": {
+                                "==": [
+                                  { "getComponent": [{ "var": "s" }, "AbilitySlot", "abilityId"] },
+                                  10
+                                ]
+                              },
+                              "then": [
+                                {
+                                  "set": {
+                                    "name": "charge",
+                                    "value": {
+                                      "getComponent": [
+                                        { "var": "s" },
+                                        "AbilityCooldown",
+                                        "remaining"
+                                      ]
+                                    }
+                                  }
+                                }
+                              ]
+                            }
+                          }
+                        ]
+                      }
+                    }
+                  ]
+                }
+              },
+              {
+                "if": {
+                  "cond": {
+                    "and": [
+                      { "==": [{ "var": "busy" }, 0] },
+                      {
+                        "and": [
+                          { ">=": [{ "var": "t" }, 0] },
+                          { "isAlive": [{ "var": "t" }] },
+                          { "!": [{ "hasComponent": [{ "var": "t" }, "Dead"] }] }
+                        ]
+                      }
+                    ]
+                  },
+                  "then": [
+                    {
+                      "forEach": {
+                        "query": {
+                          "all": ["Health", "Position"],
+                          "not": ["Dead"],
+                          "withTag": "Hero",
+                          "withinRadius": {
+                            "center": {
+                              "vec": [
+                                { "getComponent": [{ "var": "b" }, "Position", "x"] },
+                                { "getComponent": [{ "var": "b" }, "Position", "y"] }
+                              ]
+                            },
+                            "radius": 117963
+                          }
+                        },
+                        "as": "v",
+                        "do": [
+                          { "set": { "name": "near", "value": { "+": [{ "var": "near" }, 1] } } }
+                        ]
+                      }
+                    },
+                    {
+                      "let": {
+                        "bindings": {
+                          "gap": {
+                            "vec.length": [
+                              {
+                                "vec.sub": [
+                                  {
+                                    "vec": [
+                                      { "getComponent": [{ "var": "t" }, "Position", "x"] },
+                                      { "getComponent": [{ "var": "t" }, "Position", "y"] }
+                                    ]
+                                  },
+                                  {
+                                    "vec": [
+                                      { "getComponent": [{ "var": "b" }, "Position", "x"] },
+                                      { "getComponent": [{ "var": "b" }, "Position", "y"] }
+                                    ]
+                                  }
+                                ]
+                              }
+                            ]
+                          }
+                        },
+                        "do": [
+                          {
+                            "if": {
+                              "cond": {
+                                "and": [
+                                  { "==": [{ "var": "slam" }, 0] },
+                                  { ">=": [{ "var": "near" }, 1] }
+                                ]
+                              },
+                              "then": [
+                                {
+                                  "emitEvent": {
+                                    "type": "BossSlamReady",
+                                    "data": { "entity": { "var": "b" }, "tick": { "tick": [] } }
+                                  }
+                                }
+                              ]
+                            }
+                          },
+                          {
+                            "if": {
+                              "cond": {
+                                "and": [
+                                  { "==": [{ "var": "strike" }, 0] },
+                                  { "<=": [{ "var": "gap" }, 327680] }
+                                ]
+                              },
+                              "then": [
+                                {
+                                  "emitEvent": {
+                                    "type": "BossStrikeReady",
+                                    "data": { "entity": { "var": "b" }, "tick": { "tick": [] } }
+                                  }
+                                }
+                              ]
+                            }
+                          },
+                          {
+                            "if": {
+                              "cond": {
+                                "and": [
+                                  { "==": [{ "var": "charge" }, 0] },
+                                  { ">": [{ "var": "gap" }, 327680] }
+                                ]
+                              },
+                              "then": [
+                                {
+                                  "emitEvent": {
+                                    "type": "BossChargeReady",
+                                    "data": { "entity": { "var": "b" }, "tick": { "tick": [] } }
+                                  }
+                                }
+                              ]
+                            }
+                          }
+                        ]
+                      }
+                    }
+                  ]
+                }
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
       "name": "BossTarget",
       "order": -796,
       "query": { "all": ["NpcAgent", "BossHunt", "Position"], "not": ["Dead"] },
@@ -1496,7 +1758,11 @@
             "do": [
               {
                 "forEach": {
-                  "query": { "all": ["Health", "Position"], "not": ["Dead"], "withTag": "Hero" },
+                  "query": {
+                    "all": ["Health", "Position"],
+                    "not": ["Dead", "Falling"],
+                    "withTag": "Hero"
+                  },
                   "as": "h",
                   "do": [{ "set": { "name": "alive", "value": { "+": [{ "var": "alive" }, 1] } } }]
                 }
@@ -1518,9 +1784,14 @@
                             "!": [
                               {
                                 "and": [
-                                  { ">=": [{ "var": "pick" }, 0] },
-                                  { "isAlive": [{ "var": "pick" }] },
-                                  { "!": [{ "hasComponent": [{ "var": "pick" }, "Dead"] }] }
+                                  {
+                                    "and": [
+                                      { ">=": [{ "var": "pick" }, 0] },
+                                      { "isAlive": [{ "var": "pick" }] },
+                                      { "!": [{ "hasComponent": [{ "var": "pick" }, "Dead"] }] }
+                                    ]
+                                  },
+                                  { "!": [{ "hasComponent": [{ "var": "pick" }, "Falling"] }] }
                                 ]
                               }
                             ]
@@ -1543,7 +1814,7 @@
                                   "forEach": {
                                     "query": {
                                       "all": ["Health", "Position"],
-                                      "not": ["Dead"],
+                                      "not": ["Dead", "Falling"],
                                       "withTag": "Hero"
                                     },
                                     "as": "h",
@@ -1605,20 +1876,45 @@
                           { "!": [{ "hasComponent": [{ "var": "pick" }, "Dead"] }] }
                         ]
                       },
-                      {
-                        "!=": [
-                          { "getComponent": [{ "var": "b" }, "NpcAgent", "target"] },
-                          { "var": "pick" }
-                        ]
-                      }
+                      { "!": [{ "hasComponent": [{ "var": "pick" }, "Falling"] }] }
                     ]
                   },
                   "then": [
                     {
-                      "modifyComponent": {
-                        "entity": { "var": "b" },
-                        "component": "NpcAgent",
-                        "values": { "target": { "var": "pick" } }
+                      "if": {
+                        "cond": {
+                          "!=": [
+                            { "getComponent": [{ "var": "b" }, "NpcAgent", "target"] },
+                            { "var": "pick" }
+                          ]
+                        },
+                        "then": [
+                          {
+                            "modifyComponent": {
+                              "entity": { "var": "b" },
+                              "component": "NpcAgent",
+                              "values": { "target": { "var": "pick" } }
+                            }
+                          }
+                        ]
+                      }
+                    }
+                  ],
+                  "else": [
+                    {
+                      "if": {
+                        "cond": {
+                          "!=": [{ "getComponent": [{ "var": "b" }, "NpcAgent", "target"] }, -1]
+                        },
+                        "then": [
+                          {
+                            "modifyComponent": {
+                              "entity": { "var": "b" },
+                              "component": "NpcAgent",
+                              "values": { "target": -1 }
+                            }
+                          }
+                        ]
                       }
                     }
                   ]
@@ -1719,12 +2015,9 @@
       ]
     },
     {
-      "name": "BossRotation",
+      "name": "BossTurn",
       "order": -792,
-      "query": {
-        "all": ["NpcAgent", "BossAim", "BossDash", "Position", "Health"],
-        "not": ["Dead"]
-      },
+      "query": { "all": ["NpcAgent", "BossAim", "Position"], "not": ["Dead"] },
       "as": "b",
       "do": [
         {
@@ -1783,306 +2076,6 @@
                                       "dirX": { "vec.x": [{ "var": "aim" }] },
                                       "dirY": { "vec.y": [{ "var": "aim" }] }
                                     }
-                                  }
-                                }
-                              ]
-                            }
-                          }
-                        ]
-                      }
-                    }
-                  ]
-                }
-              },
-              {
-                "let": {
-                  "bindings": { "busy": 0, "strike": -1, "slam": -1, "charge": -1, "near": 0 },
-                  "do": [
-                    {
-                      "if": {
-                        "cond": {
-                          ">": [{ "getComponent": [{ "var": "b" }, "BossDash", "ticksLeft"] }, 0]
-                        },
-                        "then": [{ "set": { "name": "busy", "value": 1 } }]
-                      }
-                    },
-                    {
-                      "forEach": {
-                        "query": { "all": ["AbilitySlot", "AbilityCooldown"] },
-                        "as": "s",
-                        "do": [
-                          {
-                            "if": {
-                              "cond": {
-                                "==": [
-                                  { "getComponent": [{ "var": "s" }, "AbilitySlot", "owner"] },
-                                  { "var": "b" }
-                                ]
-                              },
-                              "then": [
-                                {
-                                  "if": {
-                                    "cond": {
-                                      ">=": [
-                                        {
-                                          "getComponent": [{ "var": "s" }, "AbilitySlot", "phase"]
-                                        },
-                                        0
-                                      ]
-                                    },
-                                    "then": [{ "set": { "name": "busy", "value": 1 } }]
-                                  }
-                                },
-                                {
-                                  "if": {
-                                    "cond": {
-                                      "==": [
-                                        {
-                                          "getComponent": [
-                                            { "var": "s" },
-                                            "AbilitySlot",
-                                            "abilityId"
-                                          ]
-                                        },
-                                        8
-                                      ]
-                                    },
-                                    "then": [
-                                      {
-                                        "set": {
-                                          "name": "strike",
-                                          "value": {
-                                            "getComponent": [
-                                              { "var": "s" },
-                                              "AbilityCooldown",
-                                              "remaining"
-                                            ]
-                                          }
-                                        }
-                                      }
-                                    ]
-                                  }
-                                },
-                                {
-                                  "if": {
-                                    "cond": {
-                                      "==": [
-                                        {
-                                          "getComponent": [
-                                            { "var": "s" },
-                                            "AbilitySlot",
-                                            "abilityId"
-                                          ]
-                                        },
-                                        9
-                                      ]
-                                    },
-                                    "then": [
-                                      {
-                                        "set": {
-                                          "name": "slam",
-                                          "value": {
-                                            "getComponent": [
-                                              { "var": "s" },
-                                              "AbilityCooldown",
-                                              "remaining"
-                                            ]
-                                          }
-                                        }
-                                      }
-                                    ]
-                                  }
-                                },
-                                {
-                                  "if": {
-                                    "cond": {
-                                      "==": [
-                                        {
-                                          "getComponent": [
-                                            { "var": "s" },
-                                            "AbilitySlot",
-                                            "abilityId"
-                                          ]
-                                        },
-                                        10
-                                      ]
-                                    },
-                                    "then": [
-                                      {
-                                        "set": {
-                                          "name": "charge",
-                                          "value": {
-                                            "getComponent": [
-                                              { "var": "s" },
-                                              "AbilityCooldown",
-                                              "remaining"
-                                            ]
-                                          }
-                                        }
-                                      }
-                                    ]
-                                  }
-                                }
-                              ]
-                            }
-                          }
-                        ]
-                      }
-                    },
-                    {
-                      "forEachEvent": {
-                        "type": "BossRepel",
-                        "as": "ev",
-                        "do": [
-                          {
-                            "if": {
-                              "cond": {
-                                "==": [
-                                  { "eventField": [{ "var": "ev" }, "caster"] },
-                                  { "var": "b" }
-                                ]
-                              },
-                              "then": [{ "set": { "name": "busy", "value": 1 } }]
-                            }
-                          }
-                        ]
-                      }
-                    },
-                    {
-                      "if": {
-                        "cond": {
-                          "and": [
-                            { "==": [{ "var": "busy" }, 0] },
-                            {
-                              "and": [
-                                { ">=": [{ "var": "t" }, 0] },
-                                { "isAlive": [{ "var": "t" }] },
-                                { "!": [{ "hasComponent": [{ "var": "t" }, "Dead"] }] }
-                              ]
-                            }
-                          ]
-                        },
-                        "then": [
-                          {
-                            "forEach": {
-                              "query": {
-                                "all": ["Health", "Position"],
-                                "not": ["Dead"],
-                                "withTag": "Hero",
-                                "withinRadius": {
-                                  "center": {
-                                    "vec": [
-                                      { "getComponent": [{ "var": "b" }, "Position", "x"] },
-                                      { "getComponent": [{ "var": "b" }, "Position", "y"] }
-                                    ]
-                                  },
-                                  "radius": 117963
-                                }
-                              },
-                              "as": "v",
-                              "do": [
-                                {
-                                  "set": {
-                                    "name": "near",
-                                    "value": { "+": [{ "var": "near" }, 1] }
-                                  }
-                                }
-                              ]
-                            }
-                          },
-                          {
-                            "let": {
-                              "bindings": {
-                                "gap": {
-                                  "vec.length": [
-                                    {
-                                      "vec.sub": [
-                                        {
-                                          "vec": [
-                                            { "getComponent": [{ "var": "t" }, "Position", "x"] },
-                                            { "getComponent": [{ "var": "t" }, "Position", "y"] }
-                                          ]
-                                        },
-                                        {
-                                          "vec": [
-                                            { "getComponent": [{ "var": "b" }, "Position", "x"] },
-                                            { "getComponent": [{ "var": "b" }, "Position", "y"] }
-                                          ]
-                                        }
-                                      ]
-                                    }
-                                  ]
-                                }
-                              },
-                              "do": [
-                                {
-                                  "if": {
-                                    "cond": {
-                                      "and": [
-                                        { "==": [{ "var": "slam" }, 0] },
-                                        { ">=": [{ "var": "near" }, 1] }
-                                      ]
-                                    },
-                                    "then": [
-                                      {
-                                        "emitEvent": {
-                                          "type": "BossSlam",
-                                          "data": {
-                                            "caster": { "var": "b" },
-                                            "target": { "var": "t" },
-                                            "tick": { "tick": [] }
-                                          }
-                                        }
-                                      }
-                                    ],
-                                    "else": [
-                                      {
-                                        "if": {
-                                          "cond": {
-                                            "and": [
-                                              { "==": [{ "var": "strike" }, 0] },
-                                              { "<=": [{ "var": "gap" }, 327680] }
-                                            ]
-                                          },
-                                          "then": [
-                                            {
-                                              "emitEvent": {
-                                                "type": "BossStrike",
-                                                "data": {
-                                                  "caster": { "var": "b" },
-                                                  "target": { "var": "t" },
-                                                  "tick": { "tick": [] }
-                                                }
-                                              }
-                                            }
-                                          ],
-                                          "else": [
-                                            {
-                                              "if": {
-                                                "cond": {
-                                                  "and": [
-                                                    { "==": [{ "var": "charge" }, 0] },
-                                                    { ">": [{ "var": "gap" }, 327680] }
-                                                  ]
-                                                },
-                                                "then": [
-                                                  {
-                                                    "emitEvent": {
-                                                      "type": "BossCharge",
-                                                      "data": {
-                                                        "caster": { "var": "b" },
-                                                        "target": { "var": "t" },
-                                                        "tick": { "tick": [] }
-                                                      }
-                                                    }
-                                                  }
-                                                ]
-                                              }
-                                            }
-                                          ]
-                                        }
-                                      }
-                                    ]
                                   }
                                 }
                               ]
@@ -2275,10 +2268,10 @@
                         "component": "Velocity",
                         "values": {
                           "x": {
-                            "*": [{ "getComponent": [{ "var": "b" }, "BossDash", "dirX"] }, 52429]
+                            "*": [{ "getComponent": [{ "var": "b" }, "BossDash", "dirX"] }, 32768]
                           },
                           "y": {
-                            "*": [{ "getComponent": [{ "var": "b" }, "BossDash", "dirY"] }, 52429]
+                            "*": [{ "getComponent": [{ "var": "b" }, "BossDash", "dirY"] }, 32768]
                           }
                         }
                       }
@@ -2308,10 +2301,10 @@
                             "if": {
                               "cond": {
                                 "and": [
-                                  { "hasComponent": [{ "var": "v" }, "DashMark"] },
+                                  { "hasComponent": [{ "var": "v" }, "HitMark"] },
                                   {
                                     "!=": [
-                                      { "getComponent": [{ "var": "v" }, "DashMark", "tick"] },
+                                      { "getComponent": [{ "var": "v" }, "HitMark", "dash"] },
                                       { "var": "start" }
                                     ]
                                   }
@@ -2321,8 +2314,8 @@
                                 {
                                   "modifyComponent": {
                                     "entity": { "var": "v" },
-                                    "component": "DashMark",
-                                    "values": { "tick": { "var": "start" } }
+                                    "component": "HitMark",
+                                    "values": { "dash": { "var": "start" } }
                                   }
                                 },
                                 {
@@ -2392,57 +2385,134 @@
       ]
     },
     {
+      "name": "BossFooting",
+      "order": 73,
+      "query": { "all": ["NpcAgent", "Position", "Velocity"], "not": ["Dead"] },
+      "as": "b",
+      "do": [
+        {
+          "let": {
+            "bindings": {
+              "vx": { "getComponent": [{ "var": "b" }, "Velocity", "x"] },
+              "vy": { "getComponent": [{ "var": "b" }, "Velocity", "y"] }
+            },
+            "do": [
+              {
+                "if": {
+                  "cond": {
+                    "and": [
+                      { "or": [{ "!=": [{ "var": "vx" }, 0] }, { "!=": [{ "var": "vy" }, 0] }] },
+                      {
+                        "!": [
+                          {
+                            "hasFloorAt": [
+                              {
+                                "vec": [
+                                  {
+                                    "+": [
+                                      { "getComponent": [{ "var": "b" }, "Position", "x"] },
+                                      { "var": "vx" }
+                                    ]
+                                  },
+                                  {
+                                    "+": [
+                                      { "getComponent": [{ "var": "b" }, "Position", "y"] },
+                                      { "var": "vy" }
+                                    ]
+                                  }
+                                ]
+                              }
+                            ]
+                          }
+                        ]
+                      }
+                    ]
+                  },
+                  "then": [
+                    {
+                      "modifyComponent": {
+                        "entity": { "var": "b" },
+                        "component": "Velocity",
+                        "values": { "x": 0, "y": 0 }
+                      }
+                    }
+                  ]
+                }
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
       "name": "BossContact",
       "order": 109,
       "query": { "all": ["NpcAgent", "BossHunt"], "not": ["Dead"] },
       "as": "b",
       "do": [
         {
-          "forEachEvent": {
-            "type": "Collision",
-            "as": "ev",
+          "let": {
+            "bindings": { "seen": 0 },
             "do": [
               {
-                "let": {
-                  "bindings": {
-                    "other": {
-                      "if": [
-                        { "==": [{ "eventField": [{ "var": "ev" }, "entity"] }, { "var": "b" }] },
-                        { "eventField": [{ "var": "ev" }, "other"] },
-                        {
-                          "if": [
-                            {
-                              "==": [{ "eventField": [{ "var": "ev" }, "other"] }, { "var": "b" }]
-                            },
-                            { "eventField": [{ "var": "ev" }, "entity"] },
-                            -1
-                          ]
-                        }
-                      ]
-                    }
-                  },
+                "forEachEvent": {
+                  "type": "Collision",
+                  "as": "ev",
                   "do": [
                     {
-                      "if": {
-                        "cond": {
-                          "and": [
-                            {
-                              "and": [
-                                { ">=": [{ "var": "other" }, 0] },
-                                { "isAlive": [{ "var": "other" }] },
-                                { "!": [{ "hasComponent": [{ "var": "other" }, "Dead"] }] }
-                              ]
-                            },
-                            { "!=": [{ "var": "other" }, { "var": "b" }] },
-                            { "hasComponent": [{ "var": "other" }, "Player"] }
-                          ]
+                      "let": {
+                        "bindings": {
+                          "other": {
+                            "if": [
+                              {
+                                "==": [
+                                  { "eventField": [{ "var": "ev" }, "entity"] },
+                                  { "var": "b" }
+                                ]
+                              },
+                              { "eventField": [{ "var": "ev" }, "other"] },
+                              {
+                                "if": [
+                                  {
+                                    "==": [
+                                      { "eventField": [{ "var": "ev" }, "other"] },
+                                      { "var": "b" }
+                                    ]
+                                  },
+                                  { "eventField": [{ "var": "ev" }, "entity"] },
+                                  -1
+                                ]
+                              }
+                            ]
+                          }
                         },
-                        "then": [
+                        "do": [
                           {
-                            "modifyComponent": {
-                              "entity": { "var": "b" },
-                              "component": "BossHunt",
-                              "values": { "bumped": { "var": "other" } }
+                            "if": {
+                              "cond": {
+                                "and": [
+                                  { "==": [{ "var": "seen" }, 0] },
+                                  {
+                                    "and": [
+                                      { ">=": [{ "var": "other" }, 0] },
+                                      { "isAlive": [{ "var": "other" }] },
+                                      { "!": [{ "hasComponent": [{ "var": "other" }, "Dead"] }] }
+                                    ]
+                                  },
+                                  { "!=": [{ "var": "other" }, { "var": "b" }] },
+                                  { "hasComponent": [{ "var": "other" }, "Player"] }
+                                ]
+                              },
+                              "then": [
+                                { "set": { "name": "seen", "value": 1 } },
+                                {
+                                  "modifyComponent": {
+                                    "entity": { "var": "b" },
+                                    "component": "BossHunt",
+                                    "values": { "bumped": { "var": "other" } }
+                                  }
+                                }
+                              ]
                             }
                           }
                         ]
@@ -2555,6 +2625,7 @@
         "all": [
           "Dead",
           "NpcAgent",
+          "NpcThreat",
           "BossHunt",
           "BossAim",
           "BossDash",
@@ -2611,6 +2682,22 @@
                   "entity": { "var": "e" },
                   "component": "NpcAgent",
                   "values": { "state": -1, "target": -1 }
+                }
+              },
+              {
+                "modifyComponent": {
+                  "entity": { "var": "e" },
+                  "component": "NpcThreat",
+                  "values": {
+                    "source0": -1,
+                    "source1": -1,
+                    "source2": -1,
+                    "source3": -1,
+                    "value0": 0,
+                    "value1": 0,
+                    "value2": 0,
+                    "value3": 0
+                  }
                 }
               },
               {
@@ -3626,6 +3713,7 @@
                 "spawnEntity": {
                   "prefab": "BossWave",
                   "overrides": {
+                    "AbilityProjectile": { "owner": { "var": "owner" } },
                     "Position": {
                       "x": { "vec.x": [{ "var": "bp" }] },
                       "y": { "vec.y": [{ "var": "bp" }] }
@@ -3649,109 +3737,62 @@
                     "y": { "vec.y": [{ "var": "bp" }] }
                   }
                 }
-              },
-              {
-                "forEach": {
-                  "query": {
-                    "all": ["Health", "Position"],
-                    "not": ["Dead"],
-                    "withTag": "Hero",
-                    "withinRadius": { "center": { "var": "bp" }, "radius": 367001 }
-                  },
-                  "as": "v",
-                  "do": [
-                    {
-                      "let": {
-                        "bindings": {
-                          "d": {
-                            "vec.sub": [
-                              {
-                                "vec": [
-                                  { "getComponent": [{ "var": "v" }, "Position", "x"] },
-                                  { "getComponent": [{ "var": "v" }, "Position", "y"] }
-                                ]
-                              },
-                              { "var": "bp" }
-                            ]
-                          }
-                        },
-                        "do": [
-                          {
-                            "let": {
-                              "bindings": {
-                                "along": { "vec.dot": [{ "var": "d" }, { "var": "dir" }] },
-                                "side": {
-                                  "abs": [
-                                    {
-                                      "-": [
-                                        {
-                                          "*": [
-                                            { "vec.x": [{ "var": "d" }] },
-                                            { "vec.y": [{ "var": "dir" }] }
-                                          ]
-                                        },
-                                        {
-                                          "*": [
-                                            { "vec.y": [{ "var": "d" }] },
-                                            { "vec.x": [{ "var": "dir" }] }
-                                          ]
-                                        }
-                                      ]
-                                    }
-                                  ]
-                                }
-                              },
-                              "do": [
-                                {
-                                  "if": {
-                                    "cond": {
-                                      "and": [
-                                        { ">=": [{ "var": "along" }, 0] },
-                                        { "<=": [{ "var": "along" }, 327680] },
-                                        { "<=": [{ "var": "side" }, 39321] }
-                                      ]
-                                    },
-                                    "then": [
-                                      {
-                                        "emitEvent": {
-                                          "type": "Damage",
-                                          "data": {
-                                            "amount": 300,
-                                            "entity": { "var": "v" },
-                                            "source": { "var": "owner" }
-                                          }
-                                        }
-                                      },
-                                      {
-                                        "emitEvent": {
-                                          "type": "HeroHit",
-                                          "data": {
-                                            "entity": { "var": "v" },
-                                            "x": {
-                                              "getComponent": [{ "var": "v" }, "Position", "x"]
-                                            },
-                                            "y": {
-                                              "getComponent": [{ "var": "v" }, "Position", "y"]
-                                            }
-                                          }
-                                        }
-                                      }
-                                    ]
-                                  }
-                                }
-                              ]
-                            }
-                          }
-                        ]
-                      }
-                    }
-                  ]
-                }
               }
             ]
           }
         }
-      ]
+      ],
+      "projectile": {
+        "onHit": [
+          {
+            "if": {
+              "cond": {
+                "and": [
+                  { ">=": [{ "var": "other" }, 0] },
+                  { "isAlive": [{ "var": "other" }] },
+                  { "hasComponent": [{ "var": "other" }, "HitMark"] },
+                  { "!": [{ "hasComponent": [{ "var": "other" }, "Dead"] }] },
+                  {
+                    "!=": [
+                      { "getComponent": [{ "var": "other" }, "HitMark", "wave"] },
+                      { "var": "self" }
+                    ]
+                  }
+                ]
+              },
+              "then": [
+                {
+                  "modifyComponent": {
+                    "entity": { "var": "other" },
+                    "component": "HitMark",
+                    "values": { "wave": { "var": "self" } }
+                  }
+                },
+                {
+                  "emitEvent": {
+                    "type": "Damage",
+                    "data": {
+                      "amount": 300,
+                      "entity": { "var": "other" },
+                      "source": { "var": "owner" }
+                    }
+                  }
+                },
+                {
+                  "emitEvent": {
+                    "type": "HeroHit",
+                    "data": {
+                      "entity": { "var": "other" },
+                      "x": { "getComponent": [{ "var": "other" }, "Position", "x"] },
+                      "y": { "getComponent": [{ "var": "other" }, "Position", "y"] }
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        ]
+      }
     },
     {
       "id": "bossSlam",
@@ -4026,7 +4067,7 @@
                                     58982
                                   ]
                                 },
-                                52429
+                                32768
                               ]
                             }
                           ]
@@ -4092,27 +4133,111 @@
         {
           "let": {
             "bindings": {
-              "victim": { "eventField": [{ "var": "ask" }, "target"] },
               "at": {
                 "vec": [
                   { "getComponent": [{ "var": "owner" }, "Position", "x"] },
                   { "getComponent": [{ "var": "owner" }, "Position", "y"] }
                 ]
-              }
+              },
+              "victim": { "eventField": [{ "var": "ask" }, "target"] }
             },
             "do": [
+              {
+                "forEach": {
+                  "query": {
+                    "all": ["Health", "Position"],
+                    "not": ["Dead"],
+                    "withTag": "Hero",
+                    "withinRadius": { "center": { "var": "at" }, "radius": 98304 }
+                  },
+                  "as": "v",
+                  "do": [
+                    {
+                      "emitEvent": {
+                        "type": "Damage",
+                        "data": {
+                          "amount": 200,
+                          "entity": { "var": "v" },
+                          "source": { "var": "owner" }
+                        }
+                      }
+                    },
+                    {
+                      "emitEvent": {
+                        "type": "HeroHit",
+                        "data": {
+                          "entity": { "var": "v" },
+                          "x": { "getComponent": [{ "var": "v" }, "Position", "x"] },
+                          "y": { "getComponent": [{ "var": "v" }, "Position", "y"] }
+                        }
+                      }
+                    },
+                    {
+                      "if": {
+                        "cond": {
+                          "and": [
+                            { "hasComponent": [{ "var": "v" }, "Locomotion"] },
+                            { "hasComponent": [{ "var": "v" }, "LocomotionState"] }
+                          ]
+                        },
+                        "then": [
+                          {
+                            "let": {
+                              "bindings": {
+                                "push": {
+                                  "vec.normalize": [
+                                    {
+                                      "vec.sub": [
+                                        {
+                                          "vec": [
+                                            { "getComponent": [{ "var": "v" }, "Position", "x"] },
+                                            { "getComponent": [{ "var": "v" }, "Position", "y"] }
+                                          ]
+                                        },
+                                        { "var": "at" }
+                                      ]
+                                    }
+                                  ]
+                                },
+                                "dash": {
+                                  "getComponent": [{ "var": "v" }, "Locomotion", "dodgeSpeed"]
+                                }
+                              },
+                              "do": [
+                                {
+                                  "modifyComponent": {
+                                    "entity": { "var": "v" },
+                                    "component": "LocomotionState",
+                                    "values": {
+                                      "state": 1,
+                                      "dirX": { "vec.x": [{ "var": "push" }] },
+                                      "dirY": { "vec.y": [{ "var": "push" }] },
+                                      "ticksLeft": {
+                                        "if": [
+                                          { ">": [{ "var": "dash" }, 0] },
+                                          { "toInt": [{ "/": [327680, { "var": "dash" }] }] },
+                                          0
+                                        ]
+                                      }
+                                    }
+                                  }
+                                }
+                              ]
+                            }
+                          }
+                        ]
+                      }
+                    }
+                  ]
+                }
+              },
               {
                 "if": {
                   "cond": {
                     "and": [
-                      {
-                        "and": [
-                          { ">=": [{ "var": "victim" }, 0] },
-                          { "isAlive": [{ "var": "victim" }] },
-                          { "!": [{ "hasComponent": [{ "var": "victim" }, "Dead"] }] }
-                        ]
-                      },
-                      { "!=": [{ "var": "victim" }, { "var": "owner" }] }
+                      { ">=": [{ "var": "victim" }, 0] },
+                      { "isAlive": [{ "var": "victim" }] },
+                      { "!": [{ "hasComponent": [{ "var": "victim" }, "Dead"] }] }
                     ]
                   },
                   "then": [
@@ -4136,98 +4261,6 @@
                           }
                         },
                         "do": [
-                          {
-                            "emitEvent": {
-                              "type": "Damage",
-                              "data": {
-                                "amount": 200,
-                                "entity": { "var": "victim" },
-                                "source": { "var": "owner" }
-                              }
-                            }
-                          },
-                          {
-                            "emitEvent": {
-                              "type": "HeroHit",
-                              "data": {
-                                "entity": { "var": "victim" },
-                                "x": { "getComponent": [{ "var": "victim" }, "Position", "x"] },
-                                "y": { "getComponent": [{ "var": "victim" }, "Position", "y"] }
-                              }
-                            }
-                          },
-                          {
-                            "if": {
-                              "cond": {
-                                "and": [
-                                  { "hasComponent": [{ "var": "victim" }, "Locomotion"] },
-                                  { "hasComponent": [{ "var": "victim" }, "LocomotionState"] }
-                                ]
-                              },
-                              "then": [
-                                {
-                                  "let": {
-                                    "bindings": {
-                                      "push": {
-                                        "vec.normalize": [
-                                          {
-                                            "vec.sub": [
-                                              {
-                                                "vec": [
-                                                  {
-                                                    "getComponent": [
-                                                      { "var": "victim" },
-                                                      "Position",
-                                                      "x"
-                                                    ]
-                                                  },
-                                                  {
-                                                    "getComponent": [
-                                                      { "var": "victim" },
-                                                      "Position",
-                                                      "y"
-                                                    ]
-                                                  }
-                                                ]
-                                              },
-                                              { "var": "at" }
-                                            ]
-                                          }
-                                        ]
-                                      },
-                                      "dash": {
-                                        "getComponent": [
-                                          { "var": "victim" },
-                                          "Locomotion",
-                                          "dodgeSpeed"
-                                        ]
-                                      }
-                                    },
-                                    "do": [
-                                      {
-                                        "modifyComponent": {
-                                          "entity": { "var": "victim" },
-                                          "component": "LocomotionState",
-                                          "values": {
-                                            "state": 1,
-                                            "dirX": { "vec.x": [{ "var": "push" }] },
-                                            "dirY": { "vec.y": [{ "var": "push" }] },
-                                            "ticksLeft": {
-                                              "if": [
-                                                { ">": [{ "var": "dash" }, 0] },
-                                                { "toInt": [{ "/": [327680, { "var": "dash" }] }] },
-                                                0
-                                              ]
-                                            }
-                                          }
-                                        }
-                                      }
-                                    ]
-                                  }
-                                }
-                              ]
-                            }
-                          },
                           {
                             "emitEvent": {
                               "type": "BossRepelLanded",
@@ -4271,7 +4304,7 @@
                     { "getComponent": [{ "var": "owner" }, "Position", "y"] }
                   ]
                 },
-                "radius": 19661
+                "radius": 16384
               }
             },
             "as": "v",
@@ -4352,7 +4385,72 @@
                   }
                 ]
               }
+            ],
+            "transitions": [
+              {
+                "to": "slam",
+                "when": { "kind": "event", "event": "BossSlamReady", "entityField": "entity" }
+              },
+              {
+                "to": "strike",
+                "when": { "kind": "event", "event": "BossStrikeReady", "entityField": "entity" }
+              },
+              {
+                "to": "charge",
+                "when": { "kind": "event", "event": "BossChargeReady", "entityField": "entity" }
+              }
             ]
+          },
+          {
+            "name": "slam",
+            "actions": [
+              {
+                "executor": "cast",
+                "event": "BossSlam",
+                "considerations": [
+                  {
+                    "input": "always",
+                    "curve": { "type": "constant", "value": 65536 },
+                    "weight": 65536
+                  }
+                ]
+              }
+            ],
+            "transitions": [{ "to": "hunt", "when": { "kind": "elapsed", "ticks": 1 } }]
+          },
+          {
+            "name": "strike",
+            "actions": [
+              {
+                "executor": "cast",
+                "event": "BossStrike",
+                "considerations": [
+                  {
+                    "input": "always",
+                    "curve": { "type": "constant", "value": 65536 },
+                    "weight": 65536
+                  }
+                ]
+              }
+            ],
+            "transitions": [{ "to": "hunt", "when": { "kind": "elapsed", "ticks": 1 } }]
+          },
+          {
+            "name": "charge",
+            "actions": [
+              {
+                "executor": "cast",
+                "event": "BossCharge",
+                "considerations": [
+                  {
+                    "input": "always",
+                    "curve": { "type": "constant", "value": 65536 },
+                    "weight": 65536
+                  }
+                ]
+              }
+            ],
+            "transitions": [{ "to": "hunt", "when": { "kind": "elapsed", "ticks": 1 } }]
           }
         ]
       }
