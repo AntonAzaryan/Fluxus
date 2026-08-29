@@ -135,6 +135,65 @@ describe('стенд портрета берёт текстуры из обще�
 });
 
 /**
+ * Числа записи манифеста (ASSET-6) доезжают до инстанса стенда — те же поля и
+ * тем же смыслом, что у арены: множитель масштаба нормализуется высотой модели
+ * (REND-17), а скрытая часть не рисуется и текстуру за собой не тянет (REND-9).
+ * Стенд ни того, ни другого не считает сам — он лишь передаёт запись дальше, и
+ * проверяется здесь ровно это: что передаёт, а не подставляет умолчание.
+ */
+describe('стенд отдаёт инстансу числа записи манифеста (HUD-7, ASSET-6)', () => {
+  /** Корень инстанса стенда: сцена у него своя и наружу не выставлена. */
+  function rootOf(show: (stage: PortraitStage) => void): THREE.Object3D {
+    const added: THREE.Object3D[] = [];
+    const add = vi
+      .spyOn(THREE.Scene.prototype, 'add')
+      .mockImplementation(function (this: THREE.Scene, ...objects: THREE.Object3D[]) {
+        added.push(...objects);
+        return THREE.Object3D.prototype.add.apply(this, objects) as THREE.Scene;
+      });
+    const { stage } = bench();
+    show(stage);
+    add.mockRestore();
+    stage.dispose();
+    // Свет мини-сцены садится в неё до модели: корень инстанса — последний.
+    return added[added.length - 1]!;
+  }
+
+  it('множитель масштаба записи нормализуется высотой модели, а не игнорируется', () => {
+    // Высота модели стенда — 4 мировых единицы, значит нормализующий множитель
+    // при `scale: 2` вдвое больше умолчательного (REND-17).
+    const plain = rootOf((stage) => {
+      stage.showModel(stageModel(), HERO);
+    });
+    const scaled = rootOf((stage) => {
+      stage.showModel(stageModel(), { ...HERO, scale: 2 });
+    });
+
+    expect(plain.children[0]!.scale.x).toBeCloseTo(0.25);
+    expect(scaled.children[0]!.scale.x).toBeCloseTo(0.5);
+  });
+
+  it('скрытая часть записи не попадает в мини-сцену', () => {
+    const meshes = (root: THREE.Object3D): number => {
+      let n = 0;
+      root.traverse((object) => {
+        if (object instanceof THREE.Mesh) n++;
+      });
+      return n;
+    };
+
+    // Единственный меш модели стенда — часть 0: без записи он в сцене есть, со
+    // скрытой частью его там нет (ASSET-6, REND-9). Скин при этом просится всё
+    // равно — он свойство модели, а не набора видимых частей, — и это же
+    // поведение у арены: прятать часть дешевле по кадру, а не по загрузке.
+    expect(meshes(rootOf((stage) => { stage.showModel(stageModel(), HERO); }))).toBe(1);
+    expect(
+      meshes(rootOf((stage) => { stage.showModel(stageModel(), { ...HERO, hiddenParts: [0] }); })),
+    ).toBe(0);
+  });
+});
+
+/**
  * Владение THREE-сборкой (шапка `threeStage.ts`, REND-3): геометрия и материалы
  * принадлежат КОНТЕКСТУ рендера, поэтому стенд владеет своими и освобождает их
  * сам — в отличие от подсистемы моделей арены, чей кэш живёт дольше инстанса.
