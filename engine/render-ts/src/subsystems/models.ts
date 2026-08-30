@@ -96,6 +96,7 @@ import {
   modelDerivatives,
   resolveEffectByKind,
   resolveLodThresholds,
+  resolveParticlesByKind,
   resolveSurfaceAlign,
   resolveVisual,
   resolveVisualEmitter,
@@ -409,12 +410,16 @@ const PLACEHOLDER_BOUNDS: ModelBounds = {
   maxZ: PLACEHOLDER_HEIGHT,
 };
 /**
- * Объём-прокси эмиттерного вида (ASSET-14). Частиц подсистема моделей не рисует
- * — их рисует подсистема частиц (REND-24), — но ПОПАДАТЬ автор обязан и в них:
- * размещение факела — такая же запись `decorations`, как размещение статуи, и
- * выделять, двигать и удалять её во вьюпорте нужно тем же способом (REND-18,
- * ED-17). Источник объёмов-прокси при этом остаётся ОДИН (REND-15): подсистема
- * частиц в picking'е не участвует и участвовать не начинает.
+ * Объём-прокси вида, который рисуют частицы, — на обе дороги к нему один
+ * (REND-37): и на эмиттерный decoration-вид (ASSET-14), и на сущность, чей вид
+ * назван записью `particles.byKind` (REND-24). Частиц подсистема моделей не
+ * рисует, но ПОПАДАТЬ автор обязан и в них: размещение факела — такая же запись
+ * `decorations`, как размещение статуи, а горящая жаровня, мешающая пройти, —
+ * такая же сим-сущность, как любая другая; выделять, двигать и удалять их во
+ * вьюпорте нужно тем же способом (REND-18, ED-17), и отладочный инспектор
+ * спрашивает о них тем же picking'ом (RDBG-1). Источник объёмов-прокси при этом
+ * остаётся ОДИН (REND-15): подсистема частиц в picking'е не участвует и
+ * участвовать не начинает.
  *
  * Размер фиксированный: у эмиттера нет ни модели, ни границ — облако частиц
  * меняет размер каждый кадр, и производить объём попадания от него значило бы
@@ -665,9 +670,11 @@ interface InstanceRecord {
   holder: THREE.Group | null;
   placeholder: THREE.Mesh | null;
   /**
-   * Ключ записи разрешился в ЭМИТТЕРНЫЙ вид (ASSET-14): рисуют его частицы
-   * (REND-24), а этот пул даёт ему только объём-прокси (`EMITTER_BOUNDS`) —
-   * чтобы попадать в размещённый факел было чем (REND-15, REND-18).
+   * Изображение вида — частицы (REND-24), и обе дороги к нему один и тот же
+   * флаг: ключ разрешился в эмиттерный decoration-вид (ASSET-14) либо вид
+   * назван записью `particles.byKind` (REND-37). Этот пул такому инстансу
+   * ничего не строит и даёт ему только объём-прокси (`EMITTER_BOUNDS`) — чтобы
+   * попадать в нарисованное было чем (REND-15, REND-18).
    */
   emitter: boolean;
   /** Ярус, которым инстанс нарисован (REND-20) — с учётом деградации. */
@@ -2179,6 +2186,10 @@ export class ModelsSubsystem implements RenderSubsystem, InstanceProxySource {
         this.rebuild(ctx, record);
         continue;
       }
+      // Модельной записи нет ни до, ни после — пересборки не будет, но заявка
+      // чужой подсистемы за переподачу могла появиться либо исчезнуть, и
+      // заглушка обязана поехать за ней (REND-37).
+      if (record.visual === undefined) this.syncClaim(ctx, record);
       this.applyEntryParams(record);
       // Масштаб записи — нормализующая обёртка: переставляется на живом инстансе.
       record.model?.setScale(record.visual?.scale ?? 1);
@@ -2592,28 +2603,14 @@ export class ModelsSubsystem implements RenderSubsystem, InstanceProxySource {
 
     const visual = record.visual;
     if (visual === undefined) {
-      // Тип, который манифест описал записью ЭФФЕКТА (REND-23), рисуется не
-      // моделью — и заглушки ему не полагается: заглушка означает «ассет ещё не
-      // доехал» (ASSET-4), а тут доезжать нечему. Молчит подсистема по той же
-      // причине: запись в манифесте есть, просто не её.
-      if (resolveEffectByKind(this.manifest, kind) !== undefined) return;
-      // Ровно то же и по той же причине — эмиттерный вид (ASSET-14): его
-      // изображение частицы, и рисует его подсистема частиц (REND-24).
-      // `resolveVisual` отдаёт по такому ключу пусто НАМЕРЕННО — чтобы
-      // подсистема моделей не рисовала того, чего ей рисовать нечем; принять
-      // это за отсутствующую запись значило бы поставить на факел заглушку.
-      // Объём-прокси такой записи, однако, даёт всё-таки этот пул: источник
-      // прокси один (REND-15), а попадать в размещённый факел автор обязан
-      // тем же способом, что в статую (REND-18, ED-17).
-      if (resolveVisualEmitter(this.manifest, kind) !== undefined) {
-        record.emitter = true;
+      // Модельной записи нет — но изображение у вида может быть чужое (REND-37).
+      const claim = claimOf(this.manifest, kind);
+      if (claim !== null) {
+        record.emitter = claim === 'particles';
         return;
       }
       // Сущность без записи в манифесте: заглушка и предупреждение один раз (ASSET-6).
-      if (!this.warnedKinds.has(kind)) {
-        this.warnedKinds.add(kind);
-        this.warn(`render: для типа "${kind}" нет записи в манифесте визуалов — заглушка (ASSET-6)`);
-      }
+      this.warnMissingVisual(kind);
       this.makePlaceholder(ctx, record);
       return;
     }
@@ -2631,6 +2628,38 @@ export class ModelsSubsystem implements RenderSubsystem, InstanceProxySource {
     }
     this.makePlaceholder(ctx, record);
     if (entry.failed === null) entry.waiting.add(record);
+  }
+
+  /**
+   * Заявка чужой подсистемы на ЖИВОМ инстансе после переподачи манифеста
+   * (REND-17, REND-37): появившаяся снимает заглушку, исчезнувшая ставит её
+   * обратно. Зовётся только там, где модельной записи нет ни до, ни после, —
+   * `rebuildsInstance` сравнивает модельные записи и обеих сторон этого
+   * перехода не видит, а построенного из ассета у такого инстанса нет вовсе,
+   * и пересобирать здесь нечего.
+   */
+  private syncClaim(ctx: RenderContext, record: InstanceRecord): void {
+    const kind = record.kind;
+    if (kind === null) return;
+    const claim = claimOf(this.manifest, kind);
+    record.emitter = claim === 'particles';
+    if (claim !== null) {
+      // Узел заводился под заглушку; чужому изображению он не нужен — ровно
+      // так же, как его не заводит `attachVisual` заявленному виду с рождения.
+      this.disposePlaceholder(record);
+      this.releaseHolder(record);
+      return;
+    }
+    if (record.placeholder !== null) return;
+    this.warnMissingVisual(kind);
+    this.makePlaceholder(ctx, record);
+  }
+
+  /** Записи о виде в манифесте нет — предупреждение один раз на тип (ASSET-6). */
+  private warnMissingVisual(kind: string): void {
+    if (this.warnedKinds.has(kind)) return;
+    this.warnedKinds.add(kind);
+    this.warn(`render: для типа "${kind}" нет записи в манифесте визуалов — заглушка (ASSET-6)`);
   }
 
   /**
@@ -3621,6 +3650,33 @@ function screenSize(radius: number, distance: number, screen: ScreenScale): numb
 }
 
 /**
+ * Кто рисует вид, у которого модельной записи нет: `'effect'` — подсистема
+ * эффектов по записи `effects.byKind` (REND-23), `'particles'` — подсистема
+ * частиц по эмиттерному decoration-виду (ASSET-14) либо по записи
+ * `particles.byKind` (REND-24); null — не рисует никто, и пустой ответ
+ * `resolveVisual` означает ровно то, чем выглядит: записи о виде нет (ASSET-6).
+ *
+ * Довод, ради которого вопрос вообще задаётся (REND-37): заглушка означает
+ * «ассет ещё не доехал» (ASSET-4), и поставить её поверх чужого изображения
+ * значило бы соврать дважды — назвать недоехавшим нарисованное и потребовать
+ * от автора запись, которую он уже сделал. `resolveVisual` отдаёт по
+ * эмиттерному ключу пусто НАМЕРЕННО, чтобы этот пул не брался рисовать то,
+ * чего ему рисовать нечем, — принимать это молчание за отсутствие записи
+ * нельзя.
+ *
+ * Спрашиваются ровно источники, ключуемые ВИЗУАЛЬНЫМ ТИПОМ. Таблицы `byState`
+ * и `byEvent` обеих секций сюда не входят: они ключуются именем состояния и
+ * типом события, вида не называют, и заглушка, зависящая от них, мигала бы
+ * вместе с доставленным состоянием.
+ */
+function claimOf(manifest: VisualManifest, kind: string): 'effect' | 'particles' | null {
+  if (resolveEffectByKind(manifest, kind) !== undefined) return 'effect';
+  if (resolveVisualEmitter(manifest, kind) !== undefined) return 'particles';
+  if (resolveParticlesByKind(manifest, kind) !== undefined) return 'particles';
+  return null;
+}
+
+/**
  * Габариты нарисованного инстанса в его собственных осях: модель (детальный
  * ярус) либо запись батча, а до готовности — заглушка (ASSET-4). null — рисовать
  * нечего, и попадать не во что (REND-15). Один ответ на весь файл: прокси
@@ -3629,8 +3685,8 @@ function screenSize(radius: number, distance: number, screen: ScreenScale): numb
 function boundsOf(record: InstanceRecord): ModelBounds | null {
   if (record.model !== null) return record.model.bounds;
   if (record.batch !== null) return record.batch.bounds;
-  // Эмиттерный вид (ASSET-14) рисуется частицами, а попадать в него нужно тем
-  // же способом, что в модельный (REND-15, REND-18): фиксированный объём.
+  // Вид, который рисуют частицы (ASSET-14, REND-24), попадаем тем же способом,
+  // что модельный (REND-15, REND-18, REND-37): фиксированный объём.
   if (record.emitter) return EMITTER_BOUNDS;
   return record.placeholder === null ? null : PLACEHOLDER_BOUNDS;
 }

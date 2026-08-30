@@ -31,7 +31,7 @@ import {
   instanceParticles,
   stepInstance,
 } from '../src/particleEffects.js';
-import { makeAssets, makeEntityView, makeTickView } from './fixtures.js';
+import { makeAssets, makeEntityView, makeModel, makeTickView } from './fixtures.js';
 
 function fixture(name: string): ParticleEffectDocument {
   const path = fileURLToPath(new URL(`./fixtures/${name}`, import.meta.url));
@@ -108,6 +108,22 @@ function frames(subsystem: ParticlesSubsystem, count: number, dt = 0.1): void {
 
 /** Имя узла-сокета записи `particles.byKind.Fireball` манифеста фикстуры. */
 const SOCKET_NAME = 'Socket_Tail';
+
+/** Модель снаряда, у которого кроме хвоста из частиц есть и своя запись. */
+const MODEL_ID = 'models/fireball.mdx';
+
+/**
+ * Подсистема моделей на том же стенде и том же манифесте. Заявка чужой
+ * подсистемы (REND-37) наблюдаема только с её стороны: заглушкой,
+ * предупреждением и объёмом-прокси, — своего следа в подсистеме частиц у неё
+ * нет и быть не должно.
+ */
+function makeModels(manifest: VisualManifest, ctx: RenderContext) {
+  const warnings: string[] = [];
+  const models = new ModelsSubsystem(manifest, { warn: (m) => warnings.push(m) });
+  models.init(ctx);
+  return { models, warnings };
+}
 
 /**
  * Инстанс ДЕТАЛЬНОГО яруса с названным узлом — вход резолва сокета (REND-24).
@@ -426,6 +442,84 @@ describe('ParticlesSubsystem: decoration-эмиттеры (REND-18, REND-24)', (
   });
 });
 
+/**
+ * Вид, изображение которого манифест отдал секции эмиттеров записью `byKind`
+ * (REND-37): рисуют его частицы, а подсистема моделей молчит и даёт ему только
+ * объём-прокси. Наблюдается всё это СО СТОРОНЫ МОДЕЛЕЙ — заглушкой,
+ * предупреждением и прокси, — поэтому стенд здесь двойной.
+ */
+describe('Вид, нарисованный только частицами (REND-37)', () => {
+  it('сущность вида из particles.byKind заглушки и предупреждения не получает', () => {
+    const manifest = makeManifest();
+    const { ctx } = makeRig({ manifest });
+    const { models, warnings } = makeModels(manifest, ctx);
+    // Две сущности одного типа подряд: предупреждение ASSET-6 одно на тип, и
+    // пустой список означает, что его не было вовсе, а не что второе съедено
+    // дедупом первого.
+    models.syncTick(
+      makeTickView([makeEntityView(1, { kind: 'Fireball' }), makeEntityView(2, { kind: 'Fireball' })]),
+    );
+    models.updateFrame(0.016, 1);
+
+    expect(models.instanceFor(1)!.placeholder).toBe(false);
+    expect(models.instanceFor(2)!.placeholder).toBe(false);
+    expect(warnings).toEqual([]);
+  });
+
+  it('опечатка в ключе записи заявкой не становится (сценарий «Опечатка в ключе записи эмиттера»)', () => {
+    const manifest: VisualManifest = { entities: {}, particles: { byKind: { Smok: { effect: TORCH } } } };
+    const { subsystem, ctx } = makeRig({ manifest });
+    const { models, warnings } = makeModels(manifest, ctx);
+    const smoke = [makeEntityView(1, { kind: 'Smoke' }), makeEntityView(2, { kind: 'Smoke' })];
+    models.syncTick(makeTickView(smoke));
+    models.updateFrame(0.016, 1);
+    subsystem.syncTick(makeTickView(smoke));
+
+    expect(models.instanceFor(1)!.placeholder).toBe(true);
+    expect(warnings.filter((m) => m.includes('Smoke'))).toHaveLength(1);
+    // И частиц не досталось ни одному из двух ключей: `Smoke` записи не имеет,
+    // а сущностей типа `Smok` в кадре нет.
+    expect(subsystem.activeCount).toBe(0);
+  });
+
+  it('запись byState заглушки не отменяет — ни на приходе состояния, ни на его уходе', () => {
+    // Ключ у `byState` — имя СОСТОЯНИЯ, и вида она не называет: заявить его ей
+    // нечем. Иначе заглушка мигала бы вместе с доставленным состоянием.
+    const manifest: VisualManifest = { entities: {}, particles: { byState: { Poisoned: { effect: TORCH } } } };
+    const { ctx } = makeRig({ manifest });
+    const { models, warnings } = makeModels(manifest, ctx);
+    const ghost = (states: number): ReturnType<typeof makeEntityView> =>
+      makeEntityView(1, { kind: 'Ghost', states });
+
+    for (const states of [0, POISONED, 0]) {
+      models.syncTick(makeTickView([ghost(states)]));
+      models.updateFrame(0.016, 1);
+      expect(models.instanceFor(1)!.placeholder).toBe(true);
+    }
+    expect(warnings.filter((m) => m.includes('Ghost'))).toHaveLength(1);
+  });
+
+  it('снаряд с моделью и хвостом из частиц строится моделью (приоритет модельной записи)', () => {
+    const manifest = makeManifest();
+    manifest.entities.Fireball = { model: MODEL_ID, tier: 'detailed' };
+    const { ctx, assets } = makeRig({ manifest });
+    const { models, warnings } = makeModels(manifest, ctx);
+    models.syncTick(makeTickView([makeEntityView(1, { kind: 'Fireball' })]));
+    models.updateFrame(0.016, 1);
+    // Модель ещё едет: на этот срок заглушка полагается (ASSET-4) — заявка
+    // частиц её не снимает, потому что к такому виду правило не применяется.
+    expect(models.instanceFor(1)!.placeholder).toBe(true);
+
+    assets.resolve('model', MODEL_ID, makeModel());
+    models.updateFrame(0.016, 1);
+    const instance = models.instanceFor(1)!;
+    expect(instance.placeholder).toBe(false);
+    // Объём-прокси даёт модель, а не фиксированный объём эмиттера.
+    expect(instance.bounds).toBe(instance.model!.bounds);
+    expect(warnings).toEqual([]);
+  });
+});
+
 describe('ParticlesSubsystem: данные, а не код (REND-24, REND-17)', () => {
   it('новый эффект — запись манифеста; переподача её доносит', () => {
     const manifest = makeManifest();
@@ -687,6 +781,32 @@ describe('Частицы и picking (REND-15, REND-24)', () => {
     const visited: number[] = [];
     models.eachProxy((p) => visited.push(p.entity));
     expect(visited).toEqual([1]);
+  });
+
+  it('сущность, нарисованная частицами, попадаема тем же объёмом (сценарий «Клик по сущности, нарисованной частицами»)', () => {
+    // Обе дороги к одному изображению — сущность вида `Fireball` из
+    // `particles.byKind` и размещение эмиттерного decoration-вида `Torch`, —
+    // и объём попадания у них обязан быть один: второго размера под ту же
+    // ситуацию не заведено. Источником прокси подсистема частиц при этом не
+    // становится — это держит соседний тест этого же describe.
+    const manifest = makeManifest();
+    const { ctx } = makeRig({ manifest });
+    const { models } = makeModels(manifest, ctx);
+    models.syncTick(
+      makeTickView([makeEntityView(1, { kind: 'Fireball', prevX: 4, currX: 4, prevY: 3, currY: 3 })]),
+    );
+    models.syncDecorations(new Map([[2, makeEntityView(2, { kind: 'Torch' })]]));
+    models.updateFrame(0.016, 1);
+
+    const entity: PickProxy = createPickProxy();
+    const placed: PickProxy = createPickProxy();
+    expect(models.proxyOf(1, entity)).toBe(true);
+    expect(models.proxyOf(2, placed, true)).toBe(true);
+    expect(entity.posX).toBeCloseTo(4, 6);
+    expect(entity.posY).toBeCloseTo(3, 6);
+    expect(entity.maxZ - entity.minZ).toBeGreaterThan(0);
+    const box = (p: PickProxy): number[] => [p.minX, p.minY, p.minZ, p.maxX, p.maxY, p.maxZ];
+    expect(box(entity)).toEqual(box(placed));
   });
 });
 

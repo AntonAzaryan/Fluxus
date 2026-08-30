@@ -306,6 +306,53 @@ describe('пересборка инстанса при смене модели (
     expect(ctx.scene.children.length).toBe(1);
     expect(subsystem.instanceFor(HERO)!.placeholder).toBe(false);
   });
+
+  it('переподача, заведшая запись эмиттера, снимает заглушку (REND-37)', () => {
+    const { subsystem, ctx, assets, warnings } = makeRig();
+    subsystem.syncTick(makeTickView([makeEntityView(HERO, { kind: 'Ghost' })]));
+    const instance = subsystem.instanceFor(HERO)!;
+    expect(instance.placeholder).toBe(true);
+    expect(warnings.length).toBe(1);
+    const requests = assets.requests.length;
+
+    const next = makeManifest();
+    next.particles = { byKind: { Ghost: { effect: 'vfx/ghost.effect.json' } } };
+    subsystem.applyManifest(next);
+
+    // Изображение у вида теперь чужое: заглушки нет, и узла под неё в сцене не
+    // осталось — ровно как у вида, заявленного с рождения.
+    expect(subsystem.instanceFor(HERO)).toBe(instance);
+    expect(instance.placeholder).toBe(false);
+    expect(ctx.scene.children.length).toBe(0);
+    // Пересборки из ассета в этом переходе нет: спрашивать было нечего.
+    expect(assets.requests.length).toBe(requests);
+
+    // Обратная правка возвращает заглушку тому же инстансу; предупреждение об
+    // отсутствующей записи остаётся одним на тип (ASSET-6) — о `Ghost` уже
+    // сказано, и повторять переподача его не начинает.
+    subsystem.applyManifest(makeManifest());
+    expect(subsystem.instanceFor(HERO)).toBe(instance);
+    expect(instance.placeholder).toBe(true);
+    expect(ctx.scene.children.length).toBe(1);
+    expect(assets.requests.length).toBe(requests);
+    expect(warnings.length).toBe(1);
+  });
+
+  it('исчезнувшая запись эмиттера возвращает заглушку и её предупреждение (REND-37, ASSET-6)', () => {
+    const manifest = makeManifest();
+    manifest.particles = { byKind: { Wisp: { effect: 'vfx/wisp.effect.json' } } };
+    const { subsystem, ctx, warnings } = makeRig(manifest);
+    subsystem.syncTick(makeTickView([makeEntityView(HERO, { kind: 'Wisp' })]));
+    expect(subsystem.instanceFor(HERO)!.placeholder).toBe(false);
+    expect(warnings).toEqual([]);
+
+    // Автор убрал запись — изображения у вида не осталось вовсе, и это ровно
+    // тот случай, ради которого предупреждение и написано.
+    subsystem.applyManifest(makeManifest());
+    expect(subsystem.instanceFor(HERO)!.placeholder).toBe(true);
+    expect(ctx.scene.children.length).toBe(1);
+    expect(warnings.filter((message) => message.includes('Wisp'))).toHaveLength(1);
+  });
 });
 
 describe('назначенное поимённо переживает переподачу (REND-11, REND-6)', () => {

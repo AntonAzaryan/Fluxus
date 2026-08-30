@@ -10,7 +10,13 @@
 import { describe, expect, it } from 'vitest';
 import * as THREE from 'three';
 import type { VisualManifest } from '@fluxus/assets';
-import { EffectsSubsystem, ModelsSubsystem, type RenderContext } from '../src/index.js';
+import {
+  EffectsSubsystem,
+  ModelsSubsystem,
+  createPickProxy,
+  type PickProxy,
+  type RenderContext,
+} from '../src/index.js';
 import { makeAssets, makeEntityView, makeTickView } from './fixtures.js';
 
 /** Манифест только с секцией эффектов: моделей у этих типов нет и не нужно. */
@@ -311,5 +317,27 @@ describe('Эффекты и picking (REND-15, REND-23)', () => {
     // Ни объёма-прокси (рисовать нечего), ни жалобы на отсутствующую запись.
     expect(models.instanceFor(1)!.placeholder).toBe(false);
     expect(warnings).toHaveLength(0);
+  });
+
+  it('купол эффекта остаётся невыделяемым: объёма-прокси у него нет (сценарий REND-37)', () => {
+    // Решение осознанное, а не недосмотр: габариты оболочки записаны в самой
+    // записи (примитив, радиус, высота), и фиксированный объём эмиттера был бы
+    // для купола радиусом в метры заведомо неверной целью. Выбор между ним и
+    // объёмом, производным от записи, — отдельное решение, и здесь оно не
+    // принято: поведение таких видов прежнее.
+    const { assets, ctx } = makeRig();
+    const models = new ModelsSubsystem(makeManifest(), { warn: () => {} });
+    models.init({ ...ctx, assets: assets.service });
+    // Рядом — тип, о котором манифест не говорит ничего. Он позируется тем же
+    // кадром и прокси даёт, поэтому «прокси нет» у `Fireball` — это решение о
+    // нём, а не непозированный инстанс.
+    models.syncTick(
+      makeTickView([makeEntityView(1, { kind: 'Fireball' }), makeEntityView(2, { kind: 'Ghost' })]),
+    );
+    models.updateFrame(0.016, 1);
+
+    const proxy: PickProxy = createPickProxy();
+    expect(models.proxyOf(2, proxy)).toBe(true);
+    expect(models.proxyOf(1, proxy)).toBe(false);
   });
 });
