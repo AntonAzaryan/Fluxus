@@ -75,7 +75,8 @@
     },
     { "name": "HitMark", "fields": { "dash": "i32", "wave": "entity" } },
     { "name": "FieldState", "fields": { "radius": "fixed" } },
-    { "name": "Minion", "fields": { "bornTick": "i32" } }
+    { "name": "Minion", "fields": { "bornTick": "i32" } },
+    { "name": "Chilled", "fields": { "sinceTick": "i32" } }
   ],
   "prefabs": [
     {
@@ -2209,7 +2210,7 @@
       "name": "BossRepel",
       "order": -793,
       "query": {
-        "all": ["NpcAgent", "BossHunt", "Position"],
+        "all": ["NpcAgent", "BossHunt", "BossDash", "Position"],
         "not": ["Dead"],
         "withTag": "Boss"
       },
@@ -2230,9 +2231,14 @@
               {
                 "if": {
                   "cond": {
-                    ">=": [
-                      { "tick": [] },
-                      { "getComponent": [{ "var": "b" }, "BossHunt", "repelUntil"] }
+                    "and": [
+                      {
+                        ">=": [
+                          { "tick": [] },
+                          { "getComponent": [{ "var": "b" }, "BossHunt", "repelUntil"] }
+                        ]
+                      },
+                      { "<=": [{ "getComponent": [{ "var": "b" }, "BossDash", "ticksLeft"] }, 0] }
                     ]
                   },
                   "then": [
@@ -4645,7 +4651,7 @@
         "onExpire": [
           {
             "forEach": {
-              "query": { "all": ["TimeScaleModifiers"] },
+              "query": { "all": ["Chilled", "TimeScaleModifiers"] },
               "as": "v",
               "do": [
                 {
@@ -4654,7 +4660,8 @@
                     "component": "TimeScaleModifiers",
                     "id": 7001
                   }
-                }
+                },
+                { "removeComponent": { "entity": { "var": "v" }, "component": "Chilled" } }
               ]
             }
           },
@@ -4683,56 +4690,51 @@
                   { "getComponent": [{ "var": "owner" }, "Position", "y"] }
                 ]
               },
-              "reach": { "getComponent": [{ "var": "owner" }, "FieldState", "radius"] },
-              "scale": {
-                "-": [
-                  65536,
-                  {
-                    "*": [
-                      52429,
-                      {
-                        "clamp": [
-                          {
-                            "/": [
-                              {
-                                "fromInt": [
-                                  {
-                                    "-": [
-                                      720,
-                                      {
-                                        "getComponent": [
-                                          { "var": "owner" },
-                                          "AbilityDuration",
-                                          "remaining"
-                                        ]
-                                      }
-                                    ]
-                                  }
-                                ]
-                              },
-                              { "fromInt": [240] }
-                            ]
-                          },
-                          0,
-                          65536
-                        ]
-                      }
-                    ]
-                  }
-                ]
-              }
+              "reach": { "getComponent": [{ "var": "owner" }, "FieldState", "radius"] }
             },
             "do": [
               {
                 "forEach": {
-                  "query": { "all": ["TimeScaleModifiers"] },
+                  "query": { "all": ["Chilled", "Position", "TimeScaleModifiers"] },
                   "as": "v",
                   "do": [
                     {
-                      "removeModifier": {
-                        "entity": { "var": "v" },
-                        "component": "TimeScaleModifiers",
-                        "id": 7001
+                      "if": {
+                        "cond": {
+                          "or": [
+                            {
+                              ">": [
+                                {
+                                  "vec.length": [
+                                    {
+                                      "vec.sub": [
+                                        {
+                                          "vec": [
+                                            { "getComponent": [{ "var": "v" }, "Position", "x"] },
+                                            { "getComponent": [{ "var": "v" }, "Position", "y"] }
+                                          ]
+                                        },
+                                        { "var": "center" }
+                                      ]
+                                    }
+                                  ]
+                                },
+                                { "var": "reach" }
+                              ]
+                            },
+                            { "hasComponent": [{ "var": "v" }, "Dead"] }
+                          ]
+                        },
+                        "then": [
+                          {
+                            "removeModifier": {
+                              "entity": { "var": "v" },
+                              "component": "TimeScaleModifiers",
+                              "id": 7001
+                            }
+                          },
+                          { "removeComponent": { "entity": { "var": "v" }, "component": "Chilled" } }
+                        ]
                       }
                     }
                   ]
@@ -4749,11 +4751,62 @@
                   "as": "v",
                   "do": [
                     {
-                      "addModifier": {
-                        "entity": { "var": "v" },
-                        "component": "TimeScaleModifiers",
-                        "id": 7001,
-                        "value": { "var": "scale" }
+                      "if": {
+                        "cond": { "!": [{ "hasComponent": [{ "var": "v" }, "Chilled"] }] },
+                        "then": [
+                          {
+                            "addComponent": {
+                              "entity": { "var": "v" },
+                              "component": "Chilled",
+                              "values": { "sinceTick": { "tick": [] } }
+                            }
+                          }
+                        ]
+                      }
+                    },
+                    {
+                      "let": {
+                        "bindings": {
+                          "since": {
+                            "if": [
+                              { "hasComponent": [{ "var": "v" }, "Chilled"] },
+                              { "getComponent": [{ "var": "v" }, "Chilled", "sinceTick"] },
+                              { "tick": [] }
+                            ]
+                          }
+                        },
+                        "do": [
+                          {
+                            "addModifier": {
+                              "entity": { "var": "v" },
+                              "component": "TimeScaleModifiers",
+                              "id": 7001,
+                              "value":
+                            {
+                              "-": [
+                                65536,
+                                {
+                                  "*": [
+                                    52429,
+                                    {
+                                      "clamp": [
+                                        {
+                                          "/": [
+                                            { "fromInt": [{ "-": [{ "tick": [] }, { "var": "since" }] }] },
+                                            { "fromInt": [240] }
+                                          ]
+                                        },
+                                        0,
+                                        65536
+                                      ]
+                                    }
+                                  ]
+                                }
+                              ]
+                            }
+                            }
+                          }
+                        ]
                       }
                     }
                   ]
@@ -4763,18 +4816,68 @@
                 "forEach": {
                   "query": {
                     "all": ["Position", "TimeScaleModifiers"],
-                    "not": ["Held"],
                     "withTag": "Fireball",
                     "withinRadius": { "center": { "var": "center" }, "radius": { "var": "reach" } }
                   },
                   "as": "p",
                   "do": [
                     {
-                      "addModifier": {
-                        "entity": { "var": "p" },
-                        "component": "TimeScaleModifiers",
-                        "id": 7001,
-                        "value": { "var": "scale" }
+                      "if": {
+                        "cond": { "!": [{ "hasComponent": [{ "var": "p" }, "Chilled"] }] },
+                        "then": [
+                          {
+                            "addComponent": {
+                              "entity": { "var": "p" },
+                              "component": "Chilled",
+                              "values": { "sinceTick": { "tick": [] } }
+                            }
+                          }
+                        ]
+                      }
+                    },
+                    {
+                      "let": {
+                        "bindings": {
+                          "since": {
+                            "if": [
+                              { "hasComponent": [{ "var": "p" }, "Chilled"] },
+                              { "getComponent": [{ "var": "p" }, "Chilled", "sinceTick"] },
+                              { "tick": [] }
+                            ]
+                          }
+                        },
+                        "do": [
+                          {
+                            "addModifier": {
+                              "entity": { "var": "p" },
+                              "component": "TimeScaleModifiers",
+                              "id": 7001,
+                              "value":
+                            {
+                              "-": [
+                                65536,
+                                {
+                                  "*": [
+                                    52429,
+                                    {
+                                      "clamp": [
+                                        {
+                                          "/": [
+                                            { "fromInt": [{ "-": [{ "tick": [] }, { "var": "since" }] }] },
+                                            { "fromInt": [240] }
+                                          ]
+                                        },
+                                        0,
+                                        65536
+                                      ]
+                                    }
+                                  ]
+                                }
+                              ]
+                            }
+                            }
+                          }
+                        ]
                       }
                     }
                   ]
@@ -5136,7 +5239,7 @@
         "tier": "mass",
         "decision": { "intervalTicks": 4 },
         "ranges": { "sense": 3145728, "attack": 32768, "arrive": 26214, "separation": 39322 },
-        "speed": 5243,
+        "speed": 6816,
         "separationWeight": 32768,
         "scales": { "elapsedTicks": 180, "crowd": 4 },
         "states": [
