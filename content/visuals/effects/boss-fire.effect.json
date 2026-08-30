@@ -1,0 +1,262 @@
+{
+  "metadata": {
+    "version": 4.7,
+    "type": "Object",
+    "generator": "Object3D.toJSON"
+  },
+  "geometries": [
+    {
+      "uuid": "b2f9a41c-6d33-4a7e-9c15-0e8b41c7d902",
+      "type": "PlaneGeometry",
+      "width": 1,
+      "height": 1,
+      "widthSegments": 1,
+      "heightSegments": 1
+    }
+  ],
+  "materials": [
+    {
+      "uuid": "3c81de50-9a24-4f1b-8b6c-72d0e5a1f4b8",
+      "type": "MeshBasicMaterial",
+      "color": 16777215,
+      "envMapRotation": [
+        0,
+        0,
+        0,
+        "XYZ"
+      ],
+      "reflectivity": 1,
+      "refractionRatio": 0.98,
+      "blending": 2,
+      "transparent": true,
+      "blendColor": 0,
+      "depthWrite": false
+    }
+  ],
+  "object": {
+    "uuid": "7e0c6b19-4f52-4d80-a3ec-5b91d2c8a0f3",
+    "type": "Group",
+    "name": "boss-fire",
+    "layers": 1,
+    "matrix": [
+      1,
+      0,
+      0,
+      0,
+      0,
+      1,
+      0,
+      0,
+      0,
+      0,
+      1,
+      0,
+      0,
+      0,
+      0,
+      1
+    ],
+    "up": [
+      0,
+      1,
+      0
+    ],
+    "children": [
+      {
+        "uuid": "1d47f2ab-8c60-4e39-b7a2-96f3c40d5e71",
+        "type": "ParticleEmitter",
+        "name": "boss-fire",
+        "layers": 1,
+        "matrix": [
+          1,
+          0,
+          0,
+          0,
+          0,
+          1,
+          0,
+          0,
+          0,
+          0,
+          1,
+          0,
+          0,
+          0,
+          0,
+          1
+        ],
+        "up": [
+          0,
+          1,
+          0
+        ],
+        "ps": {
+          "version": "3.0",
+          "autoDestroy": false,
+          "looping": true,
+          "prewarm": false,
+          "duration": 1,
+          "shape": {
+            "type": "cone",
+            "radius": 0.600006103515625,
+            "arc": 6.283185307179586,
+            "thickness": 1,
+            "angle": 0.12,
+            "mode": 0,
+            "spread": 0,
+            "speed": {
+              "type": "ConstantValue",
+              "value": 1
+            }
+          },
+          "startLife": {
+            "type": "IntervalValue",
+            "a": 0.35,
+            "b": 0.75
+          },
+          "startSpeed": {
+            "type": "IntervalValue",
+            "a": 0.4,
+            "b": 0.9
+          },
+          "startRotation": {
+            "type": "ConstantValue",
+            "value": 0
+          },
+          "startSize": {
+            "type": "IntervalValue",
+            "a": 0.22,
+            "b": 0.46
+          },
+          "startColor": {
+            "type": "Gradient",
+            "color": {
+              "type": "CLinearFunction",
+              "subType": "Color",
+              "keys": [
+                {
+                  "value": {
+                    "r": 1,
+                    "g": 0.62,
+                    "b": 0.22
+                  },
+                  "pos": 0
+                },
+                {
+                  "value": {
+                    "r": 1,
+                    "g": 0.37,
+                    "b": 0.12
+                  },
+                  "pos": 1
+                }
+              ]
+            },
+            "alpha": {
+              "type": "CLinearFunction",
+              "subType": "Number",
+              "keys": [
+                {
+                  "value": 0.9,
+                  "pos": 0
+                },
+                {
+                  "value": 0.9,
+                  "pos": 1
+                }
+              ]
+            }
+          },
+          "emissionOverTime": {
+            "type": "ConstantValue",
+            "value": 46
+          },
+          "emissionOverDistance": {
+            "type": "ConstantValue",
+            "value": 0
+          },
+          "emissionBursts": [],
+          "onlyUsedByOther": false,
+          "instancingGeometry": "b2f9a41c-6d33-4a7e-9c15-0e8b41c7d902",
+          "renderOrder": 0,
+          "renderMode": 0,
+          "rendererEmitterSettings": {},
+          "material": "3c81de50-9a24-4f1b-8b6c-72d0e5a1f4b8",
+          "layers": 1,
+          "startTileIndex": {
+            "type": "ConstantValue",
+            "value": 0
+          },
+          "uTileCount": 1,
+          "vTileCount": 1,
+          "blendTiles": false,
+          "softParticles": false,
+          "softFarFade": 0,
+          "softNearFade": 0,
+          "behaviors": [
+            {
+              "type": "SizeOverLife",
+              "size": {
+                "type": "PiecewiseBezier",
+                "functions": [
+                  {
+                    "function": {
+                      "p0": 1,
+                      "p1": 0.8,
+                      "p2": 0.45,
+                      "p3": 0
+                    },
+                    "start": 0
+                  }
+                ]
+              }
+            },
+            {
+              "type": "ColorOverLife",
+              "color": {
+                "type": "Gradient",
+                "color": {
+                  "type": "CLinearFunction",
+                  "subType": "Color",
+                  "keys": [
+                    {
+                      "value": {
+                        "r": 1,
+                        "g": 0.55,
+                        "b": 0.18
+                      },
+                      "pos": 0
+                    },
+                    {
+                      "value": {
+                        "r": 0.55,
+                        "g": 0.12,
+                        "b": 0.03
+                      },
+                      "pos": 1
+                    }
+                  ]
+                },
+                "alpha": {
+                  "type": "CLinearFunction",
+                  "subType": "Number",
+                  "keys": [
+                    {
+                      "value": 0.85,
+                      "pos": 0
+                    },
+                    {
+                      "value": 0,
+                      "pos": 1
+                    }
+                  ]
+                }
+              }
+            }
+          ],
+          "worldSpace": false
+        }
+      }
+    ]
+  }
+}

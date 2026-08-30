@@ -101,14 +101,19 @@ export function createDemoExtractor(grid: TerrainGrid | undefined): Extractor {
     // `HeavyFireball` — ПЕРЕД `Fireball`: заряженный снаряд несёт оба тега
     // (системы сцены ищут его по `Fireball`), а тип берётся первым совпавшим —
     // так у него своя, более крупная запись эффекта.
-    // `BossWave` и `BossFire` — спутники способностей босса: волна удара и
-    // полоса огня от разгона. Модели у них нет, как у купола, — их рисует
-    // запись `effects.byKind` манифеста, и ключ ей нужен тот же (ASSET-6).
+    // `BossWave`, `BossFire` и `BossField` — спутники способностей босса: волна
+    // удара, полоса огня от разгона и поле замедления. Модели у них нет, как у
+    // купола: волну и поле рисует запись `effects.byKind` манифеста, а пятно
+    // огня — эмиттер `particles.byKind` (ASSET-6, ASSET-14). `BossMinion`,
+    // наоборот, вид С МОДЕЛЬЮ (`entities` манифеста): без ключа скелет босса
+    // приехал бы в кадр безымянным и не нарисовался бы вовсе.
     kindOf: kindByTags([
       'Hero',
       'Boss',
+      'BossMinion',
       'BossWave',
       'BossFire',
+      'BossField',
       'HeavyFireball',
       'Fireball',
       'SlowDome',

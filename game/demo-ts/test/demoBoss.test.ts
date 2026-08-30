@@ -1,7 +1,9 @@
 /**
- * Босс демо-арены как КОНТЕНТ (`content/scenes/duel.scene.json`: prefab `Boss`,
- * определения `bossStrike`/`bossSlam`/`bossCharge`/`bossRepel`/`bossFireAura`,
- * системы `Boss*` и документ поведения `arenaBoss`).
+ * Босс демо-арены как КОНТЕНТ (`content/scenes/duel.scene.json`: prefab'ы
+ * `Boss`/`BossMinion`/`BossField`, определения `bossStrike`/`bossSlam`/
+ * `bossCharge`/`bossFireAura`/`bossField`/`bossFieldAura`/`bossSpawn`/
+ * `bossMinionMelee`, системы `Boss*`/`Minion*` и документы поведения
+ * `arenaBoss`/`arenaMinion`).
  *
  * Проверяется не платформа NPC и не платформа способностей — их механизмы
  * закрыты `engine/core-ts/test/npc.test.ts` и `abilities.test.ts`, — а ПОЛИТИКА,
@@ -13,6 +15,12 @@
  * любого героя видит в нём законную цель, а его собственные площадные
  * способности обязаны исключать всех, кроме героев, — что и делает `withTag`
  * их запросов.
+ *
+ * Отталкивание в упор — НЕ способность и намеренно: способности одного
+ * владельца взаимоисключающи (`supersede`, ABIL-6), и пассивка, у которой нет
+ * ни фазы, ни телеграфа, срывала бы боссу каждый замах чужим телом. Поэтому
+ * она живёт JSON-системой `BossRepel` со сроком в поле `BossHunt.repelUntil`, а
+ * не слотом с кулдауном, — и работает независимо от того, что босс кастует.
  *
  * Ротация — политика ДОКУМЕНТА (NPC-7): у него состояние на каждую
  * способность, просит их исполнитель `cast`, а порядок переходов из `hunt` и
@@ -66,12 +74,31 @@ interface EffectEntry {
 const MANIFEST = manifestJson as unknown as {
   readonly entities: Record<string, { readonly animations: { readonly events: Record<string, string> } }>;
   readonly effects: {
-    readonly byKind: Record<string, EffectEntry>;
+    readonly byKind: Record<string, EffectEntry | undefined>;
     readonly byEvent: Record<string, EffectEntry>;
   };
-  readonly particles: { readonly byEvent: Record<string, { readonly effect: string }> };
+  readonly particles: {
+    readonly byKind?: Record<string, { readonly effect: string }>;
+    readonly byEvent: Record<string, { readonly effect: string }>;
+  };
   readonly cameraEffects: { readonly events: Record<string, { readonly effect: string }> };
 };
+
+/** Корень дерева контента — из него читаются модель и ассеты эмиттеров. */
+const CONTENT_ROOT = join(dirname(fileURLToPath(import.meta.url)), '../../../content');
+
+/**
+ * Радиус формы эмиттера частиц в мировых единицах — то, чем ассет эмиттера
+ * заменяет поле `radius` записи-сферы. Читается из самого документа: у секции
+ * `particles` манифеста своего радиуса нет вовсе (ASSET-14), и связь картинки с
+ * зоной урона иначе держать не на чем.
+ */
+function emitterRadius(assetId: string): number {
+  const doc = JSON.parse(readFileSync(join(CONTENT_ROOT, assetId), 'utf8')) as {
+    object: { children: readonly { ps: { shape: { radius: number } } }[] };
+  };
+  return doc.object.children[0]!.ps.shape.radius;
+}
 
 const CAST = 1 << ACTION_BITS.cast;
 
@@ -85,27 +112,34 @@ const CAST = 1 << ACTION_BITS.cast;
 const BOSS_RADIUS = 39321;
 const HERO_RADIUS = 19661;
 /**
- * «Средняя дистанция» боя с боссом — 5 мировых единиц. Одно число на три
- * величины: досягаемость волны удара, отброс слэма и отброс в упор. Мерка
- * взята от арены (радиус 21) и от собственного рывка героя (3.6): дальше
- * рывка, но далеко не через арену.
+ * «Средняя дистанция» отброса — 5 мировых единиц: на столько улетает жертва и
+ * от слэма, и от толчка в упор. Мерка взята от арены (радиус 21) и от
+ * собственного рывка героя (3.6): дальше рывка, но далеко не через арену.
  */
 const MEDIUM = 327680;
-/** Ширина волны — радиус тела босса; её досягаемость — скорость × время жизни. */
-const WAVE_RADIUS = BOSS_RADIUS;
-const WAVE_SPEED = 32768;
-const WAVE_TICKS = 10;
-/** Взрыв слэма — три радиуса тела. */
-const SLAM_RADIUS = 3 * BOSS_RADIUS;
 /**
- * Пятно огня вдвое меньше тела босса, а шаг рывка — РОВНО его диаметр: пятна
- * ложатся по одному на тик и соседние касаются, не перекрываясь. Шире шаг —
- * между пятнами щель, которую оболочка манифеста всё равно рисует сплошной
- * полосой; уже — нахлёст, и стоящий на стыке горит вдвое, потому что каждое
- * пятно жжёт своим кастером.
+ * Досягаемость удара — 4 единицы: ближе неё босс бьёт волной, дальше просит
+ * разгон. Число живёт В ДВУХ местах и обязано совпадать: сенсор готовности
+ * (`BossReady`) сравнивает с ним дистанцию до цели, а сама волна дотягивается
+ * ровно на «скорость × время жизни». Разъедутся — босс будет замахиваться по
+ * тому, до кого волна не долетит.
  */
-const FIRE_RADIUS = 19661;
-const DASH_SPEED = 2 * FIRE_RADIUS;
+const WAVE_SPEED = 32768;
+const WAVE_TICKS = 8;
+const STRIKE_REACH = WAVE_SPEED * WAVE_TICKS;
+/** Ширина волны — радиус тела босса. */
+const WAVE_RADIUS = BOSS_RADIUS;
+/** Взрыв слэма — шесть радиусов тела. */
+const SLAM_RADIUS = 6 * BOSS_RADIUS;
+/**
+ * Пятно огня — РОВНО шаг рывка, и ложится оно через тик: соседние центры тогда
+ * отстоят на два радиуса, то есть касаются, не перекрываясь. Шире шаг — между
+ * пятнами щель, которую оболочка манифеста всё равно рисует сплошной полосой;
+ * уже — нахлёст, и стоящий на стыке горит вдвое, потому что каждое пятно жжёт
+ * своим кастером.
+ */
+const FIRE_RADIUS = 39322;
+const DASH_SPEED = FIRE_RADIUS;
 
 const STRIKE_WINDUP = 48; // 800 мс
 const STRIKE_CD = 60; // 1 с
@@ -117,8 +151,8 @@ const DASH_DAMAGE = 500;
 const FIRE_LIFE = 240; // 4 с
 /**
  * «Сто урона в секунду» — СКОРОСТЬ, а не проба раз в секунду: полоса шириной в
- * 0.6 единицы пересекается бегущим героем за семь-восемь тиков, и проба раз в
- * шестьдесят ловила бы его один раз из десяти. Десять проб в секунду по
+ * 1.2 единицы пересекается бегущим героем за полтора десятка тиков, и проба раз
+ * в шестьдесят ловила бы его один раз из четырёх. Десять проб в секунду по
  * десятке дают ту же сотню стоящему и честную долю пробегающему.
  */
 const FIRE_PERIOD = 6;
@@ -126,9 +160,46 @@ const FIRE_DAMAGE = 10;
 /** Та самая сотня в секунду, которую эта пара обязана давать. */
 const FIRE_DPS = (FIRE_DAMAGE * 60) / FIRE_PERIOD;
 const REPEL_DAMAGE = 200;
-const REPEL_CD = 45;
+/** Пауза между толчками — поле `BossHunt.repelUntil`, а не кулдаун слота. */
+const REPEL_INTERVAL = 45;
 /** Микровзрыв в упор — радиальный: разлетается всё, что стоит вплотную. */
 const REPEL_RADIUS = 98304;
+
+/**
+ * Поле замедления. Радиус — полтора купола героя, и считается он ИМЕННО так:
+ * 196610 × 3 / 2 = 294915. Спад — с единицы до 0.2 за первые четыре секунды,
+ * дальше держится; жизнь 12 с, кулдаун 20 с (кулдаун строго больше жизни —
+ * поэтому полей в мире не бывает двух, и постоянный id источника законен).
+ */
+const DOME_RADIUS = 196610;
+const FIELD_RADIUS = (DOME_RADIUS * 3) / 2;
+const FIELD_LIFE = 720;
+const FIELD_CD = 1200;
+const FIELD_RAMP = 240;
+const FIELD_FLOOR = 13107;
+/** Идентификатор источника замедления поля в списке `TimeScaleModifiers`. */
+const FIELD_MODIFIER_ID = 7001;
+
+/**
+ * Скелет-прислужник: тело в полтора раза меньше героя (19661 / 1.5), шаг —
+ * ровно героический, жизнь 10 с, и один фаербол (200) его убивает.
+ */
+const MINION_RADIUS = 13107;
+const MINION_SPEED = 5243;
+const MINION_HP = 100;
+const MINION_LIFE = 600;
+const MINION_MELEE = 50;
+const MINION_MELEE_CD = 60;
+/** Удар в контакт — сумма тел: скелет достаёт ровно того, в кого упёрся. */
+const MINION_REACH = MINION_RADIUS + HERO_RADIUS;
+/** Взрыв на смерти — та же зона, что у толчка босса в упор. */
+const MINION_BURST = 200;
+const MINION_BURST_RADIUS = REPEL_RADIUS;
+const MINION_COUNT = 3;
+const SPAWN_ROAR = 90; // 1.5 с — тот же рёв, что у слэма
+const SPAWN_CD = 900;
+/** Слой коллизий скелета — свой: ни герой, ни босс им не блокируются. */
+const MINION_LAYER = 16;
 
 /** Окно охоты за одной целью и окно возрождения — оба по 10 с при 60 Гц. */
 const HUNT_TICKS = 600;
@@ -136,7 +207,7 @@ const BOSS_RESPAWN_TICKS = 600;
 /** Вероятность переключиться на обидчика — 0.5 в Q16.16. */
 const RAGE_CHANCE = 32768;
 
-const BOSS_HP = 4000;
+const BOSS_HP = 8000;
 const HERO_HP = 1000;
 const HIT_DAMAGE = 200;
 /** Слой коллизий босса — свой, а не общий слой актёров (2). */
@@ -294,19 +365,26 @@ function bossAt(cx: number, cy: number, scene: SceneDef = SCENE): SceneDef {
 /**
  * Сцена, где боссу выданы заведомо неисчерпаемые стартовые кулдауны на все
  * способности, кроме перечисленных. Так изолируется ОДНА из них: иначе первый
- * же тик уводит босса в замах, а `supersede` (ABIL-6) делает соседние касты
- * взаимоисключающими.
+ * же тик уводит босса в поле замедления и рёв призыва (они первые в ротации), а
+ * `supersede` (ABIL-6) делает соседние касты взаимоисключающими.
+ *
+ * Толчка в упор в этом списке нет и быть не может: он больше не способность, а
+ * система, и запирается отдельно — `noRepel`.
  */
+const BOSS_SLOTS = [
+  'SlotBossStrike',
+  'SlotBossSlam',
+  'SlotBossCharge',
+  'SlotBossField',
+  'SlotBossSpawn',
+] as const;
+
 function only(...keep: readonly string[]): SceneDef {
-  const parked = new Set(
-    ['SlotBossStrike', 'SlotBossSlam', 'SlotBossCharge', 'SlotBossRepel'].filter(
-      (name) => !keep.includes(name),
-    ),
-  );
+  const parked = new Set(BOSS_SLOTS.filter((name) => !keep.includes(name)));
   return {
     ...SCENE,
     prefabs: SCENE.prefabs!.map((entry) =>
-      parked.has(entry.name)
+      parked.has(entry.name as (typeof BOSS_SLOTS)[number])
         ? {
             ...entry,
             components: {
@@ -322,7 +400,30 @@ function only(...keep: readonly string[]): SceneDef {
   };
 }
 
-const repelOnly = (): SceneDef => only('SlotBossRepel');
+/**
+ * Сцена с запертым толчком: срок паузы отодвинут за горизонт прогона. Нужна
+ * там, где предмет проверки — ТЕЛО босса или его каст, а не пассивка: толчок
+ * радиальный и срабатывает раньше, чем герой успевает упереться.
+ */
+function noRepel(scene: SceneDef = SCENE): SceneDef {
+  return {
+    ...scene,
+    prefabs: scene.prefabs!.map((entry) =>
+      entry.name === 'Boss'
+        ? {
+            ...entry,
+            components: {
+              ...entry.components,
+              BossHunt: {
+                ...(entry.components.BossHunt as Record<string, number>),
+                repelUntil: 100000,
+              },
+            },
+          }
+        : entry,
+    ),
+  };
+}
 
 const hp = (state: SimulationState, entity: EntityId): number =>
   coreWorld.getField(state.world, entity, 'Health', 'hp');
@@ -396,11 +497,13 @@ describe('босс охотится за случайной целью', () => {
   });
 
   it('держит цель десять секунд и перевыбирает — иногда ту же', () => {
-    // Способности боссу запаркованы: он только преследует, героев не задевает
-    // и потому не выбивает их с арены. Предмет проверки — СРОК охоты, и
-    // посторонние смерти сдвигали бы его, ничего не сообщая о нём самом.
+    // Способности боссу запаркованы, толчок заперт: он только преследует,
+    // героев не задевает и потому не выбивает их с арены. Предмет проверки —
+    // СРОК охоты, и посторонние смерти сдвигали бы его, ничего не сообщая о нём
+    // самом: двести урона раз в сорок пять тиков убивают героя за четыре
+    // секунды, и мерилась бы его живучесть.
     const picks: { tick: number; target: EntityId }[] = [];
-    const a = stand([[20, 24], [28, 24]], only(), 1);
+    const a = stand([[20, 24], [28, 24]], noRepel(only()), 1);
     for (let t = 1; t <= 5 * HUNT_TICKS + 1; t++) {
       a.step();
       for (const event of a.last.events) {
@@ -481,28 +584,39 @@ describe('босс переключается на обидчика с веро�
   });
 });
 
-describe('отталкивание: пассивный микровзрыв на столкновении', () => {
-  it('снимает 200 и уносит на среднюю дистанцию', () => {
-    // Герой бежит в босса и упирается в него телом — физика эмитит
-    // `Collision` (PHYS-9), система `BossContact` запоминает столкнувшегося, и
-    // способность просится следующим тиком: событие живёт один тик (EVT-2), а
-    // машина фаз читает шину раньше физики.
-    const a = stand([[20, 24]], repelOnly());
+describe('отталкивание: пассивный микровзрыв в упор', () => {
+  it('подошедшего вплотную бьёт на 200 и уносит на среднюю дистанцию', () => {
+    // Жалоба дизайнера дословно: «подхожу к боссу вплотную — и ничего». Стенд
+    // её и воспроизводит: герой идёт в босса и упирается. Способности заперты —
+    // предмет проверки ПАССИВКА, а не то, чем босс занят.
+    const a = stand([[20, 24]], only());
     const hero = a.heroes[0]!;
     const forward = [{ moveX: FIXED_ONE }];
 
-    const bump = until(a, 'Collision', 200, forward);
-    const before = { x: px(a.state, hero), y: py(a.state, hero) };
-    const away = distance(a.state, hero, a.boss);
-    expect(a.step(forward)).toContain('BossRepelLanded');
-    expect(bump).toBeGreaterThan(1);
+    // Толчок ждёт не столкновения, а расстояния: `Collision` физика публикует
+    // только на ЗАБЛОКИРОВАННОМ шаге (PHYS-9), и стоящему вплотную его не
+    // видать вовсе. Порог — радиус микровзрыва, и герой доходит до него сам.
+    // Точка отсчёта снимается ДО тика толчка: `LocomotionSystem` (order 0)
+    // стоит позже системы толчка (-793) и первый шаг отброса отрабатывает уже
+    // на нём.
+    let before = { x: 0, y: 0 };
+    let landed = -1;
+    for (let t = 1; t <= 300 && landed < 0; t++) {
+      before = { x: px(a.state, hero), y: py(a.state, hero) };
+      if (a.step(forward).includes('BossRepelLanded')) landed = a.at();
+    }
+    // Допуск — один шаг рывка: толчок сработал внутри радиуса, а `Locomotion`
+    // того же тика уже унёс жертву на первый шаг отброса.
+    expect(distance(a.state, hero, a.boss)).toBeLessThanOrEqual(REPEL_RADIUS + DODGE_SPEED);
     expect(hp(a.state, hero)).toBe(HERO_HP - REPEL_DAMAGE);
+    // Контроль: до порога он шёл, а не получил толчок с первого тика издалека.
+    expect(landed).toBeGreaterThan(1);
 
     // Отброс — БУКВАЛЬНО рывок жертвы: тот же `LOCOMOTION_DODGE`, что ставит
     // герою его собственный уклон (LOC-3, LOC-4), и число тиков считается от
-    // его же `dodgeSpeed`. Единица разницы служебная: способность пишет
-    // состояние командой, а `LocomotionSystem` того же тика уже отрабатывает
-    // первый шаг манёвра.
+    // его же `dodgeSpeed`. Единица разницы служебная: система пишет состояние
+    // командой, а `LocomotionSystem` того же тика уже отрабатывает первый шаг.
+    const away = distance(a.state, hero, a.boss);
     expect(coreWorld.getField(a.state.world, hero, 'LocomotionState', 'state')).toBe(LOCOMOTION_DODGE);
     const left = coreWorld.getField(a.state.world, hero, 'LocomotionState', 'ticksLeft');
     expect(left).toBe(KNOCKBACK_TICKS - 1);
@@ -514,14 +628,34 @@ describe('отталкивание: пассивный микровзрыв на
     expect(distance(a.state, hero, a.boss)).toBeGreaterThan(away);
   });
 
+  it('пока герой держится вплотную, толчок повторяется — но не чаще интервала', () => {
+    // Вторая половина жалобы: «и второй раз ничего». Прежняя реализация
+    // ВЫБРАСЫВАЛА запомненный контакт на следующем тике, поэтому подошедший в
+    // неудачный момент не получал толчка ни разу. Здесь герой давит вперёд всё
+    // время, и меряются ОБА свойства: повтор случается и случается не чаще
+    // объявленного интервала.
+    const a = stand([[20, 24]], only());
+    const forward = [{ moveX: FIXED_ONE }];
+    const at: number[] = [];
+    for (let t = 1; t <= 900; t++) {
+      if (a.step(forward).includes('BossRepelLanded')) at.push(a.at());
+    }
+    expect(at.length).toBeGreaterThanOrEqual(2);
+    for (let i = 1; i < at.length; i++) {
+      expect(at[i]! - at[i - 1]!, `толчки на тиках ${at.join(',')}`).toBeGreaterThanOrEqual(
+        REPEL_INTERVAL,
+      );
+    }
+  });
+
   it('микровзрыв радиальный: разлетаются все, кто стоит вплотную', () => {
     // «При столкновении происходит микровзрыв» — взрыв, а не тычок в одного:
     // иначе при двух подбежавших в один тик толчок доставался бы тому, кого
     // раньше вернул запрос физики (QUERY-2), и пассивка читалась бы как
     // «иногда не срабатывает».
-    const a = stand([[22.5, 24], [25.5, 24]], repelOnly());
+    const a = stand([[22.5, 24], [25.5, 24]], only());
     const forward = [{ moveX: FIXED_ONE }, { moveX: -FIXED_ONE }];
-    until(a, 'BossRepelLanded', 200, forward);
+    until(a, 'BossRepelLanded', 300, forward);
     for (const hero of a.heroes) {
       expect(distance(a.state, hero, a.boss)).toBeLessThan(REPEL_RADIUS + DODGE_SPEED * KNOCKBACK_TICKS);
       expect(hp(a.state, hero)).toBe(HERO_HP - REPEL_DAMAGE);
@@ -532,9 +666,9 @@ describe('отталкивание: пассивный микровзрыв на
     // Курс инстанса производен от скорости (REND-13), и стоящего босса он не
     // поворачивает. Событие несёт `dirX`/`dirY` на жертву — по ним рендер
     // доворачивает корпус (REND-5).
-    const a = stand([[24, 20]], repelOnly());
+    const a = stand([[24, 20]], only());
     const hero = a.heroes[0]!;
-    until(a, 'BossRepelLanded', 200, [{ moveY: FIXED_ONE }]);
+    until(a, 'BossRepelLanded', 300, [{ moveY: FIXED_ONE }]);
     const landed = a.last.events.find((event) => event.type === 'BossRepelLanded')!;
     expect(landed.data.entity).toBe(a.boss);
     expect(landed.data.target).toBe(hero);
@@ -544,41 +678,36 @@ describe('отталкивание: пассивный микровзрыв на
     expect(coreWorld.getField(a.state.world, hero, 'LocomotionState', 'dirY')).toBeLessThan(0);
   });
 
-  it('кулдаун держит паузу: второго толчка подряд не бывает', () => {
-    const a = stand([[20, 24]], repelOnly());
+  it('идущий каст толчок НЕ срывает и толчку каст не мешает', () => {
+    // Ровно то, ради чего пассивка перестала быть способностью: `supersede`
+    // (ABIL-6) обрывает чужой каст того же владельца безусловно, и прежняя
+    // реализация вынуждена была молчать, пока идёт любая фаза, — то есть почти
+    // всегда, потому что замах в 48 тиков стоит на кулдауне в 60. Теперь
+    // толчок — система, и обе половины проверяются на одном прогоне: он
+    // случается ВНУТРИ замаха, а замах доживает до волны ровно за свои 800 мс.
+    const a = stand([[21, 24]], only('SlotBossStrike'));
     const forward = [{ moveX: FIXED_ONE }];
-    until(a, 'BossRepelLanded', 200, forward);
-    for (let t = 1; t < REPEL_CD; t++) {
-      expect(a.step(forward)).not.toContain('BossRepelLanded');
-    }
-  });
-
-  it('идущий каст толчок не срывает: замах доходит до волны', () => {
-    // `supersede` (ABIL-6) прерывает чужой каст того же владельца безусловно,
-    // поэтому подбежавший герой мог бы срывать боссу каждый замах собственным
-    // телом. Гейт живёт в `BossRepelAsk`: пока хоть один слот в фазе, просьба
-    // не публикуется вовсе.
-    const a = stand([[20, 24]]);
-    const hero = a.heroes[0]!;
-    const forward = [{ moveX: FIXED_ONE }];
-    const windup = until(a, 'BossStrikeWindup', 20, forward);
-    let bumped = false;
+    const windup = until(a, 'BossStrikeWindup', 60, forward);
+    let repelled = -1;
+    let landed = -1;
     while (a.at() < windup + STRIKE_WINDUP) {
       const events = a.step(forward);
-      if (events.includes('Collision')) bumped = true;
-      // Пока замах идёт, толчок молчит — иначе он и оборвал бы этот замах.
-      if (a.at() < windup + STRIKE_WINDUP) expect(events).not.toContain('BossRepelLanded');
+      if (events.includes('BossRepelLanded') && repelled < 0) repelled = a.at();
+      if (events.includes('BossStrikeLanded')) landed = a.at();
     }
-    expect(bumped).toBe(true);
-    // Замах дожил до волны ровно 800 мс, несмотря на столкновения.
-    expect(a.last.events.map((event) => event.type)).toContain('BossStrikeLanded');
-    expect(hp(a.state, hero)).toBe(HERO_HP - STRIKE_DAMAGE);
+    // Толчок сработал, пока слот был В ФАЗЕ, — прежний гейт этого не допускал.
+    expect(repelled, 'толчок не сработал за замах').toBeGreaterThan(0);
+    expect(repelled).toBeLessThanOrEqual(windup + STRIKE_WINDUP);
+    // И замах не оборвался: волна вышла ровно через свои 48 тиков.
+    expect(landed).toBe(windup + STRIKE_WINDUP);
   });
 });
 
 describe('удар: замах и волна вперёд', () => {
   it('замах длится 800 мс, потом волна — и кулдаун в секунду', () => {
-    const a = stand([[27, 24]]);
+    // Удар в изоляции: поле и призыв стоят в ротации ВЫШЕ него (они реже
+    // готовы), и на полной сцене первые полторы секунды босса заняты ими.
+    const a = stand([[27, 24]], only('SlotBossStrike'));
     const hero = a.heroes[0]!;
     const windup = until(a, 'BossStrikeWindup', 20);
     const landed = until(a, 'BossStrikeLanded', 200);
@@ -612,7 +741,7 @@ describe('удар: замах и волна вперёд', () => {
   it('волна бьёт вперёд, а не кругом', () => {
     // Крест героев на равном расстоянии: кого бы жребий ни выбрал целью,
     // задет обязан быть ровно он — остальные трое стоят вбок и назад.
-    const a = stand([[27, 24], [21, 24], [24, 27], [24, 21]]);
+    const a = stand([[27, 24], [21, 24], [24, 27], [24, 21]], only('SlotBossStrike'));
     until(a, 'BossStrikeLanded', 200);
     const landed = a.last.events.find((event) => event.type === 'BossStrikeLanded')!;
     const dirX = landed.data.dirX!;
@@ -638,28 +767,30 @@ describe('удар: замах и волна вперёд', () => {
   it('за досягаемостью волны урона нет: убежавший от неё цел', () => {
     // Босс на замахе СТОИТ (`BossCastHold` гасит ему скорость), и герой успевает
     // уйти дальше, чем волна пролетает за свою жизнь.
-    const reach = WAVE_SPEED * WAVE_TICKS;
-    const away = stand([[28.5, 24]]);
+    const away = stand([[27.5, 24]], only('SlotBossStrike'));
     until(away, 'BossStrikeLanded', 200, [{ moveX: FIXED_ONE }]);
     for (let t = 1; t <= WAVE_TICKS + 2; t++) away.step([{ moveX: FIXED_ONE }]);
     expect(hp(away.state, away.heroes[0]!)).toBe(HERO_HP);
-    expect(px(away.state, away.heroes[0]!) - px(away.state, away.boss)).toBeGreaterThan(reach);
+    expect(px(away.state, away.heroes[0]!) - px(away.state, away.boss)).toBeGreaterThan(
+      STRIKE_REACH,
+    );
     // И волна погасла сама, а не застряла в мире.
     expect(tagged(away, 'BossWave')).toHaveLength(0);
 
     // Тот же стенд без бегства — попадание: разница ровно в дистанции.
-    const held = stand([[28.5, 24]]);
+    const held = stand([[27.5, 24]], only('SlotBossStrike'));
     until(held, 'BossStrikeLanded', 200);
     for (let t = 1; t <= WAVE_TICKS; t++) held.step();
     expect(hp(held.state, held.heroes[0]!)).toBe(HERO_HP - STRIKE_DAMAGE);
   });
 });
 
-describe('слем: рёв и круговой взрыв', () => {
-  it('рёв 1.5 с, взрыв в три радиуса тела, 500 урона и отброс', () => {
+describe('слэм: рёв и круговой взрыв', () => {
+  it('рёв 1.5 с, взрыв в шесть радиусов тела, 500 урона и отброс', () => {
     // Ближний герой внутри взрыва, дальний — снаружи: радиус проверяется
-    // границей, а не фактом попадания.
-    const a = stand([[25.5, 24], [26.6, 24]]);
+    // границей, а не фактом попадания. Слэм в изоляции: рёв длинный, и сосед по
+    // ротации успел бы отобрать у него ход.
+    const a = stand([[26, 24], [28, 24]], only('SlotBossSlam'));
     const near = a.heroes[0]!;
     const far = a.heroes[1]!;
     expect(distance(a.state, near, a.boss)).toBeLessThan(SLAM_RADIUS);
@@ -688,7 +819,7 @@ describe('слем: рёв и круговой взрыв', () => {
 
 describe('разгон: наводка, рывок и полоса огня', () => {
   it('наводится 2 с, потом рассекает цель на 500 — ровно раз за рывок', () => {
-    const a = stand([[36, 24]]);
+    const a = stand([[36, 24]], noRepel(only('SlotBossCharge')));
     const hero = a.heroes[0]!;
     const aim = until(a, 'BossChargeAim', 20);
     const start = until(a, 'BossChargeStarted', 300);
@@ -721,14 +852,19 @@ describe('разгон: наводка, рывок и полоса огня', ()
     // Босс стоит ПОД плато (уровень 1 над 0), допуск подъёма ему снят: шагом
     // он упирается в обрыв, потому что идёт строго на север и скользить вдоль
     // стены ему нечем. Разница между двумя прогонами — только в дистанции до
-    // цели, то есть в том, дотягивается ли до неё удар или просится разгон.
-    const flat = bossCollider({ cliffRise: 0 }, bossAt(14, 8, health('Hero', 400000)));
+    // цели, то есть в том, дотягивается ли до неё удар или просится разгон:
+    // порог ровно один и тот же — досягаемость волны.
+    const flat = noRepel(
+      bossCollider({ cliffRise: 0 }, bossAt(14, 8, health('Hero', 400000, only('SlotBossCharge')))),
+    );
+    const near = 8 + STRIKE_REACH / FIXED_ONE - 0.2;
+    const far = 8 + STRIKE_REACH / FIXED_ONE + 2;
 
-    const walk = stand([[14, 12.5]], flat);
+    const walk = stand([[14, near]], flat);
     for (let t = 1; t <= 400; t++) walk.step();
     expect(py(walk.state, walk.boss)).toBeLessThan(11 * FIXED_ONE);
 
-    const dash = stand([[14, 14]], flat);
+    const dash = stand([[14, far]], flat);
     for (let t = 1; t <= 400; t++) dash.step();
     expect(py(dash.state, dash.boss)).toBeGreaterThan(11 * FIXED_ONE);
   });
@@ -736,12 +872,13 @@ describe('разгон: наводка, рывок и полоса огня', ()
   it('оставляет полосу огня: 4 с жизни и 100 урона в секунду', () => {
     // Разгон в изоляции: после рывка босс стоит вплотную и герою нечем мешать
     // гореть — иначе тики огня перемешались бы с ударами и отбросами.
-    const a = stand([[36, 24]], health('Hero', 400000, only('SlotBossCharge')));
+    const a = stand([[36, 24]], noRepel(health('Hero', 400000, only('SlotBossCharge'))));
     const started = until(a, 'BossChargeStarted', 300);
     const ended = until(a, 'BossChargeEnded', 100);
     const patches = tagged(a, 'BossFire');
-    // Полоса, а не одно пятно: пятно на каждый тик рывка.
-    expect(patches.length).toBe(ended - started + 1);
+    // Полоса, а не одно пятно: пятно ЧЕРЕЗ тик рывка — по одному на каждый
+    // нечётный остаток, последнее в конечной точке (`left == 1`).
+    expect(patches.length).toBe(Math.ceil((ended - started + 1) / 2));
     // И полоса СПЛОШНАЯ: соседние пятна отстоят ровно на два своих радиуса,
     // то есть касаются. Щель между ними горела бы не по всей полосе, а
     // оболочка манифеста рисовала бы её сплошной — игрок стоял бы в огне и не
@@ -754,7 +891,7 @@ describe('разгон: наводка, рывок и полоса огня', ()
     }
     expect(
       coreWorld.getField(a.state.world, patches[0]!, 'AbilityDuration', 'remaining'),
-    ).toBeGreaterThan(FIRE_LIFE - patches.length - 2);
+    ).toBeGreaterThan(FIRE_LIFE - 2 * patches.length - 2);
 
     // Тики огня: по десятке десять раз в секунду, источник — пятно, а не сам
     // босс. Считается СКОРОСТЬ: стоящему в полосе она обязана дать ровно сто
@@ -805,17 +942,299 @@ describe('разгон: наводка, рывок и полоса огня', ()
   });
 });
 
+describe('поле замедления: жёлтый купол, гасящий время', () => {
+  /** Множитель времени сущности (TIME-2); без компонента — обычный темп. */
+  const timeScale = (a: Stand, entity: EntityId): number =>
+    coreWorld.hasComponent(a.state.world, entity, 'TimeScale')
+      ? coreWorld.getField(a.state.world, entity, 'TimeScale', 'value')
+      : FIXED_ONE;
+
+  it('гасит время героя ПЛАВНО: с единицы до 0.2 за четыре секунды, дальше держит', () => {
+    // Толчок заперт: он уносит жертву на пять единиц, то есть за край поля, —
+    // а предмет проверки здесь спад, а не пассивка.
+    const a = stand([[26, 24]], noRepel(only('SlotBossField')));
+    const hero = a.heroes[0]!;
+    const cast = until(a, 'BossFieldCast', 60);
+    expect(tagged(a, 'BossField')).toHaveLength(1);
+
+    const trace: number[] = [];
+    for (let t = 1; t <= FIELD_RAMP + 240; t++) {
+      a.step();
+      trace.push(timeScale(a, hero));
+    }
+    // Спад монотонный — ни ступеньки вверх.
+    for (let i = 1; i < trace.length; i++) {
+      expect(trace[i]!, `тик ${i}`).toBeLessThanOrEqual(trace[i - 1]!);
+    }
+    // И он именно ПЛАВНЫЙ, а не «через четыре секунды вдруг 0.2»: за окно спада
+    // множитель принимает сотни разных значений, а не два.
+    const distinct = new Set(trace.slice(0, FIELD_RAMP));
+    expect(distinct.size).toBeGreaterThan(100);
+    // Середина окна — строго между единицей и полом: ни там, ни там.
+    const middle = trace[FIELD_RAMP / 2]!;
+    expect(middle).toBeLessThan(FIXED_ONE);
+    expect(middle).toBeGreaterThan(FIELD_FLOOR);
+    // К концу окна — ровно объявленные 0.2, и дальше они держатся.
+    expect(trace[FIELD_RAMP + 2]).toBe(FIELD_FLOOR);
+    expect(trace[trace.length - 1]).toBe(FIELD_FLOOR);
+    // Контроль: герой всё это время внутри поля, иначе мерился бы выход из него.
+    const field = tagged(a, 'BossField')[0]!;
+    expect(distance(a.state, hero, field)).toBeLessThan(FIELD_RADIUS);
+    expect(cast).toBeGreaterThan(0);
+  });
+
+  it('гаснет через 12 секунд и снимает своё замедление', () => {
+    const a = stand([[26, 24]], noRepel(only('SlotBossField')));
+    const hero = a.heroes[0]!;
+    const cast = until(a, 'BossFieldCast', 60);
+    for (let t = 1; t <= FIELD_RAMP + 10; t++) a.step();
+    expect(timeScale(a, hero)).toBe(FIELD_FLOOR);
+
+    const expired = until(a, 'BossFieldExpired', FIELD_LIFE + 20);
+    // Минус тик служебный: зона появляется на тике каста, а система
+    // длительности (order 810) успевает убавить остаток уже на нём же.
+    expect(expired - cast).toBe(FIELD_LIFE - 1);
+    expect(tagged(a, 'BossField')).toHaveLength(0);
+    // Источник снят: иначе герой остался бы замедленным навсегда — списки
+    // источников (TIME-7) сами не рассасываются.
+    a.step();
+    expect(timeScale(a, hero)).toBe(FIXED_ONE);
+  });
+
+  it('замедляет и снаряды, а самого босса — нет', () => {
+    // Двое по краям поля: босс подходит к одному вплотную, и выстрел ВТОРОГО
+    // летит через всё поле. Стенд с одним героем мерил бы не то — снаряд, разо-
+    // рвавшийся о босса в тот же тик, замедляться просто не успевает.
+    const a = stand([[20, 24], [28, 24]], noRepel(only('SlotBossField')));
+    until(a, 'BossFieldCast', 60);
+    for (let t = 1; t <= FIELD_RAMP + 10; t++) a.step();
+    // Босс стоит в собственном поле и идёт обычным темпом: запросы ауры
+    // отобраны тегами героя и снаряда, и кастера в них нет.
+    expect(timeScale(a, a.boss)).toBe(FIXED_ONE);
+
+    let seen = 0;
+    let slowest = FIXED_ONE;
+    for (let t = 1; t <= 150; t++) {
+      const fire = t % 30 === 1 ? CAST : 0;
+      a.step([{ buttons: fire }, { buttons: fire }]);
+      for (const ball of tagged(a, 'Fireball')) {
+        seen += 1;
+        slowest = Math.min(slowest, timeScale(a, ball));
+      }
+    }
+    // Контроль: снаряды в мире были, иначе проверялось бы пустое множество.
+    expect(seen).toBeGreaterThan(0);
+    expect(slowest).toBe(FIELD_FLOOR);
+  });
+
+  it('поле кастуется, только когда в его радиусе есть кому мешать', () => {
+    // Дальний герой — за краем поля: сигнал готовности молчит, и босс идёт
+    // сближаться, а не тратит двадцатисекундный кулдаун в пустоту.
+    const far = stand([[38, 24]], noRepel(only('SlotBossField')));
+    for (let t = 1; t <= 30; t++) {
+      expect(far.step(), `тик ${t}`).not.toContain('BossFieldReady');
+    }
+    expect(distance(far.state, far.heroes[0]!, far.boss)).toBeGreaterThan(FIELD_RADIUS);
+    // Тот же стенд вблизи — сигнал есть: разница ровно в дистанции.
+    const near = stand([[26, 24]], noRepel(only('SlotBossField')));
+    expect(until(near, 'BossFieldReady', 30)).toBeGreaterThan(0);
+  });
+});
+
+describe('призыв: три скелета перед боссом', () => {
+  const minions = (a: Stand): readonly EntityId[] => tagged(a, 'BossMinion');
+
+  it('рёв 1.5 с — и трое встают ПЕРЕД боссом, по его прицелу', () => {
+    const a = stand([[30, 24]], noRepel(only('SlotBossSpawn')));
+    const roar = until(a, 'BossSpawnRoar', 30);
+    expect(minions(a)).toHaveLength(0);
+    const born = until(a, 'BossSpawned', SPAWN_ROAR + 10);
+    expect(born - roar).toBe(SPAWN_ROAR);
+    expect(minions(a)).toHaveLength(MINION_COUNT);
+
+    const aimX = coreWorld.getField(a.state.world, a.boss, 'BossAim', 'dirX');
+    const aimY = coreWorld.getField(a.state.world, a.boss, 'BossAim', 'dirY');
+    for (const minion of minions(a)) {
+      const dx = px(a.state, minion) - px(a.state, a.boss);
+      const dy = py(a.state, minion) - py(a.state, a.boss);
+      // «Перед боссом» — проекция на прицел строго положительна.
+      expect((dx * aimX + dy * aimY) / FIXED_ONE).toBeGreaterThan(0);
+      // И не внутри его тела: они стоят снаружи, а не в кастере.
+      expect(Math.hypot(dx, dy)).toBeGreaterThan(BOSS_RADIUS + MINION_RADIUS);
+    }
+  });
+
+  it('идут за той же жертвой, что и хозяин — и после того, как он её сменил', () => {
+    // Ловушка платформы: `chooseTarget` (NPC-5) переписывает `NpcAgent.target`
+    // каждый тик, поэтому одноразовой записи при спавне не хватило бы —
+    // система сцены переписывает цель ПОСЛЕ поведения, каждый тик.
+    const a = stand([[30, 24], [18, 24]], noRepel(only('SlotBossSpawn')));
+    until(a, 'BossSpawned', 200);
+    const hunted = (): EntityId => coreWorld.getField(a.state.world, a.boss, 'BossHunt', 'hunted');
+    const first = hunted();
+    for (let t = 1; t <= 30; t++) a.step();
+    for (const minion of minions(a)) {
+      expect(coreWorld.getField(a.state.world, minion, 'NpcAgent', 'target')).toBe(hunted());
+    }
+    // Смена жертвы: окно охоты истекает, и скелеты обязаны переехать вместе с
+    // хозяином, а не остаться на прежней цели.
+    let switched = -1;
+    for (let t = 1; t <= HUNT_TICKS + 60 && switched < 0; t++) {
+      a.step();
+      if (hunted() !== first) switched = a.at();
+    }
+    expect(switched, 'босс так и не сменил цель').toBeGreaterThan(0);
+    const alive = minions(a);
+    expect(alive.length).toBeGreaterThan(0);
+    for (const minion of alive) {
+      expect(coreWorld.getField(a.state.world, minion, 'NpcAgent', 'target')).toBe(hunted());
+    }
+  });
+
+  it('в контакте грызут по 50 раз в секунду', () => {
+    const a = stand([[30, 24]], noRepel(only('SlotBossSpawn', 'SlotBossStrike')));
+    const hero = a.heroes[0]!;
+    until(a, 'BossSpawned', 200);
+    const bites = new Map<EntityId, number[]>();
+    for (let t = 1; t <= 400; t++) {
+      a.step();
+      for (const event of a.last.events) {
+        if (event.type !== 'Damage') continue;
+        if (event.data.entity !== hero) continue;
+        if (event.data.amount !== MINION_MELEE) continue;
+        const source = event.data.source!;
+        expect(coreWorld.hasTag(a.state.world, source, 'BossMinion')).toBe(true);
+        bites.set(source, [...(bites.get(source) ?? []), a.at()]);
+      }
+    }
+    expect(bites.size).toBeGreaterThan(0);
+    let periodic = 0;
+    for (const ticks of bites.values()) {
+      for (let i = 1; i < ticks.length; i++) {
+        expect(ticks[i]! - ticks[i - 1]!).toBe(MINION_MELEE_CD);
+        periodic += 1;
+      }
+    }
+    // Контроль: мерился ПЕРИОД, а не единственный укус.
+    expect(periodic).toBeGreaterThan(0);
+  });
+
+  it('живёт десять секунд и уходит взрывом на 200', () => {
+    // Скелеты всё это время висят на герое, поэтому истечение срока проверяется
+    // не только событием: взрыв обязан снять с него свои двести — по одному
+    // разу на каждого. Запас hp герою поднят: предмет проверки ВЗРЫВ, а не то,
+    // сколько он проживёт под тремя скелетами.
+    const a = stand([[30, 24]], noRepel(health('Hero', 400000, only('SlotBossSpawn'))));
+    const hero = a.heroes[0]!;
+    const born = until(a, 'BossSpawned', 200);
+    const bursts: number[] = [];
+    let blasted = 0;
+    for (let t = 1; t <= MINION_LIFE + 30; t++) {
+      a.step();
+      for (const event of a.last.events) {
+        if (event.type === 'BossMinionBurst') bursts.push(a.at());
+        if (
+          event.type === 'Damage' &&
+          event.data.entity === hero &&
+          event.data.amount === MINION_BURST
+        ) {
+          blasted += 1;
+        }
+      }
+    }
+    expect(bursts).toHaveLength(MINION_COUNT);
+    for (const at of bursts) expect(at - born).toBe(MINION_LIFE);
+    expect(blasted).toBe(MINION_COUNT);
+    expect(tagged(a, 'BossMinion')).toHaveLength(0);
+  });
+
+  it('фаербол снимает скелета с одного попадания, и тот взрывается на 200', () => {
+    // Скелет ЛОВИТ снаряд (его слой в маске снаряда) и умирает: сотня hp против
+    // двухсот урона. Взрыв на смерти — вторая ветка того же исхода, что и
+    // истечение срока, и стреляет герой в упор именно ради неё: убитый вплотную
+    // скелет обязан достать взрывом того, кто его добил.
+    const a = stand([[30, 24]], noRepel(health('Hero', 400000, only('SlotBossSpawn'))));
+    const hero = a.heroes[0]!;
+    until(a, 'BossSpawned', 200);
+    const before = tagged(a, 'BossMinion').length;
+    expect(before).toBe(MINION_COUNT);
+
+    // Огонь открывается, только когда скелет уже в зоне собственного взрыва:
+    // иначе снаряд снял бы его на подходе, и по герою бить было бы нечему.
+    let killed = -1;
+    let burst = -1;
+    let hurt = -1;
+    let press = false;
+    for (let t = 1; t <= 600 && burst < 0; t++) {
+      const close = tagged(a, 'BossMinion').some(
+        (minion) => distance(a.state, minion, hero) <= MINION_BURST_RADIUS,
+      );
+      press = close && killed < 0 && !press;
+      const hpBefore = hp(a.state, hero);
+      a.step([{ buttons: press ? CAST : 0 }]);
+      for (const event of a.last.events) {
+        if (
+          event.type === 'EntityDied' &&
+          killed < 0 &&
+          coreWorld.hasTag(a.state.world, event.data.entity!, 'BossMinion')
+        ) {
+          killed = a.at();
+        }
+        if (event.type === 'BossMinionBurst' && killed > 0) burst = a.at();
+        if (
+          event.type === 'Damage' &&
+          event.data.entity === hero &&
+          event.data.amount === MINION_BURST
+        ) {
+          hurt = hpBefore - hp(a.state, hero);
+        }
+      }
+    }
+    expect(killed, 'скелет не погиб от снаряда').toBeGreaterThan(0);
+    // Взрыв — на СЛЕДУЮЩЕМ тике после смерти: урон обязан успеть к системе
+    // применения (order 320), а система смерти стоит позже неё (322).
+    expect(burst).toBe(killed + 1);
+    expect(tagged(a, 'BossMinion').length).toBeLessThan(before);
+    // И добивший получил свои двести: он стоял в зоне взрыва — за тем скелет
+    // к нему и шёл.
+    expect(hurt).toBeGreaterThanOrEqual(MINION_BURST);
+  });
+
+  it('купол героя гасит время скелетам', () => {
+    const a = stand([[30, 24]], noRepel(only('SlotBossSpawn')));
+    until(a, 'BossSpawned', 200);
+    // Ждём, пока скелеты подойдут, и ставим купол под ноги.
+    for (let t = 1; t <= 90; t++) a.step();
+    a.step([{ buttons: 1 << ACTION_BITS.slowDome }]);
+    expect(tagged(a, 'SlowDome')).toHaveLength(1);
+    const dome = tagged(a, 'SlowDome')[0]!;
+    let slowed = 0;
+    for (let t = 1; t <= 10; t++) {
+      a.step();
+      for (const minion of tagged(a, 'BossMinion')) {
+        if (distance(a.state, minion, dome) > DOME_RADIUS) continue;
+        if (!coreWorld.hasComponent(a.state.world, minion, 'TimeScale')) continue;
+        if (coreWorld.getField(a.state.world, minion, 'TimeScale', 'value') < FIXED_ONE) slowed += 1;
+      }
+    }
+    expect(slowed, 'ни один скелет под куполом не замедлился').toBeGreaterThan(0);
+  });
+});
+
 describe('босс, арена и собственная шкура', () => {
   it('всходит на плато: допуск подъёма против нулевого', () => {
     // Единственная разница между прогонами — `Collider.cliffRise` босса: с
     // допуском в один уровень он вступает на плато ровно там же, где герой
-    // запрыгивает (PHYS-11), без допуска — упирается в обрыв.
-    const scene = bossAt(14, 8, health('Hero', 400000));
-    const climbs = stand([[14, 12.5]], scene);
+    // запрыгивает (PHYS-11), без допуска — упирается в обрыв. Способности
+    // заперты: предмет проверки — ШАГ, и разгон сквозь обрыв (своя проверка
+    // выше) здесь только мешал бы.
+    const scene = only();
+    const walkable = bossAt(14, 8, health('Hero', 400000, scene));
+    const climbs = stand([[14, 12.5]], walkable);
     for (let t = 1; t <= 400; t++) climbs.step();
     expect(py(climbs.state, climbs.boss)).toBeGreaterThan(11 * FIXED_ONE);
 
-    const stalls = stand([[14, 12.5]], bossCollider({ cliffRise: 0 }, scene));
+    const stalls = stand([[14, 12.5]], bossCollider({ cliffRise: 0 }, walkable));
     for (let t = 1; t <= 400; t++) stalls.step();
     expect(py(stalls.state, stalls.boss)).toBeLessThan(11 * FIXED_ONE);
   });
@@ -875,8 +1294,10 @@ describe('босс, арена и собственная шкура', () => {
   });
 
   it('герой упирается в босса и не оказывается за ним', () => {
-    // Способности запаркованы: предмет проверки — ТЕЛО босса, а не его толчок.
-    const a = stand([[21, 24]], only());
+    // Способности запаркованы, толчок заперт: предмет проверки — ТЕЛО босса, а
+    // не пассивка. Толчок радиальный и срабатывает за полторы единицы до
+    // контакта — с ним герой до тела просто не дошёл бы.
+    const a = stand([[21, 24]], noRepel(only()));
     const hero = a.heroes[0]!;
     const contact = BOSS_RADIUS + HERO_RADIUS;
     for (let t = 0; t < 90; t++) {
@@ -921,7 +1342,7 @@ describe('босс, арена и собственная шкура', () => {
     const hero = a.heroes[0]!;
     const healthy = hp(a.state, hero);
     let crossed = false;
-    for (let t = 0; t < REPEL_CD + 60; t++) {
+    for (let t = 0; t < REPEL_INTERVAL + 60; t++) {
       expect(a.step([{ moveX: FIXED_ONE }])).not.toContain('BossRepelLanded');
       if (px(a.state, hero) > px(a.state, a.boss)) crossed = true;
     }
@@ -984,14 +1405,20 @@ describe('босс, арена и собственная шкура', () => {
     // исключает его `withTag: "Hero"` — тег есть только у героев.
     const a = stand([[26, 24], [30, 24]]);
     const seen = new Set<string>();
-    for (let t = 1; t <= 600; t++) {
+    for (let t = 1; t <= 900; t++) {
       for (const type of a.step()) seen.add(type);
       expect(hp(a.state, a.boss)).toBe(BOSS_HP);
     }
-    // Контроль: за прогон отработали все три активные способности.
+    // Контроль: за прогон отработали все пять активных способностей и пассивка
+    // — иначе «себя не задевает» проверялось бы на том, чего не случилось.
     expect(seen).toContain('BossStrikeLanded');
     expect(seen).toContain('BossSlamLanded');
     expect(seen).toContain('BossChargeStarted');
+    expect(seen).toContain('BossFieldCast');
+    expect(seen).toContain('BossSpawned');
+    expect(seen).toContain('BossRepelLanded');
+    // Скелеты — тоже «свои»: ни их удар, ни их взрыв босса не касаются.
+    expect(seen).toContain('BossMinionBurst');
   });
 
   it('каждый площадной запрос босса отобран тегом героя', () => {
@@ -1009,8 +1436,8 @@ describe('босс, арена и собственная шкура', () => {
       if (each?.query?.withinRadius !== undefined) queries.push(each.query);
       for (const value of Object.values(record)) walk(value);
     };
-    for (const id of ['bossSlam', 'bossRepel', 'bossFireAura']) walk(abilityDef(id));
-    for (const name of ['BossReady', 'BossDashDrive']) walk(systemDef(name));
+    for (const id of ['bossSlam', 'bossFireAura', 'bossMinionMelee']) walk(abilityDef(id));
+    for (const name of ['BossReady', 'BossDashDrive', 'BossRepel', 'MinionEnd']) walk(systemDef(name));
     // Удар в этот перечень не входит намеренно: его урон едет снарядом, а не
     // выборкой, и «только по героям» держит там условие `HitMark` — компонент,
     // которого нет ни у босса, ни у его спутников.
@@ -1040,11 +1467,35 @@ describe('числа и картинка босса: ретюн виден в д
       expect.arrayContaining([SLAM_DAMAGE, SLAM_ROAR, SLAM_RADIUS, MEDIUM]),
     );
     expect(numbers(abilityDef('bossCharge'))).toEqual(expect.arrayContaining([CHARGE_AIM]));
-    expect(numbers(abilityDef('bossRepel'))).toEqual(
-      expect.arrayContaining([REPEL_DAMAGE, REPEL_CD, REPEL_RADIUS, MEDIUM]),
+    // Толчок — СИСТЕМА, а не определение: и урон, и радиус, и отброс, и срок
+    // паузы читаются из неё.
+    expect(numbers(systemDef('BossRepel'))).toEqual(
+      expect.arrayContaining([REPEL_DAMAGE, REPEL_INTERVAL, REPEL_RADIUS, MEDIUM]),
     );
     expect(numbers(abilityDef('bossFireAura'))).toEqual(
       expect.arrayContaining([FIRE_DAMAGE, FIRE_PERIOD, FIRE_RADIUS]),
+    );
+    // Поле замедления: радиус, жизнь, кулдаун и окно спада — все в определении.
+    expect(numbers(abilityDef('bossField'))).toEqual(
+      expect.arrayContaining([FIELD_RADIUS, FIELD_LIFE, FIELD_CD, FIELD_MODIFIER_ID]),
+    );
+    expect(numbers(abilityDef('bossFieldAura'))).toEqual(
+      expect.arrayContaining([FIELD_LIFE, FIELD_RAMP, FIELD_MODIFIER_ID]),
+    );
+    // Постоянный id источника замедления законен ровно потому, что полей в мире
+    // не бывает двух: кулдаун строго длиннее жизни зоны. Сойдутся — два поля
+    // начнут переписывать один и тот же слот списка, и снятие одним сняло бы
+    // замедление, наложенное другим.
+    expect(FIELD_CD).toBeGreaterThan(FIELD_LIFE);
+    // Призыв и скелет: рёв, кулдаун, удар в контакт и взрыв на смерти.
+    expect(numbers(abilityDef('bossSpawn'))).toEqual(
+      expect.arrayContaining([SPAWN_ROAR, SPAWN_CD, MINION_COUNT]),
+    );
+    expect(numbers(abilityDef('bossMinionMelee'))).toEqual(
+      expect.arrayContaining([MINION_MELEE, MINION_MELEE_CD, MINION_REACH]),
+    );
+    expect(numbers(systemDef('MinionEnd'))).toEqual(
+      expect.arrayContaining([MINION_BURST, MINION_BURST_RADIUS, MINION_LIFE]),
     );
     expect(numbers(systemDef('BossDashDrive'))).toContain(DASH_DAMAGE);
     expect(numbers(systemDef('BossTarget'))).toContain(HUNT_TICKS);
@@ -1060,12 +1511,48 @@ describe('числа и картинка босса: ретюн виден в д
     // тела и шаг рывка читаются из документа, и производные от них величины
     // обязаны сойтись с тем, что там же и записано.
     const bodyRadius = (boss.components.Collider as Record<string, number>).radius!;
-    expect(numbers(abilityDef('bossSlam'))).toContain(3 * bodyRadius);
+    expect(numbers(abilityDef('bossSlam'))).toContain(6 * bodyRadius);
     const dashStep = numbers(systemDef('BossDashDrive')).find((value) => value === DASH_SPEED);
     expect(dashStep, 'шаг рывка не найден в BossDashDrive').toBe(DASH_SPEED);
     expect(numbers(abilityDef('bossFireAura'))).toContain(FIRE_RADIUS);
-    // Полоса сплошная и без нахлёста ровно тогда, когда шаг равен диаметру.
-    expect(dashStep).toBe(2 * FIRE_RADIUS);
+    // Полоса сплошная и без нахлёста ровно тогда, когда пятно ложится через
+    // тик, а его радиус равен шагу: центры соседних тогда отстоят на диаметр.
+    expect(dashStep).toBe(FIRE_RADIUS);
+    // Досягаемость удара и жизнь волны — одно и то же число, посчитанное
+    // дважды: сенсор сравнивает с ним дистанцию, волна пролетает его сама.
+    expect(numbers(systemDef('BossReady'))).toContain(STRIKE_REACH);
+    expect(numbers(systemDef('BossReady'))).toContain(SLAM_RADIUS);
+    expect(numbers(systemDef('BossReady'))).toContain(FIELD_RADIUS);
+    // Полтора купола героя — та самая связь, ради которой поле и заведено.
+    const dome = SCENE.prefabs!.find((prefab) => prefab.name === 'SlowDome')!;
+    const field = SCENE.prefabs!.find((prefab) => prefab.name === 'BossField')!;
+    expect((field.components.FieldState as Record<string, number>).radius).toBe(
+      ((dome.components.DomeState as Record<string, number>).radius! * 3) / 2,
+    );
+    // Тело скелета — героическое, делённое на полтора; шаг — героический ровно.
+    const minion = SCENE.prefabs!.find((prefab) => prefab.name === 'BossMinion')!;
+    const heroPrefab = SCENE.prefabs!.find((prefab) => prefab.name === 'Hero')!;
+    const heroRadius = (heroPrefab.components.Collider as Record<string, number>).radius!;
+    expect((minion.components.Collider as Record<string, number>).radius).toBe(
+      Math.floor(heroRadius / 1.5),
+    );
+    expect((minion.components.Health as Record<string, number>).hp).toBe(MINION_HP);
+    expect((minion.components.Collider as Record<string, number>).cliffRise).toBe(BOSS_CLIFF_RISE);
+    expect((minion.components.Collider as Record<string, number>).layer).toBe(MINION_LAYER);
+    const minionBehavior = (SCENE as unknown as { npc: { behaviors: readonly { name: string; speed: number }[] } })
+      .npc.behaviors.find((entry) => entry.name === 'arenaMinion')!;
+    expect(minionBehavior.speed).toBe(
+      (heroPrefab.components.Locomotion as Record<string, number>).maxSpeed,
+    );
+    expect(minionBehavior.speed).toBe(MINION_SPEED);
+    // Один фаербол убивает скелета: снаряд ВИДИТ его слой, и урона хватает.
+    const ball = SCENE.prefabs!.find((prefab) => prefab.name === 'Fireball')!;
+    expect((ball.components.Collider as Record<string, number>).hitMask! & MINION_LAYER).toBe(
+      MINION_LAYER,
+    );
+    expect((ball.components.Projectile as Record<string, number>).damage).toBeGreaterThanOrEqual(
+      MINION_HP,
+    );
     // И «сто в секунду» — произведение периода на урон, а не отдельное число.
     expect(FIRE_DPS).toBe(100);
     expect(numbers(abilityDef('bossFireAura'))).toEqual(
@@ -1079,6 +1566,17 @@ describe('числа и картинка босса: ретюн виден в д
     const behaviors = (SCENE as unknown as { npc: { behaviors: readonly Record<string, unknown>[] } })
       .npc.behaviors;
     expect(behaviors[0]!.threat).toBeUndefined();
+    // Каждая система, ключуемая платформенным `NpcAgent`, отбирает СВОЕГО
+    // агента тегом: без этого скелет получил бы слоты способностей босса
+    // (`GrantBossSlots`), возрождался бы в центре арены (`BossRespawn`) и стоял
+    // бы на чужом касте (`BossCastHold`). Проверка механическая: забытый тег
+    // виден здесь, а не в бою.
+    for (const system of SCENE.systems!) {
+      const query: { readonly all?: readonly string[]; readonly withTag?: string } =
+        system.query ?? {};
+      if (!(query.all ?? []).includes('NpcAgent')) continue;
+      expect(query.withTag, `система ${system.name}`).toMatch(/^Boss(Minion)?$/);
+    }
     // Возрождение: окно и точка — зеркало `arena.center` сцены.
     const respawn = numbers(systemDef('BossRespawn'));
     expect(respawn).toContain(BOSS_RESPAWN_TICKS);
@@ -1113,20 +1611,44 @@ describe('числа и картинка босса: ретюн виден в д
 
     const hunt = behavior.states.find((state) => state.name === 'hunt')!;
     expect(hunt.actions.map((action) => action.executor)).toEqual(['seekTarget']);
-    // Приоритет: слэм, удар, разгон — ровно в этом порядке.
-    expect(hunt.transitions!.map((transition) => transition.to)).toEqual(['slam', 'strike', 'charge']);
-    for (const name of ['slam', 'strike', 'charge']) {
+    // Приоритет: поле, призыв, слэм, удар, разгон — ровно в этом порядке.
+    // Редкое стоит РАНЬШЕ частого и это несущее: удар готов почти всегда
+    // (замах 48 тиков на кулдауне 60), и, стой он выше, до поля с призывом
+    // очередь не доходила бы вовсе.
+    const rotation = ['field', 'spawn', 'slam', 'strike', 'charge'];
+    expect(hunt.transitions!.map((transition) => transition.to)).toEqual(rotation);
+    for (const name of rotation) {
       const state = behavior.states.find((entry) => entry.name === name)!;
       expect(state.actions.map((action) => action.executor)).toEqual(['cast']);
       expect(state.actions[0]!.event).toBe(`Boss${name[0]!.toUpperCase()}${name.slice(1)}`);
     }
+    // Кулдауны редких способностей и правда длиннее: иначе порядок выше был бы
+    // не «редкое вперёд», а произволом.
+    const cooldownOf = (slot: string): number =>
+      (SCENE.prefabs!.find((prefab) => prefab.name === slot)!.components.AbilityCooldown as
+        Record<string, number>).total!;
+    expect(cooldownOf('SlotBossField')).toBeGreaterThan(cooldownOf('SlotBossSpawn'));
+    expect(cooldownOf('SlotBossSpawn')).toBeGreaterThan(cooldownOf('SlotBossSlam'));
+    expect(cooldownOf('SlotBossSlam')).toBeGreaterThan(cooldownOf('SlotBossStrike'));
     // Переход в состояние каста едет СИГНАЛОМ сцены (NPC-7: источник сигнала
     // ставится раньше системы поведения). Сигнал — единственное, чего закрытые
     // словари документа не видят: остаток кулдауна слота (ABIL-7).
     const signals = hunt.transitions!.map((transition) => transition.when.event);
-    expect(signals).toEqual(['BossSlamReady', 'BossStrikeReady', 'BossChargeReady']);
+    expect(signals).toEqual(rotation.map((name) => `Boss${name[0]!.toUpperCase()}${name.slice(1)}Ready`));
     const sensor = systemDef('BossReady');
     expect(sensor.order).toBeLessThan(-795);
+
+    // Второй документ — скелет: он ТОЛЬКО преследует, а цель ему пишет система
+    // сцены `MinionTarget`, и пишет ПОСЛЕ системы поведения (-795): та
+    // переписывает `NpcAgent.target` каждый тик (NPC-5), и запись раньше неё
+    // пропала бы молча.
+    const minion = (SCENE as unknown as { npc: { behaviors: readonly Doc[] } }).npc.behaviors.find(
+      (entry) => entry.name === 'arenaMinion',
+    )!;
+    expect(minion.states.map((state) => state.name)).toEqual(['chase']);
+    expect(minion.states[0]!.actions.map((action) => action.executor)).toEqual(['seekTarget']);
+    expect(systemDef('MinionTarget').order).toBeGreaterThan(-795);
+    expect(systemDef('MinionTarget').order).toBeLessThan(0);
   });
 
   it('радиус вспышки слэма — радиус, по которому он бьёт', () => {
@@ -1141,18 +1663,35 @@ describe('числа и картинка босса: ретюн виден в д
     expect(MANIFEST.effects.byKind.BossWave!.radius).toBeGreaterThanOrEqual(
       WAVE_RADIUS / FIXED_ONE,
     );
-    // Пятно огня — РОВНО зона урона: и радиус, и шаг выражаются в целых долях
-    // мировой единицы, так что округлять нечего.
-    expect(MANIFEST.effects.byKind.BossFire!.radius).toBe(FIRE_RADIUS / FIXED_ONE);
+    // Поле замедления — купол по виду, как и купол героя: радиус оболочки равен
+    // зоне действия.
+    expect(MANIFEST.effects.byKind.BossField!.radius).toBe(FIELD_RADIUS / FIXED_ONE);
+    // Пятно огня рисуется ЭМИТТЕРОМ, а не сферой: примитив у манифеста один, и
+    // горящую полосу им честно не изобразить. Зона урона поэтому сверяется с
+    // собственным радиусом ассета эмиттера — записи-сферы у пятна больше нет.
+    expect(MANIFEST.effects.byKind.BossFire).toBeUndefined();
+    const emitter = MANIFEST.particles.byKind!.BossFire!.effect;
+    expect(emitter).toMatch(/\.effect\.json$/);
+    expect(emitterRadius(emitter)).toBe(FIRE_RADIUS / FIXED_ONE);
     // Толчок в упор стал радиальным взрывом — вспышка обязана назвать его радиус.
     expect(MANIFEST.effects.byEvent.BossRepelLanded!.radiusTo).toBe(REPEL_RADIUS / FIXED_ONE);
+    // Взрыв скелета — та же связь: вспышка ровно по зоне урона.
+    expect(MANIFEST.effects.byEvent.BossMinionBurst!.radiusTo).toBe(
+      MINION_BURST_RADIUS / FIXED_ONE,
+    );
     // Замахи озвучены частицами, приземления — тряской камеры.
-    for (const type of ['BossStrikeWindup', 'BossSlamRoar', 'BossChargeAim']) {
+    for (const type of ['BossStrikeWindup', 'BossSlamRoar', 'BossChargeAim', 'BossSpawnRoar']) {
       expect(MANIFEST.particles.byEvent[type]!.effect).toBe(
         MANIFEST.particles.byEvent.CastFireball!.effect,
       );
     }
-    for (const type of ['BossStrikeLanded', 'BossSlamLanded', 'BossChargeStarted', 'BossRepelLanded']) {
+    for (const type of [
+      'BossStrikeLanded',
+      'BossSlamLanded',
+      'BossChargeStarted',
+      'BossRepelLanded',
+      'BossMinionBurst',
+    ]) {
       expect(MANIFEST.cameraEffects.events[type]!.effect).toBe('shake');
     }
   });
@@ -1161,8 +1700,7 @@ describe('числа и картинка босса: ретюн виден в д
     // Запись, не совпавшая ни с одним клипом, гасит анимацию молча (REND-4):
     // рендер предупреждает один раз в консоль и рисует позу покоя. Разрешение
     // здесь — то же самое, что у рендера, а не второе правило рядом.
-    const root = join(dirname(fileURLToPath(import.meta.url)), '../../../content');
-    const bytes = readFileSync(join(root, 'visuals/models/SkeletonBarbarian.mdx'));
+    const bytes = readFileSync(join(CONTENT_ROOT, 'visuals/models/SkeletonBarbarian.mdx'));
     // Загрузчик MDX синхронен, но подпись реестра допускает и промис (ASSET-3):
     // сужение здесь — про подпись, а не про поведение.
     const model = mdxLoader.load(

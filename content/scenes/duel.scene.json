@@ -66,14 +66,16 @@
     { "name": "Granted", "fields": { "atTick": "i32" } },
     {
       "name": "BossHunt",
-      "fields": { "bumped": "entity", "hunted": "entity", "untilTick": "i32" }
+      "fields": { "hunted": "entity", "repelUntil": "i32", "untilTick": "i32" }
     },
     { "name": "BossAim", "fields": { "dirX": "fixed", "dirY": "fixed" } },
     {
       "name": "BossDash",
       "fields": { "dirX": "fixed", "dirY": "fixed", "startTick": "i32", "ticksLeft": "i32" }
     },
-    { "name": "HitMark", "fields": { "dash": "i32", "wave": "entity" } }
+    { "name": "HitMark", "fields": { "dash": "i32", "wave": "entity" } },
+    { "name": "FieldState", "fields": { "radius": "fixed" } },
+    { "name": "Minion", "fields": { "bornTick": "i32" } }
   ],
   "prefabs": [
     {
@@ -122,6 +124,7 @@
         "Vision": { "radius": 1572864 },
         "Team": { "id": 0 },
         "Visibility": { "visibleTo": 0 },
+        "TimeScaleModifiers": {},
         "HitMark": { "dash": -1, "wave": -1 }
       },
       "tags": ["Hero"]
@@ -136,7 +139,7 @@
           "cliffRise": -1,
           "halfX": 9830,
           "halfY": 9830,
-          "hitMask": 10,
+          "hitMask": 26,
           "layer": 4,
           "radius": 9830,
           "shape": 0
@@ -158,7 +161,7 @@
           "cliffRise": -1,
           "halfX": 19661,
           "halfY": 19661,
-          "hitMask": 10,
+          "hitMask": 26,
           "layer": 4,
           "radius": 19661,
           "shape": 0
@@ -256,13 +259,13 @@
         },
         "ArenaState": { "support": 0 },
         "FallConfig": { "deathDepth": 4915200, "speed": 16384 },
-        "Health": { "hp": 4000, "hpMax": 4000 },
+        "Health": { "hp": 8000, "hpMax": 8000 },
         "Vision": { "radius": 1572864 },
         "Team": { "id": 2 },
         "Visibility": { "visibleTo": 0 },
         "NpcAgent": {},
         "NpcThreat": {},
-        "BossHunt": { "bumped": -1, "hunted": -1, "untilTick": 0 },
+        "BossHunt": { "hunted": -1, "repelUntil": 0, "untilTick": 0 },
         "BossAim": { "dirX": 65536, "dirY": 0 },
         "BossDash": { "dirX": 0, "dirY": 0, "startTick": -1, "ticksLeft": 0 }
       },
@@ -290,17 +293,38 @@
       }
     },
     {
-      "name": "SlotBossRepel",
+      "name": "SlotBossField",
       "components": {
-        "AbilitySlot": { "abilityId": 11, "slotIndex": 3 },
-        "AbilityCooldown": { "remaining": 0, "total": 45 }
+        "AbilitySlot": { "abilityId": 12, "slotIndex": 3 },
+        "AbilityCooldown": { "remaining": 0, "total": 1200 }
+      }
+    },
+    {
+      "name": "SlotBossSpawn",
+      "components": {
+        "AbilitySlot": { "abilityId": 14, "slotIndex": 4 },
+        "AbilityCooldown": { "remaining": 0, "total": 900 }
       }
     },
     {
       "name": "SlotBossFire",
       "components": {
-        "AbilitySlot": { "abilityId": 12, "slotIndex": 0 },
+        "AbilitySlot": { "abilityId": 11, "slotIndex": 0 },
         "AbilityCooldown": { "remaining": 0, "total": 6 }
+      }
+    },
+    {
+      "name": "SlotBossFieldAura",
+      "components": {
+        "AbilitySlot": { "abilityId": 13, "slotIndex": 0 },
+        "AbilityCooldown": { "remaining": 0, "total": 0 }
+      }
+    },
+    {
+      "name": "SlotBossMinionMelee",
+      "components": {
+        "AbilitySlot": { "abilityId": 15, "slotIndex": 0 },
+        "AbilityCooldown": { "remaining": 0, "total": 60 }
       }
     },
     {
@@ -318,7 +342,7 @@
           "radius": 39321,
           "shape": 0
         },
-        "AbilityProjectile": { "abilityId": 8, "range": 0, "ticksLeft": 10 }
+        "AbilityProjectile": { "abilityId": 8, "range": 0, "ticksLeft": 8 }
       },
       "tags": ["BossWave"]
     },
@@ -326,9 +350,46 @@
       "name": "BossFire",
       "components": {
         "Position": { "x": 0, "y": 0 },
-        "AbilityDuration": { "abilityId": 12, "remaining": 240 }
+        "AbilityDuration": { "abilityId": 11, "remaining": 240 }
       },
       "tags": ["BossFire"]
+    },
+    {
+      "name": "BossField",
+      "components": {
+        "Position": { "x": 0, "y": 0 },
+        "FieldState": { "radius": 294915 },
+        "AbilityDuration": { "abilityId": 12, "remaining": 720 }
+      },
+      "tags": ["BossField"]
+    },
+    {
+      "name": "BossMinion",
+      "components": {
+        "Player": { "slot": 2 },
+        "Position": { "x": 0, "y": 0 },
+        "Velocity": { "x": 0, "y": 0 },
+        "Collider": {
+          "blockMask": 1,
+          "cliffRise": 1,
+          "halfX": 13107,
+          "halfY": 13107,
+          "hitMask": 0,
+          "layer": 16,
+          "radius": 13107,
+          "shape": 0
+        },
+        "ArenaState": { "support": 0 },
+        "FallConfig": { "deathDepth": 4915200, "speed": 16384 },
+        "Health": { "hp": 100, "hpMax": 100 },
+        "Team": { "id": 2 },
+        "Visibility": { "visibleTo": 0 },
+        "TimeScaleModifiers": {},
+        "NpcAgent": { "behavior": 1 },
+        "NpcThreat": {},
+        "Minion": { "bornTick": 0 }
+      },
+      "tags": ["BossMinion"]
     }
   ],
   "systems": [
@@ -1425,7 +1486,7 @@
     {
       "name": "GrantBossSlots",
       "order": -949,
-      "query": { "all": ["NpcAgent"], "not": ["Granted"] },
+      "query": { "all": ["NpcAgent"], "not": ["Granted"], "withTag": "Boss" },
       "as": "b",
       "do": [
         {
@@ -1448,7 +1509,13 @@
         },
         {
           "spawnEntity": {
-            "prefab": "SlotBossRepel",
+            "prefab": "SlotBossField",
+            "overrides": { "AbilitySlot": { "owner": { "var": "b" } } }
+          }
+        },
+        {
+          "spawnEntity": {
+            "prefab": "SlotBossSpawn",
             "overrides": { "AbilitySlot": { "owner": { "var": "b" } } }
           }
         },
@@ -1483,9 +1550,55 @@
       ]
     },
     {
+      "name": "GrantBossFieldAura",
+      "order": -938,
+      "query": { "all": ["AbilityDuration"], "not": ["Granted"], "withTag": "BossField" },
+      "as": "f",
+      "do": [
+        {
+          "spawnEntity": {
+            "prefab": "SlotBossFieldAura",
+            "overrides": { "AbilitySlot": { "owner": { "var": "f" } } }
+          }
+        },
+        {
+          "addComponent": {
+            "entity": { "var": "f" },
+            "component": "Granted",
+            "values": { "atTick": { "tick": [] } }
+          }
+        }
+      ]
+    },
+    {
+      "name": "GrantMinionMelee",
+      "order": -937,
+      "query": { "all": ["Minion"], "not": ["Granted"], "withTag": "BossMinion" },
+      "as": "m",
+      "do": [
+        {
+          "spawnEntity": {
+            "prefab": "SlotBossMinionMelee",
+            "overrides": { "AbilitySlot": { "owner": { "var": "m" } } }
+          }
+        },
+        {
+          "addComponent": {
+            "entity": { "var": "m" },
+            "component": "Granted",
+            "values": { "atTick": { "tick": [] } }
+          }
+        }
+      ]
+    },
+    {
       "name": "BossReady",
       "order": -797,
-      "query": { "all": ["NpcAgent", "BossDash", "BossHunt", "Position"], "not": ["Dead"] },
+      "query": {
+        "all": ["NpcAgent", "BossDash", "BossHunt", "Position"],
+        "not": ["Dead"],
+        "withTag": "Boss"
+      },
       "as": "b",
       "do": [
         {
@@ -1496,7 +1609,10 @@
               "strike": -1,
               "slam": -1,
               "charge": -1,
-              "near": 0
+              "field": -1,
+              "spawn": -1,
+              "near": 0,
+              "inside": 0
             },
             "do": [
               {
@@ -1504,12 +1620,6 @@
                   "cond": {
                     ">": [{ "getComponent": [{ "var": "b" }, "BossDash", "ticksLeft"] }, 0]
                   },
-                  "then": [{ "set": { "name": "busy", "value": 1 } }]
-                }
-              },
-              {
-                "if": {
-                  "cond": { ">=": [{ "getComponent": [{ "var": "b" }, "BossHunt", "bumped"] }, 0] },
                   "then": [{ "set": { "name": "busy", "value": 1 } }]
                 }
               },
@@ -1609,6 +1719,54 @@
                                 }
                               ]
                             }
+                          },
+                          {
+                            "if": {
+                              "cond": {
+                                "==": [
+                                  { "getComponent": [{ "var": "s" }, "AbilitySlot", "abilityId"] },
+                                  12
+                                ]
+                              },
+                              "then": [
+                                {
+                                  "set": {
+                                    "name": "field",
+                                    "value": {
+                                      "getComponent": [
+                                        { "var": "s" },
+                                        "AbilityCooldown",
+                                        "remaining"
+                                      ]
+                                    }
+                                  }
+                                }
+                              ]
+                            }
+                          },
+                          {
+                            "if": {
+                              "cond": {
+                                "==": [
+                                  { "getComponent": [{ "var": "s" }, "AbilitySlot", "abilityId"] },
+                                  14
+                                ]
+                              },
+                              "then": [
+                                {
+                                  "set": {
+                                    "name": "spawn",
+                                    "value": {
+                                      "getComponent": [
+                                        { "var": "s" },
+                                        "AbilityCooldown",
+                                        "remaining"
+                                      ]
+                                    }
+                                  }
+                                }
+                              ]
+                            }
                           }
                         ]
                       }
@@ -1649,12 +1807,34 @@
                                 { "getComponent": [{ "var": "b" }, "Position", "y"] }
                               ]
                             },
-                            "radius": 117963
+                            "radius": 235926
                           }
                         },
                         "as": "v",
                         "do": [
                           { "set": { "name": "near", "value": { "+": [{ "var": "near" }, 1] } } }
+                        ]
+                      }
+                    },
+                    {
+                      "forEach": {
+                        "query": {
+                          "all": ["Health", "Position"],
+                          "not": ["Dead"],
+                          "withTag": "Hero",
+                          "withinRadius": {
+                            "center": {
+                              "vec": [
+                                { "getComponent": [{ "var": "b" }, "Position", "x"] },
+                                { "getComponent": [{ "var": "b" }, "Position", "y"] }
+                              ]
+                            },
+                            "radius": 294915
+                          }
+                        },
+                        "as": "v",
+                        "do": [
+                          { "set": { "name": "inside", "value": { "+": [{ "var": "inside" }, 1] } } }
                         ]
                       }
                     },
@@ -1687,6 +1867,37 @@
                             "if": {
                               "cond": {
                                 "and": [
+                                  { "==": [{ "var": "field" }, 0] },
+                                  { ">=": [{ "var": "inside" }, 1] }
+                                ]
+                              },
+                              "then": [
+                                {
+                                  "emitEvent": {
+                                    "type": "BossFieldReady",
+                                    "data": { "entity": { "var": "b" }, "tick": { "tick": [] } }
+                                  }
+                                }
+                              ]
+                            }
+                          },
+                          {
+                            "if": {
+                              "cond": { "==": [{ "var": "spawn" }, 0] },
+                              "then": [
+                                {
+                                  "emitEvent": {
+                                    "type": "BossSpawnReady",
+                                    "data": { "entity": { "var": "b" }, "tick": { "tick": [] } }
+                                  }
+                                }
+                              ]
+                            }
+                          },
+                          {
+                            "if": {
+                              "cond": {
+                                "and": [
                                   { "==": [{ "var": "slam" }, 0] },
                                   { ">=": [{ "var": "near" }, 1] }
                                 ]
@@ -1706,7 +1917,7 @@
                               "cond": {
                                 "and": [
                                   { "==": [{ "var": "strike" }, 0] },
-                                  { "<=": [{ "var": "gap" }, 327680] }
+                                  { "<=": [{ "var": "gap" }, 262144] }
                                 ]
                               },
                               "then": [
@@ -1724,7 +1935,7 @@
                               "cond": {
                                 "and": [
                                   { "==": [{ "var": "charge" }, 0] },
-                                  { ">": [{ "var": "gap" }, 327680] }
+                                  { ">": [{ "var": "gap" }, 262144] }
                                 ]
                               },
                               "then": [
@@ -1751,7 +1962,11 @@
     {
       "name": "BossTarget",
       "order": -796,
-      "query": { "all": ["NpcAgent", "BossHunt", "Position"], "not": ["Dead"] },
+      "query": {
+        "all": ["NpcAgent", "BossHunt", "Position"],
+        "not": ["Dead"],
+        "withTag": "Boss"
+      },
       "as": "b",
       "do": [
         {
@@ -1931,81 +2146,225 @@
       ]
     },
     {
-      "name": "BossRepelAsk",
+      "name": "MinionTarget",
+      "order": -794,
+      "query": { "all": ["NpcAgent", "Minion"], "not": ["Dead"], "withTag": "BossMinion" },
+      "as": "m",
+      "do": [
+        {
+          "let": {
+            "bindings": { "prey": -1 },
+            "do": [
+              {
+                "forEach": {
+                  "query": { "all": ["BossHunt"], "not": ["Dead"], "withTag": "Boss" },
+                  "as": "b",
+                  "do": [
+                    {
+                      "set": {
+                        "name": "prey",
+                        "value": { "getComponent": [{ "var": "b" }, "BossHunt", "hunted"] }
+                      }
+                    }
+                  ]
+                }
+              },
+              {
+                "if": {
+                  "cond": {
+                    "and": [
+                      {
+                        "and": [
+                          { ">=": [{ "var": "prey" }, 0] },
+                          { "isAlive": [{ "var": "prey" }] },
+                          { "!": [{ "hasComponent": [{ "var": "prey" }, "Dead"] }] }
+                        ]
+                      },
+                      { "!": [{ "hasComponent": [{ "var": "prey" }, "Falling"] }] },
+                      {
+                        "!=": [
+                          { "getComponent": [{ "var": "m" }, "NpcAgent", "target"] },
+                          { "var": "prey" }
+                        ]
+                      }
+                    ]
+                  },
+                  "then": [
+                    {
+                      "modifyComponent": {
+                        "entity": { "var": "m" },
+                        "component": "NpcAgent",
+                        "values": { "target": { "var": "prey" } }
+                      }
+                    }
+                  ]
+                }
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "BossRepel",
       "order": -793,
-      "query": { "all": ["NpcAgent", "BossHunt"], "not": ["Dead"] },
+      "query": {
+        "all": ["NpcAgent", "BossHunt", "Position"],
+        "not": ["Dead"],
+        "withTag": "Boss"
+      },
       "as": "b",
       "do": [
         {
           "let": {
             "bindings": {
-              "v": { "getComponent": [{ "var": "b" }, "BossHunt", "bumped"] },
-              "busy": 0
+              "at": {
+                "vec": [
+                  { "getComponent": [{ "var": "b" }, "Position", "x"] },
+                  { "getComponent": [{ "var": "b" }, "Position", "y"] }
+                ]
+              },
+              "hit": 0
             },
             "do": [
               {
                 "if": {
-                  "cond": { ">=": [{ "var": "v" }, 0] },
+                  "cond": {
+                    ">=": [
+                      { "tick": [] },
+                      { "getComponent": [{ "var": "b" }, "BossHunt", "repelUntil"] }
+                    ]
+                  },
                   "then": [
                     {
                       "forEach": {
-                        "query": { "all": ["AbilitySlot"] },
-                        "as": "s",
+                        "query": {
+                          "all": ["Health", "Position"],
+                          "not": ["Dead"],
+                          "withTag": "Hero",
+                          "withinRadius": { "center": { "var": "at" }, "radius": 98304 }
+                        },
+                        "as": "v",
                         "do": [
+                          { "set": { "name": "hit", "value": 1 } },
                           {
-                            "if": {
-                              "cond": {
-                                "and": [
-                                  {
-                                    "==": [
-                                      { "getComponent": [{ "var": "s" }, "AbilitySlot", "owner"] },
-                                      { "var": "b" }
-                                    ]
-                                  },
-                                  {
-                                    ">=": [
-                                      { "getComponent": [{ "var": "s" }, "AbilitySlot", "phase"] },
-                                      0
+                            "emitEvent": {
+                              "type": "Damage",
+                              "data": {
+                                "amount": 200,
+                                "entity": { "var": "v" },
+                                "source": { "var": "b" }
+                              }
+                            }
+                          },
+                          {
+                            "emitEvent": {
+                              "type": "HeroHit",
+                              "data": {
+                                "entity": { "var": "v" },
+                                "x": { "getComponent": [{ "var": "v" }, "Position", "x"] },
+                                "y": { "getComponent": [{ "var": "v" }, "Position", "y"] }
+                              }
+                            }
+                          },
+                          {
+                            "let": {
+                              "bindings": {
+                                "push": {
+                                  "vec.normalize": [
+                                    {
+                                      "vec.sub": [
+                                        {
+                                          "vec": [
+                                            { "getComponent": [{ "var": "v" }, "Position", "x"] },
+                                            { "getComponent": [{ "var": "v" }, "Position", "y"] }
+                                          ]
+                                        },
+                                        { "var": "at" }
+                                      ]
+                                    }
+                                  ]
+                                }
+                              },
+                              "do": [
+                                {
+                                  "if": {
+                                    "cond": {
+                                      "and": [
+                                        { "hasComponent": [{ "var": "v" }, "Locomotion"] },
+                                        { "hasComponent": [{ "var": "v" }, "LocomotionState"] }
+                                      ]
+                                    },
+                                    "then": [
+                                      {
+                                        "let": {
+                                          "bindings": {
+                                            "dash": {
+                                              "getComponent": [
+                                                { "var": "v" },
+                                                "Locomotion",
+                                                "dodgeSpeed"
+                                              ]
+                                            }
+                                          },
+                                          "do": [
+                                            {
+                                              "modifyComponent": {
+                                                "entity": { "var": "v" },
+                                                "component": "LocomotionState",
+                                                "values": {
+                                                  "state": 1,
+                                                  "dirX": { "vec.x": [{ "var": "push" }] },
+                                                  "dirY": { "vec.y": [{ "var": "push" }] },
+                                                  "ticksLeft": {
+                                                    "if": [
+                                                      { ">": [{ "var": "dash" }, 0] },
+                                                      {
+                                                        "toInt": [
+                                                          { "/": [327680, { "var": "dash" }] }
+                                                        ]
+                                                      },
+                                                      0
+                                                    ]
+                                                  }
+                                                }
+                                              }
+                                            }
+                                          ]
+                                        }
+                                      }
                                     ]
                                   }
-                                ]
-                              },
-                              "then": [{ "set": { "name": "busy", "value": 1 } }]
+                                },
+                                {
+                                  "emitEvent": {
+                                    "type": "BossRepelLanded",
+                                    "data": {
+                                      "dirX": { "vec.x": [{ "var": "push" }] },
+                                      "dirY": { "vec.y": [{ "var": "push" }] },
+                                      "entity": { "var": "b" },
+                                      "target": { "var": "v" },
+                                      "tick": { "tick": [] },
+                                      "x": { "vec.x": [{ "var": "at" }] },
+                                      "y": { "vec.y": [{ "var": "at" }] }
+                                    }
+                                  }
+                                }
+                              ]
                             }
                           }
                         ]
                       }
                     },
                     {
-                      "modifyComponent": {
-                        "entity": { "var": "b" },
-                        "component": "BossHunt",
-                        "values": { "bumped": -1 }
-                      }
-                    },
-                    {
                       "if": {
-                        "cond": {
-                          "and": [
-                            { "==": [{ "var": "busy" }, 0] },
-                            {
-                              "and": [
-                                { ">=": [{ "var": "v" }, 0] },
-                                { "isAlive": [{ "var": "v" }] },
-                                { "!": [{ "hasComponent": [{ "var": "v" }, "Dead"] }] }
-                              ]
-                            }
-                          ]
-                        },
+                        "cond": { "==": [{ "var": "hit" }, 1] },
                         "then": [
                           {
-                            "emitEvent": {
-                              "type": "BossRepel",
-                              "data": {
-                                "caster": { "var": "b" },
-                                "target": { "var": "v" },
-                                "tick": { "tick": [] }
-                              }
+                            "modifyComponent": {
+                              "entity": { "var": "b" },
+                              "component": "BossHunt",
+                              "values": { "repelUntil": { "+": [{ "tick": [] }, 45] } }
                             }
                           }
                         ]
@@ -2022,7 +2381,11 @@
     {
       "name": "BossTurn",
       "order": -792,
-      "query": { "all": ["NpcAgent", "BossAim", "Position"], "not": ["Dead"] },
+      "query": {
+        "all": ["NpcAgent", "BossAim", "Position"],
+        "not": ["Dead"],
+        "withTag": "Boss"
+      },
       "as": "b",
       "do": [
         {
@@ -2105,7 +2468,11 @@
     {
       "name": "BossFacing",
       "order": -791,
-      "query": { "all": ["NpcAgent", "BossAim", "Position"], "not": ["Dead"] },
+      "query": {
+        "all": ["NpcAgent", "BossAim", "Position"],
+        "not": ["Dead"],
+        "withTag": "Boss"
+      },
       "as": "b",
       "do": [
         {
@@ -2191,7 +2558,7 @@
     {
       "name": "BossCastHold",
       "order": 71,
-      "query": { "all": ["NpcAgent", "Velocity"], "not": ["Dead"] },
+      "query": { "all": ["NpcAgent", "Velocity"], "not": ["Dead"], "withTag": "Boss" },
       "as": "b",
       "do": [
         {
@@ -2251,7 +2618,8 @@
       "order": 72,
       "query": {
         "all": ["NpcAgent", "BossDash", "Velocity", "Position", "Collider"],
-        "not": ["Dead"]
+        "not": ["Dead"],
+        "withTag": "Boss"
       },
       "as": "b",
       "do": [
@@ -2287,14 +2655,21 @@
                       }
                     },
                     {
-                      "spawnEntity": {
-                        "prefab": "BossFire",
-                        "overrides": {
-                          "Position": {
-                            "x": { "vec.x": [{ "var": "bp" }] },
-                            "y": { "vec.y": [{ "var": "bp" }] }
+                      "if": {
+                        "cond": { "bitTest": [{ "var": "left" }, 0] },
+                        "then": [
+                          {
+                            "spawnEntity": {
+                              "prefab": "BossFire",
+                              "overrides": {
+                                "Position": {
+                                  "x": { "vec.x": [{ "var": "bp" }] },
+                                  "y": { "vec.y": [{ "var": "bp" }] }
+                                }
+                              }
+                            }
                           }
-                        }
+                        ]
                       }
                     },
                     {
@@ -2397,7 +2772,11 @@
     {
       "name": "BossFooting",
       "order": 73,
-      "query": { "all": ["NpcAgent", "Position", "Velocity"], "not": ["Dead"] },
+      "query": {
+        "all": ["NpcAgent", "Position", "Velocity"],
+        "not": ["Dead"],
+        "withTag": "Boss"
+      },
       "as": "b",
       "do": [
         {
@@ -2467,79 +2846,87 @@
       ]
     },
     {
-      "name": "BossContact",
-      "order": 109,
-      "query": { "all": ["NpcAgent", "BossHunt"], "not": ["Dead"] },
-      "as": "b",
+      "name": "MinionEnd",
+      "order": 319,
+      "query": { "all": ["Minion", "Position"], "withTag": "BossMinion" },
+      "as": "m",
       "do": [
         {
-          "let": {
-            "bindings": { "seen": 0 },
-            "do": [
+          "if": {
+            "cond": {
+              "or": [
+                { "hasComponent": [{ "var": "m" }, "Dead"] },
+                {
+                  ">=": [
+                    {
+                      "-": [
+                        { "tick": [] },
+                        { "getComponent": [{ "var": "m" }, "Minion", "bornTick"] }
+                      ]
+                    },
+                    600
+                  ]
+                }
+              ]
+            },
+            "then": [
               {
-                "forEachEvent": {
-                  "type": "Collision",
-                  "as": "ev",
+                "let": {
+                  "bindings": {
+                    "at": {
+                      "vec": [
+                        { "getComponent": [{ "var": "m" }, "Position", "x"] },
+                        { "getComponent": [{ "var": "m" }, "Position", "y"] }
+                      ]
+                    }
+                  },
                   "do": [
                     {
-                      "let": {
-                        "bindings": {
-                          "other": {
-                            "if": [
-                              {
-                                "==": [
-                                  { "eventField": [{ "var": "ev" }, "entity"] },
-                                  { "var": "b" }
-                                ]
-                              },
-                              { "eventField": [{ "var": "ev" }, "other"] },
-                              {
-                                "if": [
-                                  {
-                                    "==": [
-                                      { "eventField": [{ "var": "ev" }, "other"] },
-                                      { "var": "b" }
-                                    ]
-                                  },
-                                  { "eventField": [{ "var": "ev" }, "entity"] },
-                                  -1
-                                ]
-                              }
-                            ]
-                          }
+                      "forEach": {
+                        "query": {
+                          "all": ["Health", "Position"],
+                          "not": ["Dead"],
+                          "withTag": "Hero",
+                          "withinRadius": { "center": { "var": "at" }, "radius": 98304 }
                         },
+                        "as": "v",
                         "do": [
                           {
-                            "if": {
-                              "cond": {
-                                "and": [
-                                  { "==": [{ "var": "seen" }, 0] },
-                                  {
-                                    "and": [
-                                      { ">=": [{ "var": "other" }, 0] },
-                                      { "isAlive": [{ "var": "other" }] },
-                                      { "!": [{ "hasComponent": [{ "var": "other" }, "Dead"] }] }
-                                    ]
-                                  },
-                                  { "!=": [{ "var": "other" }, { "var": "b" }] },
-                                  { "hasComponent": [{ "var": "other" }, "Player"] }
-                                ]
-                              },
-                              "then": [
-                                { "set": { "name": "seen", "value": 1 } },
-                                {
-                                  "modifyComponent": {
-                                    "entity": { "var": "b" },
-                                    "component": "BossHunt",
-                                    "values": { "bumped": { "var": "other" } }
-                                  }
-                                }
-                              ]
+                            "emitEvent": {
+                              "type": "Damage",
+                              "data": {
+                                "amount": 200,
+                                "entity": { "var": "v" },
+                                "source": { "var": "m" }
+                              }
+                            }
+                          },
+                          {
+                            "emitEvent": {
+                              "type": "HeroHit",
+                              "data": {
+                                "entity": { "var": "v" },
+                                "x": { "getComponent": [{ "var": "v" }, "Position", "x"] },
+                                "y": { "getComponent": [{ "var": "v" }, "Position", "y"] }
+                              }
                             }
                           }
                         ]
                       }
-                    }
+                    },
+                    {
+                      "emitEvent": {
+                        "type": "BossMinionBurst",
+                        "data": {
+                          "entity": { "var": "m" },
+                          "radius": 98304,
+                          "tick": { "tick": [] },
+                          "x": { "vec.x": [{ "var": "at" }] },
+                          "y": { "vec.y": [{ "var": "at" }] }
+                        }
+                      }
+                    },
+                    { "destroyEntity": { "entity": { "var": "m" } } }
                   ]
                 }
               }
@@ -2551,7 +2938,11 @@
     {
       "name": "BossRage",
       "order": 325,
-      "query": { "all": ["NpcAgent", "BossHunt", "Health"], "not": ["Dead"] },
+      "query": {
+        "all": ["NpcAgent", "BossHunt", "Health"],
+        "not": ["Dead"],
+        "withTag": "Boss"
+      },
       "as": "b",
       "do": [
         {
@@ -2655,7 +3046,8 @@
           "Velocity",
           "Collider",
           "Health"
-        ]
+        ],
+        "withTag": "Boss"
       },
       "as": "e",
       "do": [
@@ -2726,7 +3118,11 @@
                 "modifyComponent": {
                   "entity": { "var": "e" },
                   "component": "BossHunt",
-                  "values": { "bumped": -1, "hunted": -1, "untilTick": { "tick": [] } }
+                  "values": {
+                    "hunted": -1,
+                    "repelUntil": { "tick": [] },
+                    "untilTick": { "tick": [] }
+                  }
                 }
               },
               {
@@ -3388,6 +3784,30 @@
                     }
                   ]
                 }
+              },
+              {
+                "forEach": {
+                  "query": {
+                    "all": ["Position", "TimeScaleModifiers"],
+                    "not": ["Dead"],
+                    "withTag": "BossMinion",
+                    "withinRadius": { "center": { "var": "center" }, "radius": { "var": "reach" } }
+                  },
+                  "as": "k",
+                  "do": [
+                    {
+                      "spawnEntity": {
+                        "prefab": "BuffSlow",
+                        "overrides": {
+                          "BuffInstance": {
+                            "source": { "var": "owner" },
+                            "target": { "var": "k" }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                }
               }
             ]
           }
@@ -3837,7 +4257,7 @@
                 "type": "BossSlamRoar",
                 "data": {
                   "entity": { "var": "owner" },
-                  "radius": 117963,
+                  "radius": 235926,
                   "ticks": 90,
                   "x": { "getComponent": [{ "var": "owner" }, "Position", "x"] },
                   "y": { "getComponent": [{ "var": "owner" }, "Position", "y"] }
@@ -3866,7 +4286,7 @@
                     "all": ["Health", "Position"],
                     "not": ["Dead"],
                     "withTag": "Hero",
-                    "withinRadius": { "center": { "var": "bp" }, "radius": 117963 }
+                    "withinRadius": { "center": { "var": "bp" }, "radius": 235926 }
                   },
                   "as": "v",
                   "do": [
@@ -3954,7 +4374,7 @@
                   "type": "BossSlamLanded",
                   "data": {
                     "entity": { "var": "owner" },
-                    "radius": 117963,
+                    "radius": 235926,
                     "tick": { "tick": [] },
                     "x": { "vec.x": [{ "var": "bp" }] },
                     "y": { "vec.y": [{ "var": "bp" }] }
@@ -4142,173 +4562,6 @@
       ]
     },
     {
-      "id": "bossRepel",
-      "trigger": { "event": { "type": "BossRepel", "as": "ask" } },
-      "condition": {
-        "and": [
-          { "!": [{ "hasComponent": [{ "var": "owner" }, "Dead"] }] },
-          { "==": [{ "eventField": [{ "var": "ask" }, "caster"] }, { "var": "owner" }] }
-        ]
-      },
-      "cooldownTicks": 45,
-      "effects": [
-        {
-          "let": {
-            "bindings": {
-              "at": {
-                "vec": [
-                  { "getComponent": [{ "var": "owner" }, "Position", "x"] },
-                  { "getComponent": [{ "var": "owner" }, "Position", "y"] }
-                ]
-              },
-              "victim": { "eventField": [{ "var": "ask" }, "target"] }
-            },
-            "do": [
-              {
-                "forEach": {
-                  "query": {
-                    "all": ["Health", "Position"],
-                    "not": ["Dead"],
-                    "withTag": "Hero",
-                    "withinRadius": { "center": { "var": "at" }, "radius": 98304 }
-                  },
-                  "as": "v",
-                  "do": [
-                    {
-                      "emitEvent": {
-                        "type": "Damage",
-                        "data": {
-                          "amount": 200,
-                          "entity": { "var": "v" },
-                          "source": { "var": "owner" }
-                        }
-                      }
-                    },
-                    {
-                      "emitEvent": {
-                        "type": "HeroHit",
-                        "data": {
-                          "entity": { "var": "v" },
-                          "x": { "getComponent": [{ "var": "v" }, "Position", "x"] },
-                          "y": { "getComponent": [{ "var": "v" }, "Position", "y"] }
-                        }
-                      }
-                    },
-                    {
-                      "if": {
-                        "cond": {
-                          "and": [
-                            { "hasComponent": [{ "var": "v" }, "Locomotion"] },
-                            { "hasComponent": [{ "var": "v" }, "LocomotionState"] }
-                          ]
-                        },
-                        "then": [
-                          {
-                            "let": {
-                              "bindings": {
-                                "push": {
-                                  "vec.normalize": [
-                                    {
-                                      "vec.sub": [
-                                        {
-                                          "vec": [
-                                            { "getComponent": [{ "var": "v" }, "Position", "x"] },
-                                            { "getComponent": [{ "var": "v" }, "Position", "y"] }
-                                          ]
-                                        },
-                                        { "var": "at" }
-                                      ]
-                                    }
-                                  ]
-                                },
-                                "dash": {
-                                  "getComponent": [{ "var": "v" }, "Locomotion", "dodgeSpeed"]
-                                }
-                              },
-                              "do": [
-                                {
-                                  "modifyComponent": {
-                                    "entity": { "var": "v" },
-                                    "component": "LocomotionState",
-                                    "values": {
-                                      "state": 1,
-                                      "dirX": { "vec.x": [{ "var": "push" }] },
-                                      "dirY": { "vec.y": [{ "var": "push" }] },
-                                      "ticksLeft": {
-                                        "if": [
-                                          { ">": [{ "var": "dash" }, 0] },
-                                          { "toInt": [{ "/": [327680, { "var": "dash" }] }] },
-                                          0
-                                        ]
-                                      }
-                                    }
-                                  }
-                                }
-                              ]
-                            }
-                          }
-                        ]
-                      }
-                    }
-                  ]
-                }
-              },
-              {
-                "if": {
-                  "cond": {
-                    "and": [
-                      { ">=": [{ "var": "victim" }, 0] },
-                      { "isAlive": [{ "var": "victim" }] },
-                      { "!": [{ "hasComponent": [{ "var": "victim" }, "Dead"] }] }
-                    ]
-                  },
-                  "then": [
-                    {
-                      "let": {
-                        "bindings": {
-                          "push": {
-                            "vec.normalize": [
-                              {
-                                "vec.sub": [
-                                  {
-                                    "vec": [
-                                      { "getComponent": [{ "var": "victim" }, "Position", "x"] },
-                                      { "getComponent": [{ "var": "victim" }, "Position", "y"] }
-                                    ]
-                                  },
-                                  { "var": "at" }
-                                ]
-                              }
-                            ]
-                          }
-                        },
-                        "do": [
-                          {
-                            "emitEvent": {
-                              "type": "BossRepelLanded",
-                              "data": {
-                                "dirX": { "vec.x": [{ "var": "push" }] },
-                                "dirY": { "vec.y": [{ "var": "push" }] },
-                                "entity": { "var": "owner" },
-                                "target": { "var": "victim" },
-                                "tick": { "tick": [] },
-                                "x": { "vec.x": [{ "var": "at" }] },
-                                "y": { "vec.y": [{ "var": "at" }] }
-                              }
-                            }
-                          }
-                        ]
-                      }
-                    }
-                  ]
-                }
-              }
-            ]
-          }
-        }
-      ]
-    },
-    {
       "id": "bossFireAura",
       "trigger": { "always": true },
       "cooldownTicks": 6,
@@ -4326,7 +4579,7 @@
                     { "getComponent": [{ "var": "owner" }, "Position", "y"] }
                   ]
                 },
-                "radius": 19661
+                "radius": 39322
               }
             },
             "as": "v",
@@ -4335,6 +4588,365 @@
                 "emitEvent": {
                   "type": "Damage",
                   "data": { "amount": 10, "entity": { "var": "v" }, "source": { "var": "owner" } }
+                }
+              },
+              {
+                "emitEvent": {
+                  "type": "HeroHit",
+                  "data": {
+                    "entity": { "var": "v" },
+                    "x": { "getComponent": [{ "var": "v" }, "Position", "x"] },
+                    "y": { "getComponent": [{ "var": "v" }, "Position", "y"] }
+                  }
+                }
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "bossField",
+      "trigger": { "event": { "type": "BossField", "as": "ask" } },
+      "condition": {
+        "and": [
+          { "!": [{ "hasComponent": [{ "var": "owner" }, "Dead"] }] },
+          { "==": [{ "eventField": [{ "var": "ask" }, "caster"] }, { "var": "owner" }] }
+        ]
+      },
+      "cooldownTicks": 1200,
+      "effects": [
+        {
+          "spawnEntity": {
+            "prefab": "BossField",
+            "overrides": {
+              "AbilityDuration": { "owner": { "var": "owner" }, "remaining": 720 },
+              "Position": {
+                "x": { "getComponent": [{ "var": "owner" }, "Position", "x"] },
+                "y": { "getComponent": [{ "var": "owner" }, "Position", "y"] }
+              }
+            }
+          }
+        },
+        {
+          "emitEvent": {
+            "type": "BossFieldCast",
+            "data": {
+              "entity": { "var": "owner" },
+              "radius": 294915,
+              "tick": { "tick": [] },
+              "x": { "getComponent": [{ "var": "owner" }, "Position", "x"] },
+              "y": { "getComponent": [{ "var": "owner" }, "Position", "y"] }
+            }
+          }
+        }
+      ],
+      "duration": {
+        "onExpire": [
+          {
+            "forEach": {
+              "query": { "all": ["TimeScaleModifiers"] },
+              "as": "v",
+              "do": [
+                {
+                  "removeModifier": {
+                    "entity": { "var": "v" },
+                    "component": "TimeScaleModifiers",
+                    "id": 7001
+                  }
+                }
+              ]
+            }
+          },
+          {
+            "emitEvent": {
+              "type": "BossFieldExpired",
+              "data": {
+                "x": { "getComponent": [{ "var": "self" }, "Position", "x"] },
+                "y": { "getComponent": [{ "var": "self" }, "Position", "y"] }
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "bossFieldAura",
+      "trigger": { "always": true },
+      "effects": [
+        {
+          "let": {
+            "bindings": {
+              "center": {
+                "vec": [
+                  { "getComponent": [{ "var": "owner" }, "Position", "x"] },
+                  { "getComponent": [{ "var": "owner" }, "Position", "y"] }
+                ]
+              },
+              "reach": { "getComponent": [{ "var": "owner" }, "FieldState", "radius"] },
+              "scale": {
+                "-": [
+                  65536,
+                  {
+                    "*": [
+                      52429,
+                      {
+                        "clamp": [
+                          {
+                            "/": [
+                              {
+                                "fromInt": [
+                                  {
+                                    "-": [
+                                      720,
+                                      {
+                                        "getComponent": [
+                                          { "var": "owner" },
+                                          "AbilityDuration",
+                                          "remaining"
+                                        ]
+                                      }
+                                    ]
+                                  }
+                                ]
+                              },
+                              { "fromInt": [240] }
+                            ]
+                          },
+                          0,
+                          65536
+                        ]
+                      }
+                    ]
+                  }
+                ]
+              }
+            },
+            "do": [
+              {
+                "forEach": {
+                  "query": { "all": ["TimeScaleModifiers"] },
+                  "as": "v",
+                  "do": [
+                    {
+                      "removeModifier": {
+                        "entity": { "var": "v" },
+                        "component": "TimeScaleModifiers",
+                        "id": 7001
+                      }
+                    }
+                  ]
+                }
+              },
+              {
+                "forEach": {
+                  "query": {
+                    "all": ["Position", "TimeScaleModifiers"],
+                    "not": ["Dead"],
+                    "withTag": "Hero",
+                    "withinRadius": { "center": { "var": "center" }, "radius": { "var": "reach" } }
+                  },
+                  "as": "v",
+                  "do": [
+                    {
+                      "addModifier": {
+                        "entity": { "var": "v" },
+                        "component": "TimeScaleModifiers",
+                        "id": 7001,
+                        "value": { "var": "scale" }
+                      }
+                    }
+                  ]
+                }
+              },
+              {
+                "forEach": {
+                  "query": {
+                    "all": ["Position", "TimeScaleModifiers"],
+                    "not": ["Held"],
+                    "withTag": "Fireball",
+                    "withinRadius": { "center": { "var": "center" }, "radius": { "var": "reach" } }
+                  },
+                  "as": "p",
+                  "do": [
+                    {
+                      "addModifier": {
+                        "entity": { "var": "p" },
+                        "component": "TimeScaleModifiers",
+                        "id": 7001,
+                        "value": { "var": "scale" }
+                      }
+                    }
+                  ]
+                }
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "bossSpawn",
+      "trigger": { "event": { "type": "BossSpawn", "as": "ask" } },
+      "condition": {
+        "and": [
+          { "!": [{ "hasComponent": [{ "var": "owner" }, "Dead"] }] },
+          { "==": [{ "eventField": [{ "var": "ask" }, "caster"] }, { "var": "owner" }] }
+        ]
+      },
+      "cooldownTicks": 900,
+      "phases": [
+        {
+          "id": "roar",
+          "trigger": "auto",
+          "durationTicks": 90,
+          "onEnter": [
+            {
+              "emitEvent": {
+                "type": "BossSpawnRoar",
+                "data": {
+                  "entity": { "var": "owner" },
+                  "ticks": 90,
+                  "x": { "getComponent": [{ "var": "owner" }, "Position", "x"] },
+                  "y": { "getComponent": [{ "var": "owner" }, "Position", "y"] }
+                }
+              }
+            }
+          ],
+          "timeout": { "then": "commit" }
+        }
+      ],
+      "effects": [
+        {
+          "let": {
+            "bindings": {
+              "ahead": {
+                "vec.add": [
+                  {
+                    "vec": [
+                      { "getComponent": [{ "var": "owner" }, "Position", "x"] },
+                      { "getComponent": [{ "var": "owner" }, "Position", "y"] }
+                    ]
+                  },
+                  {
+                    "vec.scale": [
+                      {
+                        "vec": [
+                          { "getComponent": [{ "var": "owner" }, "BossAim", "dirX"] },
+                          { "getComponent": [{ "var": "owner" }, "BossAim", "dirY"] }
+                        ]
+                      },
+                      98304
+                    ]
+                  }
+                ]
+              },
+              "side": {
+                "vec": [
+                  { "-": [0, { "getComponent": [{ "var": "owner" }, "BossAim", "dirY"] }] },
+                  { "getComponent": [{ "var": "owner" }, "BossAim", "dirX"] }
+                ]
+              }
+            },
+            "do": [
+              {
+                "let": {
+                  "bindings": {
+                    "left": {
+                      "vec.add": [
+                        { "var": "ahead" },
+                        { "vec.scale": [{ "var": "side" }, -49152] }
+                      ]
+                    },
+                    "right": {
+                      "vec.add": [{ "var": "ahead" }, { "vec.scale": [{ "var": "side" }, 49152] }]
+                    }
+                  },
+                  "do": [
+                    {
+                      "spawnEntity": {
+                        "prefab": "BossMinion",
+                        "overrides": {
+                          "Minion": { "bornTick": { "tick": [] } },
+                          "Position": {
+                            "x": { "vec.x": [{ "var": "left" }] },
+                            "y": { "vec.y": [{ "var": "left" }] }
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "spawnEntity": {
+                        "prefab": "BossMinion",
+                        "overrides": {
+                          "Minion": { "bornTick": { "tick": [] } },
+                          "Position": {
+                            "x": { "vec.x": [{ "var": "ahead" }] },
+                            "y": { "vec.y": [{ "var": "ahead" }] }
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "spawnEntity": {
+                        "prefab": "BossMinion",
+                        "overrides": {
+                          "Minion": { "bornTick": { "tick": [] } },
+                          "Position": {
+                            "x": { "vec.x": [{ "var": "right" }] },
+                            "y": { "vec.y": [{ "var": "right" }] }
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "emitEvent": {
+                        "type": "BossSpawned",
+                        "data": {
+                          "count": 3,
+                          "entity": { "var": "owner" },
+                          "tick": { "tick": [] },
+                          "x": { "vec.x": [{ "var": "ahead" }] },
+                          "y": { "vec.y": [{ "var": "ahead" }] }
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "bossMinionMelee",
+      "trigger": { "always": true },
+      "condition": { "!": [{ "hasComponent": [{ "var": "owner" }, "Dead"] }] },
+      "cooldownTicks": 60,
+      "effects": [
+        {
+          "forEach": {
+            "query": {
+              "all": ["Health", "Position"],
+              "not": ["Dead"],
+              "withTag": "Hero",
+              "withinRadius": {
+                "center": {
+                  "vec": [
+                    { "getComponent": [{ "var": "owner" }, "Position", "x"] },
+                    { "getComponent": [{ "var": "owner" }, "Position", "y"] }
+                  ]
+                },
+                "radius": 32768
+              }
+            },
+            "as": "v",
+            "do": [
+              {
+                "emitEvent": {
+                  "type": "Damage",
+                  "data": { "amount": 50, "entity": { "var": "v" }, "source": { "var": "owner" } }
                 }
               },
               {
@@ -4410,6 +5022,14 @@
             ],
             "transitions": [
               {
+                "to": "field",
+                "when": { "kind": "event", "event": "BossFieldReady", "entityField": "entity" }
+              },
+              {
+                "to": "spawn",
+                "when": { "kind": "event", "event": "BossSpawnReady", "entityField": "entity" }
+              },
+              {
                 "to": "slam",
                 "when": { "kind": "event", "event": "BossSlamReady", "entityField": "entity" }
               },
@@ -4422,6 +5042,40 @@
                 "when": { "kind": "event", "event": "BossChargeReady", "entityField": "entity" }
               }
             ]
+          },
+          {
+            "name": "field",
+            "actions": [
+              {
+                "executor": "cast",
+                "event": "BossField",
+                "considerations": [
+                  {
+                    "input": "always",
+                    "curve": { "type": "constant", "value": 65536 },
+                    "weight": 65536
+                  }
+                ]
+              }
+            ],
+            "transitions": [{ "to": "hunt", "when": { "kind": "elapsed", "ticks": 1 } }]
+          },
+          {
+            "name": "spawn",
+            "actions": [
+              {
+                "executor": "cast",
+                "event": "BossSpawn",
+                "considerations": [
+                  {
+                    "input": "always",
+                    "curve": { "type": "constant", "value": 65536 },
+                    "weight": 65536
+                  }
+                ]
+              }
+            ],
+            "transitions": [{ "to": "hunt", "when": { "kind": "elapsed", "ticks": 1 } }]
           },
           {
             "name": "slam",
@@ -4473,6 +5127,33 @@
               }
             ],
             "transitions": [{ "to": "hunt", "when": { "kind": "elapsed", "ticks": 1 } }]
+          }
+        ]
+      },
+      {
+        "schema": 1,
+        "name": "arenaMinion",
+        "tier": "mass",
+        "decision": { "intervalTicks": 4 },
+        "ranges": { "sense": 3145728, "attack": 32768, "arrive": 26214, "separation": 0 },
+        "speed": 5243,
+        "separationWeight": 0,
+        "scales": { "elapsedTicks": 180, "crowd": 4 },
+        "states": [
+          {
+            "name": "chase",
+            "actions": [
+              {
+                "executor": "seekTarget",
+                "considerations": [
+                  {
+                    "input": "always",
+                    "curve": { "type": "constant", "value": 65536 },
+                    "weight": 65536
+                  }
+                ]
+              }
+            ]
           }
         ]
       }
