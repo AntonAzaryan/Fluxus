@@ -22,7 +22,9 @@ import {
 } from '../../dsl/scoring.js';
 import { NPC_THREAT_SLOTS } from './components.js';
 import type { NpcHandles } from './handles.js';
+import { slotReady } from '../abilities/runtime.js';
 import {
+  INPUT_ABILITY_READY,
   INPUT_ALWAYS,
   INPUT_CROWDING,
   INPUT_HEALTH_FRACTION,
@@ -56,9 +58,23 @@ export const NO_ACTION = -1;
  */
 const TIE_LIMIT = 8;
 
+/**
+ * Пустая выборка слотов: ею решатель и живёт вне окна валидности результата
+ * запроса (QUERY-3) — система ставит настоящую выборку на время обхода агентов
+ * и отпускает её тем же вызовом.
+ */
+export const NO_SLOTS = new Float64Array(0);
+
 export class NpcDecider {
   readonly perception: NpcPerception;
   private readonly ties = new Int32Array(TIE_LIMIT);
+  /**
+   * Выборка слотов способностей ТЕКУЩЕГО тика — по ней вход `abilityReady`
+   * ищет слот агента (NPC-7). Одна на тик и на всех решающих агентов: порядок
+   * обхода детерминирован (QUERY-2), а исход от него не зависит вовсе —
+   * `slotIndex` у владельца уникален (ABIL-1).
+   */
+  private slots: Float64Array = NO_SLOTS;
 
   // Кадр текущего агента: заполняется перед пересмотром и живёт до его конца.
   private entity: EntityId = NO_ENTITY;
@@ -100,6 +116,18 @@ export class NpcDecider {
   /** Текущая цель кадра — её ставит `chooseTarget`, читают входы и переходы. */
   get chosenTarget(): EntityId {
     return this.target;
+  }
+
+  /**
+   * Выборка слотов способностей тика; ставит её система поведения перед
+   * обходом агентов и только если словарь документов эту выборку спрашивает,
+   * а после обхода отпускает обратно в `NO_SLOTS` — окно валидности результата
+   * запроса есть тело вызвавшей системы, и удерживать его дольше нельзя
+   * (QUERY-3). Пустая — сцена без способностей либо документ без входа
+   * `abilityReady`.
+   */
+  set abilitySlots(slots: Float64Array) {
+    this.slots = slots;
   }
 
   /**
@@ -168,6 +196,7 @@ export class NpcDecider {
     behavior: CompiledBehavior,
     routes: NpcRoutes,
     input: number,
+    slot: number,
   ): Fixed {
     switch (input) {
       case INPUT_TARGET_KNOWN:
@@ -202,10 +231,34 @@ export class NpcDecider {
         );
       case INPUT_ROUTE_REMAINING:
         return this.route < 0 || routes.at(this.route, this.routeIndex) === NO_ENTITY ? 0 : FIXED_ONE;
+      case INPUT_ABILITY_READY:
+        return this.abilityReady(ctx, handles, slot);
       default:
         // `always`: ось-константа для действия без условий.
         return input === INPUT_ALWAYS ? FIXED_ONE : 0;
     }
+  }
+
+  /**
+   * Готовность слота агента (NPC-7): единица, когда каст этого слота
+   * СТАРТОВАЛ БЫ прямо сейчас. Отвечает предикат самой платформы способностей
+   * (`slotReady`, ABIL-7), а не второе прочтение её полей рядом: разойдись
+   * они, документ просил бы каст, который гейт триггера всё равно роняет.
+   *
+   * Слот ищется линейным обходом выборки тика: у владельца `slotIndex`
+   * уникален (ABIL-1), поэтому первый совпавший и есть искомый, а исход не
+   * зависит ни от порядка обхода, ни от раскладки слотов чужих агентов. Слота
+   * с таким индексом у агента нет — ноль: отсутствующая способность не готова.
+   */
+  private abilityReady(ctx: SystemContext, handles: NpcHandles, slotIndex: number): Fixed {
+    const fields = handles.abilitySlot;
+    if (fields === undefined) return 0;
+    for (const slot of this.slots) {
+      if (ctx.getByHandle(slot, fields.owner) !== this.entity) continue;
+      if (ctx.getByHandle(slot, fields.slotIndex) !== slotIndex) continue;
+      return slotReady(ctx, fields, slot) ? FIXED_ONE : 0;
+    }
+    return 0;
   }
 
   /**
@@ -228,7 +281,14 @@ export class NpcDecider {
       const action = state.actions[index]!;
       let utility = UTILITY_IDENTITY_FIXED;
       for (const consideration of action.considerations) {
-        const value = this.inputValue(ctx, handles, behavior, routes, consideration.input);
+        const value = this.inputValue(
+          ctx,
+          handles,
+          behavior,
+          routes,
+          consideration.input,
+          consideration.slot,
+        );
         utility = combineUtilityFixed(
           utility,
           considerationScoreFixed(consideration.curve, consideration.weight, value),

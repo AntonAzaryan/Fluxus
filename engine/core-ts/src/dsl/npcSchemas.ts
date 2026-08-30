@@ -45,6 +45,14 @@ const npcCurve: Json = {
   })),
 };
 
+/**
+ * Параметризован ровно один вход словаря (NPC-7), поэтому ветка условная:
+ * `abilityReady` слот обязан назвать, любой другой вход — не вправе. Схема
+ * повторяет здесь то же правило, которым компилятор документа отвергает лишнее
+ * поле, а не смягчает его: `additionalProperties: false` без ветки принимал бы
+ * `slot` у входа, которому он бессмыслен (SER-5 — схема не строже загрузчика,
+ * но и не слабее там, где может).
+ */
 const npcConsideration: Json = {
   title: 'Ось полезности (NPC-3)',
   type: 'object',
@@ -52,9 +60,21 @@ const npcConsideration: Json = {
   required: ['input', 'curve', 'weight'],
   properties: {
     input: { $comment: 'Вход закрытого словаря NPC.', enum: sorted(NPC_INPUTS) },
+    slot: {
+      $comment: 'Индекс слота способности (AbilitySlot.slotIndex, ABIL-1) — только у входа abilityReady (NPC-7).',
+      type: 'integer',
+      minimum: 0,
+    },
     curve: { $ref: '#/$defs/npcCurve' },
     weight: { $comment: 'Доля [0, 1] в Q16.16.', ...unit },
   },
+  allOf: [
+    {
+      if: { required: ['input'], properties: { input: { const: 'abilityReady' } } },
+      then: { required: ['slot'] },
+      else: { not: { required: ['slot'] } },
+    },
+  ],
 };
 
 const npcAction: Json = {

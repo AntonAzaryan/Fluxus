@@ -27,6 +27,8 @@ export interface SlotHandles {
   readonly component: ComponentHandle;
   readonly abilityId: FieldHandle;
   readonly owner: FieldHandle;
+  /** Идентичность слота у владельца (ABIL-1): ею слот адресуют документы. */
+  readonly slotIndex: FieldHandle;
   readonly phase: FieldHandle;
   readonly phaseTicks: FieldHandle;
   readonly staged: FieldHandle;
@@ -52,6 +54,7 @@ export function resolveSlotHandles(ctx: SystemContext): SlotHandles {
     component: ctx.resolveComponent(ABILITY_SLOT_COMPONENT),
     abilityId: field('abilityId'),
     owner: field('owner'),
+    slotIndex: field('slotIndex'),
     phase: field('phase'),
     phaseTicks: field('phaseTicks'),
     staged: field('staged'),

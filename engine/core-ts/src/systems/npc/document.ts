@@ -17,6 +17,7 @@
 import { SCORING_CURVE_FIELDS, type FixedCurve, type ScoringCurveType } from '../../dsl/scoring.js';
 import { asList, asObject, fail, keyOf, literalName } from '../abilities/parse.js';
 import {
+  NO_SLOT,
   NPC_BEHAVIOR_SCHEMA,
   type CompiledAction,
   type CompiledBehavior,
@@ -102,8 +103,22 @@ function compileCurve(node: unknown, path: string): FixedCurve {
 /** Ось полезности: вход словаря NPC, кривая общей модели и вес (NPC-3). */
 function compileConsideration(node: unknown, path: string): CompiledConsideration {
   const root = asObject(node, path);
+  const input = keyOf(INPUT_CODES, root.input, `${path}.input`);
+  // Слот спрашивается ровно у того входа, для которого он что-то значит
+  // (NPC-7), и отвергается у прочих — тем же правилом, каким документ бота
+  // отвергает `slot` у входа, кроме `abilityCooldownFraction` (BOT-9).
+  const namesSlot = input === INPUT_CODES.abilityReady;
+  if (namesSlot === (root.slot === undefined)) {
+    fail(
+      `${path}.slot`,
+      namesSlot
+        ? 'вход "abilityReady" обязан назвать слот способности (AbilitySlot.slotIndex, ABIL-1)'
+        : 'слот осмыслен только у входа "abilityReady"',
+    );
+  }
   return {
-    input: keyOf(INPUT_CODES, root.input, `${path}.input`),
+    input,
+    slot: namesSlot ? countOf(root.slot, `${path}.slot`) : NO_SLOT,
     curve: compileCurve(root.curve, `${path}.curve`),
     // Вес оси — доля по построению диапазона (NPC-3): вес больше единицы вывел
     // бы полезность действия за [0, 1], то есть сделал бы веса разных действий

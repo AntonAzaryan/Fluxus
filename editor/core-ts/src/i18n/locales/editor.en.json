@@ -195,6 +195,7 @@
   "schema.npcBehavior.tier": "Mass or elite agent: the tier says only whether the agent may decide every tick.",
   "schema.npcConsideration.curve": "Response curve of the shared scoring model shape.",
   "schema.npcConsideration.input": "Input from the NPC dictionary, normalised to [0, 1] by the mechanism.",
+  "schema.npcConsideration.slot": "Ability slot index (AbilitySlot.slotIndex) — only for the abilityReady input; the slot is meaningless for the other inputs.",
   "schema.npcConsideration.weight": "Axis weight, a fraction in [0, 1]: a weight above one would take the utility out of range.",
   "schema.npcState.actions": "Actions of the state; utility scoring picks between them.",
   "schema.npcState.name": "State name; transitions address it by this name, the mechanism by index.",

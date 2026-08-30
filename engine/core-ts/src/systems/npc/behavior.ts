@@ -20,10 +20,11 @@
  * ни адаптивности от нагрузки здесь нет, иначе два прогона одного матча
  * разошлись бы.
  */
-import { NpcDecider, NO_ACTION } from './decide.js';
+import { NpcDecider, NO_ACTION, NO_SLOTS } from './decide.js';
 import { NpcRoutes } from './routes.js';
 import { healthFraction, isDead, livingAgents, posX, posY, teamOf } from './runtime.js';
 import { NPC_ACTION_NONE, NPC_AGENT_COMPONENT } from './components.js';
+import { ABILITY_SLOT_COMPONENT } from '../abilities/components.js';
 import { resolveNpcHandles, type NpcHandles } from './handles.js';
 import {
   COND_ELAPSED,
@@ -36,6 +37,7 @@ import {
   COND_TARGET_BEYOND,
   COND_TARGET_WITHIN,
   EXEC_CAST,
+  INPUT_ABILITY_READY,
   type CompiledBehavior,
   type CompiledState,
   type NpcCatalog,
@@ -63,6 +65,15 @@ export class NpcBehaviorSystem implements System {
   private readonly decider = new NpcDecider(CELL_SIZE);
   private readonly routes = new NpcRoutes();
   private readonly spec: QuerySpec;
+  /** Выборка слотов способностей — её обходит вход `abilityReady` (NPC-7). */
+  private readonly slotSpec: QuerySpec = { all: [ABILITY_SLOT_COMPONENT] };
+  /**
+   * Спрашивает ли хоть один документ каталога готовность слота. Считается на
+   * загрузке, а не каждый тик: сцене, ни один документ которой про
+   * способности не спрашивает, лишний запрос к миру был бы работой ни за чем —
+   * и работой, пропорциональной размеру мира (QUERY-3).
+   */
+  private readonly readsSlots: boolean;
   /**
    * Вход в состояние состоялся на этом тике: признак хранится ПОЛЕМ, а не
    * возвращается парой с индексом, — пара была бы объектом на каждого агента
@@ -79,6 +90,7 @@ export class NpcBehaviorSystem implements System {
   constructor(catalog: NpcCatalog) {
     this.catalog = catalog;
     this.spec = livingAgents(catalog);
+    this.readsSlots = readsAbilityReady(catalog);
   }
 
   run(ctx: SystemContext): void {
@@ -86,6 +98,10 @@ export class NpcBehaviorSystem implements System {
     if (agents.length === 0) return;
     const bindings = this.catalog.bindings;
     const handles = (this.handles ??= resolveNpcHandles(ctx, bindings));
+    // Выборка слотов — ОДНА на тик и на всех агентов: обход её детерминирован
+    // (QUERY-2), и запрос на каждое вычисление входа был бы работой, кратной
+    // числу решающих агентов.
+    if (this.readsSlots) this.decider.abilitySlots = ctx.query(this.slotSpec);
     this.decider.perception.rebuild(ctx, bindings, handles);
     this.routes.rebuild(ctx, bindings.position, handles);
     const rng = ctx.rng.stream(RNG_STREAM);
@@ -118,6 +134,10 @@ export class NpcBehaviorSystem implements System {
         this.decide(ctx, handles, behavior, entity, state, rng.next());
       }
     }
+    // Выборка отпускается здесь же: её окно валидности — тело этого вызова
+    // (QUERY-3), и решатель за него результат не удерживает — ровно так же
+    // отпускает свою выборку слотов машина фаз (`abilities/phase.ts`).
+    this.decider.abilitySlots = NO_SLOTS;
   }
 
   /**
@@ -284,6 +304,23 @@ export class NpcBehaviorSystem implements System {
       y: posY(ctx, handles, entity),
     });
   }
+}
+
+/**
+ * Спрашивает ли каталог готовность слота хоть одной осью (NPC-7). Обход
+ * документов ОДИН на загрузку сцены: словари закрыты и после компиляции не
+ * меняются, поэтому ответ — свойство каталога, а не состояния мира.
+ */
+function readsAbilityReady(catalog: NpcCatalog): boolean {
+  // Обход декларативный, а не циклами: он случается ОДИН раз на сборку системы
+  // и в тик не входит вовсе, поэтому замыкания здесь ничего не стоят.
+  return catalog.behaviors.some((behavior) =>
+    behavior.states.some((state) =>
+      state.actions.some((action) =>
+        action.considerations.some((axis) => axis.input === INPUT_ABILITY_READY),
+      ),
+    ),
+  );
 }
 
 /**

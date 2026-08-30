@@ -26,6 +26,8 @@ import {
   threatValueField,
 } from './components.js';
 import type { CompiledNpcBindings } from './model.js';
+import { ABILITY_SLOT_COMPONENT } from '../abilities/components.js';
+import { resolveSlotHandles, type SlotHandles } from '../abilities/handles.js';
 import { optionalComponentHandle } from '../optionalHandle.js';
 import type { ComponentHandle, FieldHandle, SystemContext } from '../../types.js';
 
@@ -80,6 +82,14 @@ export interface NpcHandles {
   readonly directorReleased: FieldHandle;
   readonly directorTimer: FieldHandle;
   readonly directorWave: FieldHandle;
+
+  /**
+   * Поля слота способности (ABIL-1) — ими вход `abilityReady` находит слот
+   * агента и спрашивает платформу способностей о его готовности (NPC-7).
+   * `undefined` — сцена способностей не объявила вовсе (SER-7): её агенту
+   * готового слота нет, как нет и самих слотов.
+   */
+  readonly abilitySlot: SlotHandles | undefined;
 }
 
 function threatSlots(ctx: SystemContext): NpcThreatSlotHandles[] {
@@ -141,5 +151,13 @@ export function resolveNpcHandles(ctx: SystemContext, bindings: CompiledNpcBindi
     directorReleased: ctx.resolveField(NPC_DIRECTOR_COMPONENT, 'released'),
     directorTimer: ctx.resolveField(NPC_DIRECTOR_COMPONENT, 'timer'),
     directorWave: ctx.resolveField(NPC_DIRECTOR_COMPONENT, 'wave'),
+
+    // Слоты — имя чужой платформы, и резолв его терпимый: сцена вправе
+    // объявить поведение NPC без способностей (SER-7), и падать ей на именах
+    // компонента, которого у неё нет, не на чем.
+    abilitySlot:
+      optionalComponentHandle(ctx, ABILITY_SLOT_COMPONENT) === undefined
+        ? undefined
+        : resolveSlotHandles(ctx),
   };
 }

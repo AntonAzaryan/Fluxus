@@ -51,11 +51,11 @@ import {
   buttonEdge,
   buttonFell,
   buttonsOf,
-  cooldownRemaining,
   cooldownTicksOf,
   predicate,
   prevButtonsOf,
   setCooldown,
+  slotReady,
   SlotScope,
   stagedStepsValid,
   ticksOf,
@@ -151,7 +151,10 @@ export class CastPhaseSystem implements System {
     owner: EntityId,
     ability: CompiledAbility,
   ): void {
-    if (cooldownRemaining(ctx, slot) > 0) return;
+    // Гейт — общий предикат платформы (`slotReady`), а не своё прочтение фазы и
+    // кулдауна: тот же самый ответ читает вход `abilityReady` документа
+    // поведения NPC (NPC-7), и разойтись им нельзя.
+    if (!slotReady(ctx, this.scope.handles(ctx), slot)) return;
     let event = NO_EVENT;
     if (ability.triggerKind === TRIGGER_INPUT) {
       if (!this.catalog.bindings.hasInput) return;

@@ -28,6 +28,7 @@ import {
 } from '../src/systems/npc/components.js';
 import { compileNpcCatalog } from '../src/systems/npc/document.js';
 import {
+  NO_SLOT,
   NPC_CONDITIONS,
   NPC_INPUTS,
   type NpcPlatformDef,
@@ -304,6 +305,62 @@ describe('NPC-2: документ поведения — контент, сло�
       ],
     });
     expect(() => compileNpcCatalog({ behaviors: [broken as never] })).toThrow(/enemyMorale/);
+  });
+
+  /** Ось входа `abilityReady` (NPC-7) в документе-однодневке — ею проверяется форма. */
+  const readyAxis = (over: Record<string, unknown> = {}): Record<string, unknown> =>
+    chaser({
+      states: [
+        {
+          name: 'chase',
+          actions: [
+            {
+              executor: 'hold',
+              considerations: [{ input: 'abilityReady', curve: RISING, weight: ONE, ...over }],
+            },
+          ],
+        },
+      ],
+    });
+
+  it('«abilityReady» без слота — находка валидации с путём поля', () => {
+    // NPC-7: consideration этого входа, не назвавший `slot`, — находка. Слот и
+    // есть адресат наблюдения: без него спрашивать нечего.
+    expect(() => compileNpcCatalog({ behaviors: [readyAxis() as never] })).toThrow(/slot/);
+  });
+
+  it('слот у постороннего входа — находка: параметризован ровно один', () => {
+    // Зеркало ботовской валидации (BOT-9): лишнее поле — признак того, что
+    // документ писали, не понимая, что настраивают.
+    const broken = chaser({
+      states: [
+        {
+          name: 'chase',
+          actions: [
+            {
+              executor: 'hold',
+              considerations: [{ input: 'targetKnown', curve: RISING, weight: ONE, slot: 0 }],
+            },
+          ],
+        },
+      ],
+    });
+    expect(() => compileNpcCatalog({ behaviors: [broken as never] })).toThrow(/abilityReady/);
+  });
+
+  it('названный слот доезжает до скомпилированной оси, у прочих его нет', () => {
+    const catalog = compileNpcCatalog({
+      behaviors: [readyAxis({ slot: 3 }) as never, chaser() as never],
+      bindings: BINDINGS,
+    });
+    expect(catalog.behaviors[0]!.states[0]!.actions[0]!.considerations[0]!.slot).toBe(3);
+    // «Слот не назван» — своё значение, а не ноль: нулевой индекс законен.
+    expect(catalog.behaviors[1]!.states[0]!.actions[0]!.considerations[0]!.slot).toBe(NO_SLOT);
+  });
+
+  it('дробный и отрицательный слот — находки: индекс слота целый и неотрицательный', () => {
+    expect(() => compileNpcCatalog({ behaviors: [readyAxis({ slot: -1 }) as never] })).toThrow(/slot/);
+    expect(() => compileNpcCatalog({ behaviors: [readyAxis({ slot: 1.5 }) as never] })).toThrow(/slot/);
   });
 
   it('неизвестная форма кривой — находка с её именем и словарём', () => {
@@ -1164,11 +1221,13 @@ interface Probe {
   readonly during?: (h: Harness, i: number) => void;
   /** Сколько тиков смотреть; по умолчанию четыре. */
   readonly ticks?: number;
+  /** Добавка к сцене пробы — платформа способностей у входа `abilityReady`. */
+  readonly scene?: Partial<SceneDef>;
 }
 
 /** Типы событий пробы за отведённые ей тики. */
 function probeCast(behavior: Record<string, unknown>, probe: Probe): readonly string[] {
-  const h = harness({ behaviors: [behavior as never], bindings: BINDINGS });
+  const h = harness({ behaviors: [behavior as never], bindings: BINDINGS }, probe.scene ?? {});
   probe.place(h);
   const seen: string[] = [];
   for (let i = 0; i < (probe.ticks ?? 4); i++) {
@@ -1218,6 +1277,12 @@ function inputProbe(
   input: string,
   curve: Record<string, unknown> = RISING,
 ): Record<string, unknown> {
+  // `abilityReady` — единственный параметризованный вход словаря (NPC-7): он
+  // обязан назвать слот, и проба называет тот, который сама кладёт в мир.
+  const axis =
+    input === 'abilityReady'
+      ? { input, slot: PROBE_SLOT, curve, weight: ONE }
+      : { input, curve, weight: ONE };
   return {
     schema: 1,
     name: 'probe',
@@ -1226,15 +1291,62 @@ function inputProbe(
     ranges: { sense: F(20), attack: F(20), arrive: F(1), separation: F(2) },
     speed: F(1),
     states: [
-      {
-        name: 'weigh',
-        actions: [
-          { executor: 'cast', event: 'Weighed', considerations: [{ input, curve, weight: ONE }] },
-        ],
-      },
+      { name: 'weigh', actions: [{ executor: 'cast', event: 'Weighed', considerations: [axis] }] },
     ],
   };
 }
+
+/** Индекс слота, о готовности которого проба спрашивает (ABIL-1). */
+const PROBE_SLOT = 0;
+
+/**
+ * Сцена пробы входа `abilityReady`: платформа способностей с определением,
+ * которое само не стартует (триггер — событие, которого никто не публикует) и
+ * не кончается само (фаза `auto` без срока). Предмет пробы — ВХОД, а не машина
+ * каста: её собственные переходы закрыты `abilitySystems.test.ts`.
+ */
+const ABILITY_SCENE: Partial<SceneDef> = {
+  prefabs: [
+    ...PREFABS,
+    { name: 'Slot', components: { AbilitySlot: {}, AbilityCooldown: { remaining: 0, total: 0 } } },
+  ],
+  abilities: [
+    {
+      id: 'probe',
+      trigger: { event: { type: 'NeverAsked', as: 'ask' } },
+      phases: [{ id: 'hold', trigger: 'auto' }],
+    },
+  ] as unknown as NonNullable<SceneDef['abilities']>,
+};
+
+/** Мир слота способности: чем он занят и кому принадлежит (ABIL-1, ABIL-7). */
+interface SlotWorld {
+  /** Индекс слота у владельца; проба спрашивает `PROBE_SLOT`. */
+  readonly slotIndex?: number;
+  /** Остаток кулдауна в тиках. */
+  readonly cooldown?: number;
+  /** Идёт каст: индекс активной фазы определения. */
+  readonly phase?: number;
+  /** Слот принадлежит не агенту, а постороннему. */
+  readonly foreign?: boolean;
+}
+
+/** Крип, которому выдан слот способности описанного положения. */
+const slotted =
+  (world: SlotWorld = {}) =>
+  (h: Harness): void => {
+    const creep = h.place('Creep', { Position: { x: 0, y: 0 } });
+    const owner = world.foreign ? h.place('Hero', { Position: { x: F(3), y: 0 } }) : creep;
+    const cooldown = world.cooldown ?? 0;
+    h.place('Slot', {
+      AbilitySlot: {
+        owner,
+        slotIndex: world.slotIndex ?? PROBE_SLOT,
+        ...(world.phase === undefined ? {} : { phase: world.phase }),
+      },
+      AbilityCooldown: { remaining: cooldown, total: cooldown },
+    });
+  };
 
 describe('NPC-2, NPC-7: каждое условие закрытого словаря вычисляется', () => {
   /** Сторож перехода вместе с миром, в котором проверяется его вердикт. */
@@ -1421,6 +1533,14 @@ describe('NPC-3: каждый вход закрытого словаря выч�
       },
       zero: { place: creep },
     },
+    abilityReady: {
+      // Слот свободен и кулдаун выстоял — каст стартовал бы (ABIL-7), и вход
+      // даёт единицу.
+      weighs: { place: slotted(), scene: ABILITY_SCENE },
+      // Кулдаун не выстоял: заявку гейт триггера всё равно уронил бы, и ось её
+      // не подаёт (NPC-7).
+      zero: { place: slotted({ cooldown: 30 }), scene: ABILITY_SCENE },
+    },
   };
 
   for (const input of NPC_INPUTS) {
@@ -1443,6 +1563,55 @@ describe('NPC-3: каждый вход закрытого словаря выч�
       place: (h) => void h.place('Creep', { Position: { x: 0, y: 0 } }),
     });
     expect(alone).toContain('Weighed');
+  });
+
+  it('«abilityReady»: идущий каст того же слота выключает ось', () => {
+    // Вторая половина гейта (ABIL-7): слот в фазе не стартует, сколько бы ни
+    // выстоял кулдаун, — и вход отвечает тем же нулём, что при откате.
+    const busy = probeCast(inputProbe('abilityReady'), {
+      place: slotted({ phase: 0 }),
+      scene: ABILITY_SCENE,
+    });
+    expect(busy).not.toContain('Weighed');
+  });
+
+  it('«abilityReady»: неположительный остаток кулдауна — та же готовность, что у гейта', () => {
+    // Гейт триггера держит старт ПОЛОЖИТЕЛЬНЫМ остатком (ABIL-7), а поле
+    // остатка — обычный i32, в который пишет и контент. Вход обязан отвечать
+    // ровно то же: иначе документ считал бы неготовым слот, каст которого
+    // машина способностей стартовала бы, — то самое расхождение двух прочтений
+    // одного гейта, которого NPC-7 не допускает.
+    const spent = probeCast(inputProbe('abilityReady'), {
+      place: slotted({ cooldown: -5 }),
+      scene: ABILITY_SCENE,
+    });
+    expect(spent).toContain('Weighed');
+  });
+
+  it('«abilityReady»: чужой слот и слот с другим индексом читаются нулём', () => {
+    // NPC-7: «Слот, которого у агента нет, SHALL читаться нулём» — и исход не
+    // зависит от раскладки слотов ДРУГИХ агентов: готовый слот постороннего
+    // ось агента не включает.
+    const foreign = probeCast(inputProbe('abilityReady'), {
+      place: slotted({ foreign: true }),
+      scene: ABILITY_SCENE,
+    });
+    expect(foreign).not.toContain('Weighed');
+
+    const other = probeCast(inputProbe('abilityReady'), {
+      place: slotted({ slotIndex: PROBE_SLOT + 1 }),
+      scene: ABILITY_SCENE,
+    });
+    expect(other).not.toContain('Weighed');
+  });
+
+  it('«abilityReady»: сцена без способностей отвечает нулём, а не падает', () => {
+    // Документ вправе назвать вход в сцене, где платформы способностей нет
+    // вовсе (SER-7): компонента слота у мира нет, и готового слота — тоже.
+    const bare = probeCast(inputProbe('abilityReady'), {
+      place: (h) => void h.place('Creep', { Position: { x: 0, y: 0 } }),
+    });
+    expect(bare).not.toContain('Weighed');
   });
 
   it('«healthFraction»: убывающая кривая делает раненого агента активнее целого', () => {
