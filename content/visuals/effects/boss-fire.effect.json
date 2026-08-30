@@ -14,11 +14,54 @@
       "heightSegments": 1
     }
   ],
+  "images": [
+    {
+      "uuid": "4a1f7c62-0d95-4b31-8e77-2c6f0b39d514",
+      "url": "/visuals/textures/fire-soft.png"
+    }
+  ],
+  "textures": [
+    {
+      "uuid": "9c2b5e08-73a1-4f6d-b0c4-1e58d7a2369f",
+      "name": "fire-soft",
+      "image": "4a1f7c62-0d95-4b31-8e77-2c6f0b39d514",
+      "mapping": 300,
+      "channel": 0,
+      "repeat": [
+        1,
+        1
+      ],
+      "offset": [
+        0,
+        0
+      ],
+      "center": [
+        0,
+        0
+      ],
+      "rotation": 0,
+      "wrap": [
+        1001,
+        1001
+      ],
+      "format": 1023,
+      "type": 1009,
+      "colorSpace": "srgb",
+      "minFilter": 1006,
+      "magFilter": 1006,
+      "anisotropy": 1,
+      "flipY": true,
+      "generateMipmaps": true,
+      "premultiplyAlpha": false,
+      "unpackAlignment": 4
+    }
+  ],
   "materials": [
     {
       "uuid": "3c81de50-9a24-4f1b-8b6c-72d0e5a1f4b8",
       "type": "MeshBasicMaterial",
       "color": 16777215,
+      "map": "9c2b5e08-73a1-4f6d-b0c4-1e58d7a2369f",
       "envMapRotation": [
         0,
         0,
@@ -125,8 +168,8 @@
           },
           "startSize": {
             "type": "IntervalValue",
-            "a": 0.22,
-            "b": 0.46
+            "a": 0.15,
+            "b": 0.32
           },
           "startColor": {
             "type": "Gradient",

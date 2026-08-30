@@ -208,10 +208,17 @@
         "alpha": 0.45,
         "height": 0.35
       },
+      "BossFire": {
+        "primitive": "sphere",
+        "color": "#ff6a1e",
+        "radius": 0.600006103515625,
+        "alpha": 0.12,
+        "height": 0
+      },
       "BossField": {
         "primitive": "sphere",
         "color": "#ffe14a",
-        "radius": 4.5000457763671875,
+        "radius": 6.7500762939453125,
         "alpha": 0.2,
         "height": 0
       }
