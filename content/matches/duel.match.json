@@ -21,7 +21,8 @@
   ],
   "tickRate": 60,
   "snapshotRate": 30,
-  "inputDelay": 2,
+  "inputDelay": 15,
+  "inputWindow": 30,
   "silenceSeconds": 300,
   "rewind": {
     "interval": 30,
