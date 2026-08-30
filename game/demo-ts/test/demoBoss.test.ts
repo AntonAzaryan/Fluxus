@@ -111,10 +111,10 @@ const MANIFEST = manifestJson as unknown as {
 const CONTENT_ROOT = join(dirname(fileURLToPath(import.meta.url)), '../../../content');
 
 /**
- * Радиус формы эмиттера частиц в мировых единицах — то, чем ассет эмиттера
- * заменяет поле `radius` записи-сферы. Читается из самого документа: у секции
- * `particles` манифеста своего радиуса нет вовсе (ASSET-14), и связь картинки с
- * зоной урона иначе держать не на чем.
+ * Радиус формы эмиттера частиц в мировых единицах. Читается из САМОГО документа
+ * эффекта: у секции `particles` манифеста своего радиуса нет вовсе (ASSET-14), и
+ * связь пламени с зоной урона иначе держать не на чем — оболочка `effects.byKind`
+ * рядом отвечает только за себя.
  */
 function emitterRadius(assetId: string): number {
   return emitterDoc(assetId).object.children[0]!.ps.shape.radius;
@@ -1312,9 +1312,12 @@ describe('поле замедления: жёлтый купол, гасящий
       expect(trace[i]!, `тик ${i}`).toBeLessThanOrEqual(trace[i - 1]!);
     }
     // И он именно ПЛАВНЫЙ, а не «через две секунды вдруг 0.2»: за окно спада
-    // множитель принимает сотни разных значений, а не два.
+    // множитель меняется ПОЧТИ КАЖДЫЙ тик, а не принимает два значения. Порог —
+    // три четверти окна: шаг спада (52429 / 120 ≈ 437) на порядки крупнее
+    // единицы Q16.16, поэтому совпадений соседних тиков быть не должно вовсе, а
+    // четверть запаса оставлена служебным тикам на краях, а не округлению.
     const distinct = new Set(trace.slice(0, FIELD_RAMP));
-    expect(distinct.size).toBeGreaterThan(100);
+    expect(distinct.size).toBeGreaterThan((FIELD_RAMP * 3) / 4);
     // Середина окна — строго между единицей и полом: ни там, ни там.
     const middle = trace[FIELD_RAMP / 2]!;
     expect(middle).toBeLessThan(FIXED_ONE);
@@ -1333,7 +1336,12 @@ describe('поле замедления: жёлтый купол, гасящий
     // секунде обязан получить свои две секунды спада, а не готовые 0.2.
     // Отсчёт живёт меткой `Chilled` на самой жертве — общий на всех множитель
     // зоны выражал бы ровно ту ошибку, которую эта проверка и ловит.
-    const a = stand([[26, 24], [31, 24]], noRepel(only('SlotBossField')));
+    // Второй стоит в девяти единицах от центра арены, а не в семи: поле
+    // накрывает 6.75, и семь оставили бы ему 0.25 единицы запаса — три шага
+    // героя. Проверка тогда держалась бы не на «он снаружи», а на том, что
+    // босс за время каста никуда не сдвинулся. Девять дают 2.25 единицы —
+    // столько же, сколько семь давали полю прежнего радиуса (там было 2.5).
+    const a = stand([[26, 24], [33, 24]], noRepel(only('SlotBossField')));
     const early = a.heroes[0]!;
     const late = a.heroes[1]!;
     until(a, 'BossFieldCast', 60);
@@ -2137,11 +2145,15 @@ describe('числа и картинка босса: ретюн виден в д
     // дважды: ось дистанции обнуляется на нём, волна пролетает его сама.
     expect(Math.abs(axisReach('BossStrike') - STRIKE_REACH)).toBeLessThan(FIXED_ONE / 100);
     expect(WAVE_SPEED * WAVE_TICKS).toBe(STRIKE_REACH);
-    // Полтора купола героя — та самая связь, ради которой поле и заведено.
+    // Купол героя и поле босса связаны по-прежнему, но множитель у связи ДРУГОЙ:
+    // поле заводилось в полтора купола, и эти полтора дизайнер увеличил ещё в
+    // полтора раза — 294915 × 1.5 = 442372.5, округлённо 442373. Итог — две с
+    // четвертью купола; «полтора» здесь больше не верно ни в комментарии, ни в
+    // арифметике, и записана именно новая величина, а не прежняя со сноской.
     const dome = SCENE.prefabs!.find((prefab) => prefab.name === 'SlowDome')!;
     const field = SCENE.prefabs!.find((prefab) => prefab.name === 'BossField')!;
     expect((field.components.FieldState as Record<string, number>).radius).toBe(
-      ((dome.components.DomeState as Record<string, number>).radius! * 3) / 2,
+      Math.round((dome.components.DomeState as Record<string, number>).radius! * 2.25),
     );
     // Тело скелета — героическое, делённое на полтора; шаг — героический ровно.
     const minion = SCENE.prefabs!.find((prefab) => prefab.name === 'BossMinion')!;
@@ -2442,6 +2454,9 @@ describe('числа и картинка босса: ретюн виден в д
     // земле, которого россыпь частиц сама не даёт.
     const shell = MANIFEST.effects.byKind.BossFire;
     expect(shell, 'без оболочки по виду полоса рисуется заглушками (ASSET-6)').toBeDefined();
+    // Свечение по земле — РОВНО зона урона, а не «чуть шире», как у волны:
+    // пятна ложатся через свой диаметр, и оболочки соседних касаются краями.
+    // Шире — и полоса горела бы там, где не жжёт.
     expect(shell!.radius).toBe(FIRE_RADIUS / FIXED_ONE);
     const emitter = MANIFEST.particles.byKind!.BossFire!.effect;
     expect(emitter).toMatch(/\.effect\.json$/);
@@ -2452,7 +2467,13 @@ describe('числа и картинка босса: ретюн виден в д
     // адресу страницы, и промах читался бы невидимым огнём, а не находкой.
     const map = emitterMapUrl(emitter);
     expect(map, 'у материала эмиттера нет карты — частица будет квадратом').toMatch(/\.png$/);
-    expect(existsSync(join(CONTENT_ROOT, map!.replace(/^\//, '')))).toBe(true);
+    // Ведущий слэш снимается: у страницы дерево контента раздаётся с корня
+    // адресного пространства (DSK-4), а на диске оно и есть корень (ASSET-2).
+    const texture = (map ?? '').replace(/^\//, '');
+    expect(
+      existsSync(join(CONTENT_ROOT, texture)),
+      `документ эффекта ссылается на "${texture}", а файла в дереве контента нет`,
+    ).toBe(true);
     // Толчок в упор стал радиальным взрывом — вспышка обязана назвать его радиус.
     expect(MANIFEST.effects.byEvent.BossRepelLanded!.radiusTo).toBe(REPEL_RADIUS / FIXED_ONE);
     // Взрыв скелета — та же связь: вспышка ровно по зоне урона.
