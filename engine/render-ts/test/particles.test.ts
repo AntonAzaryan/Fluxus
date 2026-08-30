@@ -118,11 +118,23 @@ const MODEL_ID = 'models/fireball.mdx';
  * предупреждением и объёмом-прокси, — своего следа в подсистеме частиц у неё
  * нет и быть не должно.
  */
-function makeModels(manifest: VisualManifest, ctx: RenderContext) {
+function makeModels(
+  manifest: VisualManifest,
+  ctx: RenderContext,
+  options: { readonly fadeSeconds?: number } = {},
+) {
   const warnings: string[] = [];
-  const models = new ModelsSubsystem(manifest, { warn: (m) => warnings.push(m) });
+  const models = new ModelsSubsystem(manifest, { ...options, warn: (m) => warnings.push(m) });
   models.init(ctx);
   return { models, warnings };
+}
+
+/** Материал единственного меша под держателем сущности; null — меша нет. */
+function holderMaterial(scene: THREE.Scene, name: string): THREE.Material | null {
+  const holder = scene.children.find((child) => child.name === name);
+  const mesh = holder?.children[0] as Partial<THREE.Mesh> | undefined;
+  const material = mesh?.material;
+  return material === undefined || Array.isArray(material) ? null : material;
 }
 
 /**
@@ -491,12 +503,86 @@ describe('Вид, нарисованный только частицами (REND
     const ghost = (states: number): ReturnType<typeof makeEntityView> =>
       makeEntityView(1, { kind: 'Ghost', states });
 
-    for (const states of [0, POISONED, 0]) {
+    // Состояние несёт ПЕРВАЯ доставка: решение о заглушке принимается на
+    // создании инстанса, и приди оно позже — ветка решения не выполнилась бы
+    // при доставленном состоянии ни разу, а тест краснел бы только от того,
+    // что заглушка перестала быть стабильной между кадрами.
+    for (const states of [POISONED, 0, POISONED]) {
       models.syncTick(makeTickView([ghost(states)]));
       models.updateFrame(0.016, 1);
       expect(models.instanceFor(1)!.placeholder).toBe(true);
     }
     expect(warnings.filter((m) => m.includes('Ghost'))).toHaveLength(1);
+  });
+
+  it('вид с обеими записями byKind заявлен частицами и попадаем (сценарий «Пятно огня со свечением по земле»)', () => {
+    // Форма собственного контента репозитория: у `BossFire` есть и эмиттер, и
+    // плоская оболочка эффекта, подсвечивающая зону урона по земле. Нарисовано
+    // при этом облако частиц, и попадаемость вид терять не вправе — иначе её
+    // отнимало бы у него добавленное свечение.
+    const manifest: VisualManifest = {
+      entities: {},
+      effects: { byKind: { Fireball: { primitive: 'sphere', color: '#ff6a1e', radius: 0.6, alpha: 0.12, height: 0 } } },
+      particles: { byKind: { Fireball: { effect: TORCH } } },
+    };
+    const { subsystem, ctx } = makeRig({ manifest });
+    const { models, warnings } = makeModels(manifest, ctx);
+    const fire = makeEntityView(1, { kind: 'Fireball', prevX: 4, currX: 4, prevY: 3, currY: 3 });
+    models.syncTick(makeTickView([fire]));
+    models.updateFrame(0.016, 1);
+    subsystem.syncTick(makeTickView([fire]));
+
+    expect(models.instanceFor(1)!.placeholder).toBe(false);
+    expect(warnings).toEqual([]);
+    // Частицы его действительно рисуют — оболочка эффекта их не отменяет.
+    expect(subsystem.emitterFor(1)!.effect).toBe(TORCH);
+
+    // И объём-прокси тот же самый, что у вида, заявленного одной лишь секцией
+    // эмиттеров: пятно со свечением попадаемо ровно как пятно без него.
+    const both: PickProxy = createPickProxy();
+    const emitterOnly: PickProxy = createPickProxy();
+    expect(models.proxyOf(1, both)).toBe(true);
+    const plain = makeModels(makeManifest(), ctx).models;
+    plain.syncTick(makeTickView([makeEntityView(2, { kind: 'Fireball', prevX: 4, currX: 4, prevY: 3, currY: 3 })]));
+    plain.updateFrame(0.016, 1);
+    expect(plain.proxyOf(2, emitterOnly)).toBe(true);
+    const box = (p: PickProxy): number[] => [p.minX, p.minY, p.minZ, p.maxX, p.maxY, p.maxZ];
+    expect(box(both)).toEqual(box(emitterOnly));
+  });
+
+  it('заявка посреди угасания не оставляет fade за прежним мешом (FOW-8)', () => {
+    // Смена содержимого держателя обязана закрывать эпизод угасания — тем же
+    // порядком, каким его закрывает приезд модели: fade-копии материалов
+    // привязаны к КОНКРЕТНЫМ мешам, и снятая заглушка унесла бы выданную копию
+    // с собой. Не закрыть его здесь — значит оставить список целей указывать на
+    // меш, которого в сцене больше нет, и заглушка, вернувшаяся обратной
+    // правкой, не угасала бы уже никогда.
+    // Сцена своя, без батчера частиц: проверяется, что после заявки в ней не
+    // остаётся НИЧЕГО от инстанса, и чужой объект сделал бы счёт неверным.
+    const assets = makeAssets();
+    const ctxOf: RenderContext = {
+      scene: new THREE.Scene(),
+      assets: assets.service,
+      config: { heightStep: 0.5 },
+    };
+    // Длинное угасание: за кадры теста доля до единицы не доходит, и эпизод
+    // остаётся живым на всю проверку.
+    const { models } = makeModels({ entities: {} }, ctxOf, { fadeSeconds: 10 });
+    models.syncTick(makeTickView([makeEntityView(1, { kind: 'Ghost' })]));
+    models.updateFrame(0.016, 1);
+    const fading = holderMaterial(ctxOf.scene, 'entity:1');
+    expect(fading!.opacity).toBeLessThan(1); // заглушка угасает — эпизод идёт
+
+    // Заявка появилась: заглушки не стало, держателя тоже.
+    models.applyManifest({ entities: {}, particles: { byKind: { Ghost: { effect: TORCH } } } });
+    expect(ctxOf.scene.children).toHaveLength(0);
+
+    // Заявку убрали: заглушка вернулась — и угасает, а не стоит непрозрачной.
+    models.applyManifest({ entities: {} });
+    models.updateFrame(0.016, 1);
+    const restored = holderMaterial(ctxOf.scene, 'entity:1');
+    expect(restored).not.toBeNull();
+    expect(restored!.opacity).toBeLessThan(1);
   });
 
   it('снаряд с моделью и хвостом из частиц строится моделью (приоритет модельной записи)', () => {

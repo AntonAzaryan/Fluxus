@@ -2604,14 +2604,11 @@ export class ModelsSubsystem implements RenderSubsystem, InstanceProxySource {
     const visual = record.visual;
     if (visual === undefined) {
       // Модельной записи нет — но изображение у вида может быть чужое (REND-37).
-      const claim = claimOf(this.manifest, kind);
-      if (claim !== null) {
-        record.emitter = claim === 'particles';
-        return;
-      }
-      // Сущность без записи в манифесте: заглушка и предупреждение один раз (ASSET-6).
-      this.warnMissingVisual(kind);
-      this.makePlaceholder(ctx, record);
+      // Решает это ОДНО место на оба входа: и на создании инстанса, и на
+      // переподаче манифеста. Два места пришли бы к одной и той же
+      // конфигурации разными следами в сцене — держатель, снятый на одной
+      // дороге и оставленный пустым на другой.
+      this.syncClaim(ctx, record);
       return;
     }
 
@@ -2631,12 +2628,15 @@ export class ModelsSubsystem implements RenderSubsystem, InstanceProxySource {
   }
 
   /**
-   * Заявка чужой подсистемы на ЖИВОМ инстансе после переподачи манифеста
-   * (REND-17, REND-37): появившаяся снимает заглушку, исчезнувшая ставит её
-   * обратно. Зовётся только там, где модельной записи нет ни до, ни после, —
-   * `rebuildsInstance` сравнивает модельные записи и обеих сторон этого
-   * перехода не видит, а построенного из ассета у такого инстанса нет вовсе,
-   * и пересобирать здесь нечего.
+   * Изображение вида, у которого модельной записи нет (REND-37): чужая заявка
+   * снимает заглушку, её отсутствие — ставит. Одно место на все входы —
+   * создание инстанса, пересборку под новой записью и переподачу манифеста
+   * (REND-17), — и зовётся оно на переподаче ОТДЕЛЬНО от `rebuild`: тот идёт
+   * от `rebuildsInstance`, а он сравнивает МОДЕЛЬНЫЕ записи и перехода
+   * «заявки не было → заявка есть» не видит вовсе.
+   *
+   * Идемпотентно: повторный вызов на той же конфигурации ничего не меняет.
+   * Построенного из ассета у такого инстанса нет, и пересобирать здесь нечего.
    */
   private syncClaim(ctx: RenderContext, record: InstanceRecord): void {
     const kind = record.kind;
@@ -2644,8 +2644,13 @@ export class ModelsSubsystem implements RenderSubsystem, InstanceProxySource {
     const claim = claimOf(this.manifest, kind);
     record.emitter = claim === 'particles';
     if (claim !== null) {
-      // Узел заводился под заглушку; чужому изображению он не нужен — ровно
-      // так же, как его не заводит `attachVisual` заявленному виду с рождения.
+      // Содержимое держателя меняется — сперва конец эпизода угасания, тем же
+      // порядком и по той же причине, что в `attachModel` (FOW-8): fade-копии
+      // материалов привязаны к прежним мешам, и снятая отсюда заглушка унесла
+      // бы выданную копию с собой.
+      this.clearHolderFade(record);
+      // Узел заводился под заглушку; чужому изображению он не нужен, и пустым
+      // в сцене не остаётся — иначе кастер объявлен, а рисовать им нечего.
       this.disposePlaceholder(record);
       this.releaseHolder(record);
       return;
@@ -3668,11 +3673,19 @@ function screenSize(radius: number, distance: number, screen: ScreenScale): numb
  * и `byEvent` обеих секций сюда не входят: они ключуются именем состояния и
  * типом события, вида не называют, и заглушка, зависящая от них, мигала бы
  * вместе с доставленным состоянием.
+ *
+ * Порядок вопросов наблюдаемый, и секция эмиттеров стоит РАНЬШЕ секции
+ * эффектов намеренно (REND-37). Ключи секций пересекаться вправе — принадлежать
+ * ровно одной секции REND-23 обязывает ЗАПИСЬ, а не ключ, — и в контенте это
+ * пересечение живёт: у пятна огня демо пламя рисуют частицы, а плоская
+ * оболочка эффекта под ними подсвечивает зону урона по земле. Ответь этот
+ * резолвер про такой вид `'effect'` — вид остался бы без объёма-прокси
+ * (`boundsOf`), то есть невыделяемым, ровно за добавленное свечение.
  */
 function claimOf(manifest: VisualManifest, kind: string): 'effect' | 'particles' | null {
-  if (resolveEffectByKind(manifest, kind) !== undefined) return 'effect';
   if (resolveVisualEmitter(manifest, kind) !== undefined) return 'particles';
   if (resolveParticlesByKind(manifest, kind) !== undefined) return 'particles';
+  if (resolveEffectByKind(manifest, kind) !== undefined) return 'effect';
   return null;
 }
 

@@ -338,6 +338,32 @@ describe('пересборка инстанса при смене модели (
     expect(warnings.length).toBe(1);
   });
 
+  it('вторая дорога к той же конфигурации оставляет ту же сцену (REND-37)', () => {
+    // Переподача, снявшая модельную запись и одновременно заведшая запись
+    // эмиттера, идёт другим путём — через `rebuildsInstance` и `rebuild`, — а
+    // приходит к тому же: изображение вида рисуют частицы. Сцена после этого
+    // обязана совпадать со сценой первой дороги, иначе одна из них оставляет
+    // за собой пустой держатель на всю жизнь сущности.
+    const { subsystem, ctx, assets } = makeRig();
+    subsystem.syncTick(makeTickView([onSlope()]));
+    assets.resolve('model', MODEL_ID, makeModel());
+    const instance = subsystem.instanceFor(HERO)!;
+    expect(instance.model).not.toBeNull();
+    expect(ctx.scene.children.length).toBe(1);
+
+    const next = makeManifest();
+    delete next.entities.Runner;
+    next.particles = { byKind: { Runner: { effect: 'vfx/runner-trail.effect.json' } } };
+    subsystem.applyManifest(next);
+
+    expect(subsystem.instanceFor(HERO)).toBe(instance);
+    expect(instance.placeholder).toBe(false);
+    expect(instance.model).toBeNull();
+    expect(ctx.scene.children.length).toBe(0);
+    // Объём-прокси при этом есть: вид нарисован, и попадать в него есть чем.
+    expect(instance.bounds).not.toBeNull();
+  });
+
   it('исчезнувшая запись эмиттера возвращает заглушку и её предупреждение (REND-37, ASSET-6)', () => {
     const manifest = makeManifest();
     manifest.particles = { byKind: { Wisp: { effect: 'vfx/wisp.effect.json' } } };
