@@ -51,7 +51,7 @@
  * Толчка в упор `BossBusy` не касается намеренно: он больше не способность и
  * слота не занимает, а гейт на рывок несёт своя система (`BossRepel`).
  */
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
@@ -117,10 +117,38 @@ const CONTENT_ROOT = join(dirname(fileURLToPath(import.meta.url)), '../../../con
  * зоной урона иначе держать не на чем.
  */
 function emitterRadius(assetId: string): number {
-  const doc = JSON.parse(readFileSync(join(CONTENT_ROOT, assetId), 'utf8')) as {
-    object: { children: readonly { ps: { shape: { radius: number } } }[] };
+  return emitterDoc(assetId).object.children[0]!.ps.shape.radius;
+}
+
+/**
+ * Адрес картинки, которой материал эмиттера режет свой квад, — либо null, если
+ * карты у материала нет вовсе. Ссылка идёт по цепочке `material.map → texture →
+ * image.url` документа графа объектов three: карта живёт в РАЗДЕЛАХ документа, а
+ * не в самой системе частиц, и первый попавшийся url взять нельзя — материалов у
+ * документа может быть несколько.
+ */
+function emitterMapUrl(assetId: string): string | null {
+  const doc = emitterDoc(assetId);
+  const used = doc.object.children[0]!.ps.material;
+  const map = doc.materials?.find((entry) => entry.uuid === used)?.map;
+  const image = doc.textures?.find((entry) => entry.uuid === map)?.image;
+  return doc.images?.find((entry) => entry.uuid === image)?.url ?? null;
+}
+
+/** Документ эмиттерного ассета из дерева контента — ровно те поля, что читаются. */
+function emitterDoc(assetId: string): EmitterDoc {
+  return JSON.parse(readFileSync(join(CONTENT_ROOT, assetId), 'utf8')) as EmitterDoc;
+}
+
+interface EmitterDoc {
+  readonly images?: readonly { readonly uuid: string; readonly url: string }[];
+  readonly textures?: readonly { readonly uuid: string; readonly image: string }[];
+  readonly materials?: readonly { readonly uuid: string; readonly map?: string }[];
+  readonly object: {
+    readonly children: readonly {
+      readonly ps: { readonly material: string; readonly shape: { readonly radius: number } };
+    }[];
   };
-  return doc.object.children[0]!.ps.shape.radius;
 }
 
 const CAST = 1 << ACTION_BITS.cast;
@@ -189,18 +217,23 @@ const REPEL_INTERVAL = 45;
 const REPEL_RADIUS = 98304;
 
 /**
- * Поле замедления. Радиус — полтора купола героя, и считается он ИМЕННО так:
- * 196610 × 3 / 2 = 294915. Спад — с единицы до 0.2 за первые четыре секунды,
- * дальше держится; жизнь 12 с, кулдаун 20 с (кулдаун строго больше жизни —
- * поэтому полей в мире не бывает двух, и постоянный id источника законен).
+ * Поле замедления. Радиус — ДВЕ С ЧЕТВЕРТЬЮ купола героя: 196610 × 2.25 =
+ * 442372.5, округлённо 442373 (6.75 мировой единицы). Прежним он был ровно
+ * полтора купола (294915), и полтора его дизайнер увеличил ОСОЗНАННО — «поле
+ * ×1.5», — поэтому связь с куполом переписана, а не подогнана: она теперь
+ * 2.25, и никакого «полтора купола» здесь больше нет.
+ *
+ * Спад — с единицы до 0.2 за первые ДВЕ секунды, дальше держится; жизнь 12 с,
+ * кулдаун 20 с (кулдаун строго больше жизни — поэтому полей в мире не бывает
+ * двух, и постоянный id источника законен).
  */
 const DOME_RADIUS = 196610;
-const FIELD_RADIUS = (DOME_RADIUS * 3) / 2;
+const FIELD_RADIUS = Math.round(DOME_RADIUS * 2.25);
 const FIELD_LIFE = 720;
 const FIELD_CD = 1200;
-const FIELD_RAMP = 240;
+const FIELD_RAMP = 120;
 /**
- * Окно спада У СНАРЯДА — своё и намеренно крошечное. Геройские четыре секунды
+ * Окно спада У СНАРЯДА — своё и намеренно крошечное. Геройские две секунды
  * снаряду не мерка: он живёт пятьдесят тиков, а в поле проводит единицы, и на
  * общем окне «замедляет снаряды» превращалось бы в процент. Прецедент рядом:
  * купол героя кладёт свои 0.25× на чужой снаряд СРАЗУ, без всякого спада, —
@@ -1261,7 +1294,7 @@ describe('поле замедления: жёлтый купол, гасящий
       ? coreWorld.getField(a.state.world, entity, 'TimeScale', 'value')
       : FIXED_ONE;
 
-  it('гасит время героя ПЛАВНО: с единицы до 0.2 за четыре секунды, дальше держит', () => {
+  it('гасит время героя ПЛАВНО: с единицы до 0.2 за две секунды, дальше держит', () => {
     // Толчок заперт: он уносит жертву на пять единиц, то есть за край поля, —
     // а предмет проверки здесь спад, а не пассивка.
     const a = stand([[26, 24]], noRepel(only('SlotBossField')));
@@ -1278,7 +1311,7 @@ describe('поле замедления: жёлтый купол, гасящий
     for (let i = 1; i < trace.length; i++) {
       expect(trace[i]!, `тик ${i}`).toBeLessThanOrEqual(trace[i - 1]!);
     }
-    // И он именно ПЛАВНЫЙ, а не «через четыре секунды вдруг 0.2»: за окно спада
+    // И он именно ПЛАВНЫЙ, а не «через две секунды вдруг 0.2»: за окно спада
     // множитель принимает сотни разных значений, а не два.
     const distinct = new Set(trace.slice(0, FIELD_RAMP));
     expect(distinct.size).toBeGreaterThan(100);
@@ -1295,9 +1328,9 @@ describe('поле замедления: жёлтый купол, гасящий
     expect(cast).toBeGreaterThan(0);
   });
 
-  it('отсчёт спада — у каждой жертвы свой: вошедший позже получает свои 4 секунды', () => {
+  it('отсчёт спада — у каждой жертвы свой: вошедший позже получает свои 2 секунды', () => {
     // Спад описан ОТ ВХОДА жертвы, а не от рождения зоны: подошедший на пятой
-    // секунде обязан получить свои четыре секунды спада, а не готовые 0.2.
+    // секунде обязан получить свои две секунды спада, а не готовые 0.2.
     // Отсчёт живёт меткой `Chilled` на самой жертве — общий на всех множитель
     // зоны выражал бы ровно ту ошибку, которую эта проверка и ловит.
     const a = stand([[26, 24], [31, 24]], noRepel(only('SlotBossField')));
@@ -1467,7 +1500,7 @@ describe('поле замедления: жёлтый купол, гасящий
     expect(longest).toBeGreaterThan(FIELD_PROJECTILE_RAMP);
     // И окно снаряда СТРОГО короче геройского — иначе «замедляет снаряды»
     // выродилось бы в проценты: снаряд живёт пятьдесят тиков и в поле проводит
-    // единицы, а геройское окно — четыре секунды.
+    // единицы, а геройское окно — две секунды.
     expect(FIELD_PROJECTILE_RAMP).toBeLessThan(FIELD_RAMP);
     expect(numbers(abilityDef('bossFieldAura'))).toEqual(
       expect.arrayContaining([FIELD_RAMP, FIELD_PROJECTILE_RAMP]),
@@ -2395,13 +2428,31 @@ describe('числа и картинка босса: ретюн виден в д
     // Поле замедления — купол по виду, как и купол героя: радиус оболочки равен
     // зоне действия.
     expect(MANIFEST.effects.byKind.BossField!.radius).toBe(FIELD_RADIUS / FIXED_ONE);
-    // Пятно огня рисуется ЭМИТТЕРОМ, а не сферой: примитив у манифеста один, и
-    // горящую полосу им честно не изобразить. Зона урона поэтому сверяется с
-    // собственным радиусом ассета эмиттера — записи-сферы у пятна больше нет.
-    expect(MANIFEST.effects.byKind.BossFire).toBeUndefined();
+    // Пятно огня несёт ОБЕ записи, и вторая из них — не украшение.
+    //
+    // Пламя рисует эмиттер (ASSET-14): примитив манифеста один, и горящую полосу
+    // сферами честно не изобразить, поэтому зона урона сверяется с собственным
+    // радиусом ассета эмиттера. Но подсистема моделей про секцию `particles`
+    // не знает вовсе — «эмиттерным вправе быть только decoration-вид» (ASSET-14),
+    // а `BossFire` сущность, — и на вид без записи в `entities` она ставит
+    // ЗАГЛУШКУ (ASSET-4, ASSET-6): в кадре это сиреневый параллелепипед
+    // 0.4 × 0.4 × 0.9 над каждым пятном. Запись `effects.byKind` — единственное,
+    // чем документ говорит подсистеме моделей «этот вид рисую не я» (REND-23), и
+    // держится она здесь ради этого, а заодно даёт полосе сплошное свечение по
+    // земле, которого россыпь частиц сама не даёт.
+    const shell = MANIFEST.effects.byKind.BossFire;
+    expect(shell, 'без оболочки по виду полоса рисуется заглушками (ASSET-6)').toBeDefined();
+    expect(shell!.radius).toBe(FIRE_RADIUS / FIXED_ONE);
     const emitter = MANIFEST.particles.byKind!.BossFire!.effect;
     expect(emitter).toMatch(/\.effect\.json$/);
     expect(emitterRadius(emitter)).toBe(FIRE_RADIUS / FIXED_ONE);
+    // И частица режется мягкой круглой маской, а не остаётся голым квадом:
+    // документ называет файл, и файл этот в дереве контента лежит. Ссылка
+    // внутри документа эффекта — не asset id (ASSET-2): её разрешает three по
+    // адресу страницы, и промах читался бы невидимым огнём, а не находкой.
+    const map = emitterMapUrl(emitter);
+    expect(map, 'у материала эмиттера нет карты — частица будет квадратом').toMatch(/\.png$/);
+    expect(existsSync(join(CONTENT_ROOT, map!.replace(/^\//, '')))).toBe(true);
     // Толчок в упор стал радиальным взрывом — вспышка обязана назвать его радиус.
     expect(MANIFEST.effects.byEvent.BossRepelLanded!.radiusTo).toBe(REPEL_RADIUS / FIXED_ONE);
     // Взрыв скелета — та же связь: вспышка ровно по зоне урона.

@@ -359,7 +359,7 @@
       "name": "BossField",
       "components": {
         "Position": { "x": 0, "y": 0 },
-        "FieldState": { "radius": 294915 },
+        "FieldState": { "radius": 442373 },
         "AbilityDuration": { "abilityId": 12, "remaining": 720 }
       },
       "tags": ["BossField"]
@@ -4389,7 +4389,7 @@
             "type": "BossFieldCast",
             "data": {
               "entity": { "var": "owner" },
-              "radius": 294915,
+              "radius": 442373,
               "tick": { "tick": [] },
               "x": { "getComponent": [{ "var": "owner" }, "Position", "x"] },
               "y": { "getComponent": [{ "var": "owner" }, "Position", "y"] }
@@ -4543,7 +4543,7 @@
                                         {
                                           "/": [
                                             { "fromInt": [{ "-": [{ "tick": [] }, { "var": "since" }] }] },
-                                            { "fromInt": [240] }
+                                            { "fromInt": [120] }
                                           ]
                                         },
                                         0,
@@ -4884,7 +4884,7 @@
               },
               {
                 "input": "targetDistance",
-                "curve": { "type": "linear", "slope": -27961742, "intercept": 2621440 },
+                "curve": { "type": "linear", "slope": -18641140, "intercept": 2621440 },
                 "weight": 65536
               }
               ]
