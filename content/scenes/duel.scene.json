@@ -2594,7 +2594,7 @@
                               "do": [
                                 {
                                   "if": {
-                                    "cond": { "<": [{ "var": "roll" }, 13107] },
+                                    "cond": { "<": [{ "var": "roll" }, 32768] },
                                     "then": [
                                       {
                                         "modifyComponent": {

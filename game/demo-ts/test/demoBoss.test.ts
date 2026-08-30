@@ -133,8 +133,8 @@ const REPEL_RADIUS = 98304;
 /** Окно охоты за одной целью и окно возрождения — оба по 10 с при 60 Гц. */
 const HUNT_TICKS = 600;
 const BOSS_RESPAWN_TICKS = 600;
-/** Вероятность переключиться на обидчика — 0.2 в Q16.16. */
-const RAGE_CHANCE = 13107;
+/** Вероятность переключиться на обидчика — 0.5 в Q16.16. */
+const RAGE_CHANCE = 32768;
 
 const BOSS_HP = 4000;
 const HERO_HP = 1000;
@@ -437,7 +437,7 @@ describe('босс охотится за случайной целью', () => {
   });
 });
 
-describe('босс переключается на обидчика с вероятностью 20%', () => {
+describe('босс переключается на обидчика с вероятностью 50%', () => {
   it('переключение случается, но далеко не на каждом попадании', { timeout: 60000 }, () => {
     // Замер по ансамблю сидов, а не по одному броску: единственная удача или
     // единственная неудача о вероятности не говорит ничего. Считаются
@@ -468,16 +468,16 @@ describe('босс переключается на обидчика с веро�
     expect(rollable).toBeGreaterThan(50);
     expect(enraged).toBeGreaterThan(0);
     expect(enraged).toBeLessThan(rollable);
-    // Доля вокруг объявленных 20%: полоса широкая намеренно — предмет проверки
-    // редкость переключения, а не точное число выпавших орлов.
+    // Доля вокруг объявленных 50%: полоса широкая намеренно — предмет проверки
+    // то, что переключение случайно, а не точное число выпавших орлов.
     const percent = (enraged * 100) / rollable;
-    expect(percent).toBeGreaterThan(8);
-    expect(percent).toBeLessThan(40);
+    expect(percent).toBeGreaterThan(30);
+    expect(percent).toBeLessThan(70);
   });
 
   it('вероятность живёт в системе, а не в коде', () => {
     expect(numbers(systemDef('BossRage'))).toContain(RAGE_CHANCE);
-    expect(RAGE_CHANCE / FIXED_ONE).toBeCloseTo(0.2, 3);
+    expect(RAGE_CHANCE / FIXED_ONE).toBeCloseTo(0.5, 3);
   });
 });
 
