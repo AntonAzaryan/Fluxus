@@ -193,11 +193,33 @@ export function aimY(ctx: SystemContext, catalog: AbilityCatalog, owner: EntityI
 
 // ------------------------------------------------------------------ кулдаун
 
-/** Остаток кулдауна слота; читается из мира — гейт триггера обязан видеть начало тика (ABIL-7). */
-export function cooldownRemaining(ctx: SystemContext, slot: EntityId): number {
+/**
+ * Остаток кулдауна слота; читается из мира — гейт триггера обязан видеть начало
+ * тика (ABIL-7). Наружу модуля не выходит: спрашивающим нужен не остаток, а
+ * ответ гейта целиком (`slotReady`), и отдельно взятое слагаемое было бы
+ * приглашением собрать этот ответ во второй раз.
+ */
+function cooldownRemaining(ctx: SystemContext, slot: EntityId): number {
   return ctx.has(slot, ABILITY_COOLDOWN_COMPONENT)
     ? ctx.get(slot, ABILITY_COOLDOWN_COMPONENT, 'remaining')
     : 0;
+}
+
+/**
+ * Гейт старта каста (ABIL-7): слот свободен от фазы (`phase < 0`, значение
+ * `NO_PHASE`) и кулдаун выстоял. Предикат ЕДИНЫЙ и живёт здесь, а не в
+ * `tryStart`, потому что читают его двое: сама машина фаз и вход `abilityReady`
+ * документа поведения NPC (`npc-behavior` NPC-7), отвечающий «стартовал бы
+ * каст этого слота». Второе прочтение тех же двух полей рядом означало бы, что
+ * исход каста следует из двух мест, — ровно то, что ABIL-7 запрещает.
+ *
+ * Держит старт ПОЛОЖИТЕЛЬНЫЙ остаток, а не «любой ненулевой»: поле обычное i32
+ * (ABIL-1), убывание трогает только положительные значения, и запрет по
+ * отрицательному запер бы слот навсегда. Ноль и меньше — «предела нет», та же
+ * конвенция, что у дальности снаряда и длительности эффекта.
+ */
+export function slotReady(ctx: SystemContext, handles: SlotHandles, slot: EntityId): boolean {
+  return ctx.getByHandle(slot, handles.phase) < 0 && cooldownRemaining(ctx, slot) <= 0;
 }
 
 /**

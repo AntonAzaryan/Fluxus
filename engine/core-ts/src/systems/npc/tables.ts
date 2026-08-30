@@ -21,6 +21,7 @@ import {
   EXEC_FOLLOW_ROUTE,
   EXEC_HOLD,
   EXEC_SEEK_TARGET,
+  INPUT_ABILITY_READY,
   INPUT_ALWAYS,
   INPUT_CROWDING,
   INPUT_HEALTH_FRACTION,
@@ -53,6 +54,7 @@ export const INPUT_CODES: Readonly<Record<string, number>> = Object.freeze({
   crowding: INPUT_CROWDING,
   stateElapsed: INPUT_STATE_ELAPSED,
   routeRemaining: INPUT_ROUTE_REMAINING,
+  abilityReady: INPUT_ABILITY_READY,
 });
 
 export const CONDITION_CODES: Readonly<Record<string, number>> = Object.freeze({

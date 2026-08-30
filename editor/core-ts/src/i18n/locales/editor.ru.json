@@ -195,6 +195,7 @@
   "schema.npcBehavior.tier": "Массовый или особый агент: tier говорит только о праве решать каждый тик.",
   "schema.npcConsideration.curve": "Кривая отклика формы общей модели скоринга.",
   "schema.npcConsideration.input": "Вход словаря NPC, нормированный механизмом в [0, 1].",
+  "schema.npcConsideration.slot": "Индекс слота способности (AbilitySlot.slotIndex) — только у входа abilityReady; у прочих входов слот бессмыслен.",
   "schema.npcConsideration.weight": "Вес оси, доля в [0, 1]: вес больше единицы вывел бы полезность за диапазон.",
   "schema.npcState.actions": "Действия состояния; между ними выбирает utility-скоринг.",
   "schema.npcState.name": "Имя состояния; переходы адресуют его именем, механизм — индексом.",

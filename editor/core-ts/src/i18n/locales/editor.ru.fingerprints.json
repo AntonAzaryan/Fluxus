@@ -786,6 +786,10 @@
       "source": "fad99858",
       "translated": "fe3fcab2"
     },
+    "schema.npcConsideration.slot": {
+      "source": "66d0f580",
+      "translated": "bb4038aa"
+    },
     "schema.npcConsideration.weight": {
       "source": "ca02f42a",
       "translated": "0b76531b"

@@ -22,14 +22,34 @@
  * она живёт JSON-системой `BossRepel` со сроком в поле `BossHunt.repelUntil`, а
  * не слотом с кулдауном, — и работает независимо от того, что босс кастует.
  *
- * Ротация — политика ДОКУМЕНТА (NPC-7): у него состояние на каждую
- * способность, просит их исполнитель `cast`, а порядок переходов из `hunt` и
- * есть приоритет. Сцена добавляет к этому ровно один сигнал — «способность
- * применима прямо сейчас» (`BossReady`, order −797): остаток кулдауна слота
- * (ABIL-7) и фаза автомата (ABIL-1) во входы документа не входят, а просьба
- * вслепую была бы молча съедена гейтом кулдауна, и босс замер бы в том же
- * состоянии. Источник сигнала стоит раньше системы поведения — тем самым
- * способом, который NPC-7 и называет.
+ * Ротация — политика ДОКУМЕНТА (NPC-7), и с появлением входа `abilityReady`
+ * она вся уместилась в скоринг: одно состояние, в нём `seekTarget` и пять
+ * `cast`-действий, у каждого ось готовности своего слота (`slotIndex`, ABIL-1)
+ * и ось дистанции. Готовность спрашивается тем же предикатом, каким гейт
+ * триггера решает, стартовать ли каст (ABIL-7), поэтому просьбы, которую гейт
+ * уронил бы, документ не публикует вовсе — системы-сенсора, пересказывавшей
+ * кулдауны событиями `Boss*Ready`, в сцене больше нет.
+ *
+ * ПРИОРИТЕТ ротации выражают ВЕСА осей, а не порядок переходов: полезность
+ * действия есть произведение оценок его осей (NPC-3), и редкое стоит выше
+ * частого — поле (1.0), призыв (0.95), слэм (0.9), удар (0.75). Порядок был бы
+ * приоритетом у автомата состояний, которого больше нет.
+ *
+ * Сцена оставляет за собой ровно одно — ЗАНЯТОСТЬ владельца (`BossBusy`,
+ * order −798): пока идёт чей-то каст или рывок, ротационные слоты держатся
+ * недоступными, иначе следующая просьба обрывала бы текущий замах штатным
+ * `supersede` (ABIL-6). Это политика сцены, а не словаря NPC: платформа про
+ * «занят другим слотом» ничего не обещает.
+ *
+ * Держит она их ТЕМ ЖЕ полем, которым платформа держит откат, — `remaining`
+ * кулдауна слота, — и это законно ровно при одном инварианте: удержание пишет
+ * ЕДИНИЦУ И ТОЛЬКО В НУЛЕВОЙ остаток, а снимает её тем же тиком система
+ * кулдаунов (order 800), поэтому настоящий кулдаун, взведённый завершением
+ * каста по `cooldownTicks` (ABIL-7), им нельзя ни укоротить, ни продлить.
+ * Оба слагаемых инварианта пиннит describe «занятость босса», а не этот текст.
+ *
+ * Толчка в упор `BossBusy` не касается намеренно: он больше не способность и
+ * слота не занимает, а гейт на рывок несёт своя система (`BossRepel`).
  */
 import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
@@ -122,10 +142,10 @@ const HERO_RADIUS = 19661;
 const MEDIUM = 327680;
 /**
  * Досягаемость удара — 4 единицы: ближе неё босс бьёт волной, дальше просит
- * разгон. Число живёт В ДВУХ местах и обязано совпадать: сенсор готовности
- * (`BossReady`) сравнивает с ним дистанцию до цели, а сама волна дотягивается
- * ровно на «скорость × время жизни». Разъедутся — босс будет замахиваться по
- * тому, до кого волна не долетит.
+ * разгон. Число живёт В ДВУХ местах и обязано совпадать: ось дистанции
+ * документа обнуляется ровно на нём, а сама волна дотягивается на «скорость ×
+ * время жизни». Разъедутся — босс будет замахиваться по тому, до кого волна не
+ * долетит.
  */
 const WAVE_SPEED = 32768;
 const WAVE_TICKS = 8;
@@ -179,6 +199,15 @@ const FIELD_RADIUS = (DOME_RADIUS * 3) / 2;
 const FIELD_LIFE = 720;
 const FIELD_CD = 1200;
 const FIELD_RAMP = 240;
+/**
+ * Окно спада У СНАРЯДА — своё и намеренно крошечное. Геройские четыре секунды
+ * снаряду не мерка: он живёт пятьдесят тиков, а в поле проводит единицы, и на
+ * общем окне «замедляет снаряды» превращалось бы в процент. Прецедент рядом:
+ * купол героя кладёт свои 0.25× на чужой снаряд СРАЗУ, без всякого спада, —
+ * шесть тиков (одна десятая секунды) держат правило «отсчёт от входа жертвы»
+ * и при этом дают снаряду дойти до пола на первой же трети пролёта.
+ */
+const FIELD_PROJECTILE_RAMP = 6;
 const FIELD_FLOOR = 13107;
 /** Глубина спада: на столько множитель падает за всё окно. */
 const FIELD_FLOOR_STEP = FIXED_ONE - FIELD_FLOOR;
@@ -186,22 +215,50 @@ const FIELD_FLOOR_STEP = FIXED_ONE - FIELD_FLOOR;
 const FIELD_MODIFIER_ID = 7001;
 
 /**
- * Скелет-прислужник: тело в полтора раза меньше героя (19661 / 1.5), жизнь 10 с,
- * и один фаербол (200) его убивает.
+ * Скелет-прислужник: тело в полтора раза меньше героя (19661 / 1.5), жизнь 10 с.
  *
  * Шаг — на треть ШИРЕ героического, и решает здесь не отношение, а РАЗНОСТЬ:
- * догоняющий сокращает дистанцию ровно на неё. Героическим шагом он не
- * сокращает её никогда; на пятнадцати процентах разность — 786 (0.012 единицы
- * за тик), и пять единиц отрыва закрываются четырьмястами тиками из шестисот
- * отпущенных ему на жизнь. На трети разность вдвое больше, и замер по убегающему
- * герою это подтверждает: время в зоне укуса 3.5% → 8.0% → 17.5% на шагах
- * ×1.0 / ×1.15 / ×1.3. Дальше растёт только время в контакте, но не урон:
- * кулдаун укуса в секунду всё равно ограничивает частоту.
+ * догоняющий сокращает дистанцию ровно на неё. Героическим шагом он её не
+ * сокращает вовсе — но и не отстаёт: бот бежит по дуге, а не по прямой, и на
+ * поворотах преследователь срезает, поэтому даже при равном шаге он иногда
+ * оказывается в зоне укуса. На пятнадцати процентах разность — 786 (0.012
+ * единицы за тик), и пять единиц отрыва закрываются четырьмястами тиками из
+ * шестисот отпущенных ему на жизнь; на трети разность вдвое больше.
+ *
+ * Замер по убегающему по дуге герою (1200 тиков от призыва, стенд `chase`
+ * ниже): доля времени в зоне укуса 4.4% / 8.5% / 19.3% и укусов 1 / 4 / 7 на
+ * шагах ×1.0 / ×1.15 / ×1.3. Дальше (×1.5 — 26.3%, ×1.75 — 32.0%) растёт время
+ * в контакте, но урон почти нет: кулдаун укуса в секунду ограничивает частоту.
  */
 const MINION_RADIUS = 13107;
 const HERO_SPEED = 5243;
 const MINION_SPEED = 6816;
-const MINION_HP = 100;
+/**
+ * Запас скелета — 500, и это ОСОЗНАННОЕ отступление от «хп мало, умирает с
+ * одного фаербола». Мерка взята из боя, а не из головы: за отладочный матч все
+ * до единого попадания по скелетам были ЗАРЯЖЕННЫМИ фаерболами на 480, потому
+ * что бот копит заряд, — и сотня умирала от них ровно так же, как умирали бы
+ * двести. Пятьсот меняют исход: недокачанный выстрел (480) скелет переживает,
+ * полностью заряженный (200 × 2² = 800) снимает его по-прежнему с одного, а
+ * базовых двухсот нужно три. «Умирает с одного фаербола» осталось верным для
+ * заряженного и перестало быть верным для базового — связь пиннит тест ниже.
+ */
+const MINION_HP = 500;
+/**
+ * Досягаемость призыва — 12 единиц. Своей зоны у него нет вовсе, и ось нужна
+ * только затем, чтобы не звать скелетов по цели, до которой им не дойти за
+ * десять секунд жизни. Число не выдумано: `bossCharge` тем же 786432 меряет
+ * свой запасной рывок «в никуда» — это уже принятая в сцене «длинная»
+ * дистанция босса.
+ */
+const SPAWN_REACH = 786432;
+/**
+ * Окно накопления заряда фаербола в тиках и множитель на полном заряде (2.0 в
+ * Q16.16) — оба зеркала определения `fireball`, и оба сверяются с ним ниже.
+ * Урон растёт КВАДРАТОМ множителя: `200 × scale²`, то есть от 200 до 800.
+ */
+const CHARGE_TICKS = 60;
+const CHARGE_MAX_SCALE = 131072;
 const MINION_LIFE = 600;
 const MINION_MELEE = 50;
 const MINION_MELEE_CD = 60;
@@ -508,6 +565,87 @@ const abilityDef = (id: string): Record<string, unknown> =>
 const systemDef = (name: string): Record<string, unknown> =>
   SCENE.systems!.find((entry) => entry.name === name)! as unknown as Record<string, unknown>;
 
+// ------------------------------------------------- документ поведения босса
+
+/** Ось полезности, как её пишет документ сцены (NPC-3). */
+interface Axis {
+  readonly input: string;
+  /** Индекс слота — только у входа `abilityReady` (NPC-7, ABIL-1). */
+  readonly slot?: number;
+  readonly curve: { readonly type: string; readonly slope?: number; readonly intercept?: number };
+  readonly weight: number;
+}
+
+interface RotationAction {
+  readonly executor: string;
+  /** Тип публикуемой просьбы — только у исполнителя `cast`. */
+  readonly event?: string;
+  readonly considerations: readonly Axis[];
+}
+
+interface BossDoc {
+  readonly name: string;
+  readonly speed: number;
+  /** Радиус чутья — он же масштаб входа `targetDistance` (NPC-3). */
+  readonly ranges: { readonly sense: number };
+  readonly states: readonly {
+    readonly name: string;
+    readonly actions: readonly RotationAction[];
+    readonly transitions?: readonly Record<string, unknown>[];
+  }[];
+}
+
+const bossDoc = (): BossDoc =>
+  (SCENE as unknown as { npc: { behaviors: readonly BossDoc[] } }).npc.behaviors.find(
+    (entry) => entry.name === 'arenaBoss',
+  )!;
+
+/** Просьба ротации → prefab слота, который её исполняет. */
+const SLOT_PREFAB: Record<string, string> = {
+  BossStrike: 'SlotBossStrike',
+  BossSlam: 'SlotBossSlam',
+  BossCharge: 'SlotBossCharge',
+  BossField: 'SlotBossField',
+  BossSpawn: 'SlotBossSpawn',
+};
+
+/**
+ * Просьба ротации → `slotIndex`, которым её адресует документ. Список
+ * ОТДЕЛЬНЫЙ от prefab'ов намеренно: тест сверяет две стороны адресации, и
+ * разъехавшийся индекс читался бы в бою нулевой готовностью, а не ошибкой.
+ */
+const ASK_SLOT: Record<string, number> = {
+  BossStrike: 0,
+  BossSlam: 1,
+  BossCharge: 2,
+  BossField: 3,
+  BossSpawn: 4,
+};
+
+/** Ротационных слотов пять; толчок и аура в ротацию не входят вовсе. */
+const BOSS_ROTATION_SLOTS = 5;
+
+const slotPrefabField = (prefab: string, field: string): number =>
+  (SCENE.prefabs!.find((entry) => entry.name === prefab)!.components.AbilitySlot as Record<
+    string,
+    number
+  >)[field]!;
+
+const bossSlotIndex = (prefab: string): number => slotPrefabField(prefab, 'slotIndex');
+
+/**
+ * Дистанция, на которой ось `targetDistance` действия обнуляется, в мировых
+ * единицах Q16.16. Считается ИЗ ДОКУМЕНТА — наклон, свободный член и радиус
+ * чутья, — поэтому ретюн любой из трёх величин виден в тесте, а не в бою.
+ */
+const axisReach = (event: string): number => {
+  const axis = bossDoc()
+    .states[0]!.actions.find((entry) => entry.event === event)!
+    .considerations.find((entry) => entry.input === 'targetDistance')!;
+  expect(axis.curve.type).toBe('linear');
+  return (-axis.curve.intercept! / axis.curve.slope!) * bossDoc().ranges.sense;
+};
+
 // ------------------------------------------------------------------ тесты
 
 describe('босс охотится за случайной целью', () => {
@@ -737,6 +875,102 @@ describe('отталкивание: пассивный микровзрыв в �
   });
 });
 
+describe('занятость босса: сцена держит просьбы, пока идёт каст', () => {
+  /**
+   * `BossBusy` (order −798) — вся политика занятости, которую словарь NPC не
+   * несёт и нести не обязан (NPC-7): готовность слота говорит о САМОМ слоте, а
+   * «владелец занят другим» — знание сцены. Держит она просьбы тем же полем,
+   * которым платформа держит кулдаун (ABIL-7), поэтому проверяются РОВНО два
+   * её свойства: пока слот в фазе, новых просьб нет, и живой кулдаун
+   * удержанием не тронут.
+   */
+  const rotationSlots = (a: Stand): readonly EntityId[] =>
+    Object.values(SLOT_PREFAB).map((prefab) => slotOf(a, slotPrefabField(prefab, 'abilityId')));
+
+  it('пока слот в фазе, второй просьбы не публикуется', () => {
+    // Без удержания следующая же готовая способность просилась бы поверх
+    // идущего замаха, и штатный `supersede` (ABIL-6) его обрывал бы.
+    const a = stand([[25.5, 24]]);
+    a.step();
+    const slots = rotationSlots(a);
+    const phase = (slot: EntityId): number =>
+      coreWorld.getField(a.state.world, slot, 'AbilitySlot', 'phase');
+
+    let busyTicks = 0;
+    let asks = 0;
+    let asksWhileBusy = 0;
+    for (let t = 1; t <= 400; t++) {
+      // Занятость читается ДО тика: её же видит система на −798, а решение
+      // документа принимается на −795 этого самого тика.
+      const busy = slots.some((slot) => phase(slot) >= 0);
+      const asked = a.step().filter((type) => ASK_SLOT[type] !== undefined).length;
+      asks += asked;
+      if (busy) {
+        busyTicks += 1;
+        asksWhileBusy += asked;
+      }
+    }
+    // Контроль: босс и просил, и был занят — иначе проверялось бы пустое место.
+    expect(asks).toBeGreaterThanOrEqual(2);
+    expect(busyTicks).toBeGreaterThan(50);
+    expect(asksWhileBusy).toBe(0);
+  });
+
+  it('удержание пишет только в нулевой остаток: живой кулдаун цел', () => {
+    // Единственное, что делает подмену безопасной относительно ABIL-7:
+    // удержание трогает слот, у которого остатка нет, и снимается тем же тиком
+    // системой кулдаунов (order 800). Сорвись гейт `remaining <= 0` — настоящий
+    // кулдаун обрезался бы до единицы, то есть способность возвращалась бы в
+    // ротацию раньше срока, и увидеть это можно было бы только в бою.
+    const a = stand([[25.5, 24]]);
+    a.step();
+    const slots = rotationSlots(a);
+    const state = (slot: EntityId): { readonly phase: number; readonly remaining: number } => ({
+      phase: coreWorld.getField(a.state.world, slot, 'AbilitySlot', 'phase'),
+      remaining: coreWorld.getField(a.state.world, slot, 'AbilityCooldown', 'remaining'),
+    });
+
+    let before = slots.map(state);
+    let watched = 0;
+    for (let t = 1; t <= 400; t++) {
+      a.step();
+      const after = slots.map(state);
+      for (let i = 0; i < slots.length; i++) {
+        // Слот вне фазы, у которого кулдаун идёт: взвести его на этом тике
+        // некому (взводят завершение каста и прерывание, а оба требуют фазы),
+        // поэтому единственное законное изменение — убывание ровно на тик.
+        if (before[i]!.remaining <= 1 || before[i]!.phase >= 0) continue;
+        watched += 1;
+        expect(after[i]!.remaining, `слот ${i}, тик ${a.at()}`).toBe(before[i]!.remaining - 1);
+      }
+      before = after;
+    }
+    // Контроль: живой кулдаун под удержанием вообще случался.
+    expect(watched).toBeGreaterThan(50);
+  });
+
+  it('толчок в упор удержанием не глушится: он не способность и слота не занимает', () => {
+    // Половина смысла системы толчка: она работает поверх любой занятости. Если
+    // бы `BossBusy` дотягивалась до неё, пассивка замолкала бы ровно тогда,
+    // когда герой подошёл вплотную к занятому кастом боссу. Берётся рёв слэма,
+    // а не замах удара: замах закрыт своей проверкой выше, а рёв — вторая, и
+    // единственная другая, длинная фаза босса.
+    const a = stand([[21, 24]], only('SlotBossSlam'));
+    const forward = [{ moveX: FIXED_ONE }];
+    const roar = until(a, 'BossSlamRoar', 120, forward);
+    let repelled = false;
+    let landed = -1;
+    while (a.at() < roar + SLAM_ROAR) {
+      const events = a.step(forward);
+      if (events.includes('BossRepelLanded')) repelled = true;
+      if (events.includes('BossSlamLanded')) landed = a.at();
+    }
+    expect(repelled, 'под рёв слэма толчок не сработал').toBe(true);
+    // И рёв дожил до взрыва ровно за свои полторы секунды: толчок его не оборвал.
+    expect(landed).toBe(roar + SLAM_ROAR);
+  });
+});
+
 describe('удар: замах и волна вперёд', () => {
   it('замах длится 800 мс, потом волна — и кулдаун в секунду', () => {
     // Удар в изоляции: поле и призыв стоят в ротации ВЫШЕ него (они реже
@@ -907,26 +1141,34 @@ describe('разгон: наводка, рывок и полоса огня', ()
     // Босс проходит СКВОЗЬ тела намеренно (`blockMask` на рывке снят), и плата
     // за этот проход — урон самого рывка. Толчок в упор поверх него был бы
     // вторым счётом за одно и то же движение, поэтому система толчка на рывке
-    // молчит. Это НЕ прежний гейт «пока идёт любой каст»: наводка, замах и рёв
-    // толчку не мешают — их проверяет своя пара тестов.
+    // молчит. Это НЕ прежний гейт «пока идёт любой каст»: замах удара и рёв
+    // слэма толчку не мешают, и держат это две отдельные проверки — «идущий
+    // каст толчок НЕ срывает» (замах) и «толчок в упор удержанием не глушится»
+    // (рёв слэма) в describe занятости.
     const a = stand([[36, 24]], health('Hero', 400000, only('SlotBossCharge')));
     const hero = a.heroes[0]!;
     until(a, 'BossChargeStarted', 300);
 
     let dashTicks = 0;
     let repelsOnDash = 0;
-    let closeOnDash = 0;
+    let armedAndClose = 0;
     while (coreWorld.getField(a.state.world, a.boss, 'BossDash', 'ticksLeft') > 0) {
-      // Дистанция читается ДО тика — на нём система толчка и решает.
-      if (distance(a.state, hero, a.boss) <= REPEL_RADIUS) closeOnDash += 1;
+      // Оба входа гейта читаются ДО тика — на нём система толчка и решает.
+      // Мало показать, что босс проходил вплотную: молчание объяснялось бы и
+      // недоистёкшей паузой `repelUntil`. Считается тик, на котором пауза УЖЕ
+      // истекла И жертва в радиусе, — на таком толчок обязан был бы сработать,
+      // не будь гейта рывка.
+      const armed =
+        a.at() >= coreWorld.getField(a.state.world, a.boss, 'BossHunt', 'repelUntil');
+      if (armed && distance(a.state, hero, a.boss) <= REPEL_RADIUS) armedAndClose += 1;
       if (a.step().includes('BossRepelLanded')) repelsOnDash += 1;
       dashTicks += 1;
       if (dashTicks > 60) break;
     }
     expect(dashTicks).toBeGreaterThan(0);
-    // Контроль: рывок и правда проносил босса вплотную — иначе молчание толчка
-    // объяснялось бы дистанцией, а не гейтом.
-    expect(closeOnDash, 'рывок ни разу не прошёл вплотную').toBeGreaterThan(0);
+    // Контроль: такой тик за рывок был — значит молчал именно гейт рывка.
+    expect(armedAndClose, 'за рывок не было ни одного тика «пауза истекла и цель в упор»')
+      .toBeGreaterThan(0);
     expect(repelsOnDash).toBe(0);
 
     // А как только рывок кончился, пассивка снова работает: босс стоит рядом с
@@ -1152,7 +1394,7 @@ describe('поле замедления: жёлтый купол, гасящий
     expect(timeScale(a, hero)).toBe(FIXED_ONE);
   });
 
-  it('замедляет и снаряды, а самого босса — нет', () => {
+  it('замедляет и снаряды — по СВОЕМУ, короткому окну, а самого босса не трогает', () => {
     // Двое по краям поля: босс подходит к одному вплотную, и выстрел ВТОРОГО
     // летит через всё поле. Стенд с одним героем мерил бы не то — снаряд, разо-
     // рвавшийся о босса в тот же тик, замедляться просто не успевает.
@@ -1181,40 +1423,73 @@ describe('поле замедления: жёлтый купол, гасящий
     // тому, что аура его не трогает.
     expect(coreWorld.hasComponent(a.state.world, a.boss, 'TimeScaleModifiers')).toBe(false);
 
+    // Поле к этому моменту заведомо старше ГЕРОЙСКОГО окна спада: если бы
+    // отсчёт был общий на всех, влетевший сейчас снаряд получил бы пол сразу.
     for (let t = 1; t <= FIELD_RAMP + 10; t++) a.step();
 
-    let seen = 0;
-    let slowest = FIXED_ONE;
+    /** Сколько тиков снаряд уже внутри поля — по его собственной метке входа. */
+    const residency = (ball: EntityId): number =>
+      coreWorld.hasComponent(a.state.world, ball, 'Chilled')
+        ? a.at() - coreWorld.getField(a.state.world, ball, 'Chilled', 'sinceTick')
+        : -1;
+
+    let fresh = 0;
+    let settled = 0;
+    let longest = -1;
     for (let t = 1; t <= 150; t++) {
       const fire = t % 30 === 1 ? CAST : 0;
       a.step([{ buttons: fire }, { buttons: fire }]);
       for (const ball of tagged(a, 'Fireball')) {
-        seen += 1;
-        slowest = Math.min(slowest, timeScale(a, ball));
+        const inField = residency(ball);
+        longest = Math.max(longest, inField);
+        if (inField < 0) continue;
+        // Первый тик внутри — множитель ещё нетронутый: спад считается от
+        // ВХОДА снаряда, и старость поля ему не передаётся.
+        if (inField === 0) {
+          expect(timeScale(a, ball), 'снаряд получил пол в тик входа').toBe(FIXED_ONE);
+          fresh += 1;
+        }
+        // За своим окном — РОВНО пол, без допусков: окно короткое именно затем,
+        // чтобы снаряд успевал до него дожить. Единица сверху служебная —
+        // `TimeScaleSystem` (−900) видит источник, поставленный аурой (−790), с
+        // отставанием в тик.
+        if (inField > FIELD_PROJECTILE_RAMP) {
+          expect(timeScale(a, ball), `снаряд ${ball} на ${inField}-м тике внутри`).toBe(
+            FIELD_FLOOR,
+          );
+          settled += 1;
+        }
       }
     }
-    // Контроль: снаряды в мире были, иначе проверялось бы пустое множество.
-    expect(seen).toBeGreaterThan(0);
-    // Снаряд замедлен — но НЕ до пола, и это прямая проверка персонального
-    // отсчёта: поле к этому моменту старше своего окна спада, и общий на всех
-    // множитель дал бы ему 0.2 с первого же тика. Своё время внутри у снаряда
-    // всего пятьдесят тиков жизни против двухсот сорока окна, поэтому дальше
-    // верхней части спада он не уходит.
-    expect(slowest).toBeLessThan(FIXED_ONE);
-    expect(slowest).toBeGreaterThan(FIELD_FLOOR);
+    // Контроль обеих половин: снаряды и влетали свежими, и доживали до пола.
+    expect(fresh, 'ни один снаряд не был замечен в тик входа').toBeGreaterThan(0);
+    expect(settled, 'ни один снаряд не дожил до своего пола').toBeGreaterThan(0);
+    expect(longest).toBeGreaterThan(FIELD_PROJECTILE_RAMP);
+    // И окно снаряда СТРОГО короче геройского — иначе «замедляет снаряды»
+    // выродилось бы в проценты: снаряд живёт пятьдесят тиков и в поле проводит
+    // единицы, а геройское окно — четыре секунды.
+    expect(FIELD_PROJECTILE_RAMP).toBeLessThan(FIELD_RAMP);
+    expect(numbers(abilityDef('bossFieldAura'))).toEqual(
+      expect.arrayContaining([FIELD_RAMP, FIELD_PROJECTILE_RAMP]),
+    );
   });
 
-  it('поле кастуется, только когда в его радиусе есть кому мешать', () => {
-    // Дальний герой — за краем поля: сигнал готовности молчит, и босс идёт
-    // сближаться, а не тратит двадцатисекундный кулдаун в пустоту.
+  it('поле кастуется, только когда цели есть до чего мешать', () => {
+    // Дальняя цель — за краем поля: ось дистанции обнулена, и босс идёт
+    // сближаться, а не тратит двадцатисекундный кулдаун в пустоту. Меряется САМ
+    // каст: сигналов готовности в сцене больше нет, документ спрашивает
+    // готовность у платформы сам (NPC-7).
     const far = stand([[38, 24]], noRepel(only('SlotBossField')));
     for (let t = 1; t <= 30; t++) {
-      expect(far.step(), `тик ${t}`).not.toContain('BossFieldReady');
+      expect(far.step(), `тик ${t}`).not.toContain('BossField');
+      expect(distance(far.state, far.heroes[0]!, far.boss)).toBeGreaterThan(FIELD_RADIUS);
     }
-    expect(distance(far.state, far.heroes[0]!, far.boss)).toBeGreaterThan(FIELD_RADIUS);
-    // Тот же стенд вблизи — сигнал есть: разница ровно в дистанции.
+    // Тот же стенд вблизи — каст есть: разница ровно в дистанции.
     const near = stand([[26, 24]], noRepel(only('SlotBossField')));
-    expect(until(near, 'BossFieldReady', 30)).toBeGreaterThan(0);
+    expect(until(near, 'BossFieldCast', 30)).toBeGreaterThan(0);
+    // И порог оси — РОВНО радиус поля: рисовать зону там, куда она не дотянется,
+    // значило бы учить игрока не тому.
+    expect(Math.abs(axisReach('BossField') - FIELD_RADIUS)).toBeLessThan(FIXED_ONE / 100);
   });
 });
 
@@ -1246,20 +1521,34 @@ describe('призыв: три скелета перед боссом', () => {
     // `ranges.attack` вокруг жертвы и встают друг в друге: маска блокировки у
     // них своего слоя не несёт, и растолкать их нечему. На экране это ОДИН
     // скелет, и «спаунит скелетов» перестаёт читаться.
+    //
+    // Проверяется НЕ «тела не пересекаются никогда»: вес расхождения — половина
+    // веса сближения (NPC-6), поэтому на подходе к жертве соседи иногда слегка
+    // задевают друг друга, и это структурное свойство настройки, а не сбой.
+    // Пиннится то, что действительно держится всё окно: пачка не схлопывается —
+    // центры не сходятся ближе полутора радиусов тела. Замер: без расхождения
+    // минимум по парам 0.0036 единицы, с ним — 0.34.
     const a = stand([[30, 24]], noRepel(health('Hero', 400000, only('SlotBossSpawn'))));
     until(a, 'BossSpawned', 200);
-    for (let t = 1; t <= 200; t++) a.step();
-    const alive = minions(a);
-    expect(alive).toHaveLength(MINION_COUNT);
-    for (let i = 0; i < alive.length; i++) {
-      for (let j = i + 1; j < alive.length; j++) {
-        // Тела не пересекаются: центры дальше суммы радиусов.
-        expect(
-          distance(a.state, alive[i]!, alive[j]!),
-          `скелеты ${i} и ${j} стоят друг в друге`,
-        ).toBeGreaterThan(2 * MINION_RADIUS);
+    let closest = Number.POSITIVE_INFINITY;
+    let samples = 0;
+    for (let t = 1; t <= 400; t++) {
+      a.step();
+      const live = minions(a);
+      for (let i = 0; i < live.length; i++) {
+        for (let j = i + 1; j < live.length; j++) {
+          closest = Math.min(closest, distance(a.state, live[i]!, live[j]!));
+          samples += 1;
+        }
       }
     }
+    // Контроль: пары вообще были, иначе минимум остался бы бесконечностью.
+    expect(samples).toBeGreaterThan(100);
+    expect(closest, `ближайшая пара за окно: ${(closest / FIXED_ONE).toFixed(4)}`).toBeGreaterThan(
+      1.5 * MINION_RADIUS,
+    );
+    const alive = minions(a);
+    expect(alive).toHaveLength(MINION_COUNT);
     // И расхождение — политика ДОКУМЕНТА, а не случайность расстановки: обе
     // ручки NPC-6 включены, и любая из них, сброшенная в ноль, гасит механизм
     // целиком (`NpcMovementSystem.separation` выходит по первому же нулю).
@@ -1408,28 +1697,34 @@ describe('призыв: три скелета перед боссом', () => {
     expect(tagged(a, 'BossMinion')).toHaveLength(0);
   });
 
-  it('фаербол снимает скелета с одного попадания, и тот взрывается на 200', () => {
-    // Скелет ЛОВИТ снаряд (его слой в маске снаряда) и умирает: сотня hp против
-    // двухсот урона. Взрыв на смерти — вторая ветка того же исхода, что и
-    // истечение срока, и стреляет герой в упор именно ради неё: убитый вплотную
-    // скелет обязан достать взрывом того, кто его добил.
+  it('заряженный фаербол снимает скелета с одного попадания, и тот взрывается на 200', () => {
+    // Скелет ЛОВИТ снаряд (его слой в маске снаряда) и умирает — но теперь от
+    // ЗАРЯЖЕННОГО: пятьсот hp против двухсот базовых он переживает, поэтому
+    // герой держит кнопку, а не щёлкает. Взрыв на смерти — вторая ветка того же
+    // исхода, что и истечение срока, и стреляет герой в упор именно ради неё:
+    // убитый вплотную скелет обязан достать взрывом того, кто его добил.
     const a = stand([[30, 24]], noRepel(health('Hero', 400000, only('SlotBossSpawn'))));
     const hero = a.heroes[0]!;
     until(a, 'BossSpawned', 200);
     const before = tagged(a, 'BossMinion').length;
     expect(before).toBe(MINION_COUNT);
 
-    // Огонь открывается, только когда скелет уже в зоне собственного взрыва:
-    // иначе снаряд снял бы его на подходе, и по герою бить было бы нечему.
+    // Заряд копится, пока скелет идёт, и отпускается, когда тот уже в зоне
+    // собственного взрыва: иначе снаряд снял бы его на подходе, и по герою бить
+    // было бы нечему. Окно заряда — 60 тиков, дольше держать бессмысленно.
     let killed = -1;
     let burst = -1;
     let hurt = -1;
-    let press = false;
-    for (let t = 1; t <= 600 && burst < 0; t++) {
+    let held = 0;
+    for (let t = 1; t <= 900 && burst < 0; t++) {
       const close = tagged(a, 'BossMinion').some(
         (minion) => distance(a.state, minion, hero) <= MINION_BURST_RADIUS,
       );
-      press = close && killed < 0 && !press;
+      // Держим, пока не набрали полный заряд; отпускаем, когда цель в упор.
+      const charging = killed < 0 && (held < CHARGE_TICKS || !close);
+      const press = charging && held < CHARGE_TICKS;
+      if (press) held += 1;
+      else held = 0;
       const hpBefore = hp(a.state, hero);
       a.step([{ buttons: press ? CAST : 0 }]);
       for (const event of a.last.events) {
@@ -1526,20 +1821,43 @@ describe('босс, арена и собственная шкура', () => {
     expect(coreWorld.getField(a.state.world, a.boss, 'NpcAgent', 'target')).toBe(hero);
 
     // С тика падения босс СТОИТ: ни единицы Q16.16 в сторону улетающего тела.
+    //
+    // Меряются ПРОСЬБЫ, а не замахи: замах есть только у удара
+    // (`BossStrikeWindup`), рёв слэма и наводка разгона зовутся иначе, и фильтр
+    // по «Windup» проверял бы одну способность из пяти.
     const frozen = { x: px(a.state, a.boss), y: py(a.state, a.boss) };
+    const strike = slotOf(a, ABILITY_STRIKE);
     const asked: string[] = [];
-    for (let t = 1; t <= 120; t++) {
+    let strikeReady = false;
+    for (let t = 1; t <= 200; t++) {
       for (const type of a.step()) {
-        if (type.startsWith('Boss') && (type.endsWith('Ready') || type.endsWith('Windup'))) {
-          asked.push(type);
-        }
+        if (type === 'BossStrike' || type === 'BossSlam' || type === 'BossField') asked.push(type);
+      }
+      if (coreWorld.getField(a.state.world, strike, 'AbilityCooldown', 'remaining') <= 0) {
+        strikeReady = true;
       }
       expect(px(a.state, a.boss), `тик ${a.at()}`).toBe(frozen.x);
       expect(py(a.state, a.boss), `тик ${a.at()}`).toBe(frozen.y);
       expect(coreWorld.hasComponent(a.state.world, a.boss, 'Falling')).toBe(false);
       expect(coreWorld.hasComponent(a.state.world, a.boss, 'Dead')).toBe(false);
+      expect(coreWorld.hasComponent(a.state.world, hero, 'Falling'), `тик ${a.at()}`).toBe(true);
     }
-    // И не замахивается по нему: сенсор готовности падающую цель не считает.
+    // Ближний бой по падающему не просится, и держит это ДИСТАНЦИЯ, а не знание
+    // о полёте: шага босс не делает (`BossFooting` гасит скорость в сторону
+    // падающего), ближе своих порогов цель не становится, а за ними оси удара,
+    // слэма и поля — ноль (NPC-3).
+    //
+    // Контроль ровно на это: удар внутри окна БЫЛ готов, то есть молчал он не
+    // кулдауном. Слэму и полю такого контроля не поставить — их откаты (360 и
+    // 1200 тиков) переживают весь полёт героя, — но пара доказывается
+    // включением: пороги слэма (3.6) и поля (4.5) лежат по обе стороны порога
+    // удара (4.0), и цель, недостижимая для него, недостижима и для них.
+    expect(strikeReady).toBe(true);
+    // Разгон и призыв в список не входят НАМЕРЕННО: ось разгона растёт с
+    // расстоянием, то есть далёкая цель его как раз поощряет, а порог призыва
+    // (12 единиц) шире всех прочих. Отказаться от падающей цели документ не
+    // может вовсе: про полёт закрытый словарь входов не знает и знать не обязан
+    // — у платформы «цель» это живая сущность, и падающий ею остаётся (NPC-5).
     expect(asked).toEqual([]);
   });
 
@@ -1697,7 +2015,7 @@ describe('босс, арена и собственная шкура', () => {
       for (const value of Object.values(record)) walk(value);
     };
     for (const id of ['bossSlam', 'bossFireAura', 'bossMinionMelee']) walk(abilityDef(id));
-    for (const name of ['BossReady', 'BossDashDrive', 'BossRepel', 'MinionEnd']) walk(systemDef(name));
+    for (const name of ['BossDashDrive', 'BossRepel', 'MinionEnd']) walk(systemDef(name));
     // Удар в этот перечень не входит намеренно: его урон едет снарядом, а не
     // выборкой, и «только по героям» держит там условие `HitMark` — компонент,
     // которого нет ни у босса, ни у его спутников.
@@ -1783,10 +2101,9 @@ describe('числа и картинка босса: ретюн виден в д
     // тик, а его радиус равен шагу: центры соседних тогда отстоят на диаметр.
     expect(dashStep).toBe(FIRE_RADIUS);
     // Досягаемость удара и жизнь волны — одно и то же число, посчитанное
-    // дважды: сенсор сравнивает с ним дистанцию, волна пролетает его сама.
-    expect(numbers(systemDef('BossReady'))).toContain(STRIKE_REACH);
-    expect(numbers(systemDef('BossReady'))).toContain(SLAM_RADIUS);
-    expect(numbers(systemDef('BossReady'))).toContain(FIELD_RADIUS);
+    // дважды: ось дистанции обнуляется на нём, волна пролетает его сама.
+    expect(Math.abs(axisReach('BossStrike') - STRIKE_REACH)).toBeLessThan(FIXED_ONE / 100);
+    expect(WAVE_SPEED * WAVE_TICKS).toBe(STRIKE_REACH);
     // Полтора купола героя — та самая связь, ради которой поле и заведено.
     const dome = SCENE.prefabs!.find((prefab) => prefab.name === 'SlowDome')!;
     const field = SCENE.prefabs!.find((prefab) => prefab.name === 'BossField')!;
@@ -1801,10 +2118,11 @@ describe('числа и картинка босса: ретюн виден в д
       Math.floor(heroRadius / 1.5),
     );
     expect((minion.components.Health as Record<string, number>).hp).toBe(MINION_HP);
-    // Та же полуторакратность и в КАРТИНКЕ: `scale` записи вида — мировая
-    // высота, под которую подгоняется модель (ASSET-6), и разъедься она с
-    // коллайдером — дизайнер мерил бы глазами не то число, по которому считает
-    // симуляция.
+    // Та же полуторакратность и в КАРТИНКЕ — решение о ЭТОЙ паре видов, а не
+    // общее правило манифеста: `scale` записи (ASSET-6) — мировая высота, и с
+    // коллайдером её ничто не связывает (у босса они и расходятся: 2.6 / 1.6
+    // против 39321 / 19661). Скелет же задуман как герой, уменьшенный в полтора
+    // раза, и глазами дизайнер меряет именно это.
     expect(
       MANIFEST.entities.Hero!.scale / MANIFEST.entities.BossMinion!.scale,
     ).toBeCloseTo(heroRadius / MINION_RADIUS, 2);
@@ -1819,14 +2137,28 @@ describe('числа и картинка босса: ретюн виден в д
     expect(minionBehavior.speed).toBe(MINION_SPEED);
     expect(minionBehavior.speed).toBeGreaterThan(heroSpeed);
     expect(minionBehavior.speed / heroSpeed).toBeCloseTo(1.3, 2);
-    // Один фаербол убивает скелета: снаряд ВИДИТ его слой, и урона хватает.
+    // Скелет ловим снарядом: его слой в маске снаряда, иначе фаербол пролетал
+    // бы сквозь него.
     const ball = SCENE.prefabs!.find((prefab) => prefab.name === 'Fireball')!;
     expect((ball.components.Collider as Record<string, number>).hitMask! & MINION_LAYER).toBe(
       MINION_LAYER,
     );
-    expect((ball.components.Projectile as Record<string, number>).damage).toBeGreaterThanOrEqual(
-      MINION_HP,
-    );
+    // Запас скелета лежит МЕЖДУ базовым выстрелом и полностью заряженным — та
+    // самая правка, которой отступление от «умирает с одного фаербола» и
+    // выражено. Оба числа читаются ИЗ СЦЕНЫ: базовый урон — поле prefab'а
+    // снаряда, максимум — тот же урон, помноженный на квадрат предельного
+    // множителя заряда определения (`200 × scale²`, ABIL-2).
+    const base = (ball.components.Projectile as Record<string, number>).damage!;
+    const fireball = numbers(abilityDef('fireball'));
+    expect(fireball).toContain(base);
+    expect(fireball).toContain(CHARGE_MAX_SCALE);
+    expect(fireball).toContain(CHARGE_TICKS);
+    const charged = Math.trunc((base * CHARGE_MAX_SCALE * CHARGE_MAX_SCALE) / (FIXED_ONE * FIXED_ONE));
+    expect(charged).toBe(800);
+    expect(MINION_HP, 'базовый выстрел обязан НЕ убивать').toBeGreaterThan(base);
+    expect(MINION_HP, 'заряженный обязан убивать по-прежнему').toBeLessThanOrEqual(charged);
+    // И втроём базовых хватает: скелет не становится губкой.
+    expect(MINION_HP).toBeLessThanOrEqual(3 * base);
     // И «сто в секунду» — произведение периода на урон, а не отдельное число.
     expect(FIRE_DPS).toBe(100);
     expect(numbers(abilityDef('bossFireAura'))).toEqual(
@@ -1891,70 +2223,161 @@ describe('числа и картинка босса: ретюн виден в д
     expect(center).toEqual({ x: ARENA_CENTER, y: ARENA_CENTER });
   });
 
-  it('ротация — политика документа: состояния, приоритет и просьбы каста', () => {
+  it('ротация — политика документа: одно состояние, оси готовности и дистанции', () => {
     // NPC-7: «Ротации способностей — приоритеты, условия, правила цели — SHALL
     // быть политикой документа; сам каст SHALL идти существующей машиной
-    // способностей». Здесь это и пиннится: у документа есть состояние на каждую
-    // способность, просит их исполнитель `cast`, а ПОРЯДОК переходов из `hunt`
-    // и есть приоритет ротации (первый выполнившийся переход выигрывает).
-    interface Doc {
-      readonly name: string;
-      readonly speed: number;
-      readonly states: readonly {
-        readonly name: string;
-        readonly actions: readonly { readonly executor: string; readonly event?: string }[];
-        readonly transitions?: readonly { readonly to: string; readonly when: Record<string, unknown> }[];
-      }[];
-    }
-    const behavior = (SCENE as unknown as { npc: { behaviors: readonly Doc[] } }).npc.behaviors.find(
-      (entry) => entry.name === 'arenaBoss',
-    )!;
+    // способностей». Здесь это и пиннится: ротация — СКОРИНГ одного состояния,
+    // где каждое cast-действие оценивается готовностью своего слота
+    // (`abilityReady`, тот же гейт, что у триггера, ABIL-7) и дистанцией до
+    // цели. Приоритет — веса и кривые, а не порядок переходов: состояний на
+    // способность больше нет.
+    const behavior = bossDoc();
     const hero = SCENE.prefabs!.find((prefab) => prefab.name === 'Hero')!;
     // Босс не медленнее идущего героя — иначе преследование не преследование.
     expect(behavior.speed).toBeGreaterThanOrEqual(
       (hero.components.Locomotion as Record<string, number>).maxSpeed!,
     );
 
-    const hunt = behavior.states.find((state) => state.name === 'hunt')!;
-    expect(hunt.actions.map((action) => action.executor)).toEqual(['seekTarget']);
-    // Приоритет: поле, призыв, слэм, удар, разгон — ровно в этом порядке.
-    // Редкое стоит РАНЬШЕ частого и это несущее: удар готов почти всегда
-    // (замах 48 тиков на кулдауне 60), и, стой он выше, до поля с призывом
-    // очередь не доходила бы вовсе.
-    const rotation = ['field', 'spawn', 'slam', 'strike', 'charge'];
-    expect(hunt.transitions!.map((transition) => transition.to)).toEqual(rotation);
-    for (const name of rotation) {
-      const state = behavior.states.find((entry) => entry.name === name)!;
-      expect(state.actions.map((action) => action.executor)).toEqual(['cast']);
-      expect(state.actions[0]!.event).toBe(`Boss${name[0]!.toUpperCase()}${name.slice(1)}`);
+    // Ровно одно состояние и ни одного перехода: ротацией больше не правит
+    // автомат — её решает скоринг каждый тик.
+    expect(behavior.states).toHaveLength(1);
+    const rotation = behavior.states[0]!;
+    expect(rotation.transitions ?? []).toEqual([]);
+    expect(rotation.actions.map((action) => action.executor)).toEqual([
+      'seekTarget',
+      'cast',
+      'cast',
+      'cast',
+      'cast',
+      'cast',
+    ]);
+    // Базовое действие — сближение: оно и выигрывает, пока не готова ни одна
+    // способность, поэтому босс не замирает между кастами.
+    const seek = rotation.actions[0]!;
+    expect(seek.considerations.map((axis) => axis.input)).toEqual(['always']);
+
+    for (const [event, slot] of Object.entries(ASK_SLOT)) {
+      const action = rotation.actions.find((entry) => entry.event === event)!;
+      expect(action, `в ротации нет просьбы ${event}`).toBeDefined();
+      // Ось готовности адресует РЕАЛЬНЫЙ слот босса — тот самый `slotIndex`,
+      // который кладёт в мир prefab (ABIL-1). Разъедься они, ось молча читалась
+      // бы нулём: слота с таким индексом у босса нет (NPC-7).
+      const ready = action.considerations.find((axis) => axis.input === 'abilityReady')!;
+      expect(ready, `у ${event} нет оси готовности`).toBeDefined();
+      expect(ready.slot).toBe(slot);
+      expect(bossSlotIndex(SLOT_PREFAB[event]!)).toBe(slot);
+      // Кривая готовности читает сам вход, а не подменяет его константой:
+      // `constant` вернула бы единицу и на неготовом слоте.
+      expect(ready.curve.type).toBe('linear');
+      expect(ready.weight).toBeGreaterThan(0);
     }
-    // Кулдауны редких способностей и правда длиннее: иначе порядок выше был бы
-    // не «редкое вперёд», а произволом.
+  });
+
+  it('приоритет ротации — веса осей: редкое обходит частое', () => {
+    // Полезность действия есть ПРОИЗВЕДЕНИЕ оценок его осей (NPC-3), поэтому
+    // при готовности и попадании в дистанцию она равна произведению весов. Ими
+    // приоритет и выражен: у автомата состояний его выражал порядок переходов,
+    // а автомата больше нет.
+    //
+    // Порядок ровно тот же, каким он был у переходов, и он несущий: удар готов
+    // почти всегда (замах 48 тиков на кулдауне 60), и, стой он выше, до поля с
+    // призывом очередь не доходила бы вовсе.
+    const rotation = bossDoc().states[0]!;
+    const utility = (event: string): number =>
+      rotation.actions
+        .find((entry) => entry.event === event)!
+        .considerations.reduce((acc, axis) => (acc * axis.weight) / FIXED_ONE, FIXED_ONE);
+    const order = ['BossField', 'BossSpawn', 'BossSlam', 'BossStrike'];
+    for (let i = 1; i < order.length; i++) {
+      expect(utility(order[i - 1]!), `${order[i - 1]!} против ${order[i]!}`).toBeGreaterThan(
+        utility(order[i]!),
+      );
+    }
+    // И любая способность обходит сближение — иначе босс ходил бы, не кастуя.
+    const seek = rotation.actions[0]!.considerations.reduce(
+      (acc, axis) => (acc * axis.weight) / FIXED_ONE,
+      FIXED_ONE,
+    );
+    for (const event of order) expect(utility(event)).toBeGreaterThan(seek);
+
+    // Кулдауны редких способностей и правда длиннее: иначе «редкое вперёд» было
+    // бы не правилом, а произволом.
     const cooldownOf = (slot: string): number =>
-      (SCENE.prefabs!.find((prefab) => prefab.name === slot)!.components.AbilityCooldown as
-        Record<string, number>).total!;
+      (SCENE.prefabs!.find((prefab) => prefab.name === slot)!.components.AbilityCooldown as Record<
+        string,
+        number
+      >).total!;
     expect(cooldownOf('SlotBossField')).toBeGreaterThan(cooldownOf('SlotBossSpawn'));
     expect(cooldownOf('SlotBossSpawn')).toBeGreaterThan(cooldownOf('SlotBossSlam'));
     expect(cooldownOf('SlotBossSlam')).toBeGreaterThan(cooldownOf('SlotBossStrike'));
-    // Переход в состояние каста едет СИГНАЛОМ сцены (NPC-7: источник сигнала
-    // ставится раньше системы поведения). Сигнал — единственное, чего закрытые
-    // словари документа не видят: остаток кулдауна слота (ABIL-7).
-    const signals = hunt.transitions!.map((transition) => transition.when.event);
-    expect(signals).toEqual(rotation.map((name) => `Boss${name[0]!.toUpperCase()}${name.slice(1)}Ready`));
-    const sensor = systemDef('BossReady');
-    expect(sensor.order).toBeLessThan(-795);
+  });
 
-    // Второй документ — скелет: он ТОЛЬКО преследует, а цель ему пишет система
-    // сцены `MinionTarget`, и пишет ПОСЛЕ системы поведения (-795): та
-    // переписывает `NpcAgent.target` каждый тик (NPC-5), и запись раньше неё
-    // пропала бы молча.
-    const minion = (SCENE as unknown as { npc: { behaviors: readonly Doc[] } }).npc.behaviors.find(
+  it('дистанционные оси ротации — зеркала порогов боя', () => {
+    // Пороги те же, что были у снесённого сенсора, только выражены кривой: ось
+    // обнуляется там, где кончается применимость способности. Считается это ИЗ
+    // ДОКУМЕНТА (наклон, свободный член и радиус чутья), поэтому ретюн любой из
+    // трёх величин виден здесь, а не только в бою.
+    const rotation = bossDoc().states[0]!;
+    const near = (event: string, reach: number): void => {
+      expect(Math.abs(axisReach(event) - reach), event).toBeLessThan(FIXED_ONE / 100);
+    };
+    // Удар достаёт ровно на длину полёта своей волны.
+    near('BossStrike', STRIKE_REACH);
+    // Слэм просится вплотную — в радиусе собственного взрыва.
+    near('BossSlam', SLAM_RADIUS);
+    // Поле — в радиусе самого поля: ставить его туда, где оно никого не
+    // накроет, значит потратить двадцатисекундный откат впустую.
+    near('BossField', FIELD_RADIUS);
+    // Разгон — наоборот, ЗА досягаемостью удара: его ось растёт с расстоянием.
+    near('BossCharge', STRIKE_REACH);
+    const charge = rotation.actions.find((entry) => entry.event === 'BossCharge')!;
+    expect(
+      charge.considerations.find((axis) => axis.input === 'targetDistance')!.curve.slope!,
+    ).toBeGreaterThan(0);
+    // И разгон не просится вслепую: без цели `targetDistance` отвечает «дальше
+    // некуда» (NPC-3), и без оси `targetKnown` босс разгонялся бы в пустоту.
+    expect(charge.considerations.map((axis) => axis.input)).toContain('targetKnown');
+    // Призыв — единственный, чей порог не переиспользует чужой радиус: своей
+    // зоны у него нет вовсе, и ось нужна ему только затем, чтобы не звать
+    // скелетов по цели, до которой им не дойти за десять секунд жизни.
+    near('BossSpawn', SPAWN_REACH);
+    expect(SPAWN_REACH).toBeGreaterThan(STRIKE_REACH);
+  });
+
+  it('сенсора готовности в сцене нет, а занятость держит отдельная система', () => {
+    // Половина утверждения — отрицательная: система, пересказывавшая кулдауны
+    // и дистанции событиями `Boss*Ready`, снесена целиком, и вернуться она
+    // может только вместе с этими именами.
+    expect(SCENE.systems!.map((system) => system.name)).not.toContain('BossReady');
+    expect(JSON.stringify(sceneJson)).not.toMatch(/Boss(Slam|Strike|Charge|Field|Spawn)Ready/);
+
+    // Вторая половина — положительная: занятость владельца словарь NPC не
+    // видит и видеть не обязан (NPC-7), поэтому её держит сцена — раньше
+    // системы поведения (−795), чтобы решение этого же тика её увидело.
+    const busy = systemDef('BossBusy');
+    expect(busy.order).toBeLessThan(-795);
+    // Держатся ровно ротационные слоты: толчок просит своя система со своим
+    // гейтом, а ауры пятна огня, поля и скелета принадлежат другим владельцам.
+    expect(JSON.stringify(busy)).toContain('slotIndex');
+    expect(numbers(busy)).toContain(BOSS_ROTATION_SLOTS - 1);
+  });
+
+  it('второй документ — скелет: он только преследует', () => {
+    // Цель ему пишет система сцены `MinionTarget`, и пишет ПОСЛЕ системы
+    // поведения (−795): та переписывает `NpcAgent.target` каждый тик (NPC-5), и
+    // запись раньше неё пропала бы молча.
+    const minion = (SCENE as unknown as { npc: { behaviors: readonly BossDoc[] } }).npc.behaviors.find(
       (entry) => entry.name === 'arenaMinion',
     )!;
     expect(minion.states.map((state) => state.name)).toEqual(['chase']);
     expect(minion.states[0]!.actions.map((action) => action.executor)).toEqual(['seekTarget']);
     expect(systemDef('MinionTarget').order).toBeGreaterThan(-795);
     expect(systemDef('MinionTarget').order).toBeLessThan(0);
+    // Ротацию скелет не носит: осей готовности у него нет вовсе — способность
+    // у него `always`-аура, и просить её некому.
+    expect(
+      minion.states[0]!.actions.flatMap((action) => action.considerations.map((axis) => axis.input)),
+    ).not.toContain('abilityReady');
   });
 
   it('радиус вспышки слэма — радиус, по которому он бьёт', () => {

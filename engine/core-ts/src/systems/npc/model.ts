@@ -67,7 +67,12 @@ export const EXEC_CAST = 3;
  *   в масштабе ёмкости threat-таблицы;
  * - `stateElapsed` — сколько агент в текущем состоянии, в масштабе
  *   `decision.intervalTicks`;
- * - `routeRemaining` — осталось ли куда идти по маршруту.
+ * - `routeRemaining` — осталось ли куда идти по маршруту;
+ * - `abilityReady` — готовность слота способности агента, названного полем
+ *   `slot` (`AbilitySlot.slotIndex`, ABIL-1): единица, когда каст этого слота
+ *   СТАРТОВАЛ БЫ по кулдауну и занятости (NPC-7), иначе ноль. Единственный
+ *   параметризованный вход словаря — как `abilityCooldownFraction` у бота
+ *   (BOT-9).
  */
 export const NPC_INPUTS = [
   'always',
@@ -77,6 +82,7 @@ export const NPC_INPUTS = [
   'crowding',
   'stateElapsed',
   'routeRemaining',
+  'abilityReady',
 ] as const;
 
 type NpcInput = (typeof NPC_INPUTS)[number];
@@ -88,6 +94,14 @@ export const INPUT_HEALTH_FRACTION = 3;
 export const INPUT_CROWDING = 4;
 export const INPUT_STATE_ELAPSED = 5;
 export const INPUT_ROUTE_REMAINING = 6;
+export const INPUT_ABILITY_READY = 7;
+
+/**
+ * Значение поля `slot` скомпилированной оси, означающее «слот не назван»
+ * (NPC-2): у входов, которым слот не осмыслен, поля в документе нет вовсе, а
+ * индекс слота неотрицателен по построению (ABIL-1).
+ */
+export const NO_SLOT = -1;
 
 /**
  * Условия переходов HFSM — ЗАКРЫТЫЙ словарь (NPC-2, NPC-7). Ровно то, что
@@ -128,6 +142,13 @@ interface NpcCurveDef {
 
 interface NpcConsiderationDef {
   readonly input: NpcInput;
+  /**
+   * Индекс слота способности (`AbilitySlot.slotIndex`, ABIL-1) — у входа
+   * `abilityReady` и только у него (NPC-7). У прочих входов поле бессмысленно и
+   * потому отвергается валидацией: лишнее поле — признак того, что документ
+   * писали, не понимая, что настраивают (зеркало `BotConsideration.slot`).
+   */
+  readonly slot?: number;
   readonly curve: NpcCurveDef;
   readonly weight: Fixed;
 }
@@ -254,6 +275,8 @@ interface NpcBehaviorDef {
 
 export interface CompiledConsideration {
   readonly input: number;
+  /** Индекс слота у входа `abilityReady`; `NO_SLOT` — слот не назван. */
+  readonly slot: number;
   readonly curve: FixedCurve;
   readonly weight: Fixed;
 }

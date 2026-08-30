@@ -983,6 +983,7 @@
         "input": {
           "$comment": "Вход закрытого словаря NPC.",
           "enum": [
+            "abilityReady",
             "always",
             "crowding",
             "healthFraction",
@@ -991,6 +992,11 @@
             "targetDistance",
             "targetKnown"
           ]
+        },
+        "slot": {
+          "$comment": "Индекс слота способности (AbilitySlot.slotIndex, ABIL-1) — только у входа abilityReady (NPC-7).",
+          "type": "integer",
+          "minimum": 0
         },
         "curve": {
           "$ref": "#/$defs/npcCurve"
@@ -1001,7 +1007,33 @@
           "minimum": 0,
           "maximum": 65536
         }
-      }
+      },
+      "allOf": [
+        {
+          "if": {
+            "required": [
+              "input"
+            ],
+            "properties": {
+              "input": {
+                "const": "abilityReady"
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "slot"
+            ]
+          },
+          "else": {
+            "not": {
+              "required": [
+                "slot"
+              ]
+            }
+          }
+        }
+      ]
     },
     "npcCurve": {
       "title": "Кривая отклика (NPC-3)",
