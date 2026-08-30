@@ -56,7 +56,12 @@
       "entry": ["app/**/*.ts", "test/**/*.test.ts"]
     },
     "game/demo-ts": {
-      "entry": ["app/**/*.ts", "bin/*.mjs", "test/**/*.test.ts"]
+      "entry": ["app/**/*.ts", "bin/*.mjs", "test/**/*.test.ts"],
+      // cloudflared — бинарь ХОСТА, а не зависимость npm: quick-туннель игры
+      // вдвоём (`app/tunnel.ts`) спавнит его с PATH, отсутствие — названная
+      // подсказка установки, и гейт без него зелёный (спавн тестами не
+      // покрывается тем же принципом, что BLND-7 у Blender).
+      "ignoreBinaries": ["cloudflared"]
     },
     "game/server-agent-ts": {
       // Фикстуры тестов агента — СКРИПТЫ ПРОЦЕССОВ: агент спавнит их путём, а

@@ -10,10 +10,17 @@
  * Кода демо это не касается ни строкой: приложение остаётся тем же
  * веб-приложением, а различие целиком в том, кто раздаёт файлы (DSK-1).
  */
+import { defineConfig } from 'vite';
 import base from './vite.config.js';
 
-export default {
-  ...base,
-  publicDir: false,
-  build: { ...base.build, outDir: 'dist-desktop' },
-};
+// База — функция от режима (туннель включается `--mode tunnel`, `tunnel.ts`);
+// здесь режим просто пробрасывается: сборке контейнера туннель не грозит —
+// плагин живёт только в dev (`apply: 'serve'`).
+export default defineConfig((env) => {
+  const resolved = base(env);
+  return {
+    ...resolved,
+    publicDir: false,
+    build: { ...resolved.build, outDir: 'dist-desktop' },
+  };
+});
