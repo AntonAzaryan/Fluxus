@@ -72,7 +72,10 @@ interface EffectEntry {
 }
 
 const MANIFEST = manifestJson as unknown as {
-  readonly entities: Record<string, { readonly animations: { readonly events: Record<string, string> } }>;
+  readonly entities: Record<
+    string,
+    { readonly scale: number; readonly animations: { readonly events: Record<string, string> } }
+  >;
   readonly effects: {
     readonly byKind: Record<string, EffectEntry | undefined>;
     readonly byEvent: Record<string, EffectEntry>;
@@ -549,7 +552,12 @@ describe('босс переключается на обидчика с веро�
     let rollable = 0;
     let enraged = 0;
     const scene = health('Hero', 400000);
-    for (let seed = 1; seed <= 12; seed++) {
+    // Сидов больше, чем кажется нужным, и это не запас «на всякий случай»:
+    // скелеты босса ловят снаряды своим слоем (16 в маске снаряда), то есть
+    // часть выстрелов до самого босса не доезжает, и подходящих попаданий на
+    // сид приходится меньше. Доля меряется по знаменателю, и знаменатель
+    // обязан быть больше пары десятков, иначе полоса ниже ничего не значит.
+    for (let seed = 1; seed <= 20; seed++) {
       const a = stand([[21, 24], [27, 24]], scene, seed);
       for (let t = 1; t <= 1200; t++) {
         const fire = t % 70 === 0 ? CAST : 0;
@@ -1005,12 +1013,13 @@ describe('поле замедления: жёлтый купол, гасящий
     // Двое по краям поля: босс подходит к одному вплотную, и выстрел ВТОРОГО
     // летит через всё поле. Стенд с одним героем мерил бы не то — снаряд, разо-
     // рвавшийся о босса в тот же тик, замедляться просто не успевает.
-    const a = stand([[20, 24], [28, 24]], noRepel(only('SlotBossField')));
+    // Призыв разрешён рядом с полем НАМЕРЕННО: скелет — единственный носитель
+    // списка источников, который аура обязана НЕ выбрать. Мерить это на самом
+    // боссе нечем: списка он не несёт вовсе, и `TimeScale` ему не появился бы,
+    // какие бы теги в запросах ауры ни стояли.
+    const a = stand([[20, 24], [28, 24]], noRepel(only('SlotBossField', 'SlotBossSpawn')));
     until(a, 'BossFieldCast', 60);
     for (let t = 1; t <= FIELD_RAMP + 10; t++) a.step();
-    // Босс стоит в собственном поле и идёт обычным темпом: запросы ауры
-    // отобраны тегами героя и снаряда, и кастера в них нет.
-    expect(timeScale(a, a.boss)).toBe(FIXED_ONE);
 
     let seen = 0;
     let slowest = FIXED_ONE;
@@ -1025,6 +1034,22 @@ describe('поле замедления: жёлтый купол, гасящий
     // Контроль: снаряды в мире были, иначе проверялось бы пустое множество.
     expect(seen).toBeGreaterThan(0);
     expect(slowest).toBe(FIELD_FLOOR);
+
+    // А вот скелет — с `TimeScaleModifiers`, внутри того же поля и вплотную к
+    // замедленному герою — идёт обычным темпом: запросы ауры отобраны тегами
+    // героя и снаряда, и своих в них нет.
+    const field = tagged(a, 'BossField')[0]!;
+    const inside = tagged(a, 'BossMinion').filter(
+      (minion) => distance(a.state, minion, field) <= FIELD_RADIUS,
+    );
+    expect(inside.length, 'ни одного скелета внутри поля — проверять нечего').toBeGreaterThan(0);
+    for (const minion of inside) {
+      expect(coreWorld.hasComponent(a.state.world, minion, 'TimeScaleModifiers')).toBe(true);
+      expect(timeScale(a, minion)).toBe(FIXED_ONE);
+    }
+    // И сам босс списка источников не несёт вовсе — второй, независимый повод
+    // тому, что аура его не трогает.
+    expect(coreWorld.hasComponent(a.state.world, a.boss, 'TimeScaleModifiers')).toBe(false);
   });
 
   it('поле кастуется, только когда в его радиусе есть кому мешать', () => {
@@ -1062,6 +1087,35 @@ describe('призыв: три скелета перед боссом', () => {
       // И не внутри его тела: они стоят снаружи, а не в кастере.
       expect(Math.hypot(dx, dy)).toBeGreaterThan(BOSS_RADIUS + MINION_RADIUS);
     }
+  });
+
+  it('трое — это трое: расходятся телами, а не сливаются в одну точку', () => {
+    // Без локального расхождения (NPC-6) все трое сходятся на одной окружности
+    // `ranges.attack` вокруг жертвы и встают друг в друге: маска блокировки у
+    // них своего слоя не несёт, и растолкать их нечему. На экране это ОДИН
+    // скелет, и «спаунит скелетов» перестаёт читаться.
+    const a = stand([[30, 24]], noRepel(health('Hero', 400000, only('SlotBossSpawn'))));
+    until(a, 'BossSpawned', 200);
+    for (let t = 1; t <= 200; t++) a.step();
+    const alive = minions(a);
+    expect(alive).toHaveLength(MINION_COUNT);
+    for (let i = 0; i < alive.length; i++) {
+      for (let j = i + 1; j < alive.length; j++) {
+        // Тела не пересекаются: центры дальше суммы радиусов.
+        expect(
+          distance(a.state, alive[i]!, alive[j]!),
+          `скелеты ${i} и ${j} стоят друг в друге`,
+        ).toBeGreaterThan(2 * MINION_RADIUS);
+      }
+    }
+    // И расхождение — политика ДОКУМЕНТА, а не случайность расстановки: обе
+    // ручки NPC-6 включены, и любая из них, сброшенная в ноль, гасит механизм
+    // целиком (`NpcMovementSystem.separation` выходит по первому же нулю).
+    const doc = (SCENE as unknown as {
+      npc: { behaviors: readonly { name: string; separationWeight?: number; ranges: { separation: number } }[] };
+    }).npc.behaviors.find((entry) => entry.name === 'arenaMinion')!;
+    expect(doc.ranges.separation).toBeGreaterThan(2 * MINION_RADIUS);
+    expect(doc.separationWeight).toBeGreaterThan(0);
   });
 
   it('идут за той же жертвой, что и хозяин — и после того, как он её сменил', () => {
@@ -1537,6 +1591,13 @@ describe('числа и картинка босса: ретюн виден в д
       Math.floor(heroRadius / 1.5),
     );
     expect((minion.components.Health as Record<string, number>).hp).toBe(MINION_HP);
+    // Та же полуторакратность и в КАРТИНКЕ: `scale` записи вида — мировая
+    // высота, под которую подгоняется модель (ASSET-6), и разъедься она с
+    // коллайдером — дизайнер мерил бы глазами не то число, по которому считает
+    // симуляция.
+    expect(
+      MANIFEST.entities.Hero!.scale / MANIFEST.entities.BossMinion!.scale,
+    ).toBeCloseTo(heroRadius / MINION_RADIUS, 2);
     expect((minion.components.Collider as Record<string, number>).cliffRise).toBe(BOSS_CLIFF_RISE);
     expect((minion.components.Collider as Record<string, number>).layer).toBe(MINION_LAYER);
     const minionBehavior = (SCENE as unknown as { npc: { behaviors: readonly { name: string; speed: number }[] } })
@@ -1566,17 +1627,49 @@ describe('числа и картинка босса: ретюн виден в д
     const behaviors = (SCENE as unknown as { npc: { behaviors: readonly Record<string, unknown>[] } })
       .npc.behaviors;
     expect(behaviors[0]!.threat).toBeUndefined();
-    // Каждая система, ключуемая платформенным `NpcAgent`, отбирает СВОЕГО
-    // агента тегом: без этого скелет получил бы слоты способностей босса
-    // (`GrantBossSlots`), возрождался бы в центре арены (`BossRespawn`) и стоял
-    // бы на чужом касте (`BossCastHold`). Проверка механическая: забытый тег
-    // виден здесь, а не в бою.
-    for (const system of SCENE.systems!) {
-      const query: { readonly all?: readonly string[]; readonly withTag?: string } =
-        system.query ?? {};
-      if (!(query.all ?? []).includes('NpcAgent')) continue;
-      expect(query.withTag, `система ${system.name}`).toMatch(/^Boss(Minion)?$/);
-    }
+    // Каждый запрос, ключуемый платформенным `NpcAgent` или маркером скелета,
+    // отбирает СВОЕГО агента тегом: без этого скелет получил бы слоты
+    // способностей босса (`GrantBossSlots`), возрождался бы в центре арены
+    // (`BossRespawn`) и стоял бы на чужом касте (`BossCastHold`). Проверка
+    // механическая: забытый тег виден здесь, а не в бою.
+    //
+    // Обход идёт по ВСЕМУ дереву системы, а не по её верхнему запросу: тот же
+    // промах во вложенном `forEach` стоил бы ровно столько же, а увидеть его
+    // было бы негде.
+    const unscoped: string[] = [];
+    const keyed = (node: unknown, site: string): void => {
+      if (Array.isArray(node)) {
+        for (const item of node) keyed(item, site);
+        return;
+      }
+      if (node === null || typeof node !== 'object') return;
+      const record = node as Record<string, unknown>;
+      const query = record as { all?: unknown; withTag?: unknown };
+      const all = Array.isArray(query.all) ? (query.all as string[]) : [];
+      if (all.includes('NpcAgent') || all.includes('Minion')) {
+        if (query.withTag !== 'Boss' && query.withTag !== 'BossMinion') {
+          unscoped.push(`${site}: ${JSON.stringify(query.all)} → ${String(query.withTag)}`);
+        }
+      }
+      for (const value of Object.values(record)) keyed(value, site);
+    };
+    for (const system of SCENE.systems!) keyed(system, system.name);
+    expect(unscoped).toEqual([]);
+    // Контроль: обход и правда нашёл такие запросы, иначе он проверял бы пустое
+    // множество — ровно тот отказ, ради которого он и написан.
+    let scoped = 0;
+    const counted = (node: unknown): void => {
+      if (Array.isArray(node)) {
+        for (const item of node) counted(item);
+        return;
+      }
+      if (node === null || typeof node !== 'object') return;
+      const record = node as { all?: unknown };
+      if (Array.isArray(record.all) && (record.all as string[]).includes('NpcAgent')) scoped += 1;
+      for (const value of Object.values(node as Record<string, unknown>)) counted(value);
+    };
+    for (const system of SCENE.systems!) counted(system);
+    expect(scoped).toBeGreaterThanOrEqual(10);
     // Возрождение: окно и точка — зеркало `arena.center` сцены.
     const respawn = numbers(systemDef('BossRespawn'));
     expect(respawn).toContain(BOSS_RESPAWN_TICKS);
@@ -1680,11 +1773,20 @@ describe('числа и картинка босса: ретюн виден в д
       MINION_BURST_RADIUS / FIXED_ONE,
     );
     // Замахи озвучены частицами, приземления — тряской камеры.
-    for (const type of ['BossStrikeWindup', 'BossSlamRoar', 'BossChargeAim', 'BossSpawnRoar']) {
+    for (const type of ['BossStrikeWindup', 'BossSlamRoar', 'BossChargeAim']) {
       expect(MANIFEST.particles.byEvent[type]!.effect).toBe(
         MANIFEST.particles.byEvent.CastFireball!.effect,
       );
     }
+    // Рёв призыва — исключение, и оно несущее: он длится те же полторы секунды,
+    // что рёв слэма, но слэм при этом бьёт на 3.6 единицы и на 500, а призыв не
+    // бьёт вовсе. Совпади у них клип и всполох — игрок не отличил бы, от чего
+    // отбегать, и телеграф перестал бы быть телеграфом.
+    const clips = MANIFEST.entities.Boss!.animations.events;
+    expect(clips.BossSpawnRoar).not.toBe(clips.BossSlamRoar);
+    expect(MANIFEST.particles.byEvent.BossSpawnRoar!.effect).not.toBe(
+      MANIFEST.particles.byEvent.BossSlamRoar!.effect,
+    );
     for (const type of [
       'BossStrikeLanded',
       'BossSlamLanded',

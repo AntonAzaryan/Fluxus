@@ -5135,9 +5135,9 @@
         "name": "arenaMinion",
         "tier": "mass",
         "decision": { "intervalTicks": 4 },
-        "ranges": { "sense": 3145728, "attack": 32768, "arrive": 26214, "separation": 0 },
+        "ranges": { "sense": 3145728, "attack": 32768, "arrive": 26214, "separation": 39322 },
         "speed": 5243,
-        "separationWeight": 0,
+        "separationWeight": 32768,
         "scales": { "elapsedTicks": 180, "crowd": 4 },
         "states": [
           {

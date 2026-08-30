@@ -73,7 +73,7 @@
           "BossStrikeLanded": "Attack - 2",
           "BossSlamRoar": "Spell Slam",
           "BossSlamLanded": "Spell",
-          "BossSpawnRoar": "Spell Slam",
+          "BossSpawnRoar": "Birth",
           "BossFieldCast": "Spell Defend",
           "BossChargeAim": "Stand Channel",
           "BossChargeStarted": "Attack Defend",
@@ -106,7 +106,7 @@
     },
     "BossMinion": {
       "model": "visuals/models/SkeletonBarbarian.mdx",
-      "scale": 1,
+      "scale": 1.0667,
       "defaultSkin": "orange",
       "skins": {
         "orange": {
@@ -346,7 +346,7 @@
         "effect": "visuals/effects/cast-burst.effect.json"
       },
       "BossSpawnRoar": {
-        "effect": "visuals/effects/cast-burst.effect.json"
+        "effect": "visuals/effects/summon-burst.effect.json"
       },
       "BossMinionBurst": {
         "effect": "visuals/effects/blood-burst.effect.json"
