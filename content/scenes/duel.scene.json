@@ -1483,21 +1483,14 @@
       ]
     },
     {
-      "name": "BossReady",
-      "order": -797,
-      "query": { "all": ["NpcAgent", "BossDash", "BossHunt", "Position"], "not": ["Dead"] },
+      "name": "BossBusy",
+      "order": -798,
+      "query": { "all": ["NpcAgent", "BossDash", "BossHunt"], "not": ["Dead"] },
       "as": "b",
       "do": [
         {
           "let": {
-            "bindings": {
-              "t": { "getComponent": [{ "var": "b" }, "NpcAgent", "target"] },
-              "busy": 0,
-              "strike": -1,
-              "slam": -1,
-              "charge": -1,
-              "near": 0
-            },
+            "bindings": { "busy": 0 },
             "do": [
               {
                 "if": {
@@ -1515,102 +1508,28 @@
               },
               {
                 "forEach": {
-                  "query": { "all": ["AbilitySlot", "AbilityCooldown"] },
+                  "query": { "all": ["AbilitySlot"] },
                   "as": "s",
                   "do": [
                     {
                       "if": {
                         "cond": {
-                          "==": [
-                            { "getComponent": [{ "var": "s" }, "AbilitySlot", "owner"] },
-                            { "var": "b" }
+                          "and": [
+                            {
+                              "==": [
+                                { "getComponent": [{ "var": "s" }, "AbilitySlot", "owner"] },
+                                { "var": "b" }
+                              ]
+                            },
+                            {
+                              ">=": [
+                                { "getComponent": [{ "var": "s" }, "AbilitySlot", "phase"] },
+                                0
+                              ]
+                            }
                           ]
                         },
-                        "then": [
-                          {
-                            "if": {
-                              "cond": {
-                                ">=": [
-                                  { "getComponent": [{ "var": "s" }, "AbilitySlot", "phase"] },
-                                  0
-                                ]
-                              },
-                              "then": [{ "set": { "name": "busy", "value": 1 } }]
-                            }
-                          },
-                          {
-                            "if": {
-                              "cond": {
-                                "==": [
-                                  { "getComponent": [{ "var": "s" }, "AbilitySlot", "abilityId"] },
-                                  8
-                                ]
-                              },
-                              "then": [
-                                {
-                                  "set": {
-                                    "name": "strike",
-                                    "value": {
-                                      "getComponent": [
-                                        { "var": "s" },
-                                        "AbilityCooldown",
-                                        "remaining"
-                                      ]
-                                    }
-                                  }
-                                }
-                              ]
-                            }
-                          },
-                          {
-                            "if": {
-                              "cond": {
-                                "==": [
-                                  { "getComponent": [{ "var": "s" }, "AbilitySlot", "abilityId"] },
-                                  9
-                                ]
-                              },
-                              "then": [
-                                {
-                                  "set": {
-                                    "name": "slam",
-                                    "value": {
-                                      "getComponent": [
-                                        { "var": "s" },
-                                        "AbilityCooldown",
-                                        "remaining"
-                                      ]
-                                    }
-                                  }
-                                }
-                              ]
-                            }
-                          },
-                          {
-                            "if": {
-                              "cond": {
-                                "==": [
-                                  { "getComponent": [{ "var": "s" }, "AbilitySlot", "abilityId"] },
-                                  10
-                                ]
-                              },
-                              "then": [
-                                {
-                                  "set": {
-                                    "name": "charge",
-                                    "value": {
-                                      "getComponent": [
-                                        { "var": "s" },
-                                        "AbilityCooldown",
-                                        "remaining"
-                                      ]
-                                    }
-                                  }
-                                }
-                              ]
-                            }
-                          }
-                        ]
+                        "then": [{ "set": { "name": "busy", "value": 1 } }]
                       }
                     }
                   ]
@@ -1618,120 +1537,49 @@
               },
               {
                 "if": {
-                  "cond": {
-                    "and": [
-                      { "==": [{ "var": "busy" }, 0] },
-                      {
-                        "and": [
-                          {
-                            "and": [
-                              { ">=": [{ "var": "t" }, 0] },
-                              { "isAlive": [{ "var": "t" }] },
-                              { "!": [{ "hasComponent": [{ "var": "t" }, "Dead"] }] }
-                            ]
-                          },
-                          { "!": [{ "hasComponent": [{ "var": "t" }, "Falling"] }] }
-                        ]
-                      }
-                    ]
-                  },
+                  "cond": { "==": [{ "var": "busy" }, 1] },
                   "then": [
                     {
                       "forEach": {
-                        "query": {
-                          "all": ["Health", "Position"],
-                          "not": ["Dead"],
-                          "withTag": "Hero",
-                          "withinRadius": {
-                            "center": {
-                              "vec": [
-                                { "getComponent": [{ "var": "b" }, "Position", "x"] },
-                                { "getComponent": [{ "var": "b" }, "Position", "y"] }
-                              ]
-                            },
-                            "radius": 117963
-                          }
-                        },
-                        "as": "v",
+                        "query": { "all": ["AbilitySlot", "AbilityCooldown"] },
+                        "as": "s",
                         "do": [
-                          { "set": { "name": "near", "value": { "+": [{ "var": "near" }, 1] } } }
-                        ]
-                      }
-                    },
-                    {
-                      "let": {
-                        "bindings": {
-                          "gap": {
-                            "vec.length": [
-                              {
-                                "vec.sub": [
+                          {
+                            "if": {
+                              "cond": {
+                                "and": [
                                   {
-                                    "vec": [
-                                      { "getComponent": [{ "var": "t" }, "Position", "x"] },
-                                      { "getComponent": [{ "var": "t" }, "Position", "y"] }
+                                    "==": [
+                                      { "getComponent": [{ "var": "s" }, "AbilitySlot", "owner"] },
+                                      { "var": "b" }
                                     ]
                                   },
                                   {
-                                    "vec": [
-                                      { "getComponent": [{ "var": "b" }, "Position", "x"] },
-                                      { "getComponent": [{ "var": "b" }, "Position", "y"] }
+                                    "<=": [
+                                      { "getComponent": [{ "var": "s" }, "AbilitySlot", "slotIndex"] },
+                                      2
+                                    ]
+                                  },
+                                  {
+                                    "<=": [
+                                      {
+                                        "getComponent": [
+                                          { "var": "s" },
+                                          "AbilityCooldown",
+                                          "remaining"
+                                        ]
+                                      },
+                                      0
                                     ]
                                   }
                                 ]
-                              }
-                            ]
-                          }
-                        },
-                        "do": [
-                          {
-                            "if": {
-                              "cond": {
-                                "and": [
-                                  { "==": [{ "var": "slam" }, 0] },
-                                  { ">=": [{ "var": "near" }, 1] }
-                                ]
                               },
                               "then": [
                                 {
-                                  "emitEvent": {
-                                    "type": "BossSlamReady",
-                                    "data": { "entity": { "var": "b" }, "tick": { "tick": [] } }
-                                  }
-                                }
-                              ]
-                            }
-                          },
-                          {
-                            "if": {
-                              "cond": {
-                                "and": [
-                                  { "==": [{ "var": "strike" }, 0] },
-                                  { "<=": [{ "var": "gap" }, 327680] }
-                                ]
-                              },
-                              "then": [
-                                {
-                                  "emitEvent": {
-                                    "type": "BossStrikeReady",
-                                    "data": { "entity": { "var": "b" }, "tick": { "tick": [] } }
-                                  }
-                                }
-                              ]
-                            }
-                          },
-                          {
-                            "if": {
-                              "cond": {
-                                "and": [
-                                  { "==": [{ "var": "charge" }, 0] },
-                                  { ">": [{ "var": "gap" }, 327680] }
-                                ]
-                              },
-                              "then": [
-                                {
-                                  "emitEvent": {
-                                    "type": "BossChargeReady",
-                                    "data": { "entity": { "var": "b" }, "tick": { "tick": [] } }
+                                  "modifyComponent": {
+                                    "entity": { "var": "s" },
+                                    "component": "AbilityCooldown",
+                                    "values": { "remaining": 1 }
                                   }
                                 }
                               ]
@@ -4392,10 +4240,9 @@
         "ranges": { "sense": 3145728, "attack": 98304, "arrive": 65536, "separation": 0 },
         "speed": 5243,
         "separationWeight": 0,
-        "scales": { "elapsedTicks": 180, "crowd": 4 },
         "states": [
           {
-            "name": "hunt",
+            "name": "rotation",
             "actions": [
               {
                 "executor": "seekTarget",
@@ -4403,76 +4250,67 @@
                   {
                     "input": "always",
                     "curve": { "type": "constant", "value": 65536 },
-                    "weight": 65536
+                    "weight": 16384
                   }
                 ]
-              }
-            ],
-            "transitions": [
-              {
-                "to": "slam",
-                "when": { "kind": "event", "event": "BossSlamReady", "entityField": "entity" }
               },
-              {
-                "to": "strike",
-                "when": { "kind": "event", "event": "BossStrikeReady", "entityField": "entity" }
-              },
-              {
-                "to": "charge",
-                "when": { "kind": "event", "event": "BossChargeReady", "entityField": "entity" }
-              }
-            ]
-          },
-          {
-            "name": "slam",
-            "actions": [
               {
                 "executor": "cast",
                 "event": "BossSlam",
                 "considerations": [
                   {
-                    "input": "always",
-                    "curve": { "type": "constant", "value": 65536 },
+                    "input": "abilityReady",
+                    "slot": 1,
+                    "curve": { "type": "linear", "slope": 65536, "intercept": 0 },
+                    "weight": 65536
+                  },
+                  {
+                    "input": "targetDistance",
+                    "curve": { "type": "linear", "slope": -69905067, "intercept": 2621440 },
                     "weight": 65536
                   }
                 ]
-              }
-            ],
-            "transitions": [{ "to": "hunt", "when": { "kind": "elapsed", "ticks": 1 } }]
-          },
-          {
-            "name": "strike",
-            "actions": [
+              },
               {
                 "executor": "cast",
                 "event": "BossStrike",
                 "considerations": [
                   {
-                    "input": "always",
-                    "curve": { "type": "constant", "value": 65536 },
+                    "input": "abilityReady",
+                    "slot": 0,
+                    "curve": { "type": "linear", "slope": 65536, "intercept": 0 },
                     "weight": 65536
+                  },
+                  {
+                    "input": "targetDistance",
+                    "curve": { "type": "linear", "slope": -25165824, "intercept": 2621440 },
+                    "weight": 49152
                   }
                 ]
-              }
-            ],
-            "transitions": [{ "to": "hunt", "when": { "kind": "elapsed", "ticks": 1 } }]
-          },
-          {
-            "name": "charge",
-            "actions": [
+              },
               {
                 "executor": "cast",
                 "event": "BossCharge",
                 "considerations": [
                   {
-                    "input": "always",
-                    "curve": { "type": "constant", "value": 65536 },
+                    "input": "abilityReady",
+                    "slot": 2,
+                    "curve": { "type": "linear", "slope": 65536, "intercept": 0 },
+                    "weight": 65536
+                  },
+                  {
+                    "input": "targetKnown",
+                    "curve": { "type": "linear", "slope": 65536, "intercept": 0 },
+                    "weight": 65536
+                  },
+                  {
+                    "input": "targetDistance",
+                    "curve": { "type": "linear", "slope": 1258291, "intercept": -131072 },
                     "weight": 65536
                   }
                 ]
               }
-            ],
-            "transitions": [{ "to": "hunt", "when": { "kind": "elapsed", "ticks": 1 } }]
+            ]
           }
         ]
       }

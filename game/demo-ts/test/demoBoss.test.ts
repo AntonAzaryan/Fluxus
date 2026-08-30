@@ -14,14 +14,29 @@
  * способности обязаны исключать всех, кроме героев, — что и делает `withTag`
  * их запросов.
  *
- * Ротация — политика ДОКУМЕНТА (NPC-7): у него состояние на каждую
- * способность, просит их исполнитель `cast`, а порядок переходов из `hunt` и
- * есть приоритет. Сцена добавляет к этому ровно один сигнал — «способность
- * применима прямо сейчас» (`BossReady`, order −797): остаток кулдауна слота
- * (ABIL-7) и фаза автомата (ABIL-1) во входы документа не входят, а просьба
- * вслепую была бы молча съедена гейтом кулдауна, и босс замер бы в том же
- * состоянии. Источник сигнала стоит раньше системы поведения — тем самым
- * способом, который NPC-7 и называет.
+ * Ротация — политика ДОКУМЕНТА (NPC-7), и с появлением входа `abilityReady`
+ * она вся уместилась в скоринг: одно состояние, в нём `seekTarget` и три
+ * `cast`-действия, у каждого ось готовности своего слота (`slotIndex`, ABIL-1)
+ * и ось дистанции. Готовность спрашивается тем же предикатом, каким гейт
+ * триггера решает, стартовать ли каст (ABIL-7), поэтому просьбы, которую гейт
+ * уронил бы, документ не публикует вовсе — системы-сенсора, пересказывавшей
+ * кулдауны событиями `Boss*Ready`, в сцене больше нет.
+ *
+ * Сцена оставляет за собой ровно одно — ЗАНЯТОСТЬ владельца (`BossBusy`,
+ * order −798): пока идёт чей-то каст, рывок или назревший толчок, ротационные
+ * слоты держатся недоступными, иначе следующая просьба обрывала бы текущий
+ * замах штатным `supersede` (ABIL-6). Это политика сцены, а не словаря NPC:
+ * платформа про «занят другим слотом» ничего не обещает.
+ *
+ * Держит она их ТЕМ ЖЕ полем, которым платформа держит откат, — `remaining`
+ * кулдауна слота, — и это законно ровно при одном инварианте: удержание пишет
+ * ЕДИНИЦУ И ТОЛЬКО В НУЛЕВОЙ остаток, а снимает её тем же тиком система
+ * кулдаунов (order 800), поэтому настоящий кулдаун, взведённый завершением
+ * каста по `cooldownTicks` (ABIL-7), им нельзя ни укоротить, ни продлить.
+ * Выбор поля не косметический: вход `abilityReady` спрашивает у платформы
+ * ровно её гейт, и подавление, выраженное чем-то другим, снова роняло бы
+ * просьбы в гейте вместо того, чтобы их не публиковать (NPC-7). Оба слагаемых
+ * инварианта пиннит describe «занятость босса», а не только этот текст.
  */
 import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
@@ -378,6 +393,66 @@ const abilityDef = (id: string): Record<string, unknown> =>
 const systemDef = (name: string): Record<string, unknown> =>
   SCENE.systems!.find((entry) => entry.name === name)! as unknown as Record<string, unknown>;
 
+// ------------------------------------------------- документ поведения босса
+
+/** Ось полезности, как её пишет документ сцены (NPC-3). */
+interface Axis {
+  readonly input: string;
+  /** Индекс слота — только у входа `abilityReady` (NPC-7, ABIL-1). */
+  readonly slot?: number;
+  readonly curve: { readonly type: string; readonly slope?: number; readonly intercept?: number };
+  readonly weight: number;
+}
+
+interface RotationAction {
+  readonly executor: string;
+  /** Тип публикуемой просьбы — только у исполнителя `cast`. */
+  readonly event?: string;
+  readonly considerations: readonly Axis[];
+}
+
+interface BossDoc {
+  readonly name: string;
+  readonly speed: number;
+  /** Радиус чутья — он же масштаб входа `targetDistance` (NPC-3). */
+  readonly ranges: { readonly sense: number };
+  readonly states: readonly {
+    readonly name: string;
+    readonly actions: readonly RotationAction[];
+    readonly transitions?: readonly Record<string, unknown>[];
+  }[];
+}
+
+const bossDoc = (): BossDoc =>
+  (SCENE as unknown as { npc: { behaviors: readonly BossDoc[] } }).npc.behaviors.find(
+    (entry) => entry.name === 'arenaBoss',
+  )!;
+
+/** Просьба ротации → prefab слота, который её исполняет. */
+const SLOT_PREFAB: Record<string, string> = {
+  BossStrike: 'SlotBossStrike',
+  BossSlam: 'SlotBossSlam',
+  BossCharge: 'SlotBossCharge',
+};
+
+/**
+ * Просьба ротации → `slotIndex`, которым её адресует документ. Список
+ * ОТДЕЛЬНЫЙ от prefab'ов намеренно: тест сверяет две стороны адресации, и
+ * разъехавшийся индекс читался бы в бою нулевой готовностью, а не ошибкой.
+ */
+const ASK_SLOT: Record<string, number> = { BossStrike: 0, BossSlam: 1, BossCharge: 2 };
+
+/** Ротационных слотов три; четвёртый — толчок, его документ не адресует. */
+const BOSS_ROTATION_SLOTS = 3;
+
+const slotPrefabField = (prefab: string, field: string): number =>
+  (SCENE.prefabs!.find((entry) => entry.name === prefab)!.components.AbilitySlot as Record<
+    string,
+    number
+  >)[field]!;
+
+const bossSlotIndex = (prefab: string): number => slotPrefabField(prefab, 'slotIndex');
+
 // ------------------------------------------------------------------ тесты
 
 describe('босс охотится за случайной целью', () => {
@@ -686,6 +761,84 @@ describe('слем: рёв и круговой взрыв', () => {
   });
 });
 
+describe('занятость босса: сцена держит просьбы, пока идёт каст', () => {
+  /**
+   * `BossBusy` (order −798) — вся политика занятости, которую словарь NPC не
+   * несёт и нести не обязан (NPC-7): готовность слота говорит о САМОМ слоте, а
+   * «владелец занят другим» — знание сцены. Держит она просьбы тем же полем,
+   * которым платформа держит кулдаун (ABIL-7), поэтому проверяются РОВНО два
+   * её свойства: пока слот в фазе, новых просьб нет, и живой кулдаун
+   * удержанием не тронут.
+   */
+  const rotationSlots = (a: Stand): readonly EntityId[] =>
+    ['SlotBossStrike', 'SlotBossSlam', 'SlotBossCharge'].map((prefab) =>
+      slotOf(a, slotPrefabField(prefab, 'abilityId')),
+    );
+
+  it('пока слот в фазе, второй просьбы не публикуется', () => {
+    // Без удержания следующая же готовая способность просилась бы поверх
+    // идущего замаха, и штатный `supersede` (ABIL-6) его обрывал бы: замеры
+    // отладочного прогона до этой системы — четыре сорванных слэма из пяти.
+    const a = stand([[25.5, 24]]);
+    a.step();
+    const slots = rotationSlots(a);
+    const phase = (slot: EntityId): number =>
+      coreWorld.getField(a.state.world, slot, 'AbilitySlot', 'phase');
+
+    let busyTicks = 0;
+    let asks = 0;
+    let asksWhileBusy = 0;
+    for (let t = 1; t <= 400; t++) {
+      // Занятость читается ДО тика: её же видит система на −798, а решение
+      // документа принимается на −795 этого самого тика.
+      const busy = slots.some((slot) => phase(slot) >= 0);
+      const asked = a.step().filter((type) => ASK_SLOT[type] !== undefined).length;
+      asks += asked;
+      if (busy) {
+        busyTicks += 1;
+        asksWhileBusy += asked;
+      }
+    }
+    // Контроль: босс и просил, и был занят — иначе проверялось бы пустое место.
+    expect(asks).toBeGreaterThanOrEqual(2);
+    expect(busyTicks).toBeGreaterThan(50);
+    expect(asksWhileBusy).toBe(0);
+  });
+
+  it('удержание пишет только в нулевой остаток: живой кулдаун цел', () => {
+    // Единственное, что делает подмену безопасной относительно ABIL-7:
+    // удержание трогает слот, у которого остатка нет, и снимается тем же тиком
+    // системой кулдаунов (order 800). Сорвись гейт `remaining <= 0` — настоящий
+    // кулдаун обрезался бы до единицы, то есть способность возвращалась бы в
+    // ротацию раньше срока, и увидеть это можно было бы только в бою.
+    const a = stand([[25.5, 24]]);
+    a.step();
+    const slots = rotationSlots(a);
+    const state = (slot: EntityId): { readonly phase: number; readonly remaining: number } => ({
+      phase: coreWorld.getField(a.state.world, slot, 'AbilitySlot', 'phase'),
+      remaining: coreWorld.getField(a.state.world, slot, 'AbilityCooldown', 'remaining'),
+    });
+
+    let before = slots.map(state);
+    let watched = 0;
+    for (let t = 1; t <= 400; t++) {
+      a.step();
+      const after = slots.map(state);
+      for (let i = 0; i < slots.length; i++) {
+        // Слот вне фазы, у которого кулдаун идёт: взвести его на этом тике
+        // некому (взводят завершение каста и прерывание, а оба требуют фазы),
+        // поэтому единственное законное изменение — убывание ровно на тик.
+        if (before[i]!.remaining <= 1 || before[i]!.phase >= 0) continue;
+        watched += 1;
+        expect(after[i]!.remaining, `слот ${i}, тик ${a.at()}`).toBe(before[i]!.remaining - 1);
+      }
+      before = after;
+    }
+    // Контроль: живой кулдаун под удержанием вообще случался.
+    expect(watched).toBeGreaterThan(50);
+  });
+});
+
 describe('разгон: наводка, рывок и полоса огня', () => {
   it('наводится 2 с, потом рассекает цель на 500 — ровно раз за рывок', () => {
     const a = stand([[36, 24]]);
@@ -847,20 +1000,44 @@ describe('босс, арена и собственная шкура', () => {
     expect(coreWorld.getField(a.state.world, a.boss, 'NpcAgent', 'target')).toBe(hero);
 
     // С тика падения босс СТОИТ: ни единицы Q16.16 в сторону улетающего тела.
+    //
+    // Меряются ПРОСЬБЫ, а не замахи: замах есть только у удара
+    // (`BossStrikeWindup`), рёв слэма и наводка разгона зовутся иначе, и фильтр
+    // по «Windup» проверял бы одну способность из трёх.
     const frozen = { x: px(a.state, a.boss), y: py(a.state, a.boss) };
+    const strike = slotOf(a, ABILITY_STRIKE);
     const asked: string[] = [];
-    for (let t = 1; t <= 120; t++) {
+    let strikeReady = false;
+    for (let t = 1; t <= 200; t++) {
       for (const type of a.step()) {
-        if (type.startsWith('Boss') && (type.endsWith('Ready') || type.endsWith('Windup'))) {
-          asked.push(type);
-        }
+        if (type === 'BossStrike' || type === 'BossSlam') asked.push(type);
+      }
+      if (coreWorld.getField(a.state.world, strike, 'AbilityCooldown', 'remaining') <= 0) {
+        strikeReady = true;
       }
       expect(px(a.state, a.boss), `тик ${a.at()}`).toBe(frozen.x);
       expect(py(a.state, a.boss), `тик ${a.at()}`).toBe(frozen.y);
       expect(coreWorld.hasComponent(a.state.world, a.boss, 'Falling')).toBe(false);
       expect(coreWorld.hasComponent(a.state.world, a.boss, 'Dead')).toBe(false);
+      expect(coreWorld.hasComponent(a.state.world, hero, 'Falling'), `тик ${a.at()}`).toBe(true);
     }
-    // И не замахивается по нему: сенсор готовности падающую цель не считает.
+    // Ближний бой по падающему не просится, и держит это ДИСТАНЦИЯ, а не знание
+    // о полёте: шага босс не делает (`BossFooting` гасит скорость в сторону
+    // падающего), ближе своих порогов цель не становится, а за ними оси удара и
+    // слэма — ноль (NPC-3).
+    //
+    // Контроль ровно на это: удар внутри окна БЫЛ готов, то есть молчал он не
+    // кулдауном. Слэму такого контроля не поставить — его откат (360 тиков)
+    // переживает весь полёт героя, — но пара доказывается включением: порог
+    // просьбы слэма (1.8) лежит СТРОГО ВНУТРИ порога удара (5.0), и цель,
+    // недостижимая для второго, недостижима и для первого.
+    expect(strikeReady).toBe(true);
+    // Разгон в список не входит НАМЕРЕННО: его ось дистанции растёт с
+    // расстоянием, то есть далёкая цель его как раз поощряет, и по падающему он
+    // просится — молчит он здесь только своим кулдауном, потраченным в начале
+    // боя. Отказаться от падающей цели документ не может вовсе: про полёт
+    // закрытый словарь входов не знает и знать не обязан — у платформы «цель»
+    // это живая сущность, и падающий ею остаётся (NPC-5).
     expect(asked).toEqual([]);
   });
 
@@ -1010,7 +1187,7 @@ describe('босс, арена и собственная шкура', () => {
       for (const value of Object.values(record)) walk(value);
     };
     for (const id of ['bossSlam', 'bossRepel', 'bossFireAura']) walk(abilityDef(id));
-    for (const name of ['BossReady', 'BossDashDrive']) walk(systemDef(name));
+    walk(systemDef('BossDashDrive'));
     // Удар в этот перечень не входит намеренно: его урон едет снарядом, а не
     // выборкой, и «только по героям» держит там условие `HitMark` — компонент,
     // которого нет ни у босса, ни у его спутников.
@@ -1087,46 +1264,101 @@ describe('числа и картинка босса: ретюн виден в д
     expect(center).toEqual({ x: ARENA_CENTER, y: ARENA_CENTER });
   });
 
-  it('ротация — политика документа: состояния, приоритет и просьбы каста', () => {
+  it('ротация — политика документа: одно состояние, оси готовности и дистанции', () => {
     // NPC-7: «Ротации способностей — приоритеты, условия, правила цели — SHALL
     // быть политикой документа; сам каст SHALL идти существующей машиной
-    // способностей». Здесь это и пиннится: у документа есть состояние на каждую
-    // способность, просит их исполнитель `cast`, а ПОРЯДОК переходов из `hunt`
-    // и есть приоритет ротации (первый выполнившийся переход выигрывает).
-    interface Doc {
-      readonly name: string;
-      readonly speed: number;
-      readonly states: readonly {
-        readonly name: string;
-        readonly actions: readonly { readonly executor: string; readonly event?: string }[];
-        readonly transitions?: readonly { readonly to: string; readonly when: Record<string, unknown> }[];
-      }[];
-    }
-    const behavior = (SCENE as unknown as { npc: { behaviors: readonly Doc[] } }).npc.behaviors.find(
-      (entry) => entry.name === 'arenaBoss',
-    )!;
+    // способностей». Здесь это и пиннится: ротация — СКОРИНГ одного состояния,
+    // где каждое cast-действие оценивается готовностью своего слота
+    // (`abilityReady`, тот же гейт, что у триггера, ABIL-7) и дистанцией до
+    // цели. Приоритет — веса и кривые, а не порядок переходов: состояний на
+    // способность больше нет.
+    const behavior = bossDoc();
     const hero = SCENE.prefabs!.find((prefab) => prefab.name === 'Hero')!;
     // Босс не медленнее идущего героя — иначе преследование не преследование.
     expect(behavior.speed).toBeGreaterThanOrEqual(
       (hero.components.Locomotion as Record<string, number>).maxSpeed!,
     );
 
-    const hunt = behavior.states.find((state) => state.name === 'hunt')!;
-    expect(hunt.actions.map((action) => action.executor)).toEqual(['seekTarget']);
-    // Приоритет: слэм, удар, разгон — ровно в этом порядке.
-    expect(hunt.transitions!.map((transition) => transition.to)).toEqual(['slam', 'strike', 'charge']);
-    for (const name of ['slam', 'strike', 'charge']) {
-      const state = behavior.states.find((entry) => entry.name === name)!;
-      expect(state.actions.map((action) => action.executor)).toEqual(['cast']);
-      expect(state.actions[0]!.event).toBe(`Boss${name[0]!.toUpperCase()}${name.slice(1)}`);
+    // Ровно одно состояние и ни одного перехода: ротацией больше не правит
+    // автомат — её решает скоринг каждый тик.
+    expect(behavior.states).toHaveLength(1);
+    const rotation = behavior.states[0]!;
+    expect(rotation.transitions ?? []).toEqual([]);
+    expect(rotation.actions.map((action) => action.executor)).toEqual([
+      'seekTarget',
+      'cast',
+      'cast',
+      'cast',
+    ]);
+    // Базовое действие — сближение: оно и выигрывает, пока не готова ни одна
+    // способность, поэтому босс не замирает между кастами.
+    const seek = rotation.actions[0]!;
+    expect(seek.considerations.map((axis) => axis.input)).toEqual(['always']);
+
+    for (const [event, slot] of Object.entries(ASK_SLOT)) {
+      const action = rotation.actions.find((entry) => entry.event === event)!;
+      expect(action, `в ротации нет просьбы ${event}`).toBeDefined();
+      // Ось готовности адресует РЕАЛЬНЫЙ слот босса — тот самый `slotIndex`,
+      // который кладёт в мир prefab (ABIL-1). Разъедься они, ось молча читалась
+      // бы нулём: слота с таким индексом у босса нет (NPC-7).
+      const ready = action.considerations.find((axis) => axis.input === 'abilityReady')!;
+      expect(ready, `у ${event} нет оси готовности`).toBeDefined();
+      expect(ready.slot).toBe(slot);
+      expect(bossSlotIndex(SLOT_PREFAB[event]!)).toBe(slot);
+      // Кривая готовности читает сам вход, а не подменяет его константой:
+      // `constant` вернула бы единицу и на неготовом слоте.
+      expect(ready.curve.type).toBe('linear');
+      expect(ready.weight).toBeGreaterThan(0);
     }
-    // Переход в состояние каста едет СИГНАЛОМ сцены (NPC-7: источник сигнала
-    // ставится раньше системы поведения). Сигнал — единственное, чего закрытые
-    // словари документа не видят: остаток кулдауна слота (ABIL-7).
-    const signals = hunt.transitions!.map((transition) => transition.when.event);
-    expect(signals).toEqual(['BossSlamReady', 'BossStrikeReady', 'BossChargeReady']);
-    const sensor = systemDef('BossReady');
-    expect(sensor.order).toBeLessThan(-795);
+  });
+
+  it('дистанционные оси ротации — зеркала порогов боя', () => {
+    // Пороги те же, что были у снесённого сенсора, только выражены кривой:
+    // ось обнуляется там, где кончается применимость способности. Считается
+    // это ИЗ ДОКУМЕНТА (наклон, свободный член и радиус чутья), поэтому ретюн
+    // любой из трёх величин виден здесь, а не только в бою.
+    const rotation = bossDoc().states[0]!;
+    const reach = (event: string): number => {
+      const axis = rotation.actions
+        .find((entry) => entry.event === event)!
+        .considerations.find((entry) => entry.input === 'targetDistance')!;
+      expect(axis.curve.type).toBe('linear');
+      // Прямая обнуляется на `x = -intercept / slope`, а `x` — доля радиуса
+      // чутья: масштаб входа `targetDistance` задаёт документ (NPC-3).
+      return (-axis.curve.intercept! / axis.curve.slope!) * bossDoc().ranges.sense;
+    };
+    // Удар достаёт на среднюю дистанцию — ровно на длину полёта своей волны.
+    expect(Math.abs(reach('BossStrike') - MEDIUM)).toBeLessThan(FIXED_ONE / 100);
+    expect(WAVE_SPEED * WAVE_TICKS).toBe(MEDIUM);
+    // Слэм просится вплотную — в радиусе собственного взрыва.
+    expect(Math.abs(reach('BossSlam') - SLAM_RADIUS)).toBeLessThan(FIXED_ONE / 100);
+    // Разгон — наоборот, ЗА средней дистанцией: его ось растёт с расстоянием.
+    expect(Math.abs(reach('BossCharge') - MEDIUM)).toBeLessThan(FIXED_ONE / 100);
+    const charge = rotation.actions.find((entry) => entry.event === 'BossCharge')!;
+    expect(
+      charge.considerations.find((axis) => axis.input === 'targetDistance')!.curve.slope!,
+    ).toBeGreaterThan(0);
+    // И разгон не просится вслепую: без цели `targetDistance` отвечает «дальше
+    // некуда» (NPC-3), и без оси `targetKnown` босс разгонялся бы в пустоту.
+    expect(charge.considerations.map((axis) => axis.input)).toContain('targetKnown');
+  });
+
+  it('сенсора готовности в сцене нет, а занятость держит отдельная система', () => {
+    // Половина утверждения — отрицательная: система, пересказывавшая кулдауны
+    // и дистанции событиями `Boss*Ready`, снесена целиком, и вернуться она
+    // может только вместе с этими именами.
+    expect(SCENE.systems!.map((system) => system.name)).not.toContain('BossReady');
+    expect(JSON.stringify(sceneJson)).not.toMatch(/Boss(Slam|Strike|Charge)Ready/);
+
+    // Вторая половина — положительная: занятость владельца словарь NPC не
+    // видит и видеть не обязан (NPC-7), поэтому её держит сцена — раньше
+    // системы поведения (−795), чтобы решение этого же тика её увидело.
+    const busy = systemDef('BossBusy');
+    expect(busy.order).toBeLessThan(-795);
+    // Держатся ровно ротационные слоты: толчок просит своя система со своим
+    // гейтом, и запертый кулдаун отнял бы у неё пассивку.
+    expect(JSON.stringify(busy)).toContain('slotIndex');
+    expect(numbers(busy)).toContain(BOSS_ROTATION_SLOTS - 1);
   });
 
   it('радиус вспышки слэма — радиус, по которому он бьёт', () => {

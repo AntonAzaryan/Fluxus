@@ -16,9 +16,6 @@
 
     "BossHunting": { "kind": "boss-picks-target", "actor": "entity", "target": "target" },
     "BossEnraged": { "kind": "boss-switches-to-attacker", "actor": "entity", "target": "target" },
-    "BossSlamReady": { "kind": "boss-slam-ready", "actor": "entity" },
-    "BossStrikeReady": { "kind": "boss-strike-ready", "actor": "entity" },
-    "BossChargeReady": { "kind": "boss-charge-ready", "actor": "entity" },
     "BossStrike": { "kind": "boss-asks-strike", "actor": "caster", "target": "target" },
     "BossStrikeWindup": { "kind": "boss-strike-windup", "actor": "entity" },
     "BossStrikeLanded": { "kind": "boss-strike", "actor": "entity" },
