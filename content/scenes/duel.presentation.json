@@ -1,9 +1,5 @@
 {
   "decorations": [
-    { "visual": "Statue", "x": 13.5, "y": 13.5, "yaw": 0.125 },
-    { "visual": "Statue", "x": 13.5, "y": 34.5, "yaw": 0.875, "skin": "steel" },
-    { "visual": "Statue", "x": 34.5, "y": 13.5, "yaw": 0.375, "scale": 0.75 },
-    { "visual": "Statue", "x": 34.5, "y": 34.5, "yaw": 0.625, "scale": 0.75, "skin": "steel" },
     { "visual": "Torch", "x": 24.5, "y": 18.5 },
     { "visual": "Torch", "x": 24.5, "y": 30.5 }
   ],
@@ -60,10 +56,10 @@
         {
           "name": "ночь",
           "seconds": 120,
-          "ambient": { "color": "#1e2a47", "intensity": 0.14 },
+          "ambient": { "color": "#1e2a47", "intensity": 0.3 },
           "directional": {
             "color": "#5a76ad",
-            "intensity": 0.25,
+            "intensity": 0.5,
             "direction": { "x": 2, "y": 12, "z": 15 }
           }
         }
