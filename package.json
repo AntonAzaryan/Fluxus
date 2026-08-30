@@ -29,6 +29,7 @@
     "journal": "node engine/core-ts/bin/journal.mjs",
     "demo": "npm run dev -w @fluxus/demo",
     "demo:lan": "npm run dev -w @fluxus/demo -- --host",
+    "demo:tunnel": "npm run dev:tunnel -w @fluxus/demo",
     "demo:serve": "node game/demo-ts/bin/demo-serve.mjs",
     "demo:debug": "node game/demo-ts/bin/demo-serve.mjs --debug",
     "agent": "node game/server-agent-ts/bin/agent.mjs",

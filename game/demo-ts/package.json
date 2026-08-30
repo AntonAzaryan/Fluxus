@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite --config app/vite.config.ts",
+    "dev:tunnel": "vite --config app/vite.config.ts --mode tunnel",
     "demo:build": "vite build --config app/vite.config.ts",
     "demo:build:desktop": "vite build --config app/vite.desktop.config.ts",
     "demo:serve": "node bin/demo-serve.mjs",
