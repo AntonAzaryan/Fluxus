@@ -429,6 +429,54 @@ class ScaledFunction implements FunctionValueGenerator {
   }
 }
 
+/**
+ * Система частиц глазами шага: один рантайм-метод, которого нет в типах
+ * библиотеки (см. `stepInstance`).
+ */
+interface SteppableSystem {
+  update(delta: number): void;
+}
+
+/**
+ * Полный тик систем экземпляра (REND-24) — единственная точка, где рендер зовёт
+ * шаг симуляции частиц библиотеки.
+ *
+ * Она существует потому, что персональный темп есть у СУЩНОСТИ, а не у сцены
+ * (REND-38): общий `BatchedRenderer.update(delta)` шагает все системы одним
+ * числом, и оболочке замедленного героя не досталось бы своего. Разложить его
+ * на «шаг каждой системы + проход по батчам» можно — это ровно то, что он
+ * внутри и делает, — но `ParticleSystem.update` в ТИПАХ библиотеки приватен
+ * (в рантайме это обычный метод, а `IParticleSystem` его не объявляет;
+ * `emit(delta, …)` не замена — это внутренний шаг эмиссии, а не тик системы).
+ *
+ * Обход инкапсулирован здесь и только здесь: структурный тип поверх рантайм-
+ * метода плюс проверка `typeof`. Смена API при обновлении библиотеки бьётся в
+ * этой точке — предупреждением один раз и остановкой частиц, а не молчаливой
+ * заморозкой картинки; юнит-тест шага (`particles.test.ts`) падает там же.
+ *
+ * Цикл здесь ИНДЕКСНЫЙ — по дисциплине аллокаций кадра (REND-26); почему
+ * именно так, сказано над самим циклом.
+ */
+export function stepInstance(instance: EffectInstance, delta: number, warn: WarnOnce): void {
+  const systems = instance.systems;
+  /* eslint-disable-next-line @typescript-eslint/prefer-for-of --
+   * Индексный цикл намеренно: шаг зовётся на КАЖДЫЙ эмиттер каждого кадра, а
+   * `for-of` идёт через протокол итератора — объект на вызов, то есть
+   * аллокация, растущая с числом инстансов (REND-26). Общий
+   * `BatchedRenderer.update`, который здесь заменён, не платил и этого. */
+  for (let i = 0; i < systems.length; i++) {
+    const system = systems[i]!.system as unknown as SteppableSystem;
+    if (typeof system.update !== 'function') {
+      warn(
+        'particle-step',
+        'render: у системы частиц библиотеки нет метода update(delta) — шаг эмиттеров невозможен, частицы не играют (REND-24)',
+      );
+      return;
+    }
+    system.update(delta);
+  }
+}
+
 /** Сколько частиц живо у экземпляра сейчас. */
 export function instanceParticles(instance: EffectInstance): number {
   let total = 0;

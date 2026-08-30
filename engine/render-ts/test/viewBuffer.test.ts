@@ -13,10 +13,15 @@ import { LOCOMOTION_NORMAL } from '@fluxus/core';
 import { type ExtractedTick } from '../src/index.js';
 import { FACING_MEMORY_LIMIT, ViewBuffer } from '../src/viewBuffer.js';
 
-/** Сущность доставки стенда: курс `NaN` — стоит, число — идёт этим курсом. */
+/**
+ * Сущность доставки стенда: курс `NaN` — стоит, число — идёт этим курсом.
+ * `pace` — персональная шкала времени (REND-38); не задана — обычный темп,
+ * ровно как у сущности без компонента `TimeScale` (TIME-3).
+ */
 interface Delivered {
   readonly id: number;
   readonly facing: number;
+  readonly pace?: number;
 }
 
 /**
@@ -47,6 +52,7 @@ function extOf(
     motion: new Uint8Array(count).fill(LOCOMOTION_NORMAL),
     motionPhase: new Float32Array(count).fill(Number.NaN),
     flightPhase: new Float32Array(count).fill(Number.NaN),
+    timeScale: Float32Array.from(entities, (entity) => entity.pace ?? 1),
     statNames: [],
     statCount: new Uint8Array(count),
     statIndex: new Int32Array(0),
@@ -134,5 +140,40 @@ describe('ViewBuffer: курс переживает исчезновение с�
     buffer.apply(extOf(1, [{ id: 5, facing: Number.NaN }], true));
     expect(buffer.view.entities.get(5)?.facingYaw).toBe(0);
     expect(buffer.facingMemorySize).toBe(0);
+  });
+});
+
+/**
+ * Персональная шкала времени в записи (REND-38): величина ПОСЛЕДНЕГО
+ * доставленного тика, без пары для интерполяции. Пары нет намеренно —
+ * плавность спада даёт tween ауры в самой симуляции, а conflation (SHELL-4)
+ * пропущенному тику и так не даёт быть показанным.
+ */
+describe('ViewBuffer: персональная шкала времени сущности (REND-38)', () => {
+  const paceOf = (buffer: ViewBuffer, id: number): number | undefined =>
+    buffer.view.entities.get(id)?.timeScale;
+
+  it('шкала доезжает до записи, а сущность без неё идёт единицей, не нулём', () => {
+    const buffer = new ViewBuffer({ tickSeconds: 1 / 60, clock: () => 0 });
+    buffer.apply(extOf(1, [{ id: 5, facing: 0, pace: 0.2 }, { id: 6, facing: 0 }]));
+    expect(paceOf(buffer, 5)).toBeCloseTo(0.2, 6);
+    // РОВНО единица: умолчание `getEffectiveDelta` (TIME-3), а не ноль.
+    expect(paceOf(buffer, 6)).toBe(1);
+  });
+
+  it('появившаяся сущность берёт шкалу своего первого тика, а не умолчание записи', () => {
+    const buffer = new ViewBuffer({ tickSeconds: 1 / 60, clock: () => 0 });
+    buffer.apply(extOf(1, [{ id: 7, facing: 0, pace: 0.5 }]));
+    expect(paceOf(buffer, 7)).toBeCloseTo(0.5, 6);
+  });
+
+  it('следующий тик перебивает прежнюю величину: она не залипает', () => {
+    const buffer = new ViewBuffer({ tickSeconds: 1 / 60, clock: () => 0 });
+    buffer.apply(extOf(1, [{ id: 5, facing: 0, pace: 0.2 }]));
+    buffer.apply(extOf(2, [{ id: 5, facing: 0, pace: 0.6 }]));
+    expect(paceOf(buffer, 5)).toBeCloseTo(0.6, 6);
+    // Аура отпустила — темп вернулся к обычному тем же путём.
+    buffer.apply(extOf(3, [{ id: 5, facing: 0 }]));
+    expect(paceOf(buffer, 5)).toBe(1);
   });
 });

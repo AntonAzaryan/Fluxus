@@ -531,3 +531,119 @@ describe('VatAnimationBackend: кадр-фиксатор батчевого яр
     });
   });
 });
+
+/**
+ * Персональная шкала времени сущности (REND-38): часы презентации, которыми
+ * идут ФАЗЫ клипов, умножаются на её `TimeScale.value` (`time-system` TIME-2).
+ * Носителей два, машина одна (REND-20) — и проверяются оба: замедленный герой
+ * обязан перебирать анимацией во столько же раз медленнее, во сколько
+ * замедлено его движение, на любом ярусе.
+ *
+ * И ровно одно из-под шкалы выведено: кроссфейд. Он принадлежит картинке, а не
+ * миру (тот же довод, по которому REND-25 дренирует его по модулю часов), и
+ * замедленная сущность обязана доиграть переход за штатную длительность, а не
+ * впятеро дольше.
+ */
+describe('Персональная шкала времени: фазы клипов обоих ярусов (REND-38, REND-20)', () => {
+  /** Запечённый клип длительностью ровно секунда — как `Stand - 1` детального яруса. */
+  const BAKED_SECOND = [{ name: 'Stand', offset: 0, length: 10, duration: 1, loop: true }];
+  /** Фаза батчевого носителя в секундах: пара строк и вес между ними при 10 fps. */
+  const vatPhase = (backend: VatAnimationBackend): number =>
+    (backend.rowA + backend.blend) / 10;
+
+  it('фаза идёт темпом сущности: pace 0.5 — вдвое медленнее, у обоих носителей', () => {
+    const { backend, bone } = makeBackend();
+    backend.playLoop(0, 0); // 'Stand - 1', 1 с, без кроссфейда
+    backend.update(0.4, 0.5);
+    // Трек фикстуры ведёт `b0.position.z` от нуля к единице ровно за
+    // длительность клипа, поэтому z и есть фаза в секундах.
+    expect(bone.position.z).toBeCloseTo(0.2, 5);
+
+    const vat = new VatAnimationBackend(BAKED_SECOND, 10, 99);
+    vat.playLoop(0, 0);
+    vat.update(0.4, 0.5);
+    expect(vatPhase(vat)).toBeCloseTo(0.2, 5);
+  });
+
+  it('умолчание — единица: потребитель, не знающий о шкале, ничего не замечает', () => {
+    const { backend, bone } = makeBackend();
+    backend.playLoop(0, 0);
+    backend.update(0.3);
+    expect(bone.position.z).toBeCloseTo(0.3, 5);
+
+    const vat = new VatAnimationBackend(BAKED_SECOND, 10, 99);
+    vat.playLoop(0, 0);
+    vat.update(0.3);
+    expect(vatPhase(vat)).toBeCloseTo(0.3, 5);
+  });
+
+  it('шкала не несёт знака: направление задаёт только режим мира (REND-25)', () => {
+    const { backend, bone } = makeBackend();
+    backend.playLoop(0, 0);
+    backend.update(0.5, 0.4); // фаза 0.2
+    backend.update(-0.25, 0.4); // назад на 0.1 — персональным темпом
+    expect(bone.position.z).toBeCloseTo(0.1, 5);
+
+    const vat = new VatAnimationBackend(BAKED_SECOND, 10, 99);
+    vat.playLoop(0, 0);
+    vat.update(0.5, 0.4);
+    vat.update(-0.25, 0.4);
+    expect(vatPhase(vat)).toBeCloseTo(0.1, 5);
+  });
+
+  it('кроссфейд шкале не подчиняется: переход длится штатные 0.15 с при pace 0.2', () => {
+    const { backend, bone } = makeBackend();
+    backend.playLoop(0, 0.15); // 'Stand - 1'
+    backend.update(0.5, 0.2); // фаза 0.1
+    expect(bone.position.z).toBeCloseTo(0.1, 5);
+
+    // Смена клипа заводит переход; часы кадра идут обычным темпом, шкала
+    // сущности — 0.2. Двенадцать кадров по 1/60 — это 0.2 с, то есть больше
+    // 0.15 с перехода: он обязан ЗАВЕРШИТЬСЯ.
+    backend.playLoop(1, 0.15); // 'Walk Fast' с фазы 0
+    for (let i = 0; i < 12; i++) backend.update(1 / 60, 0.2);
+    // Позу целиком ведёт входящий клип, прошедший 0.2 с × 0.2 = 0.04 своей
+    // фазы. Дренируйся конверт персональным темпом — переход тянулся бы 0.75 с,
+    // и в кадре осталась бы смесь с уходящим клипом (z около 0.1).
+    expect(bone.position.z).toBeCloseTo(0.04, 3);
+
+    // Батчевый носитель: тот же переход дренируется по модулю часов и без
+    // множителя — за 0.2 с он кончается, и пара строк принадлежит новому клипу.
+    const vat = new VatAnimationBackend(
+      [
+        { name: 'Walk', offset: 0, length: 4, duration: 0.4, loop: true },
+        { name: 'Run', offset: 4, length: 4, duration: 0.4, loop: true },
+      ],
+      10,
+      99,
+    );
+    vat.playLoop(0, 0);
+    vat.update(0.2, 0.2);
+    vat.playLoop(1, 0.15);
+    for (let i = 0; i < 12; i++) vat.update(1 / 60, 0.2);
+    expect(vat.rowA).toBeGreaterThanOrEqual(4);
+  });
+
+  it('развязки one-shot целы: шкала меняет скорость подхода к границе, а не границу', () => {
+    // Вперёд: 'Attack - 1' длится 0.5 с, при pace 0.5 — секунду кадрового
+    // времени. Раньше срока машина в локомоцию не возвращается.
+    const { controller } = makeController();
+    controller.setState('move');
+    controller.handleEvent('CastFireball');
+    for (let i = 0; i < 30; i++) controller.update(1 / 60, 0.5); // 0.5 с кадров = 0.25 с клипа
+    expect(controller.currentClipName).toBe('Attack - 1');
+    for (let i = 0; i < 32; i++) controller.update(1 / 60, 0.5); // ещё 0.53 с — граница пройдена
+    expect(controller.currentClipName).toBe('Walk Fast');
+
+    // Назад: замедленный one-shot отступает к своему НАЧАЛУ тем же темпом и
+    // уступает клипу состояния там же, где уступил бы в полном (REND-25).
+    const back = makeController();
+    back.controller.setState('move');
+    back.controller.handleEvent('CastFireball');
+    back.controller.update(0.4, 0.5); // фаза 0.2
+    back.controller.update(-0.2, 0.5); // −0.1 — ещё внутри клипа
+    expect(back.controller.currentClipName).toBe('Attack - 1');
+    back.controller.update(-0.4, 0.5); // −0.2 — за начало, возврат в локомоцию
+    expect(back.controller.currentClipName).toBe('Walk Fast');
+  });
+});

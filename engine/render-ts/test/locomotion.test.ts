@@ -348,6 +348,7 @@ describe('ViewBuffer: скольжение фазы манёвра (REND-2)', ()
     motion: new Uint8Array([motion]),
     motionPhase: new Float32Array([phase]),
     flightPhase: new Float32Array([Number.NaN]),
+    timeScale: new Float32Array([1]),
     statNames: [],
     statCount: new Uint8Array([0]),
     statIndex: new Int32Array(0),

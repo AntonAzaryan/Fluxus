@@ -1514,8 +1514,12 @@ export class ModelsSubsystem implements RenderSubsystem, InstanceProxySource {
     orientFromTiltYaw(record.tilt, record.yaw, record.quat);
 
     // Анимационное время — единственное, что берёт ЗНАК: клип идёт вперёд,
-    // стоит либо отматывается вместе с миром (REND-25).
-    record.controller?.update(dt);
+    // стоит либо отматывается вместе с миром (REND-25). И единственное, что
+    // берёт ПЕРСОНАЛЬНУЮ шкалу сущности (REND-38): замедленная симуляцией
+    // сущность обязана и перебирать анимацией во столько же раз медленнее.
+    // Сглаживания выше (доворот, наклон, tier-fade) идут на `settle` — они
+    // принадлежат картинке, а не миру, и шкале не подчиняются.
+    record.controller?.update(dt, view.timeScale);
     this.applyPose(record, settle);
   }
 

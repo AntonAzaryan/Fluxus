@@ -60,6 +60,7 @@ function syntheticTick(overrides: Partial<ExtractedTick> = {}): ExtractedTick {
     motion: zeros((n) => new Uint8Array(n)),
     motionPhase: zeros((n) => new Float32Array(n)),
     flightPhase: zeros((n) => new Float32Array(n)),
+    timeScale: zeros((n) => new Float32Array(n).fill(1)),
     statNames: [],
     statCount: zeros((n) => new Uint8Array(n)),
     statIndex: new Int32Array(0),
@@ -148,6 +149,21 @@ describe('кодек: roundtrip эквивалентен прямому вызо
     expect(wire.flightPhase[0]).toBeNaN();
     expect(wire.flightPhase[1]).toBeCloseTo(0.5, 6);
     expect(wire.flightPhase[2]).toBeCloseTo(1, 6);
+  });
+
+  it('персональная шкала времени переезжает колонкой (REND-38)', () => {
+    // Три значения, которые обязаны различаться на той стороне: пол замедления
+    // поля босса, обычный темп сущности без компонента и потолок шкалы (TIME-7).
+    // Ноль в этой колонке — не «нет данных», а настоящая заморозка, и подмена
+    // им единицы была бы ровно тем дефектом, от которого бережёт REND-38.
+    const ext = syntheticTick({
+      count: 3,
+      timeScale: new Float32Array([0.2, 1, 4]),
+    });
+    const wire = readTick(frameOf(ext), [], []);
+    expect(wire.timeScale[0]).toBeCloseTo(0.2, 6);
+    expect(wire.timeScale[1]).toBe(1);
+    expect(wire.timeScale[2]).toBe(4);
   });
 
   it('чужая версия раскладки — ошибка, а не мусор в кадре', () => {

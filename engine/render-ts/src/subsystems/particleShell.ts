@@ -15,7 +15,8 @@
  */
 import * as THREE from 'three';
 import type { EntityId } from '@fluxus/core';
-import type { EffectInstance } from '../particleEffects.js';
+import type { RenderCostCounters } from '../cost.js';
+import { stepInstance, type EffectInstance } from '../particleEffects.js';
 import { resolveSocketNode, type SocketSource } from '../particleSockets.js';
 import type { EntityView } from '../types.js';
 import type { VisualSurface } from '../visualSurface.js';
@@ -103,4 +104,33 @@ export function poseEmitterShell(
   // общее правило оболочек, что у эффектов (`shellSupport.ts`).
   poseShell(shell.view, alpha, heightStep, surface, pose);
   object.position.set(pose.x, pose.y, pose.base);
+}
+
+/**
+ * Шаг симуляции оболочек в кадре (REND-24, REND-38).
+ *
+ * Часы у оболочек РАЗНЫЕ, и решает это сама оболочка: за оболочкой сущности
+ * стоит доставленное состояние, и её эмиттеры идут кадровыми часами,
+ * умноженными на персональную шкалу времени сущности (`EntityView.timeScale`,
+ * `time-system` TIME-2) — замедленный герой обязан и дымить замедленно.
+ * Decoration размещена СЦЕНОЙ (REND-18), сущности симуляции за ней нет, шкалы у
+ * неё не бывает, и факел внутри зоны замедления играет обычным темпом.
+ *
+ * Значение берётся как есть: оно приходит сведённым и клампленным
+ * (`TimeScaleSystem`, TIME-7), и переклампливать его рендеру нечем и незачем.
+ *
+ * Здесь же снимается счёт шагнутых систем (PERF-3): раньше он снимался в позе —
+ * шага как отдельной работы просто не было, — а теперь считается там, где
+ * работа и делается. Число то же: те же оболочки, тот же кадр.
+ */
+export function stepShells(
+  shells: Iterable<Shell>,
+  delta: number,
+  warnOnce: WarnOnce,
+  cost: RenderCostCounters | undefined,
+): void {
+  for (const shell of shells) {
+    if (cost !== undefined) cost.particlesSystemsStepped += shell.instance.systems.length;
+    stepInstance(shell.instance, shell.decoration ? delta : delta * shell.view.timeScale, warnOnce);
+  }
 }

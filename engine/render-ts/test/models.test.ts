@@ -900,3 +900,92 @@ describe('состояние смерти из доставки (REND-4, FOW-8)'
     expect(warnings.filter((message) => message.includes('состояние смерти'))).toHaveLength(1);
   });
 });
+
+/**
+ * Персональная шкала времени сущности (REND-38): подсистема отдаёт её
+ * контроллеру вторым аргументом кадра, и замедленная симуляцией сущность
+ * перебирает анимацией во столько же раз медленнее. Что делает со шкалой сам
+ * носитель воспроизведения, проверяет `animation.test.ts`; здесь — что кадр
+ * подсистемы её ДОНОСИТ, а сглаживания картинки ею не трогает.
+ */
+describe('персональная шкала времени сущности (REND-38)', () => {
+  /** Событие каста обеим сущностям сразу — one-shot 'Attack - 1' на 0.5 с. */
+  function castOn(
+    subsystem: ModelsSubsystem,
+    views: readonly ReturnType<typeof makeEntityView>[],
+    entity: number,
+  ): void {
+    subsystem.syncTick(
+      makeTickView([...views], { freshEvents: true, events: [{ type: 'CastFireball', data: { entity } }] }),
+    );
+  }
+
+  it('замедленная сущность доигрывает one-shot во столько же раз позже', () => {
+    const { subsystem, assets } = makeRig();
+    const full = makeEntityView(1, { moving: true });
+    const slow = makeEntityView(2, { moving: true, timeScale: 0.2 });
+    subsystem.syncTick(makeTickView([full, slow]));
+    assets.resolve('model', MODEL_ID, makeModel());
+    castOn(subsystem, [full, slow], 1);
+    castOn(subsystem, [full, slow], 2);
+    const fullClip = (): string | null => subsystem.instanceFor(1)!.controller!.currentClipName;
+    const slowClip = (): string | null => subsystem.instanceFor(2)!.controller!.currentClipName;
+    expect(fullClip()).toBe('Attack - 1');
+    expect(slowClip()).toBe('Attack - 1');
+
+    // 0.6 с кадрового времени: обычной сущности хватило на весь клип (0.5 с),
+    // замедленной — только на 0.12 с его фазы.
+    for (let i = 0; i < 36; i++) subsystem.updateFrame(1 / 60, 1);
+    expect(fullClip()).toBe('Walk Fast');
+    expect(slowClip()).toBe('Attack - 1');
+
+    // Свои 2.5 с кадрового времени она отыгрывает — и возвращается тем же путём.
+    for (let i = 0; i < 120; i++) subsystem.updateFrame(1 / 60, 1);
+    expect(slowClip()).toBe('Walk Fast');
+  });
+
+  it('обратный ход масштабируется вместе с прямым (REND-25 + REND-38)', () => {
+    const { subsystem, assets } = makeRig();
+    const slow = makeEntityView(1, { moving: true, timeScale: 0.2 });
+    subsystem.syncTick(makeTickView([slow]));
+    assets.resolve('model', MODEL_ID, makeModel());
+    castOn(subsystem, [slow], 1);
+    const clip = (): string | null => subsystem.instanceFor(1)!.controller!.currentClipName;
+
+    // Полсекунды вперёд — это 0.1 с фазы замедленного клипа.
+    for (let i = 0; i < 30; i++) subsystem.updateFrame(1 / 60, 1);
+    expect(clip()).toBe('Attack - 1');
+
+    // Полсекунды назад: фаза отматывается тем же персональным темпом и
+    // возвращается ровно к началу клипа — one-shot уступает клипу состояния.
+    for (let i = 0; i < 30; i++) subsystem.updateFrame(-1 / 60, 1);
+    expect(clip()).toBe('Walk Fast');
+  });
+
+  it('доворот шкале не подчиняется: сглаживание картинки идёт своим темпом', () => {
+    const { subsystem, assets } = makeRig();
+    const full = makeEntityView(1, { moving: true });
+    const slow = makeEntityView(2, { moving: true, timeScale: 0.2 });
+    subsystem.syncTick(makeTickView([full, slow]));
+    assets.resolve('model', MODEL_ID, makeModel());
+    // Первый кадр ставит курс мгновенно (snapPending): доворот меряется со
+    // второй доставки, когда цель уже сменилась.
+    subsystem.updateFrame(1 / 60, 1);
+    subsystem.syncTick(
+      makeTickView([
+        makeEntityView(1, { moving: true, facingYaw: Math.PI / 2 }),
+        makeEntityView(2, { moving: true, facingYaw: Math.PI / 2, timeScale: 0.2 }),
+      ]),
+    );
+
+    for (let i = 0; i < 10; i++) subsystem.updateFrame(1 / 60, 1);
+    const fullYaw = subsystem.instanceFor(1)!.pose.yaw;
+    const slowYaw = subsystem.instanceFor(2)!.pose.yaw;
+    // Курс — не часы мира, а сходящаяся к цели величина кадра: у замедленной
+    // сущности он идёт ровно тем же темпом, что у обычной, и цели ещё не достиг
+    // (иначе сравнивались бы две единицы).
+    expect(slowYaw).toBeCloseTo(fullYaw, 10);
+    expect(fullYaw).toBeGreaterThan(0);
+    expect(fullYaw).toBeLessThan(Math.PI / 2);
+  });
+});

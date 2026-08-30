@@ -138,6 +138,9 @@ export class KeyedInstanceSet<TInstance extends KeyedInstance> {
       prevMotionPhase: Number.NaN,
       currMotionPhase: Number.NaN,
       flightPhase: Number.NaN,
+      // Размещённый объект — не сущность симуляции, и персональной шкалы
+      // времени у него нет: он идёт общими часами презентации (REND-38).
+      timeScale: 1,
       levelOverride: false,
       facingYaw: 0,
       aimYaw: null,

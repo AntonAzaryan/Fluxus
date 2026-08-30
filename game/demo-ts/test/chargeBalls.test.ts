@@ -119,6 +119,7 @@ function entityView(id: EntityId, partial: Partial<EntityView> = {}): EntityView
     prevMotionPhase: Number.NaN,
     currMotionPhase: Number.NaN,
     flightPhase: Number.NaN,
+    timeScale: 1,
     ...partial,
   };
 }

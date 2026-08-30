@@ -116,13 +116,18 @@ describe('Кодек: статы разреженно, имена — в handsha
     const ext = extractorWith(rig, [SLOT_STAT, HP_STAT]).extract(tick(rig.sim, rig.state));
     // Источник есть только у одного стата — пара одна, а не две.
     expect(ext.statPairs).toBe(1);
-    const grown = requiredBytes(ext.count, 0, ext.statPairs) - requiredBytes(ext.count, 0);
-    // Пара — 8 байт значения плюс 4 байта индекса; полный размер кадра выровнен
-    // по 8 (секция f64 идёт сразу за заголовком), поэтому 12 байт полезной
-    // нагрузки дают 16 байт кадра. Растёт он на ПАРЫ, а не на число статов в
+    const bytesFor = (pairs: number): number => requiredBytes(ext.count, 0, pairs);
+    // Пара — 8 байт значения плюс 4 байта индекса, то есть 12 байт полезной
+    // нагрузки; полный размер кадра выровнен по 8 (секция f64 идёт сразу за
+    // заголовком), поэтому ОДНА пара стоит 8 либо 16 байт кадра — смотря куда
+    // пришёлся хвост при этом составе колонок, — а две складываются в ровные
+    // 24 при любом. Проверяется правило, а не то, чётное ли число f32-колонок
+    // сегодня в раскладке. Растёт кадр на ПАРЫ, а не на число статов в
     // конфигурации: незаехавший `hp` в кадре не занимает ничего.
-    expect(grown).toBe(16);
-    expect(requiredBytes(ext.count, 0, 2) - requiredBytes(ext.count, 0, 1)).toBe(8);
+    const grown = bytesFor(ext.statPairs) - bytesFor(0);
+    expect(grown === 8 || grown === 16).toBe(true);
+    expect(bytesFor(2) - bytesFor(0)).toBe(24);
+    expect(bytesFor(4) - bytesFor(2)).toBe(24);
   });
 
   it('имена статов через границу не едут — кадр несёт индексы', () => {

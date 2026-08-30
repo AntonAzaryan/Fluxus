@@ -32,6 +32,12 @@
  * (её вход — `TickView`, как у всех) и в picking не участвует (REND-15):
  * попасть лучом в частицу нельзя по построению.
  *
+ * Часы у эмиттеров при этом РАЗНЫЕ (REND-38): оболочка сущности идёт часами
+ * кадра, умноженными на её персональную шкалу времени (`EntityView.timeScale`,
+ * `time-system` TIME-2) — замедленный герой и дымит замедленно, — а decoration
+ * и выстрелы по событию идут общими часами. Отсюда по-эмиттерный шаг вместо
+ * общего `BatchedRenderer.update` (см. `updateFrame`).
+ *
  * Разрыв непрерывности (REND-2) гасит выстрелы и живые частицы ОБОЛОЧЕК
  * ПРЕЗЕНТАЦИОННОГО СОСТОЯНИЯ; оболочки восстанавливаются из доставленного
  * состояния сами — собственного игрового состояния у эмиттера нет. Набора
@@ -87,6 +93,7 @@ import {
   instanceParticles,
   restartInstance,
   setInstanceDensity,
+  stepInstance,
   type EffectInstance,
 } from '../particleEffects.js';
 import { dropSocketCache, type SocketSource } from '../particleSockets.js';
@@ -96,6 +103,7 @@ import {
   poseEmitterShell,
   publicShell,
   shellKey,
+  stepShells,
   type EmitterRecord,
   type Shell,
 } from './particleShell.js';
@@ -301,7 +309,20 @@ export class ParticlesSubsystem implements RenderSubsystem {
     // Симуляция частиц необратима — обратный ход часов презентации (REND-25)
     // её ЗАМОРАЖИВАЕТ: отмотать эмиссию назад библиотеке нечем, а идти вперёд
     // в стоящем мире значило бы показывать движение, которого в нём нет.
-    this.batchRenderer.update(dt > 0 ? dt : 0);
+    const step = Math.max(dt, 0);
+    // Шаг ПО-ЭМИТТЕРНО, а не общим `BatchedRenderer.update(dt)`: темп есть
+    // свойство сущности (REND-38), и одним числом на сцену его не выразить.
+    // Чьи часы у какой оболочки, решает она сама (`stepShells`).
+    stepShells(this.shells.values(), step, this.warnOnce, cost);
+    stepShells(this.decorationShells.values(), step, this.warnOnce, cost);
+    // Выстрел по событию (REND-24 byEvent) — образ момента мира, собственный
+    // переход картинки: он идёт общими часами, тем более что сущность-источник
+    // вправе не пережить тик своего события (REND-38).
+    for (const shot of this.shots) stepInstance(shot, step, this.warnOnce);
+    // И один проход по батчам — ровно то, чем `BatchedRenderer.update`
+    // заканчивает свой цикл: батчирование от по-эмиттерного темпа не меняется
+    // (REND-24), число батчей по-прежнему растёт с числом конвейеров.
+    for (const batch of this.batchRenderer.batches) batch.update();
     this.collectShots(cost);
     this.shieldBatches();
   }
@@ -549,22 +570,17 @@ export class ParticlesSubsystem implements RenderSubsystem {
     const heightStep = this.ctx?.config.heightStep ?? 1;
     const surface = this.options.surface?.current ?? null;
     // Оболочки обоих наборов — по одной позе на оболочку в кадре (REND-18);
-    // счёт снимается разом с размеров наборов. Систем частиц, которые библиотека
-    // шагает следом, у каждой оболочки СВОЁ число — оно и складывается в цикле:
-    // это НАШИ объекты документа эффекта, а не состояние three.quarks (design D3).
+    // счёт снимается разом с размеров наборов. Систем частиц, которые шагаются
+    // следом, у каждой оболочки СВОЁ число — его складывает сам шаг
+    // (`stepShells`), там же, где эта работа и делается.
     if (cost !== undefined) {
       cost.particlesShellsPosed += this.shells.size + this.decorationShells.size;
     }
     // Сама поза — общей механикой оболочки (`poseEmitterShell`): `warnOnce`
     // уходит готовой функцией, а не обёрткой — без замыкания на оболочку на кадр.
-    for (const shell of this.shells.values()) {
-      if (cost !== undefined) cost.particlesSystemsStepped += shell.instance.systems.length;
-      poseEmitterShell(shell, alpha, heightStep, surface, this.options.sockets, this.warnOnce, this.pose);
-    }
-    for (const shell of this.decorationShells.values()) {
-      if (cost !== undefined) cost.particlesSystemsStepped += shell.instance.systems.length;
-      poseEmitterShell(shell, alpha, heightStep, surface, this.options.sockets, this.warnOnce, this.pose);
-    }
+    const sockets = this.options.sockets;
+    for (const shell of this.shells.values()) poseEmitterShell(shell, alpha, heightStep, surface, sockets, this.warnOnce, this.pose);
+    for (const shell of this.decorationShells.values()) poseEmitterShell(shell, alpha, heightStep, surface, sockets, this.warnOnce, this.pose);
   }
 
   /**

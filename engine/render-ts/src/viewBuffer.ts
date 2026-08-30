@@ -93,6 +93,8 @@ interface EntityRecord extends EntityView {
   currMotionPhase: number;
   /** Фаза полёта последнего доставленного тика; `NaN` — сущность не летит (REND-12). */
   flightPhase: number;
+  /** Персональная шкала времени последнего доставленного тика; 1 — обычный темп (REND-38). */
+  timeScale: number;
   /**
    * Статы сущности (HUD-8). Словарь заводится ЛЕНИВО — у сущности без статов
    * его нет вовсе — и переиспользуется между доставками: запись живёт всё время
@@ -393,6 +395,10 @@ export class ViewBuffer {
       prevMotionPhase: phase,
       currMotionPhase: phase,
       flightPhase: Number.NaN,
+      // Обычный темп до первого чтения колонки (REND-38): затравка записи —
+      // единица, а не ноль, иначе появившаяся сущность на один вызов замерла
+      // бы. Настоящую величину тика ставит `applyTickFields` тут же следом.
+      timeScale: 1,
     };
   }
 
@@ -465,6 +471,10 @@ export class ViewBuffer {
     // интерполяции (REND-12): дуга производна от неё, и conflation (SHELL-4)
     // ей не вредит — пропущенный тик просто не был показан.
     record.flightPhase = ext.flightPhase[i]!;
+    // Персональная шкала — тоже величина последнего доставленного тика
+    // (REND-38): интерполировать её незачем — плавность спада даёт tween ауры
+    // в самой симуляции, и conflation (SHELL-4) ей не вредит.
+    record.timeScale = ext.timeScale[i]!;
     const next = this.applyStats(ext, record, i, statAt);
     const flags = ext.flags[i]!;
     record.moving = (flags & ENTITY_MOVING) !== 0;

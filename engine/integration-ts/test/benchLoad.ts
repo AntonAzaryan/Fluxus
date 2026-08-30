@@ -801,6 +801,8 @@ export function syntheticTick(load: SyntheticLoad): ExtractedTick {
     motion: new Uint8Array(count),
     motionPhase: new Float32Array(count),
     flightPhase: new Float32Array(count),
+    // Обычный темп у всей нагрузки: персональной шкалы стенд не заводит (REND-38).
+    timeScale: new Float32Array(count).fill(1),
     statNames: [FOG_STATS.team, FOG_STATS.visionRadius],
     statCount: new Uint8Array(count),
     statIndex: new Int32Array(count * 2),

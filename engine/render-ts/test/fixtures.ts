@@ -208,6 +208,9 @@ export function makeEntityView(id: EntityId, partial: Partial<EntityView> = {}):
     prevMotionPhase: Number.NaN,
     currMotionPhase: Number.NaN,
     flightPhase: Number.NaN,
+    // Обычный темп: персональной шкалы у сущности стенда нет, пока тест её не
+    // назовёт (REND-38, TIME-3).
+    timeScale: 1,
     ...partial,
   };
   return partial.prevMotion === undefined ? { ...view, prevMotion: view.motion } : view;

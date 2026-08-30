@@ -439,6 +439,7 @@ describe('EntityView.states: зеркалирование битов состо�
       motion: new Uint8Array([0]),
       motionPhase: new Float32Array([Number.NaN]),
       flightPhase: new Float32Array([Number.NaN]),
+      timeScale: new Float32Array([1]),
       statNames: [],
       statCount: new Uint8Array([0]),
       statIndex: new Int32Array(0),

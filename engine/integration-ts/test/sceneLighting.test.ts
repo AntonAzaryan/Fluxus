@@ -233,6 +233,7 @@ function view(id: EntityId, kind: string, x: number): EntityView {
     prevMotionPhase: Number.NaN,
     currMotionPhase: Number.NaN,
     flightPhase: Number.NaN,
+    timeScale: 1,
     levelOverride: false,
     facingYaw: 0,
     aimYaw: null,

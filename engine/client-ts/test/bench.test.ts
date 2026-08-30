@@ -37,6 +37,7 @@ function syntheticTick(count: number): ExtractedTick {
     motion: new Uint8Array(count),
     motionPhase: new Float32Array(count),
     flightPhase: new Float32Array(count),
+    timeScale: new Float32Array(count).fill(1),
     statNames: [],
     statCount: new Uint8Array(count),
     statIndex: new Int32Array(0),

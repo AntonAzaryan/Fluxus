@@ -16,7 +16,7 @@ import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import * as THREE from 'three';
-import { ParticleEmitter } from 'three.quarks';
+import { BatchedRenderer, ParticleEmitter } from 'three.quarks';
 import type { ParticleEffectDocument, VisualManifest } from '@fluxus/assets';
 import {
   ModelsSubsystem,
@@ -26,6 +26,11 @@ import {
   type RenderContext,
   type SocketSource,
 } from '../src/index.js';
+import {
+  ParticleEffectPool,
+  instanceParticles,
+  stepInstance,
+} from '../src/particleEffects.js';
 import { makeAssets, makeEntityView, makeTickView } from './fixtures.js';
 
 function fixture(name: string): ParticleEffectDocument {
@@ -223,6 +228,15 @@ describe('ParticlesSubsystem: выстрел по событию (REND-24, HUD-5
     subsystem.syncTick(explosion({ x: 65536 * 4, y: 65536 * 5 }));
     expect(subsystem.activeCount).toBe(1);
 
+    // Два кадра, а не один: первый шаг свежей системы копит эмиссию
+    // (`waitEmiting` библиотеки), спавн идёт следующим. Раньше хватало одного —
+    // общий `BatchedRenderer.update` шагал только что зарегистрированную
+    // систему ДВАЖДЫ за кадр: обновляя её батч, он переставлял её запись в
+    // конец `Map` прямо во время обхода. Это была случайность реализации
+    // библиотеки, а не правило; по-эмиттерный шаг (REND-38) идёт ровно один раз
+    // за кадр, и предмет проверки — «выстрел играет и возвращается в пул» —
+    // от этого не меняется.
+    subsystem.updateFrame(0.1, 1);
     subsystem.updateFrame(0.1, 1);
     expect(subsystem.activeCount).toBe(1);
     expect(subsystem.particleCount).toBeGreaterThan(0);
@@ -673,5 +687,156 @@ describe('Частицы и picking (REND-15, REND-24)', () => {
     const visited: number[] = [];
     models.eachProxy((p) => visited.push(p.entity));
     expect(visited).toEqual([1]);
+  });
+});
+
+/**
+ * Персональная шкала времени сущности (REND-38): шаг симуляции эмиттеров идёт
+ * ПО-ЭМИТТЕРНО, и оболочке замедленной сущности достаются её собственные часы.
+ * Наблюдаемое — эмиссия: за то же кадровое время замедленный эмиттер выбросил
+ * во столько же раз меньше частиц, во сколько замедлена сама сущность.
+ *
+ * Из-под шкалы выведены обе картинные группы: decoration размещён СЦЕНОЙ и
+ * сущности за ним нет (сценарий «Факел рядом с полем замедления»), а выстрел по
+ * событию — образ момента мира, чья сущность-источник вправе не пережить свой
+ * тик. Обе идут общими часами кадра.
+ */
+describe('ParticlesSubsystem: персональная шкала времени сущности (REND-38)', () => {
+  /** Сколько частиц живо у эмиттера — сумма по всем его системам. */
+  function particlesOf(object: THREE.Object3D): number {
+    let total = 0;
+    object.traverse((child) => {
+      if (child instanceof ParticleEmitter) total += child.system.particleNum;
+    });
+    return total;
+  }
+
+  /** Полсекунды кадрами по 1/60 — эмиссия факела за это время ещё не умирает. */
+  function halfSecond(subsystem: ParticlesSubsystem): void {
+    for (let i = 0; i < 30; i++) subsystem.updateFrame(1 / 60, 1);
+  }
+
+  it('оболочка замедленной сущности эмитирует в её темпе, а не в темпе кадра', () => {
+    const { subsystem } = makeRig();
+    subsystem.syncTick(
+      makeTickView([
+        makeEntityView(1, { kind: 'Fireball' }),
+        makeEntityView(2, { kind: 'Fireball', timeScale: 0.2 }),
+      ]),
+    );
+    halfSecond(subsystem);
+
+    const full = particlesOf(subsystem.emitterFor(1)!.object);
+    const slow = particlesOf(subsystem.emitterFor(2)!.object);
+    expect(full).toBeGreaterThan(0);
+    expect(slow).toBeGreaterThan(0);
+    // Пятая часть — с точностью до кадра округления эмиссии библиотекой.
+    expect(slow / full).toBeGreaterThan(0.1);
+    expect(slow / full).toBeLessThan(0.3);
+  });
+
+  it('decoration идёт общими часами: факел в зоне замедления не замедляется', () => {
+    const { subsystem } = makeRig();
+    // Один и тот же эффект (`TORCH`) у декорации и у замедленной сущности:
+    // разница в эмиссии тогда — только темп, а не документ.
+    subsystem.syncDecorations(
+      new Map([[9, makeEntityView(9, { kind: 'Torch', prevX: 5, currX: 5 })]]),
+    );
+    subsystem.syncTick(
+      makeTickView([
+        makeEntityView(1, { kind: 'Fireball' }),
+        makeEntityView(2, { kind: 'Fireball', timeScale: 0.2 }),
+      ]),
+    );
+    halfSecond(subsystem);
+
+    const deco = particlesOf(subsystem.decorationEmitterFor(9)!.object);
+    const full = particlesOf(subsystem.emitterFor(1)!.object);
+    const slow = particlesOf(subsystem.emitterFor(2)!.object);
+    expect(deco).toBe(full);
+    expect(deco).toBeGreaterThan(slow);
+  });
+
+  it('выстрел по событию идёт общими часами, кто бы ни был замедлен рядом', () => {
+    const shotParticles = (slowed: boolean): number => {
+      const { subsystem } = makeRig();
+      const entities = slowed
+        ? [makeEntityView(1, { kind: 'Fireball', timeScale: 0.2 })]
+        : [makeEntityView(1, { kind: 'Fireball' })];
+      subsystem.syncTick(
+        makeTickView(entities, {
+          freshEvents: true,
+          events: [{ type: 'FireballExploded', data: { x: 0, y: 0 } }],
+        }),
+      );
+      for (let i = 0; i < 6; i++) subsystem.updateFrame(1 / 60, 1);
+      // Живые частицы всей подсистемы минус частицы оболочки: остаток — выстрел.
+      return subsystem.particleCount - particlesOf(subsystem.emitterFor(1)!.object);
+    };
+
+    const beside = shotParticles(true);
+    expect(beside).toBeGreaterThan(0);
+    // Ровно столько же, сколько без замедленной сущности рядом: темп выстрела
+    // от чужой шкалы не зависит и от своей не бывает.
+    expect(beside).toBe(shotParticles(false));
+  });
+
+  it('разный темп эмиттеров батчей не плодит (REND-24)', () => {
+    const { subsystem } = makeRig();
+    subsystem.syncTick(
+      makeTickView([
+        makeEntityView(1, { kind: 'Fireball' }),
+        makeEntityView(2, { kind: 'Fireball', timeScale: 0.2 }),
+        makeEntityView(3, { kind: 'Fireball', timeScale: 0.7 }),
+      ]),
+    );
+    halfSecond(subsystem);
+    // Конвейер один на всех — и батч один: по-эмиттерный шаг батчирование не
+    // трогает, число draw calls растёт с конвейерами, а не с темпами.
+    expect(subsystem.activeCount).toBe(3);
+    expect(subsystem.batchCount).toBe(1);
+  });
+});
+
+/**
+ * Шаг экземпляра (`stepInstance`) — единственная точка, где рендер зовёт
+ * симуляцию частиц библиотеки (REND-24, REND-38). Метод `ParticleSystem.update`
+ * в типах three.quarks приватен, и обход этого сделан структурным типом с
+ * рантайм-проверкой; тест пиннит именно его: сменится API библиотеки при
+ * апгрейде — падение здесь, а не молчаливо замершая картинка на арене.
+ */
+describe('stepInstance: рантайм-API шага систем библиотеки (REND-24)', () => {
+  it('шаг двигает эмиссию экземпляра', () => {
+    const scene = new THREE.Scene();
+    const batchRenderer = new BatchedRenderer();
+    scene.add(batchRenderer);
+    const group = new THREE.Group();
+    scene.add(group);
+    const warnings: string[] = [];
+    const pool = new ParticleEffectPool(batchRenderer, (_key, message) => warnings.push(message));
+    const instance = pool.acquire(TORCH, torchDoc, group)!;
+    expect(instance).not.toBeNull();
+
+    group.updateMatrixWorld();
+    // Первый шаг копит эмиссию (`waitEmiting` библиотеки), второй её выбрасывает.
+    stepInstance(instance, 0.1, (_key, message) => warnings.push(message));
+    stepInstance(instance, 0.1, (_key, message) => warnings.push(message));
+    expect(instanceParticles(instance)).toBeGreaterThan(0);
+    // Молчание — часть контракта: предупреждение здесь означало бы, что метода
+    // шага у системы больше нет.
+    expect(warnings).toEqual([]);
+  });
+
+  it('нулевой шаг эмиссию не двигает — заморозка мира её замораживает (REND-25)', () => {
+    const scene = new THREE.Scene();
+    const batchRenderer = new BatchedRenderer();
+    scene.add(batchRenderer);
+    const group = new THREE.Group();
+    scene.add(group);
+    const pool = new ParticleEffectPool(batchRenderer, () => {});
+    const instance = pool.acquire(TORCH, torchDoc, group)!;
+    group.updateMatrixWorld();
+    for (let i = 0; i < 10; i++) stepInstance(instance, 0, () => {});
+    expect(instanceParticles(instance)).toBe(0);
   });
 });

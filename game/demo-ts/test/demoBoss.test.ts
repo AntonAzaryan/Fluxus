@@ -68,9 +68,10 @@ import {
   type Simulation,
 } from '@fluxus/core';
 import { buildMatchWorld } from '@fluxus/net';
+import * as THREE from 'three';
 import { mdxLoader, type NormalizedModel } from '@fluxus/assets';
-import { resolveClip } from '@fluxus/render';
-import { DEMO_AIM_EVENTS } from '../app/extractor.js';
+import { MixerAnimationBackend, ViewBuffer, resolveClip, type TickView } from '@fluxus/render';
+import { DEMO_AIM_EVENTS, createDemoExtractor } from '../app/extractor.js';
 import { ACTION_BITS } from '../app/sim.js';
 import sceneJson from '../../../content/scenes/duel.scene.json';
 import matchJson from '../../../content/matches/duel.match.json';
@@ -315,6 +316,12 @@ interface Stand {
   at(): number;
   /** События ПОСЛЕДНЕГО тика целиком: типам не видно ни направления, ни цели. */
   readonly last: { events: readonly GameEvent[] };
+  /**
+   * Presentation-состояние последнего тика глазами рендера (SHELL-2): то, что
+   * доехало бы до кадра. Живёт только у стенда с `{ extract: true }` — обычному
+   * тесту политики сцены доставка не нужна, а платить за неё каждым тиком незачем.
+   */
+  view(): TickView;
 }
 
 /**
@@ -329,6 +336,7 @@ function stand(
   cells: readonly (readonly [number, number])[],
   scene: SceneDef = SCENE,
   seed: number = MATCH.seed,
+  options: { readonly extract?: boolean } = {},
 ): Stand {
   const players = cells.map((_unused, index) => `p${index + 1}`);
   const built = buildMatchWorld({
@@ -360,6 +368,10 @@ function stand(
 
   let tick = 0;
   const last: { events: readonly GameEvent[] } = { events: [] };
+  // Доставка — та же, что у сборки демо (SHELL-8): свой экстрактор тест не
+  // сочиняет, иначе проверялся бы он, а не то, что видит игрок.
+  const extractor = options.extract === true ? createDemoExtractor(undefined) : null;
+  const buffer = new ViewBuffer({ tickSeconds: 1 / 60, clock: () => 0 });
   return {
     sim: built.sim,
     state: built.state,
@@ -367,6 +379,7 @@ function stand(
     heroes,
     last,
     at: () => tick,
+    view: () => buffer.view,
     step(frames = []) {
       tick += 1;
       const inputs: InputFrame[] = players.map((playerId, index) => ({
@@ -381,7 +394,9 @@ function stand(
           y: coreWorld.getField(built.state.world, bossEntity, 'Position', 'y'),
         },
       }));
-      last.events = [...simTick(built.sim, built.state, inputs).events];
+      const result = simTick(built.sim, built.state, inputs);
+      last.events = [...result.events];
+      if (extractor !== null) buffer.apply(extractor.extract(result));
       return last.events.map((event) => event.type);
     },
   };
@@ -1490,6 +1505,44 @@ describe('поле замедления: жёлтый купол, гасящий
     // И порог оси — РОВНО радиус поля: рисовать зону там, куда она не дотянется,
     // значило бы учить игрока не тому.
     expect(Math.abs(axisReach('BossField') - FIELD_RADIUS)).toBeLessThan(FIXED_ONE / 100);
+  });
+
+  /**
+   * Потребитель-доказательство REND-38 на настоящем контенте: замедление,
+   * которое кладёт аура сцены, обязано доехать до кадра и повести часы
+   * презентации героя. Пока этого не было, картинка врала о состоянии мира —
+   * герой двигался в пятую часть темпа и перебирал ногами в полный.
+   */
+  it('замедление доезжает до кадра и ведёт часы презентации героя (REND-38)', () => {
+    const a = stand([[26, 24]], noRepel(only('SlotBossField')), MATCH.seed, { extract: true });
+    const hero = a.heroes[0]!;
+    until(a, 'BossFieldCast', 60);
+    for (let t = 1; t <= FIELD_RAMP + 20; t++) a.step();
+    expect(timeScale(a, hero)).toBe(FIELD_FLOOR);
+
+    // Доставка несёт ровно ту же величину, переведённую во float на входной
+    // границе рендера (REND-1): 13107 / 65536 ≈ 0.2.
+    const delivered = a.view().entities.get(hero)!;
+    expect(delivered.timeScale).toBeCloseTo(FIELD_FLOOR / FIXED_ONE, 5);
+    // У босса шкалы нет вовсе — его собственное поле его не трогает: он идёт
+    // множителем 1, а не нулём несуществующего компонента (TIME-3).
+    expect(a.view().entities.get(a.boss)!.timeScale).toBe(1);
+
+    // И носитель воспроизведения (REND-20), ведомый этой величиной, проходит за
+    // секунду кадров ровно пятую часть клипа. Клип здесь синтетический —
+    // предмет проверки темп, а не разбор MDX: трек ведёт `b0.position.z` от
+    // нуля к единице ровно за секунду, поэтому z и есть пройденная фаза.
+    const root = new THREE.Group();
+    const bone = new THREE.Object3D();
+    bone.name = 'b0';
+    root.add(bone);
+    const clip = new THREE.AnimationClip('Run', 1, [
+      new THREE.VectorKeyframeTrack('b0.position', [0, 1], [0, 0, 0, 0, 0, 1]),
+    ]);
+    const backend = new MixerAnimationBackend(new THREE.AnimationMixer(root), [clip]);
+    backend.playLoop(0, 0);
+    for (let i = 0; i < 60; i++) backend.update(1 / 60, delivered.timeScale);
+    expect(bone.position.z).toBeCloseTo(0.2, 2);
   });
 });
 

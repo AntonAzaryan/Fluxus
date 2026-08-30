@@ -153,6 +153,7 @@ function entityView(id: EntityId, stats?: Map<string, number>): EntityView {
     prevMotionPhase: Number.NaN,
     currMotionPhase: Number.NaN,
     flightPhase: Number.NaN,
+    timeScale: 1,
     ...(stats !== undefined ? { stats } : {}),
   };
 }

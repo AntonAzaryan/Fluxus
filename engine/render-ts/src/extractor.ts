@@ -25,6 +25,7 @@ import {
   LOCOMOTION_NORMAL,
   LOCOMOTION_ROLL,
   POSITION_COMPONENT,
+  TIME_SCALE_COMPONENT,
   cellAt,
   world,
   type EntityId,
@@ -120,6 +121,15 @@ export interface ExtractedTick {
    * MUST NOT вычислять сам.
    */
   flightPhase: Float32Array;
+  /**
+   * Персональная шкала времени сущности — `TimeScale.value` мира (`time-system`
+   * TIME-2), множитель её часов презентации (REND-38). Единица — обычный темп:
+   * сущности без компонента шкалы едут ею же (семантика умолчания TIME-3), и
+   * «нет шкалы» от «шкала ноль» отличается значением, а не отсутствием колонки.
+   * Значение приезжает уже сведённым и клампленным (TIME-7) — рендер его не
+   * переклампливает.
+   */
+  timeScale: Float32Array;
   /**
    * Имена статов доставки (`match-hud` HUD-8) — словарь конфигурации сборки,
    * общий на все сущности и НЕИЗМЕННЫЙ за сессию: индексы пар ниже — позиции в
@@ -271,6 +281,7 @@ export class Extractor {
       motion: new Uint8Array(0),
       motionPhase: new Float32Array(0),
       flightPhase: new Float32Array(0),
+      timeScale: new Float32Array(0),
       statNames: this.stats.names,
       statCount: new Uint8Array(0),
       statIndex: new Int32Array(0),
@@ -397,6 +408,14 @@ export class Extractor {
     out.facingYaw[count] = yaw;
     this.readMotion(state, entity, count);
     out.flightPhase[count] = flightPhaseOf(state, entity, this.flight);
+    // Персональная шкала времени (REND-38): множитель часов презентации этой
+    // сущности. Читается СТРОГО через `hasComponent` — компонент есть только у
+    // тех, кому его завела `TimeScaleSystem` (TIME-7), а тотальное чтение
+    // несуществующего дало бы ноль и заморозило бы всех, у кого шкалы нет.
+    // Умолчание — единица, ровно как у `getEffectiveDelta` (TIME-3).
+    out.timeScale[count] = world.hasComponent(state, entity, TIME_SCALE_COMPONENT)
+      ? world.getField(state, entity, TIME_SCALE_COMPONENT, 'value') / FIXED_ONE
+      : 1;
     this.stats.read(state, entity, count, out);
 
     const aim = this.aim.get(entity);
@@ -436,6 +455,7 @@ export class Extractor {
     out.motion = new Uint8Array(capacity);
     out.motionPhase = new Float32Array(capacity);
     out.flightPhase = new Float32Array(capacity);
+    out.timeScale = new Float32Array(capacity);
     out.statCount = new Uint8Array(capacity);
     // Худший случай — все статы у всех сущностей; перевыделение идёт вместе с
     // прочими колонками, то есть только при росте сцены (SHELL-3).
