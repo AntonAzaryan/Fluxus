@@ -96,6 +96,19 @@ export interface ClientMetrics {
   inputToVisibleMs: number | undefined;
   inputToVisibleMinMs: number | undefined;
   inputToVisibleMaxMs: number | undefined;
+  /**
+   * Текущий адаптивный запас разметки ввода, тики (NTR-7): на сколько тиков
+   * вперёд клиент помечает свой кадр. Отвечает на смежный с откликом вопрос —
+   * какую долю «нажал → увидел» составляет буфер задержки ввода. Адаптация
+   * делает эту долю величиной КАНАЛА, а не константой конфига, и без публикации
+   * вялость длинного канала снова стала бы догадкой (NTR-11).
+   *
+   * `undefined` — темпа матча ещё не приезжало (`Welcome`), и запаса не
+   * существует. Нулём это не называется по той же причине, по которой не
+   * называется нулём неизмеримый RTT: отсутствие величины и величина ноль —
+   * разные высказывания.
+   */
+  inputLead: number | undefined;
   /** Отставание буфера интерполяции, мс: сколько мы отстаём от последнего пришедшего состояния. */
   bufferLagMs: number | undefined;
 }
@@ -113,6 +126,7 @@ export function createClientMetrics(): ClientMetrics {
     inputToVisibleMs: undefined,
     inputToVisibleMinMs: undefined,
     inputToVisibleMaxMs: undefined,
+    inputLead: undefined,
     bufferLagMs: undefined,
   };
 }

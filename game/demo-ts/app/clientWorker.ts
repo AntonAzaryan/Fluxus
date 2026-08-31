@@ -10,9 +10,14 @@
  */
 import { shellPort } from '@fluxus/client';
 import { DEMO_PLAYERS } from './match.js';
-import { joinDemoMatch } from './netClient.js';
+import { joinDemoMatch, type DemoJoined } from './netClient.js';
 import { directRendezvous, tabRendezvous, type DemoRendezvous } from './rendezvous.js';
-import { isDemoClientInit, type DemoClientInit, type DemoNotice } from './wiring.js';
+import {
+  isDemoClientInit,
+  type DemoClientInit,
+  type DemoInputLead,
+  type DemoNotice,
+} from './wiring.js';
 
 const scope = self as unknown as {
   addEventListener(type: 'message', listener: (event: { data: unknown }) => void): void;
@@ -33,6 +38,40 @@ function notice(message: string): void {
   port.post(envelope);
 }
 
+/** Как часто воркер сверяет запас разметки: человек читает его глазами. */
+const LEAD_POLL_MS = 500;
+
+/**
+ * Запас разметки ввода (NTR-7) наружу — по изменению, а не каждым тиком:
+ * величина целая и меняется редко, а конверт на тик был бы сообщением ради
+ * сообщения. Читается у ТЕКУЩЕГО клиента сессии: возврат в матч поднимает новый
+ * (NTR-17), и запас у него честно начинается заново.
+ *
+ * Закрытый клиент едет наружу как «нет величины»: матч кончился либо канал
+ * оборвался, и последнее показание перестало быть замером — оставлять его на
+ * экране значило бы утверждать про канал матча, которого нет. Опрос при этом
+ * продолжается: возврат в матч (NTR-17) поднимает нового клиента в той же
+ * сессии, и показание обязано вернуться само.
+ */
+function watchInputLead(joined: DemoJoined): void {
+  let shown: number | undefined;
+  let silent = false;
+  setInterval(() => {
+    const lead = joined.client.phase === 'closed' ? undefined : joined.client.metrics.inputLead;
+    if (lead === undefined) {
+      if (silent) return;
+      silent = true;
+      shown = undefined;
+      port.post({ t: 'demo-input-lead' } satisfies DemoInputLead);
+      return;
+    }
+    silent = false;
+    if (lead === shown) return;
+    shown = lead;
+    port.post({ t: 'demo-input-lead', lead } satisfies DemoInputLead);
+  }, LEAD_POLL_MS);
+}
+
 scope.addEventListener('message', (event) => {
   if (!isDemoClientInit(event.data)) return;
   const { connect, candidates } = rendezvousOf(event.data);
@@ -40,7 +79,10 @@ scope.addEventListener('message', (event) => {
   // «вернуться не удалось», пустая строка на успехе. Тем же конвертом, что и
   // причина, по которой матча нет: у человека это одно и то же место на экране.
   void joinDemoMatch({ port, connect, candidates, notify: notice }).then((joined) => {
-    if (joined.ok) return;
-    notice(joined.reason);
+    if (!joined.ok) {
+      notice(joined.reason);
+      return;
+    }
+    watchInputLead(joined);
   });
 });

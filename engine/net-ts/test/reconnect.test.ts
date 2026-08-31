@@ -626,8 +626,10 @@ describe('клиент входит в идущий матч (NTR-17, NTR-10)', 
     back.client.pushInput({ move: { x: STEP, y: 0 }, aimDir: 0, buttons: 0 }, clock.ms);
     back.host.flush();
     await settle();
-    // Кадр помечен тиком `оценка + inputDelay` (NTR-7) и применяется, когда до
-    // него дойдёт расписание: несколько тиков запаса на дорогу до него.
+    // Кадр помечен тиком `оценка + lead`, а `lead` вернувшегося клиента стоит на
+    // нижней границе `inputDelay` (NTR-7, design D3: реаттач поднимает НОВЫЙ
+    // `MatchClient`, и запас честно стартует заново). Применяется кадр, когда до
+    // его тика дойдёт расписание: несколько тиков запаса на дорогу.
     for (let i = 0; i < 8; i++) host.step();
     expect(
       server.canonicalInputs.some((frame) => frame.playerId === 'p1' && frame.move.x === STEP),

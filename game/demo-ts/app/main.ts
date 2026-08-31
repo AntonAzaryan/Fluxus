@@ -124,7 +124,13 @@ import {
   storedQualityPreset,
   type QualityPresetName,
 } from './quality.js';
-import { isDemoNotice, isDemoServerReady, type DemoClientInit, type DemoServerInit } from './wiring.js';
+import {
+  isDemoInputLead,
+  isDemoNotice,
+  isDemoServerReady,
+  type DemoClientInit,
+  type DemoServerInit,
+} from './wiring.js';
 import bindingsJson from './bindings.json';
 import sceneJson from '../../../content/scenes/duel.scene.json';
 
@@ -963,6 +969,7 @@ function spawnShellWorker(mode: DemoMode): Worker {
   const client = new Worker(new URL('./clientWorker.ts', import.meta.url), { type: 'module' });
   client.addEventListener('message', (event: MessageEvent) => {
     if (isDemoNotice(event.data)) showNotice(event.data.message);
+    if (isDemoInputLead(event.data)) showInputLead(event.data.lead);
   });
   if (mode.kind === 'server') {
     const init: DemoClientInit = { t: 'demo-client-init', url: mode.url };
@@ -1003,6 +1010,27 @@ function showNotice(message: string): void {
   if (notice === null) return;
   notice.textContent = message;
   notice.style.display = message === '' ? 'none' : 'block';
+}
+
+/**
+ * Адаптивный запас разметки ввода в тиках (`netcode-transport` NTR-7) — тот же
+ * счётчик клиента `inputLead`, что публикуют остальные наблюдаемые сетевого
+ * слоя (NTR-11).
+ *
+ * Показывается только в сетевых режимах и только когда матч состоялся: в
+ * соло-режиме сервера нет вовсе, и величины не существует. Место — стопка у
+ * правого края рядом с выбором качества: это показание страницы, а не действие
+ * внутри матча, и в композицию HUD оно не входит (design D4 демо).
+ *
+ * `undefined` ГАСИТ показанное — по той же причине, по которой пустая строка
+ * гасит уведомление: кончившийся матч не должен оставлять на экране замер
+ * канала, которого больше нет.
+ */
+function showInputLead(lead: number | undefined): void {
+  const element = document.getElementById('lead');
+  if (element === null) return;
+  element.textContent = lead === undefined ? '' : `запас ${lead}`;
+  element.style.display = lead === undefined ? 'none' : 'block';
 }
 
 /**

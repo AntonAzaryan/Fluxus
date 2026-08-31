@@ -91,6 +91,10 @@ export function reportClient(client, prefix, onClosed) {
     const metrics = client.metrics;
     const response = metrics.inputToVisibleMs === undefined ? '—' : `${metrics.inputToVisibleMs.toFixed(0)} мс`;
     const lag = metrics.bufferLagMs === undefined ? '—' : `${metrics.bufferLagMs.toFixed(0)} мс`;
+    // Запас разметки ввода (NTR-7) — рядом с откликом и по той же причине, что
+    // он там стоит: без него неизвестно, какую долю «нажал → увидел» даёт буфер
+    // задержки ввода, а какую — дорога (NTR-11).
+    const lead = metrics.inputLead === undefined ? '—' : `${metrics.inputLead} тик.`;
     // Поток событий — третий наблюдаемый выход рядом со снапшотами и откликом
     // (NTR-15, NTR-11), и три его счётчика раздельны по причине: доставлено —
     // факты, отданные потребителю (их сливает `ClientHost.step`), отброшено —
@@ -100,7 +104,7 @@ export function reportClient(client, prefix, onClosed) {
     process.stdout.write(
       `\r${prefix()}  снапшотов ${metrics.snapshotsApplied} (отброшено ${metrics.snapshotsDropped})  ` +
         `фактов ${metrics.eventBatchesDelivered} (повторов ${metrics.eventBatchesDropped}, ` +
-        `разрывов ${metrics.eventRangeGaps})  нажал→увидел ${response}  буфер ${lag}   `,
+        `разрывов ${metrics.eventRangeGaps})  нажал→увидел ${response}  запас ${lead}  буфер ${lag}   `,
     );
   }, 500);
 }

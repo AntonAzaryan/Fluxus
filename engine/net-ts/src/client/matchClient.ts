@@ -13,11 +13,8 @@
  * потому что оба шлют только ввод (NET-7).
  */
 import {
-  query,
   snapshotFromPlain,
-  world as coreWorld,
   type ComponentSchema,
-  type EntityId,
   type Fixed,
   type InputFrame,
   type PhysicsOptions,
@@ -31,7 +28,9 @@ import {
 } from '@fluxus/core';
 import { buildMatchWorld, orderedSchemas } from '../match/world.js';
 import { createClientMetrics, recordInputToVisible, type ClientMetrics } from '../metrics.js';
+import { ownInputSeq } from './echo.js';
 import { InputRing, DEFAULT_RING_TICKS } from './inputRing.js';
+import { LeadController } from './lead.js';
 import {
   InterpolationBuffer,
   type InterpolationSample,
@@ -136,12 +135,6 @@ export interface DeliveredEvents extends EventBatch {
 
 export type ClientPhase = 'greeting' | 'lobby' | 'playing' | 'closed';
 
-const DEFAULTS = {
-  playerComponent: 'Player',
-  slotField: 'slot',
-  inputComponent: 'Input',
-} as const;
-
 /** Движение в замороженном мире: его нет вовсе (NET-11). Общий литерал — кадр его не мутирует. */
 const FROZEN_MOVE: Vec2 = { x: 0, y: 0 };
 
@@ -160,6 +153,18 @@ export class MatchClient {
   private assignedSlot: number | undefined;
   private matchPacing: Pacing | undefined;
   private descriptor: MatchDescriptor | undefined;
+  /**
+   * Адаптивный запас разметки ввода (NTR-7): им помечается кадр вместо
+   * константы `inputDelay`. Заводится вместе с темпом матча — границы и
+   * стартовое значение приезжают в `Welcome`, и до него запаса не существует.
+   *
+   * Смену эпохи он переживает (NTR-16, design D3): запас — свойство канала, а
+   * не ветви истории, и перемотка о дороге до сервера ничего не сообщает.
+   * Переподключение — не переживает и не должно: возвращение поднимает НОВЫЙ
+   * `MatchClient` (NTR-17), канал после разрыва мог смениться, и накопленное
+   * значение было бы утверждением о канале, которого больше нет.
+   */
+  private leadControl: LeadController | undefined;
 
   /** Локально поднятый мир матча: даёт хеш для сверки и порядок компонентов для разбора снапшота. */
   private localWorld: WorldState | undefined;
@@ -437,12 +442,11 @@ export class MatchClient {
   /**
    * Локальная оценка серверного тика, продвигаемая драйвером в темпе `tickRate`.
    *
-   * ponytail: компенсации половины круга здесь нет — оценка равна последнему
-   * увиденному тику, дальше идёт своим темпом. На локальном прогоне это точно, а
-   * на канале с плечом запас `inputDelay` частично съедается дорогой до сервера,
-   * и часть кадров начнёт опаздывать. Компенсация вводится по замеру
-   * `inputToVisibleMs` на реальном канале — то есть тогда, когда есть чем
-   * проверить, что она помогла.
+   * Компенсации дороги здесь нет НАМЕРЕННО (design D5): оценка значит «где
+   * сервер по последнему доказательству» и остаётся привязанной к снапшотам, а
+   * запас на дорогу живёт в разметке кадра — адаптивным `lead` (NTR-7). Одно
+   * место вместо двух: сложи компенсацию ещё и сюда, и та же величина вошла бы
+   * в разметку дважды, а `serverTick` перестал бы означать наблюдение.
    */
   advance(): void {
     // В ЗАМОРОЗКЕ матча оценка стоит. Тиков в ней нет (NTR-20), снапшотов
@@ -456,9 +460,12 @@ export class MatchClient {
     if (this.clientPhase === 'playing' && !frozenByMatch(this.pauseState)) this.estimatedTick++;
   }
 
-  /** Ввод игрока: помечается тиком с запасом задержки (NTR-7) и уходит на сервер. */
+  /** Ввод игрока: помечается тиком с адаптивным запасом (NTR-7) и уходит на сервер. */
   pushInput(sample: InputSample, nowMs: number): void {
-    if (this.clientPhase !== 'playing' || this.matchPacing === undefined) return;
+    const lead = this.leadControl;
+    // Запас заводится вместе с темпом матча, поэтому его наличие и есть «темп
+    // приехал»: второго условия на `matchPacing` рядом не нужно.
+    if (this.clientPhase !== 'playing' || lead === undefined) return;
     // Ввод уезжает и в остановленном мире — но ОДНИМ битом ведения скраба.
     //
     // Молчать нельзя: живых тиков в `Rewinding` нет, и контрольный бит едет
@@ -483,7 +490,11 @@ export class MatchClient {
     const frozen = this.lastAppliedMode !== 'Running' || frozenByMatch(this.pauseState);
     const holdMask = this.options.holdButton === undefined ? 0 : 1 << this.options.holdButton;
     const frame: InputFrame = {
-      tick: this.estimatedTick + this.matchPacing.inputDelay,
+      // Разметка адаптивна (NTR-7): `serverTick + lead`, где `lead` начинается
+      // с `inputDelay` и растёт, пока кадры не начинают успевать. Константа
+      // здесь либо не покрывает длинный канал — весь ввод уходит в predicted, и
+      // игрок теряет управление, — либо облагает короткий лишним лагом отклика.
+      tick: this.estimatedTick + lead.lead,
       playerId: this.options.playerId,
       seq: this.nextSeq,
       move: frozen ? FROZEN_MOVE : sample.move,
@@ -496,6 +507,17 @@ export class MatchClient {
       buttons: frozen ? sample.buttons & holdMask : sample.buttons,
     };
     this.nextSeq++;
+    // Сигнал адаптации даёт только ЖИВАЯ отправка (design D1). Кадр
+    // замороженного мира сервер отбрасывает целиком (NET-11), снапшотов в
+    // заморозке нет вовсе, и эхо `seq` не отстаёт — оно просто не приходит;
+    // счёт такой отправки опозданием поднимал бы запас на паузе, то есть мерил
+    // бы длительность заморозки вместо длины канала.
+    if (!frozen) {
+      // Вместе с тиком разметки: сигнал считается в тиковой шкале, и без неё
+      // разность «отправлено — применено» мерила бы часы, а не канал (`lead.ts`).
+      lead.sent(frame.seq, frame.tick);
+      this.metrics.inputLead = lead.lead;
+    }
     // Кольцо хранит кадр вместе с эпохой отправки (NTR-10): кадр стёртой
     // эпохи переотправке не подлежит, но остаётся материалом диагностики.
     this.ring.push(frame, nowMs, this.lastAppliedEpoch);
@@ -612,6 +634,12 @@ export class MatchClient {
 
     this.assignedSlot = slot;
     this.matchPacing = pacing;
+    // Запас разметки заводится ровно здесь: его границы и стартовое значение —
+    // параметры конфига матча, присланные в `Welcome` (NTR-7). Публикуется он
+    // сразу же, а не с первым кадром: «сколько сейчас запас» — вопрос, на
+    // который у вошедшего в матч уже есть ответ (NTR-11).
+    this.leadControl = new LeadController(pacing);
+    this.metrics.inputLead = this.leadControl.lead;
     this.descriptor = match;
     this.localWorld = built.state.world;
     this.localHash = built.worldInitHash;
@@ -706,10 +734,20 @@ export class MatchClient {
       // потребитель. В мир и в канонический лог величина не попадает — она
       // клиентская и наблюдательная (NTR-11).
       this.metrics.inputsStranded = this.ring.strandedBefore(epoch);
+      // Наблюдение запаса начинается заново: пара «`seq` — тик» через смену
+      // эпохи не сравнима, номера тиков после перемотки идут по-новому (NTR-16).
+      // САМ запас при этом не сбрасывается — он свойство канала, а не ветви
+      // истории (NTR-7, design D3).
+      this.leadControl?.resync();
     }
     this.resyncTick(tick, rewound);
     this.buffer.push(snapshot, nowMs);
     this.metrics.snapshotsApplied++;
+    // Живой канал состояний — половина сигнала запаса (NTR-7, design D1): до
+    // первого подтверждения «эха нет» одинаково выглядит и на канале длиннее
+    // запаса, и на оборванном downlink, а поднимать запас надо только в первом
+    // случае. Приехавший снапшот и говорит, что downlink жив (`lead.ts`).
+    this.leadControl?.snapshotApplied();
     this.measureResponse(snapshot, nowMs);
   }
 
@@ -790,10 +828,11 @@ export class MatchClient {
    * из окна приёма (NTR-7) — то есть ввод исчезал бы целиком, и выглядело бы
    * это как «сервер меня не слышит», а не как разъехавшиеся часы.
    *
-   * ponytail: верхняя граница не учитывает дорогу до сервера, поэтому на канале
-   * с плечом она занижает оценку и часть кадров начнёт опаздывать. Правильная
-   * граница — та же плюс половина круга; вводится вместе с компенсацией в
-   * `advance()`, по замеру на реальном канале.
+   * Считается граница по `inputDelay`, а не по текущему `lead`, и это не
+   * упущение (design D5): ограничивается ОЦЕНКА, которая остаётся снапшотной,
+   * тогда как запас на дорогу живёт в разметке кадра (NTR-7). Втяни сюда
+   * растущий `lead` — и оценка поехала бы вверх вместе с ним, то есть запас
+   * сложился бы сам с собой, а кадры полетели бы за окно приёма.
    *
    * На смене эпохи (`rewound`) оценка ставится ровно на тик первого снапшота
    * новой эпохи, а не подтягивается постепенно (NTR-10). Постепенное
@@ -816,50 +855,44 @@ export class MatchClient {
   }
 
   /**
-   * Задержка «нажал → увидел» без единого дополнительного сообщения в протоколе.
+   * Задержка «нажал → увидел» без единого дополнительного сообщения в протоколе
+   * плюс сигнал адаптации запаса — из ОДНОГО наблюдения (`echo.ts`).
    *
-   * `InputSystem` кладёт `seq` пришедшего кадра в компонент ввода на сущности
-   * игрока (TICK-4), а своя сущность всегда есть в собственном снапшоте
-   * (NET-15). Значит, `seq` возвращается сам, и остаётся вычесть момент
-   * отправки из кольца. Отдельный Ping/Pong дал бы чистый круг до сервера, но
-   * не ответил бы на вопрос, ради которого метрика заводится: в отклик входят и
-   * канал, и буфер задержки ввода, и темп рассылки.
+   * Отдельный Ping/Pong дал бы чистый круг до сервера, но не ответил бы на
+   * вопрос, ради которого метрика заводится: в отклик входят и канал, и буфер
+   * задержки ввода, и темп рассылки.
    */
   private measureResponse(snapshot: Snapshot, nowMs: number): void {
     const slot = this.assignedSlot;
     if (slot === undefined) return;
-    const playerComponent = this.options.playerComponent ?? DEFAULTS.playerComponent;
-    const slotField = this.options.slotField ?? DEFAULTS.slotField;
-    const inputComponent = this.options.inputComponent ?? DEFAULTS.inputComponent;
-
-    const own = this.ownEntity(snapshot, playerComponent, slotField, inputComponent, slot);
-    if (own === undefined) return;
-    const seq = coreWorld.getField(snapshot.world, own, inputComponent, 'seq');
+    const seq = ownInputSeq(snapshot, slot, this.options);
     if (seq <= 0) return;
+    const sent = this.ring.bySeq(seq);
+    // Своего кадра с таким `seq` нет: он либо вытеснен из кольца, либо не наш
+    // вовсе — возвращение в матч поднимает НОВЫЙ клиент с нумерацией с начала
+    // (NTR-17), а в мире до первого своего применённого кадра стоит `seq`
+    // прежней сессии. Ни отклик, ни сигнал запаса из такого подтверждения не
+    // выводятся.
+    if (sent === undefined) return;
+    // Тот же `seq` — единственный сигнал адаптации запаса разметки (NTR-7,
+    // design D1). Второго источника у неё нет и быть не может: набор сообщений
+    // закрыт (NTR-4), а от транспортного RTT адаптация зависеть MUST NOT
+    // (NTR-11). Контроллеру он уезжает ПАРОЙ ТИКОВ: тик, которым клиент пометил
+    // подтверждённый кадр, и тик снапшота, в котором подтверждение приехало.
+    // Обе величины — серверной шкалы, и только в ней «сервер живёт на повторе»
+    // отделимо от «часы клиента идут иначе» (`lead.ts`).
+    //
+    // Учёт идёт ДО дедупа метрики отклика: повтор `seq` контроллеру нужен —
+    // тик-то новый, и именно им виден слот, живущий на predicted, — а вот
+    // задержка «нажал → увидел» обязана считать каждый `seq` однократно.
+    this.leadControl?.applied(sent.frame.tick, snapshot.tick);
     // Каждый `seq` меряется один раз. Predicted-кадр повторяет последний
     // применённый вместе с его `seq` (TICK-2), поэтому одно и то же значение
     // приезжает в каждом следующем снапшоте, пока игрок молчит, — и метрика без
     // этой проверки показывала бы не отклик, а время с последнего нажатия.
     if (seq <= this.lastMeasuredSeq) return;
     this.lastMeasuredSeq = seq;
-    const sent = this.ring.bySeq(seq);
-    if (sent === undefined) return;
     recordInputToVisible(this.metrics, nowMs - sent.sentAtMs);
-  }
-
-  private ownEntity(
-    snapshot: Snapshot,
-    playerComponent: string,
-    slotField: string,
-    inputComponent: string,
-    slot: number,
-  ): EntityId | undefined {
-    if (coreWorld.componentId(snapshot.world, playerComponent) === undefined) return undefined;
-    if (coreWorld.componentId(snapshot.world, inputComponent) === undefined) return undefined;
-    for (const entity of query(snapshot.world, { all: [playerComponent, inputComponent] })) {
-      if (coreWorld.getField(snapshot.world, entity, playerComponent, slotField) === slot) return entity;
-    }
-    return undefined;
   }
 
   private close(reason: ClientCloseReason, detail: string): void {

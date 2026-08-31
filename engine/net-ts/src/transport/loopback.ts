@@ -20,6 +20,16 @@ export interface LoopbackOptions {
    * setTimeout(deliver, 40)` даёт канал с плечом, не трогая ни сервер, ни клиента.
    */
   readonly schedule?: (deliver: () => void) => void;
+  /**
+   * Планировщик доставки ОТ слушающей стороны к подключившейся. По умолчанию
+   * тот же, что и в другую сторону: канал симметричен, пока не сказано иное.
+   *
+   * Раздельные планировщики нужны потому, что направления ломаются по-разному и
+   * лечатся разным: «рвётся downlink, uplink жив» — не то же самое, что
+   * симметричная поломка, и по счётчикам NTR-11 это разные картины. Симметричный
+   * канал такую разницу выразить не может вовсе.
+   */
+  readonly scheduleBack?: (deliver: () => void) => void;
 }
 
 const microtask = (deliver: () => void): void => {
@@ -58,9 +68,14 @@ class LoopbackTransport extends BaseTransport {
   }
 }
 
-/** Пара связанных концов одного канала. */
+/**
+ * Пара связанных концов одного канала. Первый конец — слушающей стороны, второй
+ * — подключившейся: планировщик каждого описывает доставку ОТ него, поэтому
+ * `scheduleBack` достаётся первому.
+ */
 export function loopbackPair(options: LoopbackOptions = {}): readonly [Transport, Transport] {
-  const a = new LoopbackTransport(options);
+  const back = options.scheduleBack;
+  const a = new LoopbackTransport(back === undefined ? options : { schedule: back });
   const b = new LoopbackTransport(options);
   a.peer = b;
   b.peer = a;

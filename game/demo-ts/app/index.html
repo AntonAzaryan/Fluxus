@@ -356,6 +356,26 @@
       .debug-panel__text:empty {
         display: none;
       }
+      /* Адаптивный запас разметки ввода в тиках (`netcode-transport` NTR-7):
+         счётчик клиента `inputLead` (NTR-11), приезжающий из воркера сетевого
+         режима. Такое же показание страницы, как выбор качества и панель
+         отладки, — в композицию HUD оно не входит: это не действие внутри
+         матча. Правый ВЕРХ, а не правый низ: снизу стопка страницы, и открытая
+         панель отладки растёт вверх поверх неё. Скрыто, пока матча нет: в
+         соло-режиме сервера не существует, и величины тоже. */
+      #lead {
+        display: none;
+        position: fixed;
+        right: 12px;
+        top: 12px;
+        padding: 6px 10px;
+        color: #e8e8f0;
+        font: 12px/1.4 ui-monospace, Menlo, monospace;
+        background: rgba(10, 10, 24, 0.72);
+        border: 1px solid rgba(255, 255, 255, 0.24);
+        border-radius: 8px;
+        z-index: 20;
+      }
       /* Сообщение сборки: матч занят, стенд не отвечает. Скрыто, пока нечего
          сказать; текст ставит main.ts. */
       #notice {
@@ -382,6 +402,7 @@
     <details id="debug" title="отладочные источники рендера (render-debug)">
       <summary>отладка</summary>
     </details>
+    <div id="lead" title="запас разметки ввода в тиках (netcode-transport NTR-7)"></div>
     <select id="quality" title="качество картинки"></select>
     <a id="connect" href="#">играть по сети →</a>
     <script type="module" src="./main.ts"></script>
