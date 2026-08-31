@@ -208,6 +208,7 @@ export {
   buildWallGeometry,
   toBufferGeometry,
 } from './subsystems/terrainGeometry.js';
+export { buildSkirtGeometry } from './subsystems/terrainSkirt.js';
 export type { CellRect, TerrainGeometryData } from './subsystems/terrainGeometry.js';
 
 // Подсистема моделей (REND-3..6) и переподача манифеста визуалов (REND-17).

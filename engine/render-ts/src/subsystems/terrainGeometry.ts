@@ -1,6 +1,7 @@
 /**
  * Чистые генераторы геометрии террейна (REND-7, REND-9) — площадки пола и
- * вертикальные стенки обрывов из сетки ядра и визуальной поверхности.
+ * вертикальные стенки обрывов из сетки ядра и визуальной поверхности; юбка
+ * границы пола — третий генератор, в соседнем `terrainSkirt.ts`.
  *
  * Отдельно от подсистемы, потому что генераторы — ФУНКЦИИ ДАННЫХ и ничего о
  * сцене не знают: их зовут и подсистема при пересборке чанка, и редактор, и
@@ -491,8 +492,12 @@ function wallSpan(out: WallPoint, hA: number, hB: number): void {
   out.high = Math.max(hA, hB);
 }
 
-/** Высота угла клетки `cell` в узле сетки (nodeX, nodeY). */
-function cornerHeight(
+/**
+ * Высота угла клетки `cell` в узле сетки (nodeX, nodeY). Экспорт — для
+ * генератора юбки (`terrainSkirt.ts`): кромка юбки обязана считаться теми же
+ * выборками, что кромка стенки (REND-9), а не их копией.
+ */
+export function cornerHeight(
   grid: TerrainGrid,
   heightStep: number,
   surface: VisualSurface | undefined,
@@ -513,9 +518,10 @@ function cornerHeight(
 /**
  * Высота поля в клетке стороны отрезка; без поля — плоская ступень уровня.
  * Террейн-форма, как у пола: кромка стенки идёт под кромкой пола, а walkable
- * в геометрию террейна не входит (REND-9).
+ * в геометрию террейна не входит (REND-9). Экспорт — для генератора юбки, по
+ * той же причине, что у `cornerHeight`.
  */
-function sampleWallSide(
+export function sampleWallSide(
   grid: TerrainGrid,
   heightStep: number,
   surface: VisualSurface | undefined,
