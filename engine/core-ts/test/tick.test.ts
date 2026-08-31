@@ -9,6 +9,7 @@ import {
   tick,
   type Simulation,
 } from '../src/sim/tick.js';
+import { buildSimulation } from '../src/sim/build.js';
 import { createWorld, getField, listAlive, spawn } from '../src/ecs/world.js';
 import type {
   ComponentSchema,
@@ -293,6 +294,37 @@ describe('DI (DI-3, DI-4)', () => {
     expect(seen.runs).toBe(1);
     expect(seen.context?.navigation).toBe(navigation);
     expect(seen.context?.navigation?.findPath({ x: 0, y: 0 }, { x: 65536, y: 0 })).toBe(path);
+  });
+
+  it('собранная сборкой навигация доходит до системы и ищет путь (NAV-1, NAV-7)', () => {
+    const { system, seen } = watch();
+    const built = buildSimulation(
+      {
+        scene: {
+          components: SCHEMAS,
+          terrain: { width: 4, height: 1, tileSize: 65536, levels: ['0000'], flags: ['....'] },
+        },
+        seed: WORLD_SEED,
+        navigation: { budget: 128, maxAgentRadius: 32768 },
+      },
+      { where: 'тест' },
+    );
+    built.sim.systems.register(system);
+
+    tick(built.sim, built.state);
+
+    const path = seen.context?.navigation?.findPath({ x: 32768, y: 32768 }, { x: 229376, y: 32768 });
+    expect(path?.status).toBe('found');
+    expect(path?.waypoints).toEqual([{ x: 229376, y: 32768 }]);
+  });
+
+  it('сцена без террейна навигацию собрать не может — отказ называет зависимость (NAV-3)', () => {
+    expect(() =>
+      buildSimulation(
+        { scene: { components: SCHEMAS }, seed: WORLD_SEED, navigation: { budget: 8, maxAgentRadius: 0 } },
+        { where: 'тест' },
+      ),
+    ).toThrow(/NAV-3/);
   });
 });
 

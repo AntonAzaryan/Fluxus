@@ -32,13 +32,22 @@ import {
   type PhysicsDeps,
   type PhysicsOptions,
 } from '../systems/physics.js';
+import { buildNavigation, type NavigationOptions } from '../systems/nav/navigation.js';
 import { requireModifierList } from '../systems/modifiers.js';
 import { VisibilitySystem, VISION_MODIFIER_COMPONENT, type VisibilityOptions } from '../systems/visibility.js';
 import { applyPlacement, type ScenarioSpawn } from './placement.js';
 import { loadScene, type SceneDef } from './scene.js';
+import type { SystemRegistry } from '../systems/registry.js';
 import { initialState, type Simulation } from './tick.js';
 import { worldInitHash } from './worldInit.js';
-import type { DiagnosticsSink, PhysicsApi, SimulationState } from '../types.js';
+import type {
+  DiagnosticsSink,
+  NavigationApi,
+  PhysicsApi,
+  SimulationState,
+  TerrainApi,
+  WorldState,
+} from '../types.js';
 
 /**
  * Общая часть документа прогона: то, из чего поднимается мир. Поля-опции
@@ -64,6 +73,13 @@ export interface SimulationBuildDef {
   readonly physics?: PhysicsOptions;
   readonly locomotion?: LocomotionOptions;
   readonly visibility?: VisibilityOptions;
+  /**
+   * Включает поиск пути (`pathfinding` NAV-1). Поле документа прогона, а не
+   * сцены (DI-3, SER-7): бюджет раскрытий и предел радиуса агента — числа
+   * геймдизайнера, а сами навигационные данные производны от ассета террейна
+   * (NAV-3) и в конфиге сцены не описываются.
+   */
+  readonly navigation?: NavigationOptions;
 }
 
 export interface SimulationBuildOptions {
@@ -87,6 +103,49 @@ export interface BuiltSimulation {
   readonly worldInitHash: string;
 }
 
+/**
+ * Физика сборки (PHYS-4) вместе со своей системой: статика обрывов строится из
+ * террейна ДО расстановки — она иммутабельна и в снапшот не входит (TERR-5,
+ * TERR-6).
+ */
+function physicsOf(
+  def: SimulationBuildDef,
+  world: WorldState,
+  systems: SystemRegistry,
+  terrain: TerrainApi | undefined,
+): PhysicsApi | undefined {
+  if (def.physics === undefined) return undefined;
+  const statics = terrain === undefined ? [] : staticsFromTerrain(terrain.grid);
+  const physicsWorld = new PhysicsWorld(statics, terrain?.grid.tileSize);
+  // Зависимости сборки физики, а не поля документа (DI-3): колоночный гейт
+  // включает сцена объявлением поля высоты у своего компонента коллайдера
+  // (PHYS-14), а уровень луч берёт из запроса террейна (TERR-4). Схема
+  // компонента неизменна, поэтому спрашивается один раз — здесь.
+  const deps: PhysicsDeps = {
+    height: colliderHeightDeclared(world, def.physics.collider),
+    ...(terrain !== undefined ? { terrain } : {}),
+  };
+  systems.register(new PhysicsSystem(physicsWorld, def.physics, deps));
+  return createPhysicsApi(world, physicsWorld, def.physics, deps);
+}
+
+/**
+ * Навигация сборки (`pathfinding` NAV-1). Печётся рядом со статикой обрывов и по
+ * тем же основаниям: её карты производны от иммутабельного ассета террейна, в
+ * снапшот не входят и при перемотке не пересобираются (NAV-3, TERR-6). Систем
+ * она не добавляет — это API, которое спрашивает политика движения (NAV-4).
+ */
+function navigationOf(def: SimulationBuildDef, terrain: TerrainApi | undefined): NavigationApi | undefined {
+  if (def.navigation === undefined) return undefined;
+  if (terrain === undefined) {
+    throw new Error(
+      'NAV-3: документ прогона просит навигацию (navigation) без террейна (terrain) — ' +
+        'навигационные данные производны от карты уровней, строить их не из чего',
+    );
+  }
+  return buildNavigation(terrain.grid, def.navigation);
+}
+
 export function buildSimulation(
   def: SimulationBuildDef,
   options: SimulationBuildOptions,
@@ -103,23 +162,8 @@ export function buildSimulation(
   }
   if (def.locomotion !== undefined) systems.register(new LocomotionSystem(def.locomotion));
 
-  // Статика обрывов строится из террейна до расстановки: она иммутабельна и в
-  // снапшот не входит (TERR-5, TERR-6).
-  let physics: PhysicsApi | undefined;
-  if (def.physics !== undefined) {
-    const statics = terrain === undefined ? [] : staticsFromTerrain(terrain.grid);
-    const physicsWorld = new PhysicsWorld(statics, terrain?.grid.tileSize);
-    // Зависимости сборки физики, а не поля документа (DI-3): колоночный гейт
-    // включает сцена объявлением поля высоты у своего компонента коллайдера
-    // (PHYS-14), а уровень луч берёт из запроса террейна (TERR-4). Схема
-    // компонента неизменна, поэтому спрашивается один раз — здесь.
-    const deps: PhysicsDeps = {
-      height: colliderHeightDeclared(world, def.physics.collider),
-      ...(terrain !== undefined ? { terrain } : {}),
-    };
-    systems.register(new PhysicsSystem(physicsWorld, def.physics, deps));
-    physics = createPhysicsApi(world, physicsWorld, def.physics, deps);
-  }
+  const physics = physicsOf(def, world, systems, terrain);
+  const navigation = navigationOf(def, terrain);
 
   // Видимость считается по финальным позициям тика, поэтому регистрируется
   // после физики (FOW-6).
@@ -150,6 +194,7 @@ export function buildSimulation(
     ...(arena !== undefined ? { arena } : {}),
     ...(abilities !== undefined ? { abilities } : {}),
     ...(physics !== undefined ? { physics } : {}),
+    ...(navigation !== undefined ? { navigation } : {}),
     ...(options.diagnostics !== undefined ? { diagnostics: options.diagnostics } : {}),
   };
 

@@ -13,6 +13,7 @@ import { mathApi } from '../src/math/mathApi.js';
 import { addComponent, getField, setField, spawn } from '../src/ecs/world.js';
 import { query } from '../src/ecs/query.js';
 import { loadScene, type SceneDef } from '../src/sim/scene.js';
+import { buildNavigation, type NavigationOptions } from '../src/systems/nav/navigation.js';
 import { snapshotToPlain } from '../src/sim/serialization.js';
 import {
   initialState,
@@ -213,7 +214,11 @@ interface Harness {
  * Стенд: сцена, интегратор скорости на свободном `order` между движением NPC
  * (70) и физикой (100) и шина для событий урона на месте систем сцены.
  */
-function harness(npc: NpcPlatformDef, extra: Partial<SceneDef> = {}): Harness {
+function harness(
+  npc: NpcPlatformDef,
+  extra: Partial<SceneDef> = {},
+  nav?: NavigationOptions,
+): Harness {
   const loaded = loadScene({ components: COMPONENTS, prefabs: PREFABS, npc, ...extra });
   const { world, systems } = loaded;
   let pending: { type: string; data: Record<string, number> } | undefined;
@@ -261,7 +266,15 @@ function harness(npc: NpcPlatformDef, extra: Partial<SceneDef> = {}): Harness {
     },
   });
 
-  const sim: Simulation = { systems, worldSeed: 1, math: mathApi };
+  // Навигация — зависимость сборки (DI-3, NAV-1): её наличие и переводит
+  // движение с прямого seek на путь из `findPath` (NPC-6).
+  const navigation = nav === undefined ? undefined : buildNavigation(loaded.terrain!.grid, nav);
+  const sim: Simulation = {
+    systems,
+    worldSeed: 1,
+    math: mathApi,
+    ...(navigation === undefined ? {} : { navigation }),
+  };
   const state = initialState(world, 1);
   return {
     world,
@@ -757,6 +770,162 @@ describe('NPC-6: движение — политика над навигацио
     const before = spread();
     for (let i = 0; i < 10; i++) h.step();
     expect(spread()).toBeGreaterThan(before);
+  });
+});
+
+/** Ассет террейна сцены — тип поля, без «может отсутствовать». */
+type TerrainAsset = NonNullable<SceneDef['terrain']>;
+
+describe('NPC-6: при собранной навигации сближение идёт по findPath', () => {
+  /** Медленный преследователь: за тик проходит четверть мировой единицы. */
+  const SLOW = { speed: F(0.25) };
+
+  /**
+   * Восемь на восемь: левая половина — уровень 0, правая — уровень 1. Перепад
+   * проходим ТОЛЬКО по рампе в двух нижних рядах (TERR-5), поэтому прямой seek
+   * упирается в кромку обрыва, а путь обязан вести к рампе.
+   */
+  const CLIFF: TerrainAsset = {
+    width: 8,
+    height: 8,
+    tileSize: ONE,
+    levels: [
+      '00001111',
+      '00001111',
+      '00001111',
+      '00001111',
+      '00001111',
+      '00001111',
+      '00001111',
+      '00001111',
+    ],
+    flags: [
+      '........',
+      '........',
+      '........',
+      '........',
+      '........',
+      '........',
+      '...^....',
+      '...^....',
+    ],
+  };
+
+  /** Тот же перепад БЕЗ рампы: другой берег недостижим вовсе (NAV-1). */
+  const SHEER: TerrainAsset = { ...CLIFF, flags: CLIFF.levels.map(() => '........') };
+
+  /** Ровное поле: прямая до цели проходима целиком, и путь сглаживается в неё. */
+  const FLAT: TerrainAsset = {
+    ...CLIFF,
+    levels: CLIFF.levels.map(() => '00000000'),
+    flags: CLIFF.levels.map(() => '........'),
+  };
+
+  const NAV: NavigationOptions = { budget: 512, maxAgentRadius: ONE >> 1 };
+
+  function chase(terrain: TerrainAsset, nav?: NavigationOptions): Harness {
+    const h = harness({ behaviors: [chaser(SLOW) as never], bindings: BINDINGS }, { terrain }, nav);
+    h.place('Hero', { Position: { x: F(7.5), y: F(0.5) } });
+    h.place('Creep', { Position: { x: F(0.5), y: F(0.5) } });
+    return h;
+  }
+
+  /** Единственный крип сцены — он же последняя расставленная сущность. */
+  function creepOf(h: Harness): EntityId {
+    return query(h.world, { all: [NPC_AGENT_COMPONENT] })[0]!;
+  }
+
+  it('цель за обрывом: агент идёт к рампе, а не в кромку обрыва', () => {
+    const withNav = chase(CLIFF, NAV);
+    const creep = creepOf(withNav);
+    for (let i = 0; i < 30; i++) withNav.step();
+    // Рампа внизу: путь обязан увести агента вниз, чего прямой seek не делает.
+    expect(withNav.field(creep, 'Position', 'y')).toBeGreaterThan(F(0.5));
+    expect(withNav.field(creep, NPC_AGENT_COMPONENT, 'pathValid')).toBe(1);
+
+    // Та же сцена без навигации — прежний прямой seek: строго вдоль ряда.
+    const direct = chase(CLIFF);
+    const same = creepOf(direct);
+    for (let i = 0; i < 30; i++) direct.step();
+    expect(direct.field(same, 'Position', 'y')).toBe(F(0.5));
+    expect(direct.field(same, NPC_AGENT_COMPONENT, 'pathValid')).toBe(0);
+  });
+
+  it('точка маршрута за обрывом: следование маршрутом идёт тем же путём', () => {
+    // Маршрут и преследование делят один механизм (NPC-6): различается только
+    // источник очередной цели, поэтому обход обрыва обязан работать у обоих.
+    const route = (nav?: NavigationOptions): Harness => {
+      const h = harness(
+        { behaviors: [walker({ ...SLOW, ranges: { sense: F(20), attack: F(1), arrive: F(1), separation: 0 } }) as never], bindings: BINDINGS },
+        { terrain: CLIFF },
+        nav,
+      );
+      h.place('Point', { Position: { x: F(7.5), y: F(0.5) }, Waypoint: { route: 0, index: 0 } });
+      h.place('Creep', { Position: { x: F(0.5), y: F(0.5) }, NpcRoute: { route: 0, index: 0 } });
+      return h;
+    };
+    const withNav = route(NAV);
+    const creep = creepOf(withNav);
+    for (let i = 0; i < 30; i++) withNav.step();
+    expect(withNav.field(creep, 'Position', 'y')).toBeGreaterThan(F(0.5));
+
+    const direct = route();
+    const same = creepOf(direct);
+    for (let i = 0; i < 30; i++) direct.step();
+    expect(direct.field(same, 'Position', 'y')).toBe(F(0.5));
+  });
+
+  it('недостижимая цель деградирует до прямого seek, матч не падает', () => {
+    const h = chase(SHEER, NAV);
+    const creep = creepOf(h);
+    // Десять тиков: агент ещё на своём берегу — стенда с физикой здесь нет, и
+    // дойдя до кромки, он перешагнул бы её, оказавшись с целью на одном уровне.
+    for (let i = 0; i < 10; i++) h.step();
+    expect(h.field(creep, 'Position', 'x')).toBeLessThan(F(4));
+    // Держимой точки нет — `unreachable` её сбрасывает, — и агент идёт прямо.
+    expect(h.field(creep, NPC_AGENT_COMPONENT, 'pathValid')).toBe(0);
+    expect(h.field(creep, 'Position', 'y')).toBe(F(0.5));
+    expect(h.field(creep, 'Position', 'x')).toBeGreaterThan(F(0.5));
+  });
+
+  it('на ровном поле путь совпадает с прямым seek байт-в-байт', () => {
+    const withNav = chase(FLAT, NAV);
+    const direct = chase(FLAT);
+    const a = creepOf(withNav);
+    const b = creepOf(direct);
+    for (let i = 0; i < 20; i++) {
+      withNav.step();
+      direct.step();
+      expect(withNav.field(a, 'Position', 'x')).toBe(direct.field(b, 'Position', 'x'));
+      expect(withNav.field(a, 'Position', 'y')).toBe(direct.field(b, 'Position', 'y'));
+    }
+  });
+
+  it('перемотка возвращает держимую точку пути, и прогон с отката совпадает', () => {
+    const h = chase(CLIFF, NAV);
+    const creep = creepOf(h);
+    for (let i = 0; i < 5; i++) h.step();
+    const held = [
+      h.field(creep, NPC_AGENT_COMPONENT, 'pathValid'),
+      h.field(creep, NPC_AGENT_COMPONENT, 'pathX'),
+      h.field(creep, NPC_AGENT_COMPONENT, 'pathY'),
+    ];
+    expect(held[0]).toBe(1);
+    // Точка входит в снапшот вместе с миром (SNAP-1) — своей структуры у
+    // платформы нет, поэтому перемотка возвращает её даром.
+    const snapshot = takeSnapshot(h.state);
+    expect(snapshotToPlain(snapshot).world.components.NpcAgent).toBeDefined();
+
+    for (let i = 0; i < 6; i++) h.step();
+    const live = snapshotToPlain(takeSnapshot(h.state));
+    restoreSnapshot(h.state, snapshot);
+    expect([
+      h.field(creep, NPC_AGENT_COMPONENT, 'pathValid'),
+      h.field(creep, NPC_AGENT_COMPONENT, 'pathX'),
+      h.field(creep, NPC_AGENT_COMPONENT, 'pathY'),
+    ]).toEqual(held);
+    for (let i = 0; i < 6; i++) h.step();
+    expect(snapshotToPlain(takeSnapshot(h.state))).toEqual(live);
   });
 });
 

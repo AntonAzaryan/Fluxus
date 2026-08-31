@@ -122,6 +122,7 @@
   "arenaPrefab",
   "assert",
   "assertInvariant",
+  "buildNavigation",
   "buildSimulation",
   "cellAt",
   "clamp01",

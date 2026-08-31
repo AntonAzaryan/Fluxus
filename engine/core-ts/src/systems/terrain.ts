@@ -191,8 +191,28 @@ function neighbours(x: number, y: number, width: number, height: number): number
 }
 
 /**
- * TERR-5: переход проходим при равных уровнях либо при перепаде в единицу,
- * если хотя бы одна клетка — рампа. Остальные границы становятся отрезками
+ * TERR-5: переход между клетками с общей стороной проходим при равных уровнях
+ * либо при перепаде в единицу, если хотя бы одна клетка — рампа.
+ *
+ * Функция модуля, а не замыкание внутри cliff-геометрии: тот же предикат — и
+ * единственное правило проходимости границы у поиска пути (`pathfinding`
+ * NAV-7), который берёт его отсюда. Две копии правила означали бы, что «пройти
+ * можно» значит разное у обрыва и у маршрута — ровно тот класс расхождения,
+ * который CORE-3 объявляет дефектом.
+ */
+export function terrainStepPassable(
+  levels: Uint8Array,
+  ramps: Uint8Array,
+  a: number,
+  b: number,
+): boolean {
+  const delta = Math.abs(levels[a]! - levels[b]!);
+  if (delta === 0) return true;
+  return delta === 1 && (ramps[a] === 1 || ramps[b] === 1);
+}
+
+/**
+ * TERR-5: границы, непроходимые по `terrainStepPassable`, становятся отрезками
  * cliff-геометрии; теги (блокировка движения и обзора) у всех одинаковы, и
  * навешивает их физика при регистрации коллайдеров (этап 13).
  *
@@ -203,11 +223,6 @@ function neighbours(x: number, y: number, width: number, height: number): number
 function buildCliffs(grid: TerrainGrid): CliffEdge[] {
   const { width, height, tileSize, levels, ramps } = grid;
   const edges: CliffEdge[] = [];
-  const passable = (a: number, b: number): boolean => {
-    const delta = Math.abs(levels[a]! - levels[b]!);
-    if (delta === 0) return true;
-    return delta === 1 && (ramps[a] === 1 || ramps[b] === 1);
-  };
 
   // Порядок обхода — построчный, сосед справа перед соседом снизу (DET-6).
   // Уровни сторон пишутся в отрезок здесь же (TERR-5): `levelNeg` — клетка с
@@ -215,7 +230,7 @@ function buildCliffs(grid: TerrainGrid): CliffEdge[] {
   for (let y = 0; y < height; y++) {
     for (let x = 0; x < width; x++) {
       const i = y * width + x;
-      if (x + 1 < width && !passable(i, i + 1)) {
+      if (x + 1 < width && !terrainStepPassable(levels, ramps, i, i + 1)) {
         const edgeX = (x + 1) * tileSize;
         edges.push({
           from: { x: edgeX, y: y * tileSize },
@@ -224,7 +239,7 @@ function buildCliffs(grid: TerrainGrid): CliffEdge[] {
           levelPos: levels[i + 1]!,
         });
       }
-      if (y + 1 < height && !passable(i, i + width)) {
+      if (y + 1 < height && !terrainStepPassable(levels, ramps, i, i + width)) {
         const edgeY = (y + 1) * tileSize;
         edges.push({
           from: { x: x * tileSize, y: edgeY },

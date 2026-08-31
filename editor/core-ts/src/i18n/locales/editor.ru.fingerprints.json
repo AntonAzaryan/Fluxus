@@ -962,6 +962,18 @@
       "source": "214f0487",
       "translated": "df78f545"
     },
+    "schema.scenario.navigation": {
+      "source": "f70d0e62",
+      "translated": "c5c5ffe9"
+    },
+    "schema.scenario.navigation.budget": {
+      "source": "3d5239ee",
+      "translated": "9a81e4fa"
+    },
+    "schema.scenario.navigation.maxAgentRadius": {
+      "source": "44a965e9",
+      "translated": "eebf5586"
+    },
     "schema.scenario.physics": {
       "source": "0cf3f77a",
       "translated": "51a7d71e"
