@@ -115,12 +115,14 @@ function measuredWork(): System {
   };
 }
 
-// `npcNeighbors` — своя строка сводки (NPC-6, NPC-9): на сцене без агентов
-// она ноль, и именно нулём отличает «работы не было» от «её сложили с чужой».
+// `npcNeighbors` и `navNodes` — свои строки сводки (NPC-6, NPC-9; NAV-5): на
+// сцене без агентов и без навигации они нули, и именно нулём отличают «работы
+// не было» от «её сложили с чужой».
 const EXPECTED_COST = {
   commandsApplied: 2,
   expressions: 2,
   broadPhasePairs: 1,
+  navNodes: 0,
   npcNeighbors: 0,
   raycasts: 1,
 };
@@ -270,6 +272,7 @@ describe('PERF-3: сводка стоимости — обычная запис�
       'broadPhasePairs',
       'commandsApplied',
       'expressions',
+      'navNodes',
       'npcNeighbors',
       'raycasts',
     ]);
@@ -355,6 +358,8 @@ describe('PERF-3: счётчики считают отмеренную рабо�
       commandsApplied: EXPECTED_COST.commandsApplied * 2,
       expressions: EXPECTED_COST.expressions * 2,
       broadPhasePairs: EXPECTED_COST.broadPhasePairs * 2,
+      // Вдвое от нуля — ноль: навигации на этой сцене нет вовсе.
+      navNodes: EXPECTED_COST.navNodes * 2,
       // Вдвое от нуля — ноль: агентов на этой сцене нет, и это тоже удвоение.
       npcNeighbors: EXPECTED_COST.npcNeighbors * 2,
       raycasts: EXPECTED_COST.raycasts * 2,

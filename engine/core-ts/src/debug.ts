@@ -68,6 +68,7 @@ export interface DiagnosticsContext {
   costCommandsApplied: number;
   costExpressions: number;
   costBroadPhasePairs: number;
+  costNavNodes: number;
   costNpcNeighbors: number;
   costRaycasts: number;
 }
@@ -105,6 +106,7 @@ export function withDiagnostics<T>(
     costCommandsApplied: 0,
     costExpressions: 0,
     costBroadPhasePairs: 0,
+    costNavNodes: 0,
     costNpcNeighbors: 0,
     costRaycasts: 0,
   };
@@ -299,6 +301,23 @@ export function countCostNpcNeighbors(examined: number): void {
   ctx.costNpcNeighbors += examined;
 }
 
+/**
+ * Работа одного запроса пути (`pathfinding` NAV-5, NAV-10): раскрытые узлы A*
+ * плюс пробы клеток обхода видимости. Единица та же, что у кандидатов
+ * broad-phase, — осмотренная клетка, — и обе половины считаются в одну строку
+ * намеренно: это ровно та работа, которую ограничивает бюджет поиска (NAV-5),
+ * и разделять её счётчиками значило бы обещать бюджету две единицы.
+ *
+ * Своя строка, а не сумма с соседями: работа навигации растёт размером арены и
+ * числом перезапросов, а не составом статики и не плотностью толпы, — в общем
+ * счётчике её регрессия утонула бы (тот же довод, что у `npcNeighbors`).
+ */
+export function countCostNavNodes(nodes: number): void {
+  const ctx = current;
+  if (ctx === undefined) return;
+  ctx.costNavNodes += nodes;
+}
+
 /** Вызов детерминированного raycast Physics API (PERF-3). */
 export function countCostRaycast(): void {
   const ctx = current;
@@ -342,6 +361,7 @@ function recordTickCost(ctx: DiagnosticsContext): void {
       commandsApplied: ctx.costCommandsApplied,
       expressions: ctx.costExpressions,
       broadPhasePairs: ctx.costBroadPhasePairs,
+      navNodes: ctx.costNavNodes,
       npcNeighbors: ctx.costNpcNeighbors,
       raycasts: ctx.costRaycasts,
     },

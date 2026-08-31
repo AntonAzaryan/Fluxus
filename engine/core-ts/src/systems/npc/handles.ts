@@ -64,6 +64,10 @@ export interface NpcHandles {
   readonly agentBehavior: FieldHandle;
   readonly agentDecidedTick: FieldHandle;
   readonly agentEnteredTick: FieldHandle;
+  /** Держимая точка пути и её признак (NPC-6): читаются вне окна решений. */
+  readonly agentPathValid: FieldHandle;
+  readonly agentPathX: FieldHandle;
+  readonly agentPathY: FieldHandle;
   /** Держимый вектор локального расхождения (NPC-6): читается вне окна пересчёта. */
   readonly agentSepX: FieldHandle;
   readonly agentSepY: FieldHandle;
@@ -134,6 +138,9 @@ export function resolveNpcHandles(ctx: SystemContext, bindings: CompiledNpcBindi
     agentBehavior: ctx.resolveField(NPC_AGENT_COMPONENT, 'behavior'),
     agentDecidedTick: ctx.resolveField(NPC_AGENT_COMPONENT, 'decidedTick'),
     agentEnteredTick: ctx.resolveField(NPC_AGENT_COMPONENT, 'enteredTick'),
+    agentPathValid: ctx.resolveField(NPC_AGENT_COMPONENT, 'pathValid'),
+    agentPathX: ctx.resolveField(NPC_AGENT_COMPONENT, 'pathX'),
+    agentPathY: ctx.resolveField(NPC_AGENT_COMPONENT, 'pathY'),
     agentSepX: ctx.resolveField(NPC_AGENT_COMPONENT, 'sepX'),
     agentSepY: ctx.resolveField(NPC_AGENT_COMPONENT, 'sepY'),
     agentState: ctx.resolveField(NPC_AGENT_COMPONENT, 'state'),

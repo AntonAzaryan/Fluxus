@@ -10,7 +10,7 @@
  * Контентом этот модуль не является (`game-content` CONT-1): контент лежит в
  * `content/`, здесь только его чтение и раскладка в `MatchConfig`.
  */
-import type { SceneDef } from '@fluxus/core';
+import type { NavigationOptions, SceneDef } from '@fluxus/core';
 import {
   contentPack,
   type LoadedContentPack,
@@ -22,7 +22,11 @@ import {
 // неизвестный ключ — отказ. Импортировать его сюда нельзя — он тянет `node:fs`
 // и хук резолва, которых в сборке вкладки нет, — поэтому берутся его ТИПЫ:
 // импорт стирается сборкой, а списки полей ниже приколочены типом кортежа.
-import type { MATCH_DOCUMENT_FIELDS, MatchDocumentField } from '@fluxus/net/bin/matchFile.mjs';
+import type {
+  CLIENT_BUILD_FIELDS,
+  MATCH_DOCUMENT_FIELDS,
+  MatchDocumentField,
+} from '@fluxus/net/bin/matchFile.mjs';
 import sceneJson from '../../../content/scenes/duel.scene.json';
 import matchJson from '../../../content/matches/duel.match.json';
 
@@ -53,6 +57,7 @@ export const DEMO_DOCUMENT_FIELDS: typeof MATCH_DOCUMENT_FIELDS = [
   'physics',
   'locomotion',
   'visibility',
+  'navigation',
 ];
 
 /**
@@ -96,6 +101,45 @@ export const DEMO_SNAPSHOT_RATE = doc.snapshotRate ?? 30;
  * отматывает вовсе.
  */
 export const DEMO_REWIND: MatchRewindOptions | undefined = doc.rewind;
+/**
+ * Поиск пути матча (NTR-14, `pathfinding` NAV-1): бюджет раскрытий и предел
+ * радиуса агента. Читаются из документа обеими сборками демо — сетевой и
+ * локальной (`sim.ts`), по той же причине, что настройки перемотки: собери одна
+ * сборка навигацию, а другая нет — и NPC в них ходят разными дорогами при одной
+ * сцене (NPC-6), причём в локальной сборке это некому заметить, сервера у неё
+ * нет вовсе.
+ */
+export const DEMO_NAVIGATION: NavigationOptions | undefined = doc.navigation;
+
+/**
+ * Зависимости сборки мира, которые сборка отдаёт КЛИЕНТУ (NTR-14) — копия
+ * `CLIENT_BUILD_FIELDS` запускалок, приколоченная ТИПОМ КОРТЕЖА, как и список
+ * полей документа выше. Своя запись нужна потому, что помощник запускалок
+ * тянет `node:fs` и в сборку вкладки не входит; расходиться двум записям типом
+ * запрещено: разойдись они — предсказание клиента (NTR-10) тикало бы не тем
+ * составом, что сервер, и заметить это можно было бы только по разошедшимся
+ * дорогам NPC.
+ */
+export const DEMO_CLIENT_BUILD_FIELDS: typeof CLIENT_BUILD_FIELDS = [
+  'physics',
+  'visibility',
+  'navigation',
+];
+
+/** Те же секции конфига для клиента — ровно объявленные, без `undefined`-ключей. */
+export function demoClientBuildOptions(
+  config: Pick<MatchConfig, (typeof DEMO_CLIENT_BUILD_FIELDS)[number]>,
+): Partial<Pick<MatchConfig, (typeof DEMO_CLIENT_BUILD_FIELDS)[number]>> {
+  // Отсутствующая секция ключом со значением `undefined` не становится: опции
+  // клиента отличают «не назвали» от «назвали пустым» (NTR-14). Что тело не
+  // отстало от списка, проверяет тест раскладки — сверкой ключей результата с
+  // самим списком, а не с переписанными в нём именами.
+  return {
+    ...(config.physics !== undefined ? { physics: config.physics } : {}),
+    ...(config.visibility !== undefined ? { visibility: config.visibility } : {}),
+    ...(config.navigation !== undefined ? { navigation: config.navigation } : {}),
+  };
+}
 
 /**
  * Тиков между шагами ведения точки перемотки (REW-13). Сервер делает шаг раз в

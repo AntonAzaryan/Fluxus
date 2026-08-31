@@ -4,11 +4,21 @@
  * через Command Buffer. Ядро никого по пути не водит, компонента пути и поля
  * «идти сюда» у него нет.
  *
- * Поиска пути здесь не происходит вовсе: маршрут волны — waypoint-данные сцены,
- * а сближение с целью — прямой seek. Сцена без Navigation API тикает с NPC
- * штатно (DI-4, NAV-6). Когда за `NavigationApi` появится реализация, seek
- * сменится на `findPath` — без правки документа поведения и маршрутов сцены,
- * потому что ни то ни другое о способе движения не говорит.
+ * Сближение с очередной целью движения — точкой маршрута или целью преследования
+ * — идёт по пути из `findPath`, когда навигация в сборке есть, и прямым seek,
+ * когда её нет (NPC-6, DI-4, NAV-6). Документа поведения и маршрутов сцены это
+ * не касается: ни то ни другое о СПОСОБЕ движения не говорит.
+ *
+ * Путь не хранится списком (NPC-6): `findPath` чист и детерминирован (NAV-2),
+ * поэтому политика держит ОДНУ очередную точку — полями компонента агента, как
+ * и вектор расхождения, — и перезапрашивает путь в своём окне решений (NPC-4).
+ * Окно это читается из мира: `decidedTick` агента, поставленный системой
+ * поведения на этом же тике (её `order` меньше, и её команды уже применены).
+ *
+ * Всякий не-`found` ответ, отсутствие точки и достигнутая держимая точка
+ * означают одно и то же — прямой seek к цели, тот же, что в сборке без
+ * навигации: недостижимость и исчерпание бюджета матч не роняют и волну не
+ * останавливают (NPC-6).
  *
  * Локальное расхождение — по соседям СЕТКИ (`grid.ts`): полного перебора пар
  * агентов нет, и стоимость шага растёт числом соседей, а не квадратом числа
@@ -38,6 +48,8 @@ import {
   NO_ENTITY,
   type EntityId,
   type Fixed,
+  type NavigationApi,
+  type PathRequestOptions,
   type QuerySpec,
   type System,
   type SystemContext,
@@ -79,6 +91,18 @@ export class NpcMovementSystem implements System {
   /** Направление шага текущего агента: единичный вектор либо ноль. */
   private dirX: Fixed = 0;
   private dirY: Fixed = 0;
+  /**
+   * Концы запроса пути и его опции — ПЕРЕИСПОЛЬЗУЕМЫЕ поля системы, а не
+   * литералы на вызов: запрос случается в окне решений каждого агента, и
+   * литерал на каждый был бы аллокацией, пропорциональной числу сущностей.
+   * `findPath` — чистый запрос (NAV-2) и переданных точек не удерживает.
+   */
+  private readonly requestFrom = { x: 0 as Fixed, y: 0 as Fixed };
+  private readonly requestTo = { x: 0 as Fixed, y: 0 as Fixed };
+  private readonly requestOptions = { agentRadius: 0 as Fixed };
+  /** Точка, к которой агент идёт на этом тике: держимая либо только что найденная. */
+  private pointX: Fixed = 0;
+  private pointY: Fixed = 0;
   /** Handle платформы (SYS-10): один раз на первом входе, после раннего выхода. */
   private handles: NpcHandles | undefined;
 
@@ -154,8 +178,8 @@ export class NpcMovementSystem implements System {
   }
 
   /**
-   * Следование маршруту (NPC-6): seek к текущей точке, переход к следующей по
-   * достижении. Прогресс живёт в компоненте агента, то есть снапшотится и
+   * Следование маршруту (NPC-6): сближение с текущей точкой, переход к следующей
+   * по достижении. Прогресс живёт в компоненте агента, то есть снапшотится и
    * откатывается вместе с миром (SNAP-1).
    */
   private followRoute(
@@ -177,7 +201,7 @@ export class NpcMovementSystem implements System {
       point = this.routes.at(route, index);
       if (point === NO_ENTITY) return;
     }
-    this.normalize(posX(ctx, handles, point) - x, posY(ctx, handles, point) - y);
+    this.steer(ctx, handles, behavior, entity, posX(ctx, handles, point), posY(ctx, handles, point));
   }
 
   /** Сближение с целью; в пределах дистанции контакта агент стоит (NPC-4). */
@@ -189,10 +213,119 @@ export class NpcMovementSystem implements System {
   ): void {
     const target = ctx.getByHandle(entity, handles.agentTarget);
     if (target === NO_ENTITY || !ctx.isAlive(target) || isDead(ctx, handles, target)) return;
-    const dx = posX(ctx, handles, target) - posX(ctx, handles, entity);
-    const dy = posY(ctx, handles, target) - posY(ctx, handles, entity);
+    const goalX = posX(ctx, handles, target);
+    const goalY = posY(ctx, handles, target);
+    const dx = goalX - posX(ctx, handles, entity);
+    const dy = goalY - posY(ctx, handles, entity);
     if (distSqLe(dx, dy, behavior.attack)) return;
-    this.normalize(dx, dy);
+    this.steer(ctx, handles, behavior, entity, goalX, goalY);
+  }
+
+  /**
+   * Сближение с точкой — ОДИН механизм для маршрута и для преследования (NPC-6):
+   * различается у них только источник очередной цели, а не способ движения.
+   *
+   * Без собранной навигации это прежний прямой seek, байт-в-байт (DI-4, NAV-6).
+   * С навигацией агент идёт к держимой точке пути, а прямой seek остаётся
+   * деградацией: путь не найден, точки нет либо она уже достигнута.
+   *
+   * Достигнутая точка ИСЧЕРПАНА и возвращает к прямому seek — это норма NPC-6,
+   * а не решение реализации: у документа с дистанцией контакта меньше дистанции
+   * прибытия агент, стоящий на достигнутой точке, так и не дошёл бы до цели, а
+   * шаг, длиннее остатка пути, давал бы перелёт и разворот на месте каждый тик.
+   */
+  private steer(
+    ctx: SystemContext,
+    handles: NpcHandles,
+    behavior: CompiledBehavior,
+    entity: EntityId,
+    goalX: Fixed,
+    goalY: Fixed,
+  ): void {
+    const x = posX(ctx, handles, entity);
+    const y = posY(ctx, handles, entity);
+    if (this.holdsPoint(ctx, handles, behavior, entity, goalX, goalY)) {
+      this.normalize(sub(this.pointX, x), sub(this.pointY, y));
+      return;
+    }
+    this.normalize(goalX - x, goalY - y);
+  }
+
+  /**
+   * Есть ли на этом тике держимая точка пути (NPC-6). В окне решений агента
+   * (NPC-4) путь перезапрашивается, между окнами берётся точка из полей
+   * компонента; достигнутая точка считается ИСЧЕРПАННОЙ (NPC-6) и держимой не
+   * является.
+   *
+   * Окно читается по `decidedTick`: система поведения (`order` −795) ставит его
+   * командой, а команды применяются на границе системы (CMD-2), поэтому здесь
+   * (`order` 70) равенство номеру тика и означает «агент решал на этом тике».
+   * Окно от этого остаётся функцией состояния мира, как того требует NPC-4.
+   */
+  private holdsPoint(
+    ctx: SystemContext,
+    handles: NpcHandles,
+    behavior: CompiledBehavior,
+    entity: EntityId,
+    goalX: Fixed,
+    goalY: Fixed,
+  ): boolean {
+    const navigation = ctx.navigation;
+    if (navigation === undefined) return false;
+    if (ctx.getByHandle(entity, handles.agentDecidedTick) === ctx.tick) {
+      return this.requestPath(ctx, handles, navigation, entity, goalX, goalY);
+    }
+    if (ctx.getByHandle(entity, handles.agentPathValid) === 0) return false;
+    this.pointX = ctx.getByHandle(entity, handles.agentPathX);
+    this.pointY = ctx.getByHandle(entity, handles.agentPathY);
+    const x = posX(ctx, handles, entity);
+    const y = posY(ctx, handles, entity);
+    return !distSqLe(sub(this.pointX, x), sub(this.pointY, y), behavior.arrive);
+  }
+
+  /**
+   * Перезапрос пути в окне решений (NPC-6): держится ОЧЕРЕДНАЯ точка, а не
+   * список. `agentRadius` берётся из данных агента — радиуса вписанной
+   * окружности его коллайдера (PHYS-4, ARENA-5), а не из константы механизма;
+   * сцена без физики радиуса не даёт вовсе, и запрос идёт без него.
+   */
+  private requestPath(
+    ctx: SystemContext,
+    handles: NpcHandles,
+    navigation: NavigationApi,
+    entity: EntityId,
+    goalX: Fixed,
+    goalY: Fixed,
+  ): boolean {
+    this.requestFrom.x = posX(ctx, handles, entity);
+    this.requestFrom.y = posY(ctx, handles, entity);
+    this.requestTo.x = goalX;
+    this.requestTo.y = goalY;
+    const radius = ctx.physics?.inradiusOf(entity);
+    let options: PathRequestOptions | undefined;
+    if (radius !== undefined) {
+      this.requestOptions.agentRadius = radius;
+      options = this.requestOptions;
+    }
+    const path = navigation.findPath(this.requestFrom, this.requestTo, options);
+    // Пустой список у `found` — цель совпала с точкой агента (NAV-5): держать
+    // нечего, и прямой seek здесь и есть кратчайший путь.
+    const next = path.status === 'found' ? path.waypoints[0] : undefined;
+    if (next === undefined) {
+      // Команда — только на изменившееся: поля агента участвуют в dirty-дельте
+      // тика (OBS-6), и запись прежнего нуля объявляла бы изменение, которого не
+      // было, — каждое окно решений каждого агента без пути.
+      if (ctx.getByHandle(entity, handles.agentPathValid) !== 0) {
+        ctx.commands.setField(entity, NPC_AGENT_COMPONENT, 'pathValid', 0);
+      }
+      return false;
+    }
+    this.pointX = next.x;
+    this.pointY = next.y;
+    ctx.commands.setField(entity, NPC_AGENT_COMPONENT, 'pathValid', 1);
+    ctx.commands.setField(entity, NPC_AGENT_COMPONENT, 'pathX', next.x);
+    ctx.commands.setField(entity, NPC_AGENT_COMPONENT, 'pathY', next.y);
+    return true;
   }
 
   /**

@@ -25,6 +25,7 @@ import {
   type ComponentSchema,
   type DiagnosticsSink,
   type LocomotionOptions,
+  type NavigationOptions,
   type PhysicsOptions,
   type PlainWorld,
   type ScenarioSpawn,
@@ -54,6 +55,16 @@ export interface MatchWorldDef {
    * этого поля — отказ сборки (см. `buildMatchWorld`).
    */
   readonly visibility?: VisibilityOptions;
+  /**
+   * Включение и параметры поиска пути (NTR-14), по той же форме, что поле
+   * `navigation` документа прогона сценария (CLI-2): бюджет раскрытий (`pathfinding`
+   * NAV-5) и предел радиуса агента (`terrain` TERR-7). Навигационные данные
+   * печутся из ассета террейна сцены (NAV-3), поэтому поле здесь, а не в
+   * `SceneDef`: числа геймдизайнера — зависимость сборки, а не данные сцены
+   * (DI-3). Обе стороны матча получают его из одного описания (NTR-14) — иначе
+   * предсказание клиента водило бы NPC не там, где сервер.
+   */
+  readonly navigation?: NavigationOptions;
   /**
    * Приёмник трейса (DIAG-8, DIAG-1) — та же опциональная зависимость сборки
    * (DI-5), какой его передаёт прогонщик сценария. Дорога уже существует: ядро
@@ -106,6 +117,7 @@ export function buildMatchWorld(def: MatchWorldDef): MatchWorld {
       ...(def.physics !== undefined ? { physics: def.physics } : {}),
       ...(def.locomotion !== undefined ? { locomotion: def.locomotion } : {}),
       ...(def.visibility !== undefined ? { visibility: def.visibility } : {}),
+      ...(def.navigation !== undefined ? { navigation: def.navigation } : {}),
     },
     {
       where: 'конфиг матча',

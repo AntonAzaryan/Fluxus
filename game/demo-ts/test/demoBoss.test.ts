@@ -85,6 +85,8 @@ const MATCH = matchJson as unknown as {
   readonly locomotion: Record<string, unknown>;
   /** Пересчёт видимости (NTR-14, FOW-4): сцена с `fog` без него не собирается. */
   readonly visibility?: Record<string, never>;
+  /** Поиск пути (NTR-14, `pathfinding` NAV-1): бюджет и предел радиуса агента. */
+  readonly navigation?: { readonly budget: number; readonly maxAgentRadius: number };
 };
 
 interface EffectEntry {
@@ -387,6 +389,10 @@ function stand(
     physics: {},
     locomotion: MATCH.locomotion,
     ...(MATCH.visibility !== undefined ? { visibility: MATCH.visibility } : {}),
+    // Навигация — та же зависимость сборки, что физика и видимость (NTR-14):
+    // стенд обязан поднимать мир тем же описанием, каким его поднимает матч,
+    // иначе NPC здесь ходят иначе, чем в игре (`npc-behavior` NPC-6).
+    ...(MATCH.navigation !== undefined ? { navigation: MATCH.navigation } : {}),
   });
 
   const heroes: EntityId[] = [];
@@ -1164,25 +1170,38 @@ describe('разгон: наводка, рывок и полоса огня', ()
     expect(coreWorld.getField(a.state.world, a.boss, 'Collider', 'blockMask')).toBe(BOSS_BLOCK_MASK);
   });
 
-  it('рассекает обрыв: там, где шагом не подняться, рывок проносит', () => {
-    // Босс стоит ПОД плато (уровень 1 над 0), допуск подъёма ему снят: шагом
-    // он упирается в обрыв, потому что идёт строго на север и скользить вдоль
-    // стены ему нечем. Разница между двумя прогонами — только в дистанции до
+  it('рассекает обрыв: рывок переносит через кромку раньше, чем ноги обходят её', () => {
+    // Босс стоит ПОД плато (уровень 1 над 0), допуск подъёма ему снят: сквозь
+    // кромку он не ходит. Разница между двумя прогонами — только в дистанции до
     // цели, то есть в том, дотягивается ли до неё удар или просится разгон:
     // порог ровно один и тот же — досягаемость волны.
+    //
+    // Мерится ТЕМП, а не сам факт подъёма, и это следствие навигации (NTR-14,
+    // `pathfinding` NAV-1): с ней босс кромку обходит по рампе и наверх
+    // добирается и ногами — прежнее «шагом не подняться» перестало быть правдой
+    // ровно потому, что путь теперь ищется. Рывок остаётся тем, чем был: он
+    // рассекает обрыв напрямую и потому наверху оказывается много раньше.
     const flat = noRepel(
       bossCollider({ cliffRise: 0 }, bossAt(14, 8, health('Hero', 400000, only('SlotBossCharge')))),
     );
     const near = 8 + STRIKE_REACH / FIXED_ONE - 0.2;
     const far = 8 + STRIKE_REACH / FIXED_ONE + 2;
+    /** Тик, на котором босс оказался выше кромки плато; `Infinity` — не оказался. */
+    const climb = (a: Stand): number => {
+      for (let t = 1; t <= 400; t++) {
+        a.step();
+        if (py(a.state, a.boss) > 11 * FIXED_ONE) return t;
+      }
+      return Number.POSITIVE_INFINITY;
+    };
 
     const walk = stand([[14, near]], flat);
-    for (let t = 1; t <= 400; t++) walk.step();
-    expect(py(walk.state, walk.boss)).toBeLessThan(11 * FIXED_ONE);
-
+    const walkTick = climb(walk);
     const dash = stand([[14, far]], flat);
-    for (let t = 1; t <= 400; t++) dash.step();
-    expect(py(dash.state, dash.boss)).toBeGreaterThan(11 * FIXED_ONE);
+    const dashTick = climb(dash);
+
+    expect(dashTick).toBeLessThan(walkTick);
+    expect(dashTick).toBeLessThan(400);
   });
 
   it('на рывке толчок молчит: 500 за проход не складываются с 200 в упор', () => {

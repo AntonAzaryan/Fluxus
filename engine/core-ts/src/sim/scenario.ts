@@ -12,6 +12,7 @@
 import { buildSimulation } from './build.js';
 import { type LocomotionOptions } from '../systems/locomotion.js';
 import { type PhysicsOptions } from '../systems/physics.js';
+import { type NavigationOptions } from '../systems/nav/navigation.js';
 import { type VisibilityOptions } from '../systems/visibility.js';
 import { type ScenarioSpawn } from './placement.js';
 import { type SceneDef } from './scene.js';
@@ -50,6 +51,13 @@ export interface ScenarioDef {
    * сцены: системе нужен raycast, то есть зависимость сборки (DI-3).
    */
   readonly visibility?: VisibilityOptions;
+  /**
+   * Включает поиск пути (NAV-1). Поле сценария по тем же основаниям, что физика
+   * и локомоушен: бюджет раскрытий (NAV-5) и предел радиуса агента (TERR-7) —
+   * зависимости сборки, а не данные сцены (SER-7), а сами карты производны от
+   * ассета террейна (NAV-3).
+   */
+  readonly navigation?: NavigationOptions;
 }
 
 /**
@@ -92,6 +100,7 @@ export function runScenario(def: ScenarioDef, diagnostics?: DiagnosticsSink): Ru
       ...(def.physics !== undefined ? { physics: def.physics } : {}),
       ...(def.locomotion !== undefined ? { locomotion: def.locomotion } : {}),
       ...(def.visibility !== undefined ? { visibility: def.visibility } : {}),
+      ...(def.navigation !== undefined ? { navigation: def.navigation } : {}),
     },
     {
       where: `сценарий "${def.name}"`,

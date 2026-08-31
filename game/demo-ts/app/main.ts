@@ -107,6 +107,7 @@ import {
   cameraDebugSource,
   dynamicCollidersDebugSource,
   inspectorDebugSource,
+  navPathsDebugSource,
   staticCollidersDebugSource,
 } from './debugSources.js';
 import { demoEdgePan } from './cameraInput.js';
@@ -1157,7 +1158,8 @@ function wireQualitySelect(initial: QualityPresetName): void {
  * считаются (`debugSources.ts`). Движковые источники приезжают сами — их
  * объявили подсистемы при регистрации (REND-27); сборка добавляет свои: шов
  * доставки, читателя счётчиков стоимости, реконструкцию статики, круги
- * коллайдеров по объявленному стату, инспектор поверх picking'а и камеру.
+ * коллайдеров по объявленному стату, нити пути NPC, инспектор поверх picking'а и
+ * камеру.
  *
  * Ни один из них не заводит нового канала к данным (RDBG-6): всё считается из
  * доставленного состояния, сетки handshake (SHELL-5) и позы камеры (CAM-1).
@@ -1196,6 +1198,21 @@ function wireDebugPanel(surface: VisualSurfaceSource, bounds: CameraBounds): voi
     .register(programsDebugSource(renderer3))
     .register(staticCollidersDebugSource(() => remote?.terrain ?? null))
     .register(dynamicCollidersDebugSource(STATS.colliderRadius))
+    // Нити пути NPC (`pathfinding` NAV-1, NPC-6): держимая точка агента приезжает
+    // объявленными статами (HUD-8), путь к ней главный поток пересчитывает сам
+    // — из той же сетки handshake, тем же `findPath` ядра (RDBG-6, RDBG-8).
+    .register(
+      navPathsDebugSource(
+        {
+          x: STATS.navPathX,
+          y: STATS.navPathY,
+          valid: STATS.navPathValid,
+          radius: STATS.colliderRadius,
+          target: STATS.navTarget,
+        },
+        () => remote?.terrain ?? null,
+      ),
+    )
     .register(
       inspectorDebugSource({
         picking: () => picking,

@@ -314,6 +314,21 @@ const scenario: Json = {
         },
       },
     },
+    navigation: {
+      $comment:
+        'Включает поиск пути (NAV-1). Поле сценария, а не сцены: бюджет раскрытий (NAV-5) и предел радиуса агента (TERR-7) — зависимости сборки, а карты производны от ассета террейна (NAV-3).',
+      type: 'object',
+      additionalProperties: false,
+      required: ['budget', 'maxAgentRadius'],
+      properties: {
+        budget: { $comment: 'Предел раскрытых узлов запроса (NAV-5).', type: 'integer', minimum: 1 },
+        maxAgentRadius: {
+          $comment: 'Наибольший радиус агента в Q16.16; проверяется против tileSize (TERR-7).',
+          type: 'integer',
+          minimum: 0,
+        },
+      },
+    },
     players: {
       $comment: 'Порядок задаёт слоты игроков (TICK-5); обязателен вместе с inputs.',
       type: 'array',

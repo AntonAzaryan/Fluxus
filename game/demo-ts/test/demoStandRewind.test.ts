@@ -19,14 +19,28 @@
  * поэтому раскладка как таковая проверяется формой документа —
  * `engine/net-ts/test/matchFile.test.ts`.
  */
+import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
-import type { SceneDef } from '@fluxus/core';
-import { MatchServer, contentPack, type ClientMessage, type MatchConfig } from '@fluxus/net';
-import { MATCH_DOCUMENT_FIELDS, matchConfigOf, readMatchFile } from '@fluxus/net/bin/matchFile.mjs';
+import { tick, world as coreWorld, type SceneDef } from '@fluxus/core';
 import {
+  MatchServer,
+  buildMatchWorld,
+  contentPack,
+  type ClientMessage,
+  type MatchConfig,
+} from '@fluxus/net';
+import {
+  CLIENT_BUILD_FIELDS,
+  MATCH_DOCUMENT_FIELDS,
+  matchConfigOf,
+  readMatchFile,
+} from '@fluxus/net/bin/matchFile.mjs';
+import {
+  DEMO_CLIENT_BUILD_FIELDS,
   DEMO_DOCUMENT_FIELDS,
   DEMO_MATCH,
+  demoClientBuildOptions,
   demoContentPack,
   demoMatchConfig,
   demoMatchConfigOf,
@@ -39,6 +53,10 @@ const MATCH_PATH = fileURLToPath(
   new URL('../../../content/matches/duel.match.json', import.meta.url),
 );
 const SCENE = sceneJson as unknown as SceneDef;
+
+/** Секция `navigation` документа матча (NTR-14) — как её читает человек. */
+const DOCUMENT_NAVIGATION = (matchJson as { readonly navigation?: Record<string, number> })
+  .navigation;
 
 /** Секция `rewind` документа матча — как её читает человек, открыв файл. */
 const DOCUMENT_REWIND = (matchJson as { readonly rewind?: Record<string, unknown> }).rewind;
@@ -168,10 +186,83 @@ describe('раскладка документа матча одна на обе 
     expect(() => matchConfigOf(document, demoContentPack())).toThrow(/"rewnd"/);
   });
 
+  it('документ объявляет поиск пути, и мир матча его печёт (NTR-14, NAV-1)', () => {
+    // Навигация — зависимость сборки наравне с физикой и видимостью: документ
+    // её называет, обе стороны берут ЕЁ ЖЕ (NTR-14), и без места в конфиге
+    // матча движение NPC по путям (NPC-6) было бы недостижимо ни в одной игре.
+    const config = standConfig();
+    expect(config.navigation).toEqual(DOCUMENT_NAVIGATION);
+    expect(config.navigation?.budget).toBeGreaterThan(0);
+    const built = buildMatchWorld({
+      scene: config.scene,
+      seed: config.seed,
+      players: config.players,
+      ...(config.initial !== undefined ? { initial: config.initial } : {}),
+      ...(config.physics !== undefined ? { physics: config.physics } : {}),
+      ...(config.visibility !== undefined ? { visibility: config.visibility } : {}),
+      ...(config.navigation !== undefined ? { navigation: config.navigation } : {}),
+    });
+    expect(built.sim.navigation).toBeDefined();
+    // Путь по арене демо ищется, а не отвечает «недостижимо»: сетка сцены и
+    // числа документа сходятся друг с другом.
+    const found = built.sim.navigation!.findPath(
+      { x: 557056, y: 1605632 },
+      { x: 2588672, y: 1605632 },
+    );
+    expect(found.status).toBe('found');
+
+    // И NPC арены этим пользуются: в своё окно решений агент берёт очередную
+    // точку пути (NPC-6). Без этого объявление навигации было бы мёртвым, а
+    // отладочный источник нитей пути (`demo.navPaths`) не имел бы что рисовать.
+    let held = 0;
+    for (let t = 0; t < 120 && held === 0; t++) {
+      tick(built.sim, built.state);
+      held = coreWorld
+        .listAlive(built.state.world)
+        .filter(
+          (entity) =>
+            coreWorld.hasComponent(built.state.world, entity, 'NpcAgent') &&
+            coreWorld.getField(built.state.world, entity, 'NpcAgent', 'pathValid') === 1,
+        ).length;
+    }
+    expect(held).toBeGreaterThan(0);
+  });
+
+  it('стенд отдаёт ботам зависимости сборки общей раскладкой (NTR-14, NTR-10)', () => {
+    // Бот предсказывает тики (NTR-10) и обязан тикать тем же составом, что
+    // сервер: навигация, собранная у одной стороны и не собранная у другой,
+    // водила бы NPC разными дорогами при формально одном мире. Проверяется по
+    // исходнику — исполнить стенд тест не может: он поднимает сервер и слушает
+    // порт.
+    const source = readFileSync(
+      fileURLToPath(new URL('../bin/demo-serve.mjs', import.meta.url)),
+      'utf8',
+    );
+    expect(source).toContain('clientBuildOptions(match)');
+    for (const field of CLIENT_BUILD_FIELDS) {
+      expect(source, field).not.toContain(`{ ${field}: match.${field} }`);
+    }
+  });
+
   it('список полей документа вкладки — тот же, что у запускалок', () => {
     // Совпадение списков держит тип кортежа (`npm run typecheck`); здесь —
     // что объявление типов (`matchFile.d.mts`) не разошлось с `matchFile.mjs`.
     expect([...DEMO_DOCUMENT_FIELDS]).toEqual([...MATCH_DOCUMENT_FIELDS]);
+  });
+
+  it('раскладка зависимостей сборки для клиента у вкладки та же, что у запускалок', () => {
+    // Вторая запись того же списка нужна потому, что помощник запускалок тянет
+    // `node:fs` и в сборку вкладки не входит. Разойтись им запрещено типом; тут
+    // проверяется, что и значения не разошлись (NTR-14, NTR-10).
+    expect([...DEMO_CLIENT_BUILD_FIELDS]).toEqual([...CLIENT_BUILD_FIELDS]);
+    // Сверка СПИСКОМ, а не переписанными именами: секция, добавленная в список
+    // и забытая в теле раскладки, краснеет здесь.
+    const config = standConfig();
+    const carried = config as unknown as Record<string, unknown>;
+    expect(Object.keys(demoClientBuildOptions(config)).sort()).toEqual(
+      [...DEMO_CLIENT_BUILD_FIELDS].filter((field) => carried[field] !== undefined).sort(),
+    );
+    expect(demoClientBuildOptions(config).navigation).toEqual(config.navigation);
   });
 });
 

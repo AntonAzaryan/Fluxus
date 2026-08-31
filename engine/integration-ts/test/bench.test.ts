@@ -25,7 +25,7 @@
 import { beforeAll, describe, expect, it } from 'vitest';
 import { NPC_STRESS, RECORDED_MATCHES, loadNpcStress, loadRecording, prepareRecording } from './benchLoad.js';
 import { benchUnits, calibrationLine } from '../../tests/bench/calibration.js';
-import type { ScenarioDef } from '@fluxus/core';
+import { buildNavigation, createTerrainGrid, type ScenarioDef, type TerrainDef } from '@fluxus/core';
 
 /** Прогонов на прогрев JIT и прогонов под замером. */
 const WARMUP = 20;
@@ -121,4 +121,97 @@ describe('замер массы NPC (информативно, NPC-9)', () => {
     const units = unitsPerTick(NPC_STRESS, loadNpcStress(), NPC_WARMUP, NPC_REPEATS);
     expect(units).toBeLessThan(MAX_NPC_UNITS_PER_TICK);
   });
+});
+
+/**
+ * Сторож поиска пути (`pathfinding` NAV-5, PERF-5, PERF-6): сколько реального
+ * времени стоит один запрос `findPath` на синтетической сетке.
+ *
+ * Точный объём работы стережёт эталон стоимости (`nav-path.cost.json`,
+ * PERF-4) — он считает раскрытия и пробы. Здесь меряется ровно то, чего
+ * счётчики не видят: КОНСТАНТНОЕ подорожание одного узла, при котором число
+ * узлов не изменилось ни на единицу.
+ *
+ * Оси нагрузки — те же две, что двигают стоимость поиска (PERF-6): размер сетки
+ * (раскрытий на запрос) и число запросов за замер. Карты две и они намеренно
+ * противоположны: серпантин-лабиринт заставляет A* обойти почти всю сетку, а
+ * открытое поле уходит к цели по эвристике и почти не ветвится. Сторож обязан
+ * пережить обе.
+ *
+ * Ассерт — только против деградации на порядок (PERF-5): наблюдаемое — 0.04…0.08
+ * эталонной единицы на запрос открытого поля и 0.11…0.78 на запрос лабиринта
+ * (лабиринт дороже не константой на узел, а работой: путь в нём проходит сетку
+ * целиком, а сглаживание тянет опору вдоль каждого коридора). Порог — на
+ * порядок выше худшего наблюдаемого, а не «в притык». Числа печатаются при
+ * КАЖДОМ прогоне — читать их и есть смысл сторожа.
+ */
+const NAV_TILE = 65536;
+const NAV_WARMUP = 2;
+const NAV_REPEATS = 3;
+const MAX_UNITS_PER_PATH = 8;
+
+/** Серпантин-лабиринт либо открытое поле — синтетическая сетка сторожа. */
+function navTerrain(size: number, maze: boolean): TerrainDef {
+  const levels = Array.from({ length: size }, () => '0'.repeat(size));
+  const flags = Array.from({ length: size }, (_, y) => {
+    if (!maze || y % 2 === 0) return '.'.repeat(size);
+    // Проход у противоположных краёв через ряд: путь сверху вниз обязан
+    // пройти сеткой целиком, а не по диагонали.
+    const gap = (y >> 1) % 2 === 0 ? size - 1 : 0;
+    return Array.from({ length: size }, (_, x) => (x === gap ? '.' : '_')).join('');
+  });
+  return { width: size, height: size, tileSize: NAV_TILE, levels, flags };
+}
+
+/** Стоимость ОДНОГО запроса в эталонных единицах машины. */
+function unitsPerPath(maze: boolean, size: number, requests: number): number {
+  const grid = createTerrainGrid(navTerrain(size, maze));
+  // Бюджет заведомо больше сетки: сторож меряет полный поиск, а не отказ по
+  // исчерпанию (NAV-5).
+  const navigation = buildNavigation(grid, { budget: size * size, maxAgentRadius: 0 });
+  const half = NAV_TILE >> 1;
+  const bottom = (size - 1) * NAV_TILE + half;
+  const run = (): void => {
+    for (let i = 0; i < requests; i++) {
+      // Старт съезжает по верхнему ряду: два одинаковых запроса подряд мерили
+      // бы кэш, которого у `findPath` нет и быть не должно (NAV-2).
+      const from = { x: (i % size) * NAV_TILE + half, y: half };
+      navigation.findPath(from, { x: half, y: bottom });
+    }
+  };
+
+  for (let i = 0; i < NAV_WARMUP; i++) run();
+  let bestMs = Number.POSITIVE_INFINITY;
+  for (let i = 0; i < NAV_REPEATS; i++) {
+    const started = performance.now();
+    run();
+    bestMs = Math.min(bestMs, performance.now() - started);
+  }
+
+  const perPathMs = bestMs / requests;
+  const units = benchUnits(perPathMs);
+  const kind = maze ? 'лабиринт' : 'поле';
+  console.log(
+    `[bench] findPath, ${kind} ${size}×${size}: ${(perPathMs * 1000).toFixed(1)} мкс/запрос ` +
+      `(${units.toFixed(4)} эталонной единицы; запросов в прогоне ${requests}, ` +
+      `лучший из ${NAV_REPEATS} прогонов)`,
+  );
+  return units;
+}
+
+describe('замер поиска пути (информативно, NAV-5)', () => {
+  for (const maze of [true, false]) {
+    // Ось «размер сетки» при неизменном числе запросов и ось «число запросов»
+    // при неизменном размере: обе двигают стоимость, и обе обязаны остаться
+    // ниже порога (PERF-6).
+    for (const [size, requests] of [
+      [24, 32],
+      [48, 32],
+      [48, 96],
+    ] as const) {
+      it(`${maze ? 'лабиринт' : 'поле'} ${size}×${size}, запросов ${requests}: дешевле порога`, () => {
+        expect(unitsPerPath(maze, size, requests)).toBeLessThan(MAX_UNITS_PER_PATH);
+      });
+    }
+  }
 });

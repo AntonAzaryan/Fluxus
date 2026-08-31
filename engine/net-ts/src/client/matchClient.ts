@@ -22,6 +22,7 @@ import {
   type SceneDef,
   type Snapshot,
   type Vec2,
+  type NavigationOptions,
   type VisibilityOptions,
   type WorldMode,
   type WorldState,
@@ -72,6 +73,12 @@ export interface MatchClientOptions {
   /** Зависимости сборки (DI-3): приезжают со сборкой клиента, а не с провода. */
   readonly physics?: PhysicsOptions;
   readonly visibility?: VisibilityOptions;
+  /**
+   * Включение и параметры поиска пути (NTR-14): зависимость сборки наравне с
+   * физикой и пересчётом видимости, приезжает из одного описания матча обеим
+   * сторонам — иначе предсказание водило бы NPC не там, где сервер.
+   */
+  readonly navigation?: NavigationOptions;
   readonly inputRingTicks?: number;
   readonly interpolationDelayMs?: number;
   /**
@@ -615,6 +622,7 @@ export class MatchClient {
         initial: match.initial,
         ...(this.options.physics !== undefined ? { physics: this.options.physics } : {}),
         ...(this.options.visibility !== undefined ? { visibility: this.options.visibility } : {}),
+        ...(this.options.navigation !== undefined ? { navigation: this.options.navigation } : {}),
       });
     } catch (error) {
       this.close('data-mismatch', `мир матча не поднимается: ${String(error)}`);

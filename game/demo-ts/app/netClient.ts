@@ -45,6 +45,7 @@ import { createDemoExtractor } from './extractor.js';
 import {
   DEMO_MATCH,
   DEMO_SNAPSHOT_RATE,
+  demoClientBuildOptions,
   demoContentPack,
   demoMatchConfig,
 } from './match.js';
@@ -259,8 +260,10 @@ function attemptClient(playerId: string): MatchClient {
     // документа матча): пока мир не в `Running`, наружу уезжает только он —
     // ведение скраба, — а движение и остальные действия маскируются (NET-11).
     ...(config.rewind?.holdButton !== undefined ? { holdButton: config.rewind.holdButton } : {}),
-    ...(config.physics !== undefined ? { physics: config.physics } : {}),
-    ...(config.visibility !== undefined ? { visibility: config.visibility } : {}),
+    // Зависимости сборки мира — одной раскладкой (NTR-14): перечисление имён
+    // здесь и есть тот способ отстать от документа, каким однажды отстала
+    // навигация.
+    ...demoClientBuildOptions(config),
   });
 }
 
@@ -302,8 +305,7 @@ export async function joinDemoMatch(options: DemoClientOptions): Promise<DemoJoi
       seed: config.seed,
       players: config.players,
       ...(config.initial !== undefined ? { initial: config.initial } : {}),
-      ...(config.physics !== undefined ? { physics: config.physics } : {}),
-      ...(config.visibility !== undefined ? { visibility: config.visibility } : {}),
+      ...demoClientBuildOptions(config),
     });
     const grid = world.sim.terrain?.grid;
     const session = demoSession(options, playerId, world.state, grid, buffered);

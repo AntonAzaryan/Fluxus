@@ -19,15 +19,20 @@
  * `game/demo-ts/test/demoStandRewind.test.ts`. Здесь — форма документа.
  */
 import { describe, expect, it } from 'vitest';
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import {
+  CLIENT_BUILD_FIELDS,
   LAUNCHER_FIELDS,
   MATCH_DOCUMENT_FIELDS,
+  clientBuildOptions,
   matchConfigOf,
   matchDataOf,
   type MatchDocument,
 } from '../bin/matchFile.mjs';
 import type { SceneDef } from '@fluxus/core';
 import { contentPack } from '../src/content/pack.js';
+import type { MatchClientOptions } from '../src/client/matchClient.js';
 import { MatchServer, type MatchConfig } from '../src/server/matchServer.js';
 import { duelScene } from './fixtures.js';
 
@@ -159,7 +164,11 @@ describe('раскладка документа матча в конфиг (NTR-
   });
 
   it('до конфига доезжает КАЖДАЯ секция, объявленная документом', () => {
-    const match = document();
+    // Поиск пути — такая же зависимость сборки, как физика и видимость
+    // (NTR-14), и в документе он назван здесь: сцена этого файла террейна не
+    // имеет, а навигация без карты уровней не собирается (NAV-3), поэтому
+    // серверные стенды ниже поднимаются без неё.
+    const match = document({ navigation: { budget: 256, maxAgentRadius: 16384 } });
     // Список раскладки и документ теста обязаны сойтись: секция, добавленная в
     // один и забытая в другом, краснеет здесь, а не пропадает из матча.
     expect(Object.keys(match)).toEqual(expect.arrayContaining([...MATCH_DOCUMENT_FIELDS]));
@@ -241,5 +250,61 @@ describe('следующая потерянная секция — громка�
       (LAUNCHER_FIELDS as readonly string[]).includes(field),
     );
     expect(both).toEqual([]);
+  });
+});
+
+/**
+ * Раскладка КЛИЕНТСКОЙ стороны запуска (NTR-14). Отдельный предмет от конфига
+ * сервера, и предмет несущий: серверу секции документа едут остатком объекта, а
+ * клиенту — перечислением, и перечисление, переписанное в каждой запускалке,
+ * отставало от документа молча. Так отстала навигация: сервер вёл NPC по
+ * найденным путям, предсказание клиента (NTR-10) — прямым seek.
+ */
+describe('раскладка зависимостей сборки для клиента (NTR-14)', () => {
+  it('список клиента — подмножество полей документа, без выдуманных имён', () => {
+    for (const field of CLIENT_BUILD_FIELDS) {
+      expect(MATCH_DOCUMENT_FIELDS).toContain(field);
+    }
+  });
+
+  /**
+   * Полнота списка проверяется ТИПОМ: секция документа, которую опции клиента
+   * матча принимают, но раскладка не называет, делает `Missing` непустым, и
+   * тогда `true` не присваивается — `npm run typecheck` краснеет ещё до
+   * прогона. Ровно этой проверки не хватало, когда у клиента появилось поле
+   * `navigation`.
+   */
+  it('список покрывает все зависимости сборки, которые клиент принимает', () => {
+    type ClientBuildField = keyof MatchClientOptions & (typeof MATCH_DOCUMENT_FIELDS)[number];
+    type Missing = Exclude<ClientBuildField, (typeof CLIENT_BUILD_FIELDS)[number]>;
+    const complete: [Missing] extends [never] ? true : false = true;
+    expect(complete).toBe(true);
+  });
+
+  it('едут ровно объявленные документом секции, без `undefined`-ключей', () => {
+    const full = document({ navigation: { budget: 256, maxAgentRadius: 16384 } });
+    expect(clientBuildOptions(full)).toEqual({
+      physics: full.physics,
+      visibility: full.visibility,
+      navigation: full.navigation,
+    });
+    const bare = documentWithout('physics', 'visibility');
+    expect(Object.keys(clientBuildOptions(bare))).toEqual([]);
+  });
+
+  /**
+   * Запускалки обязаны брать раскладку ОТСЮДА, а не перечислять поля у себя:
+   * список, переписанный в файле запуска, — тот самый способ отстать от
+   * документа. Проверяется по исходнику: исполнить запускалку тест не может —
+   * она поднимает сервер и читает argv.
+   */
+  it('запускалки берут раскладку общей функцией, а не своим перечислением', () => {
+    for (const launcher of ['host.mjs', 'play.mjs']) {
+      const source = readFileSync(fileURLToPath(new URL(`../bin/${launcher}`, import.meta.url)), 'utf8');
+      expect(source, launcher).toContain('clientBuildOptions(match)');
+      for (const field of CLIENT_BUILD_FIELDS) {
+        expect(source, `${launcher}: ${field}`).not.toContain(`{ ${field}: match.${field} }`);
+      }
+    }
   });
 });

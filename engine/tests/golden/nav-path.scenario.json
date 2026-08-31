@@ -1,0 +1,321 @@
+{
+  "name": "nav-path",
+  "seed": 20260831,
+  "ticks": 24,
+  "scene": {
+    "components": [
+      {
+        "name": "Position",
+        "fields": {
+          "x": "fixed",
+          "y": "fixed"
+        }
+      },
+      {
+        "name": "Velocity",
+        "fields": {
+          "x": "fixed",
+          "y": "fixed"
+        }
+      },
+      {
+        "name": "Collider",
+        "fields": {
+          "blockMask": "i32",
+          "cliffRise": "i32",
+          "halfX": "fixed",
+          "halfY": "fixed",
+          "hitMask": "i32",
+          "layer": "i32",
+          "radius": "fixed",
+          "shape": "i32"
+        }
+      },
+      {
+        "name": "Team",
+        "fields": {
+          "id": "i32"
+        }
+      },
+      {
+        "name": "Health",
+        "fields": {
+          "hp": "i32",
+          "hpMax": "i32"
+        }
+      },
+      {
+        "name": "Dead",
+        "fields": {
+          "at": "i32"
+        }
+      }
+    ],
+    "prefabs": [
+      {
+        "name": "Creep",
+        "components": {
+          "Position": {
+            "x": 0,
+            "y": 0
+          },
+          "Velocity": {
+            "x": 0,
+            "y": 0
+          },
+          "Collider": {
+            "blockMask": 1,
+            "cliffRise": 0,
+            "halfX": 19661,
+            "halfY": 19661,
+            "hitMask": 0,
+            "layer": 2,
+            "radius": 19661,
+            "shape": 0
+          },
+          "Team": {
+            "id": 1
+          },
+          "Health": {
+            "hp": 40,
+            "hpMax": 40
+          },
+          "NpcAgent": {},
+          "NpcThreat": {},
+          "NpcRoute": {}
+        }
+      },
+      {
+        "name": "Hero",
+        "components": {
+          "Position": {
+            "x": 0,
+            "y": 0
+          },
+          "Velocity": {
+            "x": 0,
+            "y": 0
+          },
+          "Collider": {
+            "blockMask": 1,
+            "cliffRise": 0,
+            "halfX": 26214,
+            "halfY": 26214,
+            "hitMask": 0,
+            "layer": 2,
+            "radius": 26214,
+            "shape": 0
+          },
+          "Team": {
+            "id": 0
+          },
+          "Health": {
+            "hp": 200,
+            "hpMax": 200
+          }
+        }
+      },
+      {
+        "name": "Point",
+        "components": {
+          "Position": {
+            "x": 0,
+            "y": 0
+          },
+          "Waypoint": {}
+        }
+      }
+    ],
+    "terrain": {
+      "width": 8,
+      "height": 8,
+      "tileSize": 65536,
+      "levels": [
+        "00001111",
+        "00001111",
+        "00001111",
+        "00001111",
+        "00001111",
+        "00001111",
+        "00001111",
+        "00001111"
+      ],
+      "flags": [
+        "........",
+        "........",
+        "._______",
+        "........",
+        "........",
+        "........",
+        "...^....",
+        "...^...."
+      ]
+    },
+    "npc": {
+      "behaviors": [
+        {
+          "schema": 1,
+          "name": "seeker",
+          "tier": "mass",
+          "decision": {
+            "intervalTicks": 4
+          },
+          "ranges": {
+            "sense": 1310720,
+            "attack": 32768,
+            "arrive": 32768,
+            "separation": 0
+          },
+          "speed": 32768,
+          "separationWeight": 0,
+          "states": [
+            {
+              "name": "chase",
+              "actions": [
+                {
+                  "executor": "seekTarget",
+                  "considerations": [
+                    {
+                      "input": "targetKnown",
+                      "curve": {
+                        "type": "linear",
+                        "slope": 65536,
+                        "intercept": 0
+                      },
+                      "weight": 65536
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "schema": 1,
+          "name": "walker",
+          "tier": "mass",
+          "decision": {
+            "intervalTicks": 4
+          },
+          "ranges": {
+            "sense": 32768,
+            "attack": 32768,
+            "arrive": 32768,
+            "separation": 0
+          },
+          "speed": 32768,
+          "separationWeight": 0,
+          "states": [
+            {
+              "name": "march",
+              "actions": [
+                {
+                  "executor": "followRoute",
+                  "considerations": [
+                    {
+                      "input": "routeRemaining",
+                      "curve": {
+                        "type": "linear",
+                        "slope": 65536,
+                        "intercept": 0
+                      },
+                      "weight": 65536
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      ],
+      "bindings": {
+        "position": "Position",
+        "velocity": "Velocity",
+        "health": [
+          "Health",
+          "hp"
+        ],
+        "healthMax": [
+          "Health",
+          "hpMax"
+        ],
+        "team": [
+          "Team",
+          "id"
+        ],
+        "deadMarker": "Dead"
+      },
+      "decisionBudget": 8
+    },
+    "initial": [
+      {
+        "prefab": "Point",
+        "overrides": {
+          "Position": {
+            "x": 32768,
+            "y": 360448
+          },
+          "Waypoint": {
+            "route": 0,
+            "index": 0
+          }
+        }
+      },
+      {
+        "prefab": "Point",
+        "overrides": {
+          "Position": {
+            "x": 425984,
+            "y": 425984
+          },
+          "Waypoint": {
+            "route": 0,
+            "index": 1
+          }
+        }
+      },
+      {
+        "prefab": "Hero",
+        "overrides": {
+          "Position": {
+            "x": 425984,
+            "y": 229376
+          }
+        }
+      },
+      {
+        "prefab": "Creep",
+        "overrides": {
+          "Position": {
+            "x": 98304,
+            "y": 32768
+          }
+        }
+      },
+      {
+        "prefab": "Creep",
+        "overrides": {
+          "Position": {
+            "x": 98304,
+            "y": 98304
+          },
+          "NpcAgent": {
+            "behavior": 1
+          },
+          "NpcRoute": {
+            "route": 0,
+            "index": 0
+          }
+        }
+      }
+    ]
+  },
+  "physics": {
+    "collider": "Collider",
+    "velocity": "Velocity"
+  },
+  "navigation": {
+    "budget": 512,
+    "maxAgentRadius": 26214
+  }
+}

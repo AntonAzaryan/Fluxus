@@ -146,6 +146,15 @@ export {
   STATIC_COLLIDER,
 } from './systems/physics.js';
 export type { PhysicsDeps, PhysicsOptions, StaticCollider } from './systems/physics.js';
+/**
+ * Сборка Navigation API (`pathfinding` NAV-1). Наружу уходит только сборка:
+ * `findPath` за ней — чистый запрос (NAV-2), мира он не касается, и мутирующей
+ * поверхности это не расширяет (TICK-3). Зовёт её `buildSimulation`, а прямой
+ * экспорт нужен тому, кто поднимает навигацию рядом с собственной сборкой —
+ * стендам и замерам (PERF-5).
+ */
+export { buildNavigation } from './systems/nav/navigation.js';
+export type { NavigationOptions } from './systems/nav/navigation.js';
 export {
   createArenaApi,
   arenaPrefab,

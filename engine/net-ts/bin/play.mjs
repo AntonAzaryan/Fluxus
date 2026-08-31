@@ -12,7 +12,7 @@
  * Рендера нет и не требуется: наблюдаемый выход — принятые снапшоты и счётчики
  * (NTR-12). Рендер подключается к этому же `MatchClient` позже.
  */
-import { flag, option, readMatchFile } from './matchFile.mjs';
+import { clientBuildOptions, flag, option, readMatchFile } from './matchFile.mjs';
 import { inputSource, reportClient } from './play.shared.mjs';
 
 const file = process.argv[2];
@@ -46,8 +46,7 @@ const clientOptions = {
   version: { buildId: match.buildId, contentPackHash: pack.hash },
   content: pack,
   observer,
-  ...(match.physics !== undefined ? { physics: match.physics } : {}),
-  ...(match.visibility !== undefined ? { visibility: match.visibility } : {}),
+  ...clientBuildOptions(match),
 };
 
 let client;

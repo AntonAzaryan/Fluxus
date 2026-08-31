@@ -13,7 +13,7 @@
  * подпутями пакета оболочки: боту не нужны ни DOM, ни рендер, и тянуть их
  * корневым модулем ради сорока строк транспорта незачем.
  */
-import type { PhysicsOptions, SceneDef, VisibilityOptions } from '@fluxus/core';
+import type { NavigationOptions, PhysicsOptions, SceneDef, VisibilityOptions } from '@fluxus/core';
 import type { ConnectionRole, Transport, TransportServer } from '@fluxus/net';
 import { shellPort } from '@fluxus/client/protocol';
 import { portTransport } from '@fluxus/client/portTransport';
@@ -131,6 +131,12 @@ export interface BotWorkerInit {
   /** Зависимости сборки мира (NTR-14) — те же значения, что у сервера матча. */
   readonly physics?: PhysicsOptions;
   readonly visibility?: VisibilityOptions;
+  /**
+   * Включение и параметры поиска пути (NTR-14): зависимость сборки наравне с
+   * физикой и пересчётом видимости, приезжает из одного описания матча обеим
+   * сторонам — иначе предсказание водило бы NPC не там, где сервер.
+   */
+  readonly navigation?: NavigationOptions;
   /**
    * Имена компонентов сцены (TICK-4), если они отличаются от умолчаний клиента.
    * Центр арены сюда не входит: он читается из самой сцены (`arena` ARENA-1).

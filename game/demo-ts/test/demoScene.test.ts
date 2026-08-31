@@ -24,6 +24,7 @@ import {
   type WorldState,
 } from '@fluxus/core';
 import { ABILITY_SLOTS, ACTION_BITS, PLAYER_ID, createDemoSimulation } from '../app/sim.js';
+import { DEMO_NAVIGATION } from '../app/match.js';
 import sceneJson from '../../../content/scenes/duel.scene.json';
 import matchJson from '../../../content/matches/duel.match.json';
 
@@ -373,6 +374,23 @@ describe('демо-сцена: кромка плато вне рампы (LOC-5,
     // Приземлился на плато, а не провалился с него в пустоту по дороге.
     expect(coreWorld.hasComponent(state.world, playerId, 'Falling')).toBe(false);
     expect(coreWorld.hasComponent(state.world, playerId, 'Dead')).toBe(false);
+  });
+});
+
+describe('локальный режим собирает тот же состав, что матч (SHELL-8, NTR-14)', () => {
+  it('одиночная симуляция печёт навигацию числами документа матча', () => {
+    // Локальная сборка (`worker.ts`) и сетевая обязаны тикать один состав:
+    // навигация, собранная в одной и пропущенная в другой, водила бы NPC
+    // разными дорогами в двух режимах одной игры (NPC-6), а в локальном
+    // режиме заметить это некому — сервера у него нет.
+    expect(DEMO_NAVIGATION).toBeDefined();
+    const demo = createDemoSimulation(SCENE);
+    expect(demo.sim.navigation).toBeDefined();
+    const path = demo.sim.navigation!.findPath(
+      { x: 557056, y: 1605632 },
+      { x: 2588672, y: 1605632 },
+    );
+    expect(path.status).toBe('found');
   });
 });
 

@@ -21,8 +21,8 @@
  * осознанно (design D5), поэтому дамп называет величину РЕКОНСТРУКЦИЕЙ, а размер
  * клетки берётся из конфигурации сборки, а не угадывается.
  */
-import type { EntityId, TerrainGrid } from '@fluxus/core';
-import { FIXED_ONE } from '@fluxus/core';
+import type { EntityId, NavigationApi, TerrainGrid } from '@fluxus/core';
+import { FIXED_ONE, NO_ENTITY, buildNavigation } from '@fluxus/core';
 import {
   DebugRows,
   type CameraBounds,
@@ -47,6 +47,8 @@ const COLORS = {
   inspector: 0xffffff,
   frustum: 0x9080ff,
   edgePan: 0xffd479,
+  navHold: 0xffe066,
+  navPath: 0x66d9ff,
 } as const;
 
 /**
@@ -263,6 +265,258 @@ export function dynamicCollidersDebugSource(statName: string): DebugSource<Debug
       }
     },
   };
+}
+
+// ------------------------------------------------ 7.1 нити пути NPC (NAV-1)
+
+interface NavPathRow {
+  entity: EntityId;
+  /** Позиция ДОСТАВЛЕННОГО тика: по ней же считается пересчёт (NAV-2). */
+  tickWorldX: number;
+  tickWorldY: number;
+  /** Держимая точка пути агента (NPC-6), мировые единицы. */
+  holdWorldX: number;
+  holdWorldY: number;
+  /** Радиус агента запроса, мировые единицы; 0 — стат радиуса не приехал. */
+  agentRadiusWorldUnits: number;
+  /**
+   * Куда вёлся пересчёт: `target` — до доставленной цели движения агента,
+   * `hold` — до держимой точки, потому что цель клиенту не доставлена (NET-12)
+   * либо её у агента нет. Различать обязательно: во втором случае ломаная
+   * показывает ближайший шаг, а не весь путь.
+   */
+  goal: string;
+  /** Сущность цели движения; `0` — цели у пересчёта нет. */
+  goalEntity: number;
+  /** Точка цели пересчёта — позиция доставленного тика, мировые единицы. */
+  goalWorldX: number;
+  goalWorldY: number;
+  /** Исход пересчёта: `found` | `unreachable` | `budgetExhausted` | `noGrid`. */
+  status: string;
+  /** Ломаная пересчитанного пути тройками `x,y,z`, мировые единицы. */
+  pathWorldPoints: number[];
+}
+
+export interface DebugNavPathsProbe extends DebugProbe {
+  readonly holdStatName: string;
+  /** Доставленных агентов с держимой точкой — тех, у кого путь есть. */
+  readonly agentsWithPath: number;
+  /** Доставленных агентов без держимой точки: идут прямым seek (NPC-6). */
+  readonly agentsWithoutPath: number;
+  /** Бюджет и предел радиуса КЛИЕНТСКОЙ сборки навигации (NAV-5, TERR-7). */
+  readonly budget: number;
+  readonly maxAgentRadiusWorldUnits: number;
+  readonly agents: DebugList<NavPathRow>;
+}
+
+/**
+ * Имена статов, из которых источник читает нить (HUD-8): держимая точка агента и
+ * радиус его коллайдера. Радиус — тот же стат, которым живут круги коллайдеров:
+ * второго имени под ту же величину сборка не заводит, а без него пересчёт идёт
+ * без ограничения зазора (NAV-9).
+ */
+export interface NavPathStats {
+  readonly x: string;
+  readonly y: string;
+  readonly valid: string;
+  readonly radius: string;
+  /** Цель движения агента (`NpcAgent.target`): до неё и ведётся пересчёт пути. */
+  readonly target: string;
+}
+
+/** Потолок перечня нитей пути (RDBG-7): агентов на арене десятки. */
+const NAV_PATH_CAP = 64;
+
+/**
+ * Бюджет раскрытий клиентской сборки навигации (NAV-5) — ПОЛИТИКА отладки, а не
+ * ядра: он заведомо больше клеток арены демо, потому что отладочный пересчёт
+ * обязан показать путь целиком, а не упереться в лимит и промолчать.
+ */
+const NAV_DEBUG_BUDGET = 16384;
+
+/**
+ * Нити пути NPC: ломаная «позиция агента → держимая точка» плюс ПОЛНЫЙ путь до
+ * цели движения, пересчитанный главным потоком (`pathfinding` NAV-1,
+ * `npc-behavior` NPC-6). Две ломаные показывают разное: держимая точка — куда
+ * агент шагает сейчас, полный путь — куда его ведёт весь маршрут.
+ *
+ * Информационная граница держится сама (RDBG-6): держимая точка приезжает
+ * ОБЪЯВЛЕННЫМ статом доставки (HUD-8) и только на доставленных сущностях, а
+ * чужой невидимый NPC до клиента не доезжает вовсе (`netcode` NET-12) — своей
+ * фильтрации у источника нет и быть не должно. Сборка, стата не объявившая,
+ * получает «нет данных», а не выдуманную нить.
+ *
+ * Пересчёт законен и точен: `findPath` — чистая функция карты и аргументов
+ * (NAV-2), навигация печётся из ТОГО ЖЕ террейн-ассета handshake (SHELL-5), из
+ * которого её печёт сборка матча (NTR-14), и второй реализации поиска здесь не
+ * заводится — зовётся `buildNavigation` ядра. Сборка эта объявлена ВНЕ
+ * оплачиваемого пути (`cost: false`), и потому включённый источник не двигает
+ * счётчиков стоимости ни на один узел (RDBG-8) — независимо от того, в какой
+ * момент кадра сняли пробу.
+ */
+export function navPathsDebugSource(
+  stats: NavPathStats,
+  gridOf: () => TerrainGrid | null,
+): DebugSource<DebugNavPathsProbe> {
+  const rows = new DebugRows<NavPathRow>(NAV_PATH_CAP, () => ({
+    entity: 0,
+    tickWorldX: 0,
+    tickWorldY: 0,
+    holdWorldX: 0,
+    holdWorldY: 0,
+    agentRadiusWorldUnits: 0,
+    goal: 'hold',
+    goalEntity: 0,
+    goalWorldX: 0,
+    goalWorldY: 0,
+    status: 'none',
+    pathWorldPoints: [],
+  }));
+  const probe = probeState({
+    holdStatName: stats.valid,
+    agentsWithPath: 0,
+    agentsWithoutPath: 0,
+    budget: NAV_DEBUG_BUDGET,
+    maxAgentRadiusWorldUnits: 0,
+    agents: rows.list,
+  });
+
+  /**
+   * Клиентская сборка навигации, привязанная к сетке handshake: печётся один
+   * раз на сетку, а не на кадр (RDBG-2). Предел радиуса — потолок TERR-7 для
+   * этой сетки: половина клетки, то есть наибольший агент, которого формат
+   * вообще допускает.
+   */
+  let bakedGrid: TerrainGrid | null = null;
+  let baked: NavigationApi | null = null;
+  let bakeError: string | null = null;
+  const navigationOf = (grid: TerrainGrid): NavigationApi | null => {
+    if (grid !== bakedGrid) {
+      bakedGrid = grid;
+      bakeError = null;
+      try {
+        baked = buildNavigation(grid, {
+          budget: NAV_DEBUG_BUDGET,
+          maxAgentRadius: grid.tileSize >> 1,
+          // Сборка ВНЕ оплачиваемого пути (RDBG-8): работа отладочного
+          // пересчёта в счётчики стоимости не пишется — ни когда пробу зовут
+          // между тиками, ни когда её зовут внутри тика с подключённым стоком.
+          // Держится это устройством сборки, а не удачным моментом вызова.
+          cost: false,
+        });
+      } catch (cause) {
+        baked = null;
+        bakeError = cause instanceof Error ? cause.message : String(cause);
+      }
+      probe.maxAgentRadiusWorldUnits = grid.tileSize / FIXED_ONE / 2;
+    }
+    return baked;
+  };
+
+  return {
+    id: 'demo.navPaths',
+    title: 'нити пути NPC (держимая точка и пересчитанный путь до цели)',
+    probe(state: DebugFrameState): DebugNavPathsProbe {
+      const view = state.view;
+      const grid = gridOf();
+      if (view === null || grid === null) {
+        probe.noData = 'доставок ещё нет либо сетка террейна не пришла (SHELL-5)';
+        return probe;
+      }
+      if (!view.statNames.includes(stats.valid)) {
+        probe.noData = `стат "${stats.valid}" сборкой не объявлен (HUD-8): держимой точки у клиента нет`;
+        return probe;
+      }
+      const navigation = navigationOf(grid);
+      probe.noData = bakeError === null ? undefined : `навигация не собрана: ${bakeError}`;
+      let withPath = 0;
+      let withoutPath = 0;
+      rows.begin();
+      for (const entity of view.entities.values()) {
+        const valid = entity.stats?.get(stats.valid);
+        if (valid === undefined) continue;
+        if (valid === 0) {
+          withoutPath += 1;
+          continue;
+        }
+        withPath += 1;
+        const row = rows.next();
+        if (row === null) continue;
+        row.entity = entity.id;
+        // Позиция ДОСТАВЛЕННОГО тика, а не интерполированная позиция кадра:
+        // аргументы пересчёта — величины симуляции, и подставлять в них
+        // сглаженную для глаза позицию значило бы спрашивать путь из точки,
+        // которой в мире не было (NAV-2).
+        row.tickWorldX = entity.currX;
+        row.tickWorldY = entity.currY;
+        row.holdWorldX = entity.stats?.get(stats.x) ?? 0;
+        row.holdWorldY = entity.stats?.get(stats.y) ?? 0;
+        row.agentRadiusWorldUnits = entity.stats?.get(stats.radius) ?? 0;
+        // Цель движения агента — вторая половина входа (RDBG-6): по ней путь
+        // считается ЦЕЛИКОМ, а не до ближайшего шага. Не доставленную цель
+        // клиент по номеру не разрешит (NET-12) — тогда пересчёт честно ведётся
+        // до держимой точки, и проба говорит об этом полем `goal`.
+        const targetId = entity.stats?.get(stats.target) ?? NO_ENTITY;
+        const target =
+          Number.isInteger(targetId) && targetId !== NO_ENTITY
+            ? view.entities.get(targetId)
+            : undefined;
+        row.goal = target === undefined ? 'hold' : 'target';
+        row.goalEntity = target?.id ?? 0;
+        row.goalWorldX = target?.currX ?? row.holdWorldX;
+        row.goalWorldY = target?.currY ?? row.holdWorldY;
+        row.pathWorldPoints.length = 0;
+        row.status = navigation === null ? 'noGrid' : 'none';
+        if (navigation !== null) {
+          fillPath(navigation, row);
+        }
+      }
+      rows.end();
+      probe.agentsWithPath = withPath;
+      probe.agentsWithoutPath = withoutPath;
+      return probe;
+    },
+    draw(value: DebugNavPathsProbe, out: DebugDraw): void {
+      for (const row of value.agents.items) {
+        // Нить «где агент → куда идёт»: держимая точка и есть его ближайшая цель.
+        out.polyline(
+          [row.tickWorldX, row.tickWorldY, 0, row.holdWorldX, row.holdWorldY, 0],
+          COLORS.navHold,
+        );
+        if (row.pathWorldPoints.length >= 6) out.polyline(row.pathWorldPoints, COLORS.navPath);
+        out.point(row.holdWorldX, row.holdWorldY, 0, COLORS.navHold);
+      }
+    },
+  };
+}
+
+/**
+ * Пересчёт пути агента до цели его движения (NAV-1). Мировые единицы главного
+ * потока переводятся обратно в Q16.16 ТОЧНО: стат `fixed` приехал делением на
+ * `FIXED_ONE` (REND-1), и обратное умножение возвращает то же целое.
+ *
+ * Совпадения с запросом сервера тик-в-тик здесь не обещается и обещать нечего:
+ * сервер спрашивал путь в СВОЁ окно решений (NPC-6), а проба спрашивает на
+ * доставленном тике. Обещается другое, и этого достаточно: одна карта, одни
+ * правила и один `findPath` (NAV-2) — то есть на одинаковых аргументах ответ
+ * побитово тот же, а расхождение картинки с игрой означало бы расхождение
+ * данных, а не двух реализаций поиска.
+ */
+function fillPath(navigation: NavigationApi, row: NavPathRow): void {
+  const from = { x: toFixed(row.tickWorldX), y: toFixed(row.tickWorldY) };
+  const to = { x: toFixed(row.goalWorldX), y: toFixed(row.goalWorldY) };
+  const radius = toFixed(row.agentRadiusWorldUnits);
+  const path = navigation.findPath(from, to, radius > 0 ? { agentRadius: radius } : undefined);
+  row.status = path.status;
+  row.pathWorldPoints.push(row.tickWorldX, row.tickWorldY, 0);
+  for (const point of path.waypoints) {
+    row.pathWorldPoints.push(point.x / FIXED_ONE, point.y / FIXED_ONE, 0);
+  }
+}
+
+/** Мировые единицы → Q16.16 (REND-1, обратный ход входной границы). */
+function toFixed(worldUnits: number): number {
+  return Math.round(worldUnits * FIXED_ONE);
 }
 
 // ------------------------------------------- 4.3 инспектор сущности курсором

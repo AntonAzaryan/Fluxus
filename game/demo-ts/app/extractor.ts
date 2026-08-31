@@ -43,6 +43,13 @@ export const DEMO_STATS: readonly StatSource[] = Object.freeze([
   // статом, как радиус обзора едет к туману. Убрать эту строку — и источник
   // скажет «нет данных», а не нарисует выдуманный радиус.
   { name: STATS.colliderRadius, component: 'Collider', field: 'radius' },
+  // Держимая точка пути агента (NPC-6) — вход отладочного источника нитей пути
+  // (RDBG-6): та же дорога, что у радиуса коллайдера. Записи молча нет у
+  // сущности без `NpcAgent` (герои, снаряды), и источник считает её «без пути».
+  { name: STATS.navPathX, component: 'NpcAgent', field: 'pathX' },
+  { name: STATS.navPathY, component: 'NpcAgent', field: 'pathY' },
+  { name: STATS.navPathValid, component: 'NpcAgent', field: 'pathValid' },
+  { name: STATS.navTarget, component: 'NpcAgent', field: 'target' },
   // Входы шара заряда главного потока (`chargeBalls.ts`): величина заряда и
   // направление прицела ЗАРЯЖАЮЩЕГО. Оба читаются с самого героя, а не с его
   // сущности-слота: слот виден только своей стороне (NET-12), а шар заряда

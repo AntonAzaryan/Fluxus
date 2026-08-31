@@ -47,7 +47,9 @@ import {
 import {
   BENCH_PRESETS,
   BENCH_PRESET_NAMES,
+  NAV_PATH,
   NPC_STRESS,
+  loadNavPath,
   loadNpcStress,
   GOLDEN_DIR,
   MATCH_STAND,
@@ -78,6 +80,13 @@ interface TickCost extends StageCost {
   broadPhasePairs: number;
   commandsApplied: number;
   expressions: number;
+  /**
+   * Работа поиска пути за тик (`pathfinding` NAV-5): раскрытые узлы A* плюс
+   * пробы клеток обхода видимости. Своя строка, а не сумма с соседями: величина
+   * растёт размером арены и числом перезапросов, и в общем счётчике её
+   * регрессия утонула бы.
+   */
+  navNodes: number;
   /** Осмотренные соседи-агенты сетки платформы поведения NPC (NPC-6, NPC-9). */
   npcNeighbors: number;
   raycasts: number;
@@ -89,6 +98,7 @@ function tickCostCollector(): { readonly sink: DiagnosticsSink; readonly total: 
     broadPhasePairs: 0,
     commandsApplied: 0,
     expressions: 0,
+    navNodes: 0,
     npcNeighbors: 0,
     raycasts: 0,
     ticks: 0,
@@ -105,6 +115,7 @@ function tickCostCollector(): { readonly sink: DiagnosticsSink; readonly total: 
       total.broadPhasePairs += Number(entry.data?.broadPhasePairs ?? 0);
       total.commandsApplied += Number(entry.data?.commandsApplied ?? 0);
       total.expressions += Number(entry.data?.expressions ?? 0);
+      total.navNodes += Number(entry.data?.navNodes ?? 0);
       total.npcNeighbors += Number(entry.data?.npcNeighbors ?? 0);
       total.raycasts += Number(entry.data?.raycasts ?? 0);
     },
@@ -741,6 +752,37 @@ function measureNpcStress(): unknown {
   runScenario(loadNpcStress(), sink);
   return { tick: sorted(total) };
 }
+
+/**
+ * Стоимость навигационной части тика (`pathfinding` NAV-5, PERF-4): сцена, где
+ * NPC идут по `findPath` через узкий проход, вдоль обрыва и по рампе.
+ *
+ * Стадия здесь ОДНА — `tick`: ни клиента, ни кадра у нагрузки нет, а мерить она
+ * заведена именно работу поиска. Эталон в общем гейте затем, чтобы подорожавший
+ * поиск краснел диффом на ревью, а не обнаруживался на плейтесте; принятие
+ * удорожания — та же явная регенерация `npm run golden:cost`.
+ */
+function measureNavPath(): unknown {
+  const { sink, total } = tickCostCollector();
+  runScenario(loadNavPath(), sink);
+  return { tick: sorted(total) };
+}
+
+describe('NAV-5: эталон стоимости поиска пути', () => {
+  it('счётчики стадии тика совпадают с эталоном', () => {
+    checkGolden(`${NAV_PATH}.cost.json`, measureNavPath());
+  });
+
+  it('нагрузка не мёртвая: поиск пути сделал работу и повторяется побитово', () => {
+    const document = measureNavPath() as { tick: TickCost };
+    expect(document.tick.ticks).toBe(loadNavPath().ticks);
+    // Своя строка эталона (PERF-3): работа навигации видна отдельно от работы
+    // сетки соседей и от кандидатов broad-phase — в общей сумме удорожание
+    // поиска утонуло бы.
+    expect(document.tick.navNodes).toBeGreaterThan(0);
+    expect(measureNavPath()).toEqual(document);
+  });
+});
 
 describe('NPC-9: эталон стоимости массы NPC', () => {
   it('счётчики стадии тика совпадают с эталоном', () => {

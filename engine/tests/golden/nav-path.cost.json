@@ -1,0 +1,11 @@
+{
+  "tick": {
+    "broadPhasePairs": 231,
+    "commandsApplied": 283,
+    "expressions": 0,
+    "navNodes": 531,
+    "npcNeighbors": 609,
+    "raycasts": 0,
+    "ticks": 24
+  }
+}

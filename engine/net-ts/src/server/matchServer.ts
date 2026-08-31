@@ -32,6 +32,7 @@ import {
   type InputFrame,
   type InputLog,
   type LocomotionOptions,
+  type NavigationOptions,
   type PhysicsOptions,
   type RewindController,
   type ScenarioDef,
@@ -165,6 +166,20 @@ export interface MatchConfig {
    * (`buildMatchWorld`), одинаково на сервере и на клиенте.
    */
   readonly visibility?: VisibilityOptions;
+  /**
+   * Включение и параметры поиска пути (NTR-14) — четвёртый нативный механизм
+   * конфига матча наравне с физикой, вводом и пересчётом видимости:
+   * навигационные данные производны от ассета террейна и печутся сборкой
+   * (`pathfinding` NAV-3), а бюджет раскрытий (NAV-5) и предел радиуса агента
+   * (`terrain` TERR-7) — числа геймдизайнера, которых в конфиге сцены нет
+   * (SER-7). Форма поля — та же, что у поля `navigation` документа прогона
+   * сценария (CLI-2).
+   *
+   * Недостача объявления отказом сборки не является — в отличие от пересчёта
+   * видимости: матч без навигации тикает штатно (DI-4), а движение NPC
+   * деградирует до прямого seek одинаково у обеих сторон (`npc-behavior` NPC-6).
+   */
+  readonly navigation?: NavigationOptions;
   /**
    * Действующий предикат видимости события (NET-13) — параметр, а не зашитое
    * решение (NTR-9): точная политика при разной видимости источника и цели
@@ -800,6 +815,7 @@ export class MatchServer {
       ...(config.physics !== undefined ? { physics: config.physics } : {}),
       ...(config.locomotion !== undefined ? { locomotion: config.locomotion } : {}),
       ...(config.visibility !== undefined ? { visibility: config.visibility } : {}),
+      ...(config.navigation !== undefined ? { navigation: config.navigation } : {}),
       ...(config.trace !== undefined ? { diagnostics: config.trace.sink } : {}),
     });
     this.sim = built.sim;
@@ -2581,6 +2597,7 @@ export class MatchServer {
       ...(this.config.physics !== undefined ? { physics: this.config.physics } : {}),
       ...(this.config.locomotion !== undefined ? { locomotion: this.config.locomotion } : {}),
       ...(this.config.visibility !== undefined ? { visibility: this.config.visibility } : {}),
+      ...(this.config.navigation !== undefined ? { navigation: this.config.navigation } : {}),
     };
   }
 }

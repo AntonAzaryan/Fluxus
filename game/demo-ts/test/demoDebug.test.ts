@@ -13,7 +13,14 @@
  * прогоне нет, а панель — обычный DOM приложения (design D10).
  */
 import { afterEach, describe, expect, it } from 'vitest';
-import { createTerrainGrid, type EntityId, type TerrainGrid } from '@fluxus/core';
+import {
+  createTerrainGrid,
+  withDiagnostics,
+  type DiagnosticRecord,
+  type DiagnosticsSink,
+  type EntityId,
+  type TerrainGrid,
+} from '@fluxus/core';
 import {
   PresentationStage,
   RenderDebugLayer,
@@ -43,6 +50,7 @@ import {
   cameraDebugSource,
   dynamicCollidersDebugSource,
   inspectorDebugSource,
+  navPathsDebugSource,
   staticCollidersDebugSource,
 } from '../app/debugSources.js';
 import { STATS } from '../app/sim.js';
@@ -333,6 +341,181 @@ describe('RDBG-1: инспектор и камера — источники сб
       expect(drawn.y).toBeCloseTo(corner.y, 6);
       expect(drawn.z).toBeCloseTo(corner.z, 6);
     });
+  });
+});
+
+// ------------------------------------------------------ 7.1/7.2 нити пути NPC
+
+/** Арена с дырой посреди: путь к держимой точке обязан её обогнуть (NAV-7). */
+function navGrid(): TerrainGrid {
+  return createTerrainGrid({
+    width: 5,
+    height: 5,
+    tileSize: 65536,
+    levels: ['00000', '00000', '00000', '00000', '00000'],
+    flags: ['.....', '.....', '.._..', '.....', '.....'],
+  });
+}
+
+const NAV_STATS = {
+  x: STATS.navPathX,
+  y: STATS.navPathY,
+  valid: STATS.navPathValid,
+  radius: STATS.colliderRadius,
+  target: STATS.navTarget,
+};
+
+/** Агент с держимой точкой: позиция доставленного тика и точка — статами. */
+function navAgent(id: EntityId, hold: [number, number] | null, target?: EntityId): EntityView {
+  const stats = new Map<string, number>();
+  if (hold === null) stats.set(STATS.navPathValid, 0);
+  else {
+    stats.set(STATS.navPathValid, 1);
+    stats.set(STATS.navPathX, hold[0]);
+    stats.set(STATS.navPathY, hold[1]);
+  }
+  if (target !== undefined) stats.set(STATS.navTarget, target);
+  return { ...entityView(id), currX: 0.5, currY: 0.5, prevX: 0.5, prevY: 0.5, stats };
+}
+
+/** Цель движения агента — обычная доставленная сущность в назначенной клетке. */
+function navGoal(id: EntityId, x: number, y: number): EntityView {
+  return { ...entityView(id), currX: x, currY: y, prevX: x, prevY: y };
+}
+
+const NAV_STAT_NAMES = [STATS.navPathValid, STATS.navPathX, STATS.navPathY, STATS.navTarget];
+
+describe('RDBG-6/NAV-1: нити пути NPC — из доставленных статов и пересчёта', () => {
+  it('агент с держимой точкой даёт нить и пересчитанный путь', () => {
+    const source = navPathsDebugSource(NAV_STATS, () => navGrid());
+    const probe = source.probe(state(tickView([navAgent(1, [4.5, 4.5])], NAV_STAT_NAMES)));
+    expect(probe.noData).toBeUndefined();
+    expect(probe.agentsWithPath).toBe(1);
+    expect(probe.agentsWithoutPath).toBe(0);
+    const row = probe.agents.items[0]!;
+    expect(row.entity).toBe(1);
+    expect([row.holdWorldX, row.holdWorldY]).toEqual([4.5, 4.5]);
+    // Пересчёт — тем же `findPath` ядра над сеткой handshake (NAV-2): путь
+    // найден и начинается с позиции доставленного тика. Цель движения агенту
+    // не доставлена, поэтому ведётся он до держимой точки, и проба говорит об
+    // этом прямо, а не выдаёт ближайший шаг за весь путь.
+    expect(row.status).toBe('found');
+    expect(row.goal).toBe('hold');
+    expect(row.goalEntity).toBe(0);
+    expect(row.pathWorldPoints.slice(0, 3)).toEqual([0.5, 0.5, 0]);
+    expect(row.pathWorldPoints.length).toBeGreaterThanOrEqual(6);
+    // Нить и путь рисуются ломаными закрытого словаря примитивов (RDBG-3).
+    const lines: number[][] = [];
+    source.draw!(probe, { ...NO_DRAW, polyline: (points) => void lines.push([...points]) });
+    expect(lines.length).toBe(2);
+    expect(lines[0]).toEqual([0.5, 0.5, 0, 4.5, 4.5, 0]);
+  });
+
+  it('агент без держимой точки нити не даёт: он идёт прямым seek (NPC-6)', () => {
+    const source = navPathsDebugSource(NAV_STATS, () => navGrid());
+    const probe = source.probe(state(tickView([navAgent(1, null)], NAV_STAT_NAMES)));
+    expect(probe.agentsWithPath).toBe(0);
+    expect(probe.agentsWithoutPath).toBe(1);
+    expect(probe.agents.items).toEqual([]);
+    const lines: number[][] = [];
+    source.draw!(probe, { ...NO_DRAW, polyline: (points) => void lines.push([...points]) });
+    expect(lines).toEqual([]);
+  });
+
+  it('доставленная цель движения даёт ПОЛНЫЙ путь, огибающий препятствие', () => {
+    // Цель за дырой в центре арены: прямой отрезок сквозь неё не проходит, и
+    // пересчёт обязан вернуть ломаную с изломом, а не отрезок до держимой точки.
+    const source = navPathsDebugSource(NAV_STATS, () => navGrid());
+    const agent = navAgent(1, [1.5, 1.5], 2);
+    const goal = navGoal(2, 4.5, 4.5);
+    const probe = source.probe(state(tickView([agent, goal], NAV_STAT_NAMES)));
+    const row = probe.agents.items[0]!;
+    expect(row.goal).toBe('target');
+    expect(row.goalEntity).toBe(2);
+    expect([row.goalWorldX, row.goalWorldY]).toEqual([4.5, 4.5]);
+    expect(row.status).toBe('found');
+    // Путь ведёт ДО ЦЕЛИ, а не до держимой точки в соседней клетке.
+    expect(row.pathWorldPoints.slice(-3)).toEqual([4.5, 4.5, 0]);
+    expect(row.pathWorldPoints.length).toBeGreaterThan(6);
+  });
+
+  it('цель не доставлена — пересчёт честно ведётся до держимой точки (NET-12)', () => {
+    // Номер цели у агента есть, а самой цели в доставке нет: восстанавливать её
+    // отладке нечем и не из чего (RDBG-6).
+    const source = navPathsDebugSource(NAV_STATS, () => navGrid());
+    const probe = source.probe(state(tickView([navAgent(1, [1.5, 1.5], 7)], NAV_STAT_NAMES)));
+    const row = probe.agents.items[0]!;
+    expect(row.goal).toBe('hold');
+    expect(row.goalEntity).toBe(0);
+    expect([row.goalWorldX, row.goalWorldY]).toEqual([1.5, 1.5]);
+  });
+
+  it('стат держимой точки не объявлен — «нет данных», а не выдуманная нить', () => {
+    const source = navPathsDebugSource(NAV_STATS, () => navGrid());
+    const probe = source.probe(state(tickView([entityView(1)], ['hp'])));
+    expect(probe.noData).toMatch(/не объявлен/);
+    expect(probe.agents.items).toEqual([]);
+  });
+
+  it('без сетки handshake источник молчит, а не строит навигацию из ничего', () => {
+    const source = navPathsDebugSource(NAV_STATS, () => null);
+    expect(source.probe(state(tickView([navAgent(1, [1.5, 1.5])], NAV_STAT_NAMES))).noData).toMatch(
+      /сетка террейна/,
+    );
+  });
+
+  it('дамп несёт ТУ ЖЕ пробу, что и наложение (RDBG-2, RDBG-7)', () => {
+    const layer = new RenderDebugLayer(new PresentationStage(renderContext()));
+    const source = navPathsDebugSource(NAV_STATS, () => navGrid());
+    layer.register(source);
+    layer.setEnabled('demo.navPaths', true);
+    layer.frame(state(tickView([navAgent(1, [4.5, 4.5])], NAV_STAT_NAMES)));
+    const section = layer.dump().sections['demo.navPaths'] as Record<string, unknown>;
+    expect(section.agentsWithPath).toBe(1);
+    const agents = section.agents as { items: { holdWorldX: number }[] };
+    expect(agents.items[0]?.holdWorldX).toBe(4.5);
+  });
+
+  it('выключенный источник пробы не считает и кадра не трогает (RDBG-4)', () => {
+    const layer = new RenderDebugLayer(new PresentationStage(renderContext()));
+    let probes = 0;
+    const source = navPathsDebugSource(NAV_STATS, () => navGrid());
+    layer.register({
+      ...source,
+      probe: (frame) => {
+        probes += 1;
+        return source.probe(frame);
+      },
+    });
+    const frame = state(tickView([navAgent(1, [4.5, 4.5])], NAV_STAT_NAMES));
+    layer.frame(frame);
+    expect(probes).toBe(0);
+    layer.setEnabled('demo.navPaths', true);
+    layer.frame(frame);
+    expect(probes).toBe(1);
+  });
+
+  it('пересчёт пути в пробе не двигает счётчики стоимости (RDBG-8)', () => {
+    // Проба снимается ВНУТРИ подключённого стока диагностики — то есть в самых
+    // невыгодных для источника условиях: сток ядра живёт переменной модуля
+    // (DIAG-1), и работа, посчитанная здесь, ушла бы в сводку игрового кадра.
+    // Ноль в `navNodes` держится не моментом вызова, а сборкой навигации
+    // отладочного слоя: она объявлена вне оплачиваемого пути (`cost: false`).
+    const entries: DiagnosticRecord[] = [];
+    const sink: DiagnosticsSink = { trace: 'systems', record: (entry) => void entries.push(entry) };
+    const source = navPathsDebugSource(NAV_STATS, () => navGrid());
+    const agent = navAgent(1, [1.5, 1.5], 2);
+    const frame = state(tickView([agent, navGoal(2, 4.5, 4.5)], NAV_STAT_NAMES));
+    let probed = 0;
+    withDiagnostics(sink, 1, () => {
+      const probe = source.probe(frame);
+      probed = probe.agents.items.length;
+    });
+    // Работа была: путь пересчитан, ломаная есть.
+    expect(probed).toBe(1);
+    const cost = entries.filter((entry) => entry.code === 'TICK_COST');
+    expect(cost).toHaveLength(1);
+    expect(cost[0]?.data?.navNodes).toBe(0);
   });
 });
 

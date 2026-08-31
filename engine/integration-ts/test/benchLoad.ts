@@ -138,6 +138,21 @@ export function loadNpcStress(): ScenarioDef {
   return JSON.parse(readFileSync(join(GOLDEN_DIR, `${NPC_STRESS}.load.json`), 'utf8')) as ScenarioDef;
 }
 
+/**
+ * Навигационная нагрузка (`pathfinding` NAV-5, NAV-7): сцена с террейном, где
+ * маршрут NPC идёт через узкий проход, вдоль обрыва и по рампе, а навигация
+ * собрана вместе с физикой. Записью матча она не является — участников у неё
+ * нет, — но, в отличие от стресса NPC, у неё есть побитовый эталон: сценарий
+ * лежит обычной парой golden-набора (`nav-path.scenario.json`, CLI-5), потому
+ * что сущностей в ней единицы. Здесь эта же пара служит нагрузкой ГЕЙТА
+ * СТОИМОСТИ: удорожание поиска пути обязано краснеть диффом (PERF-4).
+ */
+export const NAV_PATH = 'nav-path';
+
+export function loadNavPath(): ScenarioDef {
+  return JSON.parse(readFileSync(join(GOLDEN_DIR, `${NAV_PATH}.scenario.json`), 'utf8')) as ScenarioDef;
+}
+
 /** Крючки прогона записи: сток диагностики ядра и наблюдатель тиков. */
 export interface RecordingHooks {
   readonly diagnostics?: DiagnosticsSink;
