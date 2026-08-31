@@ -16,6 +16,15 @@ import { costSink } from '../cost.js';
 import { cornerLevels, type VisualSurface } from '../visualSurface.js';
 import { cornerHeight, sampleWallSide, type TerrainGeometryData } from './terrainGeometry.js';
 
+/**
+ * Низ «бесконечной» юбки (`depth === Infinity`), мировые единицы. Настоящую
+ * бесконечность Float32-геометрия не переносит (нормали и bounding-объёмы
+ * вырождаются в NaN), поэтому бесконечность означает «ниже любой видимой точки
+ * сцены»: константа лежит на порядки ниже минимума шкалы уровней с кривизной,
+ * а дальняя плоскость камеры срезает стенку задолго до этой глубины.
+ */
+export const SKIRT_BOTTOMLESS_Z = -1024;
+
 /** Растущие буферы юбки — один набор на вызов генератора. */
 interface SkirtBuffers {
   readonly positions: number[];
@@ -70,7 +79,9 @@ const SKIRT_SIDES: readonly (readonly [number, number, number, number, number, n
  * низ = верх − `depth`, поэтому нижняя кромка следует профилю верхней и полосы
  * соседних клеток смыкаются без швов.
  *
- * `depth <= 0` выключает юбку — геометрия пуста. Владелец ребра — клетка с
+ * `depth <= 0` выключает юбку — геометрия пуста; `depth === Infinity` делает
+ * её бездонной — низ уходит на `SKIRT_BOTTOMLESS_Z`, число квадов от глубины
+ * не зависит. Владелец ребра — клетка с
  * полом, она лежит ровно в одном чанке, поэтому владение — разбиение, как у
  * стенок: объединение юбок всех чанков не содержит ребра дважды.
  */
@@ -139,7 +150,11 @@ function pushCellSkirt(
   }
 }
 
-/** Полоса квадов одного ребра юбки: верх — кромка пола, низ — верх − depth. */
+/**
+ * Полоса квадов одного ребра юбки: верх — кромка пола, низ — верх − depth; у
+ * бесконечной глубины низ — плоский `SKIRT_BOTTOMLESS_Z`, профиль кромки
+ * повторять ему незачем: на этой глубине его никто не увидит.
+ */
 function pushSkirt(
   out: SkirtBuffers,
   grid: TerrainGrid,
@@ -166,9 +181,11 @@ function pushSkirt(
         : skirtSampleTop(grid, heightStep, surface, edge, wx, wy);
     if (i > 0) {
       const base = out.positions.length / 3;
+      const prevBottom = Number.isFinite(depth) ? prevTop - depth : SKIRT_BOTTOMLESS_Z;
+      const bottom = Number.isFinite(depth) ? top - depth : SKIRT_BOTTOMLESS_Z;
       out.positions.push(
-        prevX, prevY, prevTop - depth,
-        wx, wy, top - depth,
+        prevX, prevY, prevBottom,
+        wx, wy, bottom,
         wx, wy, top,
         prevX, prevY, prevTop,
       );

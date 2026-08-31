@@ -9,6 +9,7 @@ import { FIXED_ONE, createTerrainGrid } from '@fluxus/core';
 import { validateCurvatureMap, type TerrainCurvatureMap } from '@fluxus/assets';
 import {
   DEFAULT_CURVATURE_TESSELLATION,
+  SKIRT_BOTTOMLESS_Z,
   TerrainSubsystem,
   VisualSurfaceSource,
   buildFloorGeometry,
@@ -570,6 +571,31 @@ describe('юбка обрыва по границе пола (REND-7)', () => {
   it('глубина 0 выключает юбку — геометрия пуста', () => {
     const grid = islandGrid();
     expect(buildSkirtGeometry(grid, grid.floor, STEP, 0, 0, 0, 3, 3).indices.length).toBe(0);
+  });
+
+  it('бесконечная глубина — низ юбки на SKIRT_BOTTOMLESS_Z, квадов не больше', () => {
+    const grid = islandGrid();
+    const finite = buildSkirtGeometry(grid, grid.floor, STEP, DEPTH, 0, 0, 3, 3);
+    const data = buildSkirtGeometry(
+      grid,
+      grid.floor,
+      STEP,
+      Number.POSITIVE_INFINITY,
+      0,
+      0,
+      3,
+      3,
+    );
+    expect(data.indices.length).toBe(finite.indices.length);
+    // Вершины 0 и 1 каждого квада — нижняя кромка (см. pushSkirt): плоский низ
+    // ниже любой видимой точки сцены, верхняя кромка — прежняя кромка пола.
+    for (let vertex = 0; vertex * 3 < data.positions.length; vertex++) {
+      const z = data.positions[vertex * 3 + 2]!;
+      if (vertex % 4 === 0 || vertex % 4 === 1) expect(z).toBe(SKIRT_BOTTOMLESS_Z);
+      else expect(Math.abs(z) < 1e-6).toBe(true);
+    }
+    // Бесконечность не просачивается в буферы: геометрия остаётся конечной.
+    expect(data.positions.every((v) => Number.isFinite(v))).toBe(true);
   });
 
   it('на ребре со стенкой cliff-отрезка юбка начинается от нижней высоты пары', () => {
