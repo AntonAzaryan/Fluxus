@@ -468,6 +468,14 @@ export interface RenderCostCounters {
    * разбиения — в отличие от пола, где потолок квадратичен.
    */
   terrainWallQuads: number;
+  /**
+   * Квады юбки обрыва, построенные пересборкой чанков (REND-7): ребро клетки с
+   * полом, за которым пола нет — сосед без пола либо край сетки, — даёт полосу
+   * вниз: один квад без кривизны, `tessellation` под разбитой кромкой (REND-9).
+   * Растёт длиной границы пола и линейно потолком разбиения — та же форма, что
+   * у стенок; глубина юбки на число квадов не влияет.
+   */
+  terrainSkirtQuads: number;
 
   // ------------------------------------------------- вода: работа кадра (REND-35)
 
@@ -559,6 +567,7 @@ export const COST_COUNTER_STAGES: Readonly<Record<keyof RenderCostCounters, Cost
     terrainChunksRebuilt: 'frame',
     terrainFloorQuads: 'frame',
     terrainWallQuads: 'frame',
+    terrainSkirtQuads: 'frame',
     waterBodiesDrawn: 'frame',
     waterQuads: 'frame',
     waterRippleSources: 'frame',
@@ -615,6 +624,7 @@ export function createCostCounters(): RenderCostCounters {
     terrainChunksRebuilt: 0,
     terrainFloorQuads: 0,
     terrainWallQuads: 0,
+    terrainSkirtQuads: 0,
     waterBodiesDrawn: 0,
     waterQuads: 0,
     waterRippleSources: 0,

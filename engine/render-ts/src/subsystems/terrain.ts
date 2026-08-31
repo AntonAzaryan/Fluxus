@@ -5,7 +5,8 @@
  * Горизонтальные площадки — на высоте `уровень × heightStep`, вертикальные
  * стенки — по cliff-отрезкам, ПЕРЕИСПОЛЬЗОВАННЫМ из производной геометрии ядра
  * (`TerrainGrid.cliffs`, TERR-5), а не выведенным заново; рампы — наклонные
- * площадки; клетки без пола — дыры. Силуэт совпадает с симуляционным по
+ * площадки; клетки без пола — дыры, а граница пола — обрыв вниз юбкой на
+ * глубину `skirtDepth`. Силуэт совпадает с симуляционным по
  * построению: источник данных один. Кривизна (REND-9) приходит через
  * `VisualSurfaceSource`: углы клеток и кромки стенок берутся из визуальной
  * поверхности, амплитуда меньше полушага — силуэт не расходится.
@@ -57,6 +58,7 @@ import {
   type CellRect,
   type TerrainGeometryData,
 } from './terrainGeometry.js';
+import { buildSkirtGeometry } from './terrainSkirt.js';
 import type { DebugSource } from '../debug/contract.js';
 import { terrainSurfaceDebugSource } from '../debug/terrainSource.js';
 import type { VisualSurface } from '../visualSurface.js';
@@ -76,6 +78,17 @@ export interface TerrainOptions {
   readonly chunkSize?: number;
   readonly floorColor?: number;
   readonly wallColor?: number;
+  readonly skirtColor?: number;
+  /**
+   * Глубина юбки обрыва в мировых единицах (REND-7): полоса от кромки пола вниз
+   * вдоль рёбер, за которыми пола нет — сосед без пола либо край сетки. Ноль
+   * выключает юбку целиком; `Infinity` делает её бездонной — низ уходит на
+   * `SKIRT_BOTTOMLESS_Z`, ниже любой видимой точки сцены, и обрыв не имеет
+   * видимой нижней кромки ни с одного ракурса. Число квадов от глубины не
+   * зависит. Параметр рендера, как `heightStep`: цифру подбирает тот, кто
+   * смотрит на арену.
+   */
+  readonly skirtDepth?: number;
   /** Источник визуальной поверхности (REND-9); нет — плоские ступени REND-7. */
   readonly surface?: VisualSurfaceSource;
   /**
@@ -90,6 +103,13 @@ export interface TerrainOptions {
 const DEFAULT_CHUNK_SIZE = 16;
 const DEFAULT_FLOOR_COLOR = 0x4a5d3a;
 const DEFAULT_WALL_COLOR = 0x6b5a48;
+/** Темнее стенок: уходящий вниз срез читается глубиной на фоне сцены (REND-7). */
+const DEFAULT_SKIRT_COLOR = 0x453a2f;
+/**
+ * Глубина юбки по умолчанию, мировые единицы: достаточно, чтобы изометрическая
+ * камера не заглядывала под нижнюю кромку на аренах масштаба демо (48×48).
+ */
+const DEFAULT_SKIRT_DEPTH = 8;
 
 /**
  * Радиус влияния правки клетки в клетках. Уровень клетки виден на расстоянии
@@ -100,6 +120,13 @@ const DEFAULT_WALL_COLOR = 0x6b5a48;
  */
 const SHAPE_RADIUS = 2;
 
+/**
+ * Радиус влияния мутации пола (TERR-6): сам пол виден только в своей клетке,
+ * но юбка обрыва (REND-7) стоит на рёбрах с СОСЕДЯМИ — выбитая клетка меняет
+ * юбку четырёх смежных, и дальше собственной клетки их рёбра не уходят.
+ */
+const FLOOR_RADIUS = 1;
+
 export class TerrainSubsystem implements RenderSubsystem {
   readonly name = 'terrain';
 
@@ -107,6 +134,8 @@ export class TerrainSubsystem implements RenderSubsystem {
   private readonly chunkSize: number;
   private readonly floorColor: number;
   private readonly wallColor: number;
+  private readonly skirtColor: number;
+  private readonly skirtDepth: number;
   private readonly surfaceSource: VisualSurfaceSource | undefined;
   private readonly shadows: ShadowCasterSink | undefined;
 
@@ -125,15 +154,19 @@ export class TerrainSubsystem implements RenderSubsystem {
   private chunksY: number;
   private floorMeshes: (THREE.Mesh | null)[] = [];
   private wallMeshes: (THREE.Mesh | null)[] = [];
+  private skirtMeshes: (THREE.Mesh | null)[] = [];
   private readonly dirtyChunks = new Set<number>();
   private floorMaterial: THREE.MeshStandardMaterial | null = null;
   private wallMaterial: THREE.MeshStandardMaterial | null = null;
+  private skirtMaterial: THREE.MeshStandardMaterial | null = null;
 
   constructor(grid: TerrainGrid, options: TerrainOptions = {}) {
     this.grid = grid;
     this.chunkSize = options.chunkSize ?? DEFAULT_CHUNK_SIZE;
     this.floorColor = options.floorColor ?? DEFAULT_FLOOR_COLOR;
     this.wallColor = options.wallColor ?? DEFAULT_WALL_COLOR;
+    this.skirtColor = options.skirtColor ?? DEFAULT_SKIRT_COLOR;
+    this.skirtDepth = options.skirtDepth ?? DEFAULT_SKIRT_DEPTH;
     this.surfaceSource = options.surface;
     this.shadows = options.shadows;
     this.floor = new Uint8Array(grid.floor);
@@ -154,6 +187,12 @@ export class TerrainSubsystem implements RenderSubsystem {
     });
     this.wallMaterial = new THREE.MeshStandardMaterial({
       color: this.wallColor,
+      roughness: 0.95,
+      metalness: 0,
+      side: THREE.DoubleSide,
+    });
+    this.skirtMaterial = new THREE.MeshStandardMaterial({
+      color: this.skirtColor,
       roughness: 0.95,
       metalness: 0,
       side: THREE.DoubleSide,
@@ -190,11 +229,14 @@ export class TerrainSubsystem implements RenderSubsystem {
     this.clearMeshes(false);
     this.floorMeshes = [];
     this.wallMeshes = [];
+    this.skirtMeshes = [];
     this.dirtyChunks.clear();
     this.floorMaterial?.dispose();
     this.floorMaterial = null;
     this.wallMaterial?.dispose();
     this.wallMaterial = null;
+    this.skirtMaterial?.dispose();
+    this.skirtMaterial = null;
   }
 
   /**
@@ -233,9 +275,9 @@ export class TerrainSubsystem implements RenderSubsystem {
       }
       if (this.floor[cell] !== next.floor[cell]) {
         this.floor[cell] = next.floor[cell]!;
-        // Пол виден только в своей клетке: высот и стенок он не меняет (TERR-6).
-        this.dirtyChunks.add(this.chunkOfCell(cell));
-        if (cost !== undefined) cost.terrainChunksMarked++;
+        // Высот и стенок пол не меняет (TERR-6), но юбка соседей следует за
+        // его границей (REND-7) — метится окрестность FLOOR_RADIUS.
+        this.markCellRadius(cell, FLOOR_RADIUS, cost);
       }
     }
     for (const cell of shape) this.markShapeCell(cell, cost);
@@ -255,8 +297,8 @@ export class TerrainSubsystem implements RenderSubsystem {
     const cost = costSink();
     for (const cell of view.floorChangedCells) {
       this.floor[cell] = view.floorBits[cell]!;
-      this.dirtyChunks.add(this.chunkOfCell(cell));
-      if (cost !== undefined) cost.terrainChunksMarked++;
+      // Окрестность FLOOR_RADIUS: юбка обрыва соседей следует за границей пола.
+      this.markCellRadius(cell, FLOOR_RADIUS, cost);
     }
   }
 
@@ -280,7 +322,9 @@ export class TerrainSubsystem implements RenderSubsystem {
       knobs: [
         {
           name: TERRAIN_TESSELLATION,
-          cost: 'вершины и треугольники визуальной поверхности: клетка с кривизной даёт N×N подклеток (REND-9)',
+          cost:
+            'вершины и треугольники визуальной поверхности: клетка с кривизной даёт N×N подклеток, ' +
+            'кромки стенок и юбки обрыва под ней делятся на N пролётов (REND-9, REND-7)',
           semantics: 'ceiling',
           // Потолка нет — действует значение конфига рендера (REND-9).
           default: Number.POSITIVE_INFINITY,
@@ -350,6 +394,11 @@ export class TerrainSubsystem implements RenderSubsystem {
     return countVertices(this.wallMeshes);
   }
 
+  /** Число вершин юбки обрыва — для тестов и профилировки. */
+  get skirtVertexCount(): number {
+    return countVertices(this.skirtMeshes);
+  }
+
   private flushDirty(cost: RenderCostCounters | undefined): void {
     if (this.dirtyChunks.size === 0) return;
     if (cost !== undefined) cost.terrainChunksRebuilt += this.dirtyChunks.size;
@@ -361,6 +410,7 @@ export class TerrainSubsystem implements RenderSubsystem {
     const count = this.chunksX * this.chunksY;
     this.floorMeshes = new Array<THREE.Mesh | null>(count).fill(null);
     this.wallMeshes = new Array<THREE.Mesh | null>(count).fill(null);
+    this.skirtMeshes = new Array<THREE.Mesh | null>(count).fill(null);
   }
 
   private markAllChunks(cost: RenderCostCounters | undefined): void {
@@ -371,13 +421,22 @@ export class TerrainSubsystem implements RenderSubsystem {
 
   /** Инвалидация окрестности правки уровня/рампы — все чанки в радиусе SHAPE_RADIUS. */
   private markShapeCell(cell: number, cost: RenderCostCounters | undefined): void {
+    this.markCellRadius(cell, SHAPE_RADIUS, cost);
+  }
+
+  /** Пометка чанков всех клеток в радиусе `radius` от правки. */
+  private markCellRadius(
+    cell: number,
+    radius: number,
+    cost: RenderCostCounters | undefined,
+  ): void {
     const { width, height } = this.grid;
     const x = cell % width;
     const y = Math.floor(cell / width);
-    const cx0 = Math.floor(Math.max(x - SHAPE_RADIUS, 0) / this.chunkSize);
-    const cx1 = Math.floor(Math.min(x + SHAPE_RADIUS, width - 1) / this.chunkSize);
-    const cy0 = Math.floor(Math.max(y - SHAPE_RADIUS, 0) / this.chunkSize);
-    const cy1 = Math.floor(Math.min(y + SHAPE_RADIUS, height - 1) / this.chunkSize);
+    const cx0 = Math.floor(Math.max(x - radius, 0) / this.chunkSize);
+    const cx1 = Math.floor(Math.min(x + radius, width - 1) / this.chunkSize);
+    const cy0 = Math.floor(Math.max(y - radius, 0) / this.chunkSize);
+    const cy1 = Math.floor(Math.min(y + radius, height - 1) / this.chunkSize);
     // Правка одной клетки метит окрестность (SHAPE_RADIUS), и повторные пометки
     // соседних клеток считаются: каждая — свой поиск в множестве, а пересборок
     // от них не прибавляется (их считает `terrainChunksRebuilt`).
@@ -394,7 +453,7 @@ export class TerrainSubsystem implements RenderSubsystem {
    */
   private clearMeshes(dropCasters: boolean): void {
     const ctx = this.ctx;
-    for (const list of [this.floorMeshes, this.wallMeshes]) {
+    for (const list of [this.floorMeshes, this.wallMeshes, this.skirtMeshes]) {
       for (const mesh of list) {
         if (mesh === null) continue;
         // Меш прежней арены уходит и из реестра теневых кастеров (REND-8): в
@@ -463,6 +522,27 @@ export class TerrainSubsystem implements RenderSubsystem {
       this.wallMaterial,
       `terrain:walls:${cx},${cy}`,
     );
+    if (this.skirtMaterial === null) return;
+    this.skirtMeshes[chunk] = this.swapMesh(
+      this.skirtMeshes[chunk] ?? null,
+      buildSkirtGeometry(
+        this.grid,
+        this.floor,
+        this.heightStep,
+        this.skirtDepth,
+        rect.x0,
+        rect.y0,
+        rect.w,
+        rect.h,
+        this.surface,
+        this.tessellation,
+      ),
+      this.skirtMaterial,
+      `terrain:skirt:${cx},${cy}`,
+      // Юбка — не кастер: ниже неё нет приёмника тени, а карта теней платила
+      // бы за её геометрию каждую перестройку (REND-7).
+      false,
+    );
   }
 
   /** Снимает старый меш со сцены и ставит новый; пустая геометрия — меша нет. */
@@ -471,6 +551,7 @@ export class TerrainSubsystem implements RenderSubsystem {
     data: TerrainGeometryData,
     material: THREE.Material,
     name: string,
+    caster = true,
   ): THREE.Mesh | null {
     const ctx = this.ctx;
     if (ctx === null) return previous;
@@ -487,7 +568,7 @@ export class TerrainSubsystem implements RenderSubsystem {
     ctx.scene.add(mesh);
     // Террейн — статический кастер и приёмник теней при любом режиме, кроме
     // `none`: флаги расставляет сам приёмник, он один знает режим и фазу.
-    this.shadows?.setCaster(mesh, 'static');
+    if (caster) this.shadows?.setCaster(mesh, 'static');
     return mesh;
   }
 }

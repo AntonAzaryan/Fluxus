@@ -9,9 +9,11 @@ import { FIXED_ONE, createTerrainGrid } from '@fluxus/core';
 import { validateCurvatureMap, type TerrainCurvatureMap } from '@fluxus/assets';
 import {
   DEFAULT_CURVATURE_TESSELLATION,
+  SKIRT_BOTTOMLESS_Z,
   TerrainSubsystem,
   VisualSurfaceSource,
   buildFloorGeometry,
+  buildSkirtGeometry,
   buildWallGeometry,
   cornerLevels,
   createVisualSurface,
@@ -131,8 +133,8 @@ describe('TerrainSubsystem: сцена и мутация пола (REND-7, REND-
     const ctx = makeCtx();
     subsystem.init(ctx);
 
-    // Стенки + один чанк пола.
-    expect(ctx.scene.children.length).toBe(2);
+    // Стенки + один чанк пола + юбка границы сетки.
+    expect(ctx.scene.children.length).toBe(3);
     expect(subsystem.floorVertexCount).toBe(16);
 
     // Мутация пола: клетка 0 выбита (TERR-6).
@@ -331,7 +333,8 @@ describe('TerrainSubsystem.applyGrid: сетка документа (ED-10, ED-1
 
   it('смена размеров арены пересобирает раскладку чанков', () => {
     const { subsystem, ctx } = setup();
-    expect(ctx.scene.children.length).toBe(3); // три чанка пола, обрывов нет
+    // Три чанка пола и их юбки по границе сетки, обрывов нет.
+    expect(ctx.scene.children.length).toBe(6);
 
     subsystem.applyGrid(
       createTerrainGrid({
@@ -343,7 +346,7 @@ describe('TerrainSubsystem.applyGrid: сетка документа (ED-10, ED-1
       }),
     );
     subsystem.updateFrame(0.016, 1);
-    expect(ctx.scene.children.length).toBe(1);
+    expect(ctx.scene.children.length).toBe(2); // чанк пола + его юбка
     expect(subsystem.floorVertexCount).toBe(8 * 8 * 4);
   });
 });
@@ -520,5 +523,184 @@ describe('кромка стенки идёт по той же выборке, ч
     const surface = createVisualSurface(grid, STEP, docCurvature([[1, 1]]));
     const walls = buildWallGeometry(grid, STEP, surface, undefined, N);
     expect(walls.positions.length / 3).toBe(grid.cliffs.length * 4);
+  });
+});
+
+// ------------------------------------------------- юбка границы пола (REND-7)
+
+describe('юбка обрыва по границе пола (REND-7)', () => {
+  const N = DEFAULT_CURVATURE_TESSELLATION;
+  const DEPTH = 3;
+
+  /** Остров 3×3: пол только в центре, уровень 0 везде — обрывов ядра нет. */
+  function islandGrid() {
+    return createTerrainGrid({
+      width: 3,
+      height: 3,
+      tileSize: FIXED_ONE,
+      levels: ['000', '000', '000'],
+      flags: ['___', '_._', '___'],
+    });
+  }
+
+  it('остров: рёбра клетки с полом дают полосы от кромки пола вниз на глубину', () => {
+    const grid = islandGrid();
+    // Уровни равны — cliff-отрезков ядро не выводит; юбка — единственный обрыв.
+    expect(grid.cliffs.length).toBe(0);
+    const data = buildSkirtGeometry(grid, grid.floor, STEP, DEPTH, 0, 0, 3, 3);
+    expect(data.indices.length).toBe(4 * 6); // четыре ребра центральной клетки
+    for (let v = 0; v < data.positions.length; v += 3) {
+      const z = data.positions[v + 2]!;
+      expect(Math.abs(z) < 1e-6 || Math.abs(z + DEPTH) < 1e-6).toBe(true);
+    }
+  });
+
+  it('край сетки — та же граница пола: у арены без дыр юбка идёт по периметру', () => {
+    const grid = cliffGrid(); // 2×2, пол везде, правый столбец — уровень 1
+    const data = buildSkirtGeometry(grid, grid.floor, STEP, DEPTH, 0, 0, 2, 2);
+    expect(data.indices.length).toBe(8 * 6); // восемь рёбер периметра
+    // Кромки правого столбца стоят на высоте уровня 1 — юбка следует ступеням.
+    let atStep = 0;
+    for (let vertex = 0; vertex * 3 < data.positions.length; vertex++) {
+      if (vertex % 4 !== 2 && vertex % 4 !== 3) continue;
+      if (Math.abs(data.positions[vertex * 3 + 2]! - STEP) < 1e-6) atStep++;
+    }
+    expect(atStep).toBeGreaterThan(0);
+  });
+
+  it('глубина 0 выключает юбку — геометрия пуста', () => {
+    const grid = islandGrid();
+    expect(buildSkirtGeometry(grid, grid.floor, STEP, 0, 0, 0, 3, 3).indices.length).toBe(0);
+  });
+
+  it('бесконечная глубина — низ юбки на SKIRT_BOTTOMLESS_Z, квадов не больше', () => {
+    const grid = islandGrid();
+    const finite = buildSkirtGeometry(grid, grid.floor, STEP, DEPTH, 0, 0, 3, 3);
+    const data = buildSkirtGeometry(
+      grid,
+      grid.floor,
+      STEP,
+      Number.POSITIVE_INFINITY,
+      0,
+      0,
+      3,
+      3,
+    );
+    expect(data.indices.length).toBe(finite.indices.length);
+    // Вершины 0 и 1 каждого квада — нижняя кромка (см. pushSkirt): плоский низ
+    // ниже любой видимой точки сцены, верхняя кромка — прежняя кромка пола.
+    for (let vertex = 0; vertex * 3 < data.positions.length; vertex++) {
+      const z = data.positions[vertex * 3 + 2]!;
+      if (vertex % 4 === 0 || vertex % 4 === 1) expect(z).toBe(SKIRT_BOTTOMLESS_Z);
+      else expect(Math.abs(z) < 1e-6).toBe(true);
+    }
+    // Бесконечность не просачивается в буферы: геометрия остаётся конечной.
+    expect(data.positions.every((v) => Number.isFinite(v))).toBe(true);
+  });
+
+  it('на ребре со стенкой cliff-отрезка юбка начинается от нижней высоты пары', () => {
+    // Слева пол уровня 0, справа дыра уровня 1: между ними стенка ядра [0, STEP].
+    const grid = createTerrainGrid({
+      width: 2,
+      height: 1,
+      tileSize: FIXED_ONE,
+      levels: ['01'],
+      flags: ['._'],
+    });
+    expect(grid.cliffs.length).toBe(1);
+    const data = buildSkirtGeometry(grid, grid.floor, STEP, DEPTH, 0, 0, 2, 1);
+    expect(data.indices.length).toBe(4 * 6); // четыре ребра клетки с полом
+    // Ни одна вершина не поднимается выше нижней высоты пары: пролёт [0, STEP]
+    // восточного ребра уже накрыт стенкой — юбка продолжает её вниз встык.
+    for (let v = 0; v < data.positions.length; v += 3) {
+      expect(data.positions[v + 2]!).toBeLessThanOrEqual(1e-6);
+    }
+  });
+
+  it('ребро принадлежит чанку клетки с полом — объединение чанков без дублей', () => {
+    const grid = docGrid(); // 24×8, три чанка по 8
+    const whole = buildSkirtGeometry(grid, grid.floor, STEP, DEPTH, 0, 0, DOC_WIDTH, DOC_HEIGHT);
+    expect(whole.indices.length).toBe(2 * (DOC_WIDTH + DOC_HEIGHT) * 6); // периметр
+    let sum = 0;
+    for (let cx = 0; cx < DOC_WIDTH / CHUNK; cx++) {
+      sum += buildSkirtGeometry(grid, grid.floor, STEP, DEPTH, cx * CHUNK, 0, CHUNK, DOC_HEIGHT)
+        .indices.length;
+    }
+    expect(sum).toBe(whole.indices.length);
+  });
+
+  it('кромка юбки идёт той же выборкой, что кромка пола над ней (REND-9)', () => {
+    const grid = docGrid();
+    const surface = createVisualSurface(grid, STEP, docCurvature([[0, 0]]));
+    expect(surface.hasCellCurvature(0, 0)).toBe(true);
+
+    const floor = buildFloorGeometry(grid, grid.floor, STEP, 0, 0, 8, 8, surface, N);
+    const skirt = buildSkirtGeometry(grid, grid.floor, STEP, DEPTH, 0, 0, 8, 8, surface, N);
+    // Рёбра клетки с кривизной разбиты: квадов больше, чем рёбер границы.
+    expect(skirt.indices.length).toBeGreaterThan((8 + 8 + 8) * 6);
+
+    const floorPoints = new Set<string>();
+    for (let v = 0; v < floor.positions.length; v += 3) {
+      floorPoints.add(
+        `${floor.positions[v]!.toFixed(6)}|${floor.positions[v + 1]!.toFixed(6)}|${floor.positions[v + 2]!.toFixed(6)}`,
+      );
+    }
+    // Вершины 2 и 3 каждого квада полосы — верхняя кромка (см. pushSkirt).
+    let tops = 0;
+    for (let vertex = 0; vertex * 3 < skirt.positions.length; vertex++) {
+      if (vertex % 4 !== 2 && vertex % 4 !== 3) continue;
+      const v = vertex * 3;
+      const key = `${skirt.positions[v]!.toFixed(6)}|${skirt.positions[v + 1]!.toFixed(6)}|${skirt.positions[v + 2]!.toFixed(6)}`;
+      expect(floorPoints.has(key)).toBe(true);
+      tops++;
+    }
+    expect(tops).toBeGreaterThan(0);
+  });
+
+  it('выбитый пол растит юбку соседей — и в смежном чанке — не позже следующего кадра', () => {
+    const grid = docGrid();
+    const subsystem = new TerrainSubsystem(grid, { chunkSize: CHUNK });
+    const ctx: RenderContext = {
+      scene: new THREE.Scene(),
+      assets: makeAssets().service,
+      config: { heightStep: STEP },
+    };
+    subsystem.init(ctx);
+    const before = subsystem.skirtVertexCount;
+    expect(before).toBe(2 * (DOC_WIDTH + DOC_HEIGHT) * 4); // юбка периметра сетки
+
+    // Клетка (8,4) — первый столбец второго чанка: ребро её западного соседа
+    // (7,4) принадлежит чанку 0, и пересобраться обязан и он (TERR-6, REND-7).
+    const cell = 4 * DOC_WIDTH + 8;
+    const bits = new Uint8Array(grid.floor);
+    bits[cell] = 0;
+    subsystem.syncTick(makeTickView([], { floorBits: bits, floorChangedCells: [cell] }));
+    subsystem.updateFrame(0.016, 0);
+    // Четыре новых ребра вокруг дыры — по одному от каждого соседа с полом.
+    expect(subsystem.skirtVertexCount).toBe(before + 4 * 4);
+  });
+
+  it('юбка не регистрируется теневым кастером и уходит на dispose (REND-31)', () => {
+    const grid = islandGrid();
+    const casters: THREE.Object3D[] = [];
+    const subsystem = new TerrainSubsystem(grid, {
+      shadows: {
+        setCaster: (mesh) => casters.push(mesh),
+        dropCaster: () => {},
+        invalidateStatic: () => {},
+      },
+    });
+    const ctx: RenderContext = {
+      scene: new THREE.Scene(),
+      assets: makeAssets().service,
+      config: { heightStep: STEP },
+    };
+    subsystem.init(ctx);
+    expect(subsystem.skirtVertexCount).toBeGreaterThan(0);
+    expect(casters.some((mesh) => mesh.name.startsWith('terrain:skirt'))).toBe(false);
+
+    subsystem.dispose();
+    expect(subsystem.skirtVertexCount).toBe(0);
+    expect(ctx.scene.children.filter((node) => node instanceof THREE.Mesh)).toHaveLength(0);
   });
 });

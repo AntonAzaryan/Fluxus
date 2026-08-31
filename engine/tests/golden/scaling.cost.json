@@ -42,6 +42,7 @@
             "postprocessTexels": 4094,
             "terrainChunksRebuilt": 2,
             "terrainFloorQuads": 576,
+            "terrainSkirtQuads": 88,
             "terrainWallQuads": 120,
             "waterBodiesDrawn": 1,
             "waterDepthTexels": 4096,
@@ -59,7 +60,7 @@
             "syncTickDeliveries": 1,
             "syncTickInstances": 256,
             "syncTickSubsystems": 8,
-            "terrainChunksMarked": 2
+            "terrainChunksMarked": 3
           }
         },
         "large": {
@@ -99,6 +100,7 @@
             "postprocessTexels": 4094,
             "terrainChunksRebuilt": 2,
             "terrainFloorQuads": 576,
+            "terrainSkirtQuads": 88,
             "terrainWallQuads": 120,
             "waterBodiesDrawn": 1,
             "waterDepthTexels": 4096,
@@ -116,7 +118,7 @@
             "syncTickDeliveries": 1,
             "syncTickInstances": 2048,
             "syncTickSubsystems": 8,
-            "terrainChunksMarked": 2
+            "terrainChunksMarked": 3
           }
         }
       }
@@ -163,6 +165,7 @@
             "postprocessTexels": 4094,
             "terrainChunksRebuilt": 2,
             "terrainFloorQuads": 576,
+            "terrainSkirtQuads": 88,
             "terrainWallQuads": 120,
             "waterBodiesDrawn": 1,
             "waterDepthTexels": 4096,
@@ -180,7 +183,7 @@
             "syncTickDeliveries": 1,
             "syncTickInstances": 512,
             "syncTickSubsystems": 8,
-            "terrainChunksMarked": 2
+            "terrainChunksMarked": 3
           }
         },
         "large": {
@@ -220,6 +223,7 @@
             "postprocessTexels": 4094,
             "terrainChunksRebuilt": 2,
             "terrainFloorQuads": 576,
+            "terrainSkirtQuads": 88,
             "terrainWallQuads": 120,
             "waterBodiesDrawn": 1,
             "waterDepthTexels": 4096,
@@ -237,7 +241,7 @@
             "syncTickDeliveries": 1,
             "syncTickInstances": 512,
             "syncTickSubsystems": 8,
-            "terrainChunksMarked": 2
+            "terrainChunksMarked": 3
           }
         }
       }
@@ -284,6 +288,7 @@
             "postprocessTexels": 4094,
             "terrainChunksRebuilt": 2,
             "terrainFloorQuads": 576,
+            "terrainSkirtQuads": 88,
             "terrainWallQuads": 28,
             "waterBodiesDrawn": 1,
             "waterDepthTexels": 4096,
@@ -301,7 +306,7 @@
             "syncTickDeliveries": 1,
             "syncTickInstances": 512,
             "syncTickSubsystems": 8,
-            "terrainChunksMarked": 2
+            "terrainChunksMarked": 3
           }
         },
         "large": {
@@ -341,6 +346,7 @@
             "postprocessTexels": 4094,
             "terrainChunksRebuilt": 2,
             "terrainFloorQuads": 576,
+            "terrainSkirtQuads": 88,
             "terrainWallQuads": 262,
             "waterBodiesDrawn": 1,
             "waterDepthTexels": 4096,
@@ -358,7 +364,7 @@
             "syncTickDeliveries": 1,
             "syncTickInstances": 512,
             "syncTickSubsystems": 8,
-            "terrainChunksMarked": 2
+            "terrainChunksMarked": 3
           }
         }
       }
@@ -405,6 +411,7 @@
             "postprocessTexels": 4094,
             "terrainChunksRebuilt": 2,
             "terrainFloorQuads": 576,
+            "terrainSkirtQuads": 88,
             "terrainWallQuads": 120,
             "waterBodiesDrawn": 1,
             "waterDepthTexels": 4096,
@@ -422,7 +429,7 @@
             "syncTickDeliveries": 1,
             "syncTickInstances": 512,
             "syncTickSubsystems": 8,
-            "terrainChunksMarked": 2
+            "terrainChunksMarked": 3
           }
         },
         "large": {
@@ -462,6 +469,7 @@
             "postprocessTexels": 4094,
             "terrainChunksRebuilt": 2,
             "terrainFloorQuads": 576,
+            "terrainSkirtQuads": 88,
             "terrainWallQuads": 120,
             "waterBodiesDrawn": 1,
             "waterDepthTexels": 4096,
@@ -479,7 +487,7 @@
             "syncTickDeliveries": 1,
             "syncTickInstances": 512,
             "syncTickSubsystems": 8,
-            "terrainChunksMarked": 2
+            "terrainChunksMarked": 3
           }
         }
       }
@@ -526,6 +534,7 @@
             "postprocessTexels": 4094,
             "terrainChunksRebuilt": 2,
             "terrainFloorQuads": 576,
+            "terrainSkirtQuads": 88,
             "terrainWallQuads": 120,
             "waterBodiesDrawn": 1,
             "waterDepthTexels": 4096,
@@ -543,7 +552,7 @@
             "syncTickDeliveries": 1,
             "syncTickInstances": 512,
             "syncTickSubsystems": 8,
-            "terrainChunksMarked": 2
+            "terrainChunksMarked": 3
           }
         },
         "large": {
@@ -583,6 +592,7 @@
             "postprocessTexels": 4094,
             "terrainChunksRebuilt": 2,
             "terrainFloorQuads": 576,
+            "terrainSkirtQuads": 88,
             "terrainWallQuads": 120,
             "waterBodiesDrawn": 1,
             "waterDepthTexels": 4096,
@@ -600,7 +610,7 @@
             "syncTickDeliveries": 1,
             "syncTickInstances": 512,
             "syncTickSubsystems": 8,
-            "terrainChunksMarked": 2
+            "terrainChunksMarked": 3
           }
         }
       }
@@ -647,6 +657,7 @@
             "postprocessTexels": 4094,
             "terrainChunksRebuilt": 2,
             "terrainFloorQuads": 216,
+            "terrainSkirtQuads": 52,
             "terrainWallQuads": 60,
             "waterBodiesDrawn": 1,
             "waterDepthTexels": 4096,
@@ -664,7 +675,7 @@
             "syncTickDeliveries": 1,
             "syncTickInstances": 512,
             "syncTickSubsystems": 8,
-            "terrainChunksMarked": 2
+            "terrainChunksMarked": 3
           }
         },
         "large": {
@@ -704,6 +715,7 @@
             "postprocessTexels": 4094,
             "terrainChunksRebuilt": 2,
             "terrainFloorQuads": 576,
+            "terrainSkirtQuads": 88,
             "terrainWallQuads": 120,
             "waterBodiesDrawn": 1,
             "waterDepthTexels": 4096,
@@ -721,7 +733,7 @@
             "syncTickDeliveries": 1,
             "syncTickInstances": 512,
             "syncTickSubsystems": 8,
-            "terrainChunksMarked": 2
+            "terrainChunksMarked": 3
           }
         }
       }
