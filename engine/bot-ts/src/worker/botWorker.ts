@@ -88,6 +88,7 @@ export function startBotWorker(init: BotWorkerInit, options: BotWorkerOptions = 
     content: pack,
     ...(init.physics !== undefined ? { physics: init.physics } : {}),
     ...(init.visibility !== undefined ? { visibility: init.visibility } : {}),
+    ...(init.navigation !== undefined ? { navigation: init.navigation } : {}),
     ...(serializer !== undefined ? { serializer } : {}),
     ...(options.now !== undefined ? { now: options.now } : {}),
   };

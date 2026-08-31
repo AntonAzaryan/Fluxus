@@ -38,6 +38,7 @@ import {
   type RawPort,
   type WorkerLike,
 } from '@fluxus/bot';
+import { demoClientBuildOptions } from './match.js';
 
 /**
  * Формат кадра, которым говорит эта сессия (`serialization` SER-3).
@@ -131,8 +132,9 @@ export class DemoLocalSession {
           // участник, и «формат — свойство сборки» относится к нему наравне с
           // человеком (SER-3).
           ...(wireFormat !== undefined ? { wireFormat } : {}),
-          ...(config.physics !== undefined ? { physics: config.physics } : {}),
-          ...(config.visibility !== undefined ? { visibility: config.visibility } : {}),
+          // Бот предсказывает тики (NTR-10) и обязан тикать тем же составом,
+          // что сервер: раскладка зависимостей сборки — общая (NTR-14).
+          ...demoClientBuildOptions(config),
         });
         // Места живут в потоке ботов — наблюдать их отсюда нечем (BOT-4).
         return [];

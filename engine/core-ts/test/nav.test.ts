@@ -203,10 +203,20 @@ describe('NAV-5: запрос тотален', () => {
     expect(result.waypoints.at(-1)).toEqual(at(2, 2));
   });
 
-  it('совпадение клеток старта и цели — found с пустым списком', () => {
-    const result = api.findPath(at(1, 1), { x: ONE + HALF + 1, y: ONE + HALF - 1 });
+  it('совпадение СТАРТА И ЦЕЛИ — found с пустым списком (NAV-1)', () => {
+    const here = at(1, 1);
+    const result = api.findPath(here, { x: here.x, y: here.y });
     expect(result.status).toBe('found');
     expect(result.waypoints).toEqual([]);
+  });
+
+  it('цель в клетке агента, но не в его точке, — путь из самой цели', () => {
+    // Клетка одна на двоих, а точки разные: выбросить цель значило бы вернуть
+    // `found`, не ведущий никуда (NAV-1 требует последней точкой саму цель).
+    const target = { x: ONE + HALF + 1, y: ONE + HALF - 1 };
+    const result = api.findPath(at(1, 1), target);
+    expect(result.status).toBe('found');
+    expect(result.waypoints).toEqual([target]);
   });
 
   it('старт в непроходимой клетке ищет честно и не бросает', () => {
@@ -297,6 +307,22 @@ describe('NAV-9: agentRadius через карту зазора', () => {
   it('радиус в пределах TERR-7 проходит коридор в одну клетку: клетка не мельче агента', () => {
     const api = navigation(pinch, WIDE_BUDGET, HALF);
     expect(api.findPath(at(3, 1), at(3, 5), { agentRadius: HALF }).status).toBe('found');
+  });
+
+  it('агент шире клетки в коридор шириной в клетку не проходит', () => {
+    // Зазор `k` означает `(k − ½)` клетки свободного места от центра, поэтому
+    // радиус в 0.6 клетки требует уже двух клеток зазора: округление вверх
+    // считает полклетки до собственной границы (NAV-9). Простое
+    // `ceil(radius / tileSize)` дало бы единицу и пропустило бы агента в проход,
+    // в который он не входит.
+    const api = navigation(pinch, WIDE_BUDGET, HALF);
+    // Радиус — Q16.16, то есть ЦЕЛОЕ (FP-1): дробное значение здесь означало бы
+    // величину, которой в симуляции не бывает. 39321 ≈ 0.6 клетки.
+    const bulky = 39321;
+    expect(api.findPath(at(3, 1), at(3, 5), { agentRadius: bulky }).status).toBe('unreachable');
+    expect(navigation(wide, WIDE_BUDGET, HALF).findPath(at(3, 1), at(3, 5), { agentRadius: bulky }).status).toBe(
+      'found',
+    );
   });
 });
 
@@ -400,6 +426,25 @@ describe('PERF-3: работа навигации видна счётчику na
       api.findPath(at(0, 1), at(4, 1));
     });
     expect(twice).toBe(2 * first);
+  });
+
+  it('сборка с выключенным учётом счётчик не двигает (RDBG-8)', () => {
+    // Отладочный слой строит навигацию ВНЕ оплачиваемого пути: его собственная
+    // работа в счётчики стоимости попадать MUST NOT, и держится это устройством
+    // сборки, а не тем, в какой момент зовут пробу.
+    const map = plain(['.....', '.._..', '.....']);
+    const metered = buildNavigation(map, { budget: WIDE_BUDGET, maxAgentRadius: 0 });
+    const free = buildNavigation(map, { budget: WIDE_BUDGET, maxAgentRadius: 0, cost: false });
+    const paid = costOf(() => {
+      metered.findPath(at(0, 1), at(4, 1));
+    });
+    const unpaid = costOf(() => {
+      free.findPath(at(0, 1), at(4, 1));
+    });
+    expect(paid).toBeGreaterThan(0);
+    expect(unpaid).toBe(0);
+    // Ответ при этом тот же: учёт инертен (DI-5).
+    expect(free.findPath(at(0, 1), at(4, 1))).toEqual(metered.findPath(at(0, 1), at(4, 1)));
   });
 
   it('без подключённого стока учёт не исполняется вовсе', () => {

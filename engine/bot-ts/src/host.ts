@@ -21,7 +21,12 @@
  * внутрипроцессном транспорте автотеста, в паре портов воркера и в WebSocket
  * (NTR-2). Место исполнения выбирает сборка — `src/worker/`.
  */
-import type { PhysicsOptions, Serializer, VisibilityOptions } from '@fluxus/core';
+import type {
+  NavigationOptions,
+  PhysicsOptions,
+  Serializer,
+  VisibilityOptions,
+} from '@fluxus/core';
 import {
   ClientHost,
   MatchClient,
@@ -57,6 +62,12 @@ export interface BotSeatOptions {
   /** Зависимости сборки мира (NTR-14) — те же, что у клиента человека. */
   readonly physics?: PhysicsOptions;
   readonly visibility?: VisibilityOptions;
+  /**
+   * Включение и параметры поиска пути (NTR-14): зависимость сборки наравне с
+   * физикой и пересчётом видимости, приезжает из одного описания матча обеим
+   * сторонам — иначе предсказание водило бы NPC не там, где сервер.
+   */
+  readonly navigation?: NavigationOptions;
   readonly interpolationDelayMs?: number;
   readonly serializer?: Serializer;
   readonly now?: () => number;
@@ -101,6 +112,7 @@ export class BotSeat {
       ...(options.role !== undefined ? { role: options.role } : {}),
       ...(options.physics !== undefined ? { physics: options.physics } : {}),
       ...(options.visibility !== undefined ? { visibility: options.visibility } : {}),
+      ...(options.navigation !== undefined ? { navigation: options.navigation } : {}),
       ...(options.interpolationDelayMs !== undefined
         ? { interpolationDelayMs: options.interpolationDelayMs }
         : {}),

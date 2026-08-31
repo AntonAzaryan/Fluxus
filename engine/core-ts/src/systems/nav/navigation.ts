@@ -12,7 +12,7 @@
  * `tileSize` (TERR-7). Ни одной величины баланса в ядре от этого не появляется.
  *
  * Запрос ТОТАЛЕН (NAV-5): точка за краем сетки адресует ближайшую клетку тем же
- * правилом, что запрос уровня (`terrain` TERR-4, `cellAt`), совпадение клеток
+ * правилом, что запрос уровня (`terrain` TERR-4, `cellAt`), совпадение ТОЧЕК
  * старта и цели даёт `found` с пустым списком, а старт внутри непроходимой
  * геометрии ищет честно и отвечает `unreachable`, если выхода из него нет.
  * Исключений `findPath` не бросает: исключение посреди тика останавливает матч.
@@ -40,6 +40,19 @@ export interface NavigationOptions {
    * ограничен и остаётся тотальным (NAV-5).
    */
   readonly maxAgentRadius: Fixed;
+  /**
+   * Считать ли работу запросов в счётчики стоимости тика (PERF-3). По умолчанию
+   * да: сборка симуляции — оплачиваемый путь.
+   *
+   * `false` — сборка ВНЕ оплачиваемого пути: отладочный слой рендера, которому
+   * `render-debug` RDBG-8 прямо запрещает записывать собственную работу в
+   * счётчики («нужен собственный расчёт — он идёт в отладочном слое, вне
+   * оплачиваемого пути»). Гарантия эта обязана держаться устройством, а не тем,
+   * что отладку зовут в удачный момент: сток диагностики ядра — переменная
+   * модуля (DIAG-1), и проба, снятая внутри тика, иначе дописала бы свои узлы в
+   * сводку игрового кадра.
+   */
+  readonly cost?: boolean;
 }
 
 /**
@@ -48,6 +61,14 @@ export interface NavigationOptions {
  * контейнере (DET-2, условие 3). Проверяется явно и на сборке — молчаливая
  * потеря точности дала бы расхождение реализаций там, где его труднее всего
  * искать.
+ *
+ * Оценка выведена для отрезка, оба конца которого ЛЕЖАТ В СЕТКЕ: только тогда
+ * `|dx| ≤ width · tileSize` и `|dy| ≤ height · tileSize`. Конец за пределами
+ * сетки законен (NAV-5), и такой отрезок оценке не подчиняется — но и ответа не
+ * меняет: клетка вне сетки непроходима по построению (`smooth.ts`, `indexOf`),
+ * обход обязан в неё войти, чтобы дойти до конца, и возвращает «не видно» при
+ * любом порядке пересечений. Точность решает ТОЛЬКО порядок, а исход у него в
+ * этом случае один.
  */
 const EXACT_INTEGER_MAX = Number.MAX_SAFE_INTEGER;
 
@@ -78,20 +99,27 @@ export function buildNavigation(grid: TerrainGrid, options: NavigationOptions): 
   const smoothing = new NavSmoothing(nav);
   const budget = options.budget;
   const tileSize = grid.tileSize;
+  const metered = options.cost ?? true;
 
   return {
     findPath: (from: Vec2, to: Vec2, request): PathResult => {
       const radius = request?.agentRadius ?? 0;
       const minClearance = radius <= 0 ? 0 : cellsForRadius(radius, tileSize);
+      // Совпадение СТАРТА И ЦЕЛИ — единственное исключение NAV-1: путь состоял
+      // бы из одной лишь точки `from`, которую путь не содержит, то есть из
+      // ничего (NAV-5). Сравниваются точки, а не их клетки: цель, лежащая в
+      // клетке агента, но не в его позиции, — обычная достижимая цель, и
+      // выбросить её значило бы вернуть `found`, не ведущий никуда.
+      if (from.x === to.x && from.y === to.y) return FOUND_HERE;
       const fromCell = cellAt(grid, from);
       const toCell = cellAt(grid, to);
-      // Одна клетка на двоих — путь состоит из одной лишь точки `from`, которую
-      // путь не содержит (NAV-1), то есть из ничего (NAV-5).
-      if (fromCell === toCell) return FOUND_HERE;
+      // Одна клетка на двоих — отрезок между точками целиком внутри неё, и
+      // сглаживать нечего: путь есть сама цель (NAV-1).
+      if (fromCell === toCell) return { status: 'found', waypoints: [{ x: to.x, y: to.y }] };
 
       const status = search.run(fromCell, toCell, minClearance, budget);
       if (status !== 'found') {
-        countCostNavNodes(search.expansions);
+        if (metered) countCostNavNodes(search.expansions);
         return status === 'budgetExhausted' ? BUDGET_EXHAUSTED : UNREACHABLE;
       }
       const waypoints = smoothing.build(
@@ -106,7 +134,7 @@ export function buildNavigation(grid: TerrainGrid, options: NavigationOptions): 
       // видимости: ровно то, что ограничивает бюджет и растит стоимость тика
       // (PERF-3, NAV-5). Один вызов на запрос, а не на узел: в горячем цикле
       // счёт идёт в поля, а сюда приходит готовой суммой.
-      countCostNavNodes(search.expansions + smoothing.probes);
+      if (metered) countCostNavNodes(search.expansions + smoothing.probes);
       return { status: 'found', waypoints };
     },
   };
@@ -151,11 +179,20 @@ function checkOptions(grid: TerrainGrid, options: NavigationOptions): void {
  * Радиус агента в клетках зазора (NAV-9): округление ВВЕРХ — вернуть путь уже
  * агента нельзя, а вернуть его шире дозволенного лишь осторожнее.
  *
- * DET-2, условия 3 и 5: делимое `radius + tileSize − 1` — сумма двух
- * положительных `i32`, то есть меньше 2^32; делитель `tileSize` — целое ≥ 1
- * (TERR-2). Оба неотрицательны, поэтому конвенция округления отрицательных
- * (условие 4) здесь не возникает.
+ * Полклетки в требовании — не запас, а геометрия карты зазора: у клетки с
+ * зазором `k` ближайшая непроходимость отстоит от её ЦЕНТРА на `(k − ½) ·
+ * tileSize`, потому что первая клетка расстояния тратится на полклетки до
+ * собственной границы. Отсюда требование `k ≥ radius / tileSize + ½`, то есть
+ * `ceil((2·radius + tileSize) / (2·tileSize))`. Внутри области TERR-7 (радиус не
+ * больше половины клетки) это ровно единица — та же, что дало бы простое
+ * `ceil(radius / tileSize)`; за её пределами простое округление занижало бы
+ * требование на клетку и пропускало агента в проход, в который он не входит.
+ *
+ * DET-2, условия 3 и 5: делимое `2·radius + 3·tileSize − 1` — сумма
+ * положительных `i32` с малыми множителями, то есть меньше 2^34; делитель
+ * `2 · tileSize` — целое ≥ 2 (TERR-2). Оба неотрицательны, поэтому конвенция
+ * округления отрицательных (условие 4) здесь не возникает.
  */
 function cellsForRadius(radius: Fixed, tileSize: Fixed): number {
-  return Math.floor((radius + tileSize - 1) / tileSize);
+  return Math.floor((2 * radius + 3 * tileSize - 1) / (2 * tileSize));
 }

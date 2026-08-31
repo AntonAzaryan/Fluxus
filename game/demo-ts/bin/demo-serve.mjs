@@ -91,7 +91,13 @@ import { MessageChannel, Worker } from 'node:worker_threads';
 // файл матча поднял бы два разных мира (NTR-5, NTR-14). Подпуть пакета, потому
 // что помощник запускалок в публичный `@fluxus/net` не входит, а вторая копия
 // раскладки и есть тот самый способ разойтись.
-import { flag, matchConfigOf, option, readMatchFile } from '@fluxus/net/bin/matchFile.mjs';
+import {
+  clientBuildOptions,
+  flag,
+  matchConfigOf,
+  option,
+  readMatchFile,
+} from '@fluxus/net/bin/matchFile.mjs';
 // Флаги трейса — оттуда же и по той же причине (CLI-11): уровень, отбор и путь
 // вывода стенд принимает тем же образом, что и `serve.mjs`.
 import {
@@ -497,8 +503,9 @@ async function runMatch(number) {
       // Тот же формат, которым говорит сервер (SER-3): бот — обычный участник
       // матча, и «свойство сборки» относится к нему наравне с людьми.
       wireFormat,
-      ...(match.physics !== undefined ? { physics: match.physics } : {}),
-      ...(match.visibility !== undefined ? { visibility: match.visibility } : {}),
+      // Зависимости сборки мира — общей раскладкой запускалок (NTR-14): бот
+      // предсказывает тики (NTR-10) и обязан тикать тем же составом, что сервер.
+      ...clientBuildOptions(match),
     });
   };
 

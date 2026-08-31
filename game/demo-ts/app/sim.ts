@@ -17,6 +17,7 @@ import {
   PhysicsWorld,
   VISION_MODIFIER_COMPONENT,
   VisibilitySystem,
+  buildNavigation,
   colliderHeightDeclared,
   createPhysicsApi,
   initialState,
@@ -32,6 +33,10 @@ import {
   type TerrainApi,
   type TerrainGrid,
 } from '@fluxus/core';
+// Числа поиска пути приезжают из документа матча (NTR-14): второй их записи в
+// коде сборки быть не должно — разойдись они, режимы демо развели бы NPC
+// разными дорогами.
+import { DEMO_NAVIGATION } from './match.js';
 
 // ----------------------------------------------------------------- константы
 
@@ -259,6 +264,15 @@ export const STATS = {
   navPathY: 'navY',
   navPathValid: 'navHold',
   /**
+   * Цель движения агента (`NpcAgent.target`) — вторая половина того же входа:
+   * по держимой точке видно, куда агент шагает СЕЙЧАС, по цели — куда ведёт
+   * весь путь, и пересчитать его отладке иначе не из чего. Сущность едет
+   * обычным статом, как шаги прицеливания слота (`AbilitySlot.step0e`), и
+   * невидимую цель это не открывает: не доставленную сущность клиент по
+   * номеру не разрешит, и источник честно скажет, что цели у него нет.
+   */
+  navTarget: 'navTarget',
+  /**
    * Заряд каста (`Charging.ticks`) и прицел (`Input.aimDir`) — входы шара
    * заряда главного потока (`chargeBalls.ts`). Оба живут НА ГЕРОЕ, а не на
    * сущности-слоте, и это несущее: слот виден только стороне владельца
@@ -400,6 +414,14 @@ export function createDemoSimulation(def: SceneDef): DemoSimulation {
     );
   }
 
+  // Поиск пути (NAV-1): числа — те же, что объявляет документ матча (NTR-14),
+  // и берутся они ОТТУДА, а не переписываются здесь. Локальная сборка обязана
+  // тикать тот же состав, что сетевая (SHELL-8): собери матч навигацию, а
+  // одиночная симуляция нет — NPC в двух режимах одной игры ходили бы разными
+  // дорогами (NPC-6), и заметить это в локальном режиме было бы некому.
+  const navigation =
+    DEMO_NAVIGATION === undefined ? undefined : buildNavigation(grid, DEMO_NAVIGATION);
+
   const playerId = worldInitSpawn(scene.world, 'Hero');
   const state = initialState(scene.world, WORLD_SEED);
   const sim: Simulation = {
@@ -416,6 +438,7 @@ export function createDemoSimulation(def: SceneDef): DemoSimulation {
     // выключено — локальный режим разошёлся бы с сетевым (SHELL-8), где
     // `buildSimulation` API передаёт.
     physics: createPhysicsApi(scene.world, physicsWorld, {}, physicsDeps),
+    ...(navigation === undefined ? {} : { navigation }),
   };
 
   return { sim, state, playerId, terrain, grid };

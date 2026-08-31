@@ -1208,6 +1208,7 @@ function wireDebugPanel(surface: VisualSurfaceSource, bounds: CameraBounds): voi
           y: STATS.navPathY,
           valid: STATS.navPathValid,
           radius: STATS.colliderRadius,
+          target: STATS.navTarget,
         },
         () => remote?.terrain ?? null,
       ),

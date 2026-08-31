@@ -106,6 +106,13 @@ export class NavSmoothing {
     return (cell % width) * tileSize + (tileSize >> 1);
   }
 
+  /**
+   * DET-2, условия 3 и 5: делимое `cell` — линейный индекс клетки,
+   * неотрицательный и меньший площади сетки; делитель `width` — целое ≥ 1
+   * (TERR-2). Произведение ряда на `tileSize` не превышает `height · tileSize`,
+   * то есть остаётся в `i32` (TERR-2). Отрицательным делимое не бывает —
+   * условие 4 неприменимо.
+   */
   private centerY(cell: number): Fixed {
     const { width, tileSize } = this.nav.grid;
     return Math.floor(cell / width) * tileSize + (tileSize >> 1);

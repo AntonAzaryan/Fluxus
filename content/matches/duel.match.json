@@ -8,6 +8,7 @@
   "physics": {},
   "locomotion": { "dodgeButton": null, "jumpButton": 3, "lockComponent": "ActionLock" },
   "visibility": {},
+  "navigation": { "budget": 4096, "maxAgentRadius": 32768 },
   "initial": [
     { "prefab": "Hero", "overrides": { "Position": { "x": 557056, "y": 1605632 } } },
     {

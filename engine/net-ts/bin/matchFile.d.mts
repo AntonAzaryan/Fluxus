@@ -33,6 +33,7 @@ export declare const MATCH_DOCUMENT_FIELDS: readonly [
   'physics',
   'locomotion',
   'visibility',
+  'navigation',
 ];
 
 export declare const LAUNCHER_FIELDS: readonly [
@@ -45,6 +46,17 @@ export declare const LAUNCHER_FIELDS: readonly [
   'rewindWarn',
   'eventVisibility',
 ];
+
+/**
+ * Поля документа, которые запускалка отдаёт КЛИЕНТУ (NTR-14): подмножество
+ * `MATCH_DOCUMENT_FIELDS`, полнота которого проверяется типом в тестах.
+ */
+export declare const CLIENT_BUILD_FIELDS: readonly ['physics', 'visibility', 'navigation'];
+
+/** Зависимости сборки мира для клиента — ровно объявленные документом секции. */
+export declare function clientBuildOptions(
+  match: MatchDocument,
+): Partial<Pick<MatchConfig, (typeof CLIENT_BUILD_FIELDS)[number]>>;
 
 /** Поле `MatchConfig`, которое документ матча везёт как есть. */
 export type MatchDocumentField = (typeof MATCH_DOCUMENT_FIELDS)[number];

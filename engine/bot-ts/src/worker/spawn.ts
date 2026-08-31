@@ -10,7 +10,7 @@
  */
 import { botWorkerInit, type BotWireFormat, type BotWorkerSeat, type MessageChannelLike, type PortConnections, type RawPort } from '../assembly.js';
 import type { WorldViewNames } from '../worldView.js';
-import type { PhysicsOptions, SceneDef, VisibilityOptions } from '@fluxus/core';
+import type { NavigationOptions, PhysicsOptions, SceneDef, VisibilityOptions } from '@fluxus/core';
 
 /** Структурный минимум воркера: только отправка сообщения с переносом портов. */
 export interface WorkerLike {
@@ -31,6 +31,12 @@ export interface AttachBotsOptions {
   readonly wireFormat?: BotWireFormat;
   readonly physics?: PhysicsOptions;
   readonly visibility?: VisibilityOptions;
+  /**
+   * Включение и параметры поиска пути (NTR-14): зависимость сборки наравне с
+   * физикой и пересчётом видимости, приезжает из одного описания матча обеим
+   * сторонам — иначе предсказание водило бы NPC не там, где сервер.
+   */
+  readonly navigation?: NavigationOptions;
   readonly names?: WorldViewNames;
 }
 
@@ -50,6 +56,7 @@ export function attachBots(options: AttachBotsOptions): void {
     ...(options.wireFormat !== undefined ? { wireFormat: options.wireFormat } : {}),
     ...(options.physics !== undefined ? { physics: options.physics } : {}),
     ...(options.visibility !== undefined ? { visibility: options.visibility } : {}),
+    ...(options.navigation !== undefined ? { navigation: options.navigation } : {}),
     ...(options.names !== undefined ? { names: options.names } : {}),
   });
   options.worker.postMessage(init, ports);

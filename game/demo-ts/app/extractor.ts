@@ -49,6 +49,7 @@ export const DEMO_STATS: readonly StatSource[] = Object.freeze([
   { name: STATS.navPathX, component: 'NpcAgent', field: 'pathX' },
   { name: STATS.navPathY, component: 'NpcAgent', field: 'pathY' },
   { name: STATS.navPathValid, component: 'NpcAgent', field: 'pathValid' },
+  { name: STATS.navTarget, component: 'NpcAgent', field: 'target' },
   // Входы шара заряда главного потока (`chargeBalls.ts`): величина заряда и
   // направление прицела ЗАРЯЖАЮЩЕГО. Оба читаются с самого героя, а не с его
   // сущности-слота: слот виден только своей стороне (NET-12), а шар заряда

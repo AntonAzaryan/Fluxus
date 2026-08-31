@@ -15,7 +15,7 @@
  * порта. Хост во вкладке — это рандеву поверх WebRTC, и встаёт оно под тот же
  * интерфейс (SES-3).
  */
-import { flag, matchDataOf, option, readMatchFile } from './matchFile.mjs';
+import { clientBuildOptions, flag, matchDataOf, option, readMatchFile } from './matchFile.mjs';
 import { inputSource, reportClient } from './play.shared.mjs';
 
 const file = process.argv[2];
@@ -88,9 +88,9 @@ const local = session.localClient(
     playerId: founder,
     version: { buildId: match.buildId, contentPackHash: pack.hash },
     content: pack,
-    // Обе стороны берут зависимости сборки из ОДНОГО описания матча (NTR-14).
-    ...(match.physics !== undefined ? { physics: match.physics } : {}),
-    ...(match.visibility !== undefined ? { visibility: match.visibility } : {}),
+    // Обе стороны берут зависимости сборки из ОДНОГО описания матча (NTR-14):
+    // раскладка общая на все запускалки, перечисления имён здесь нет.
+    ...clientBuildOptions(match),
   },
   { input: inputSource() },
 );

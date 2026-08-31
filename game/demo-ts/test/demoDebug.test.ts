@@ -362,10 +362,11 @@ const NAV_STATS = {
   y: STATS.navPathY,
   valid: STATS.navPathValid,
   radius: STATS.colliderRadius,
+  target: STATS.navTarget,
 };
 
 /** Агент с держимой точкой: позиция доставленного тика и точка — статами. */
-function navAgent(id: EntityId, hold: [number, number] | null): EntityView {
+function navAgent(id: EntityId, hold: [number, number] | null, target?: EntityId): EntityView {
   const stats = new Map<string, number>();
   if (hold === null) stats.set(STATS.navPathValid, 0);
   else {
@@ -373,10 +374,16 @@ function navAgent(id: EntityId, hold: [number, number] | null): EntityView {
     stats.set(STATS.navPathX, hold[0]);
     stats.set(STATS.navPathY, hold[1]);
   }
+  if (target !== undefined) stats.set(STATS.navTarget, target);
   return { ...entityView(id), currX: 0.5, currY: 0.5, prevX: 0.5, prevY: 0.5, stats };
 }
 
-const NAV_STAT_NAMES = [STATS.navPathValid, STATS.navPathX, STATS.navPathY];
+/** Цель движения агента — обычная доставленная сущность в назначенной клетке. */
+function navGoal(id: EntityId, x: number, y: number): EntityView {
+  return { ...entityView(id), currX: x, currY: y, prevX: x, prevY: y };
+}
+
+const NAV_STAT_NAMES = [STATS.navPathValid, STATS.navPathX, STATS.navPathY, STATS.navTarget];
 
 describe('RDBG-6/NAV-1: нити пути NPC — из доставленных статов и пересчёта', () => {
   it('агент с держимой точкой даёт нить и пересчитанный путь', () => {
@@ -389,8 +396,12 @@ describe('RDBG-6/NAV-1: нити пути NPC — из доставленных 
     expect(row.entity).toBe(1);
     expect([row.holdWorldX, row.holdWorldY]).toEqual([4.5, 4.5]);
     // Пересчёт — тем же `findPath` ядра над сеткой handshake (NAV-2): путь
-    // найден и начинается с позиции доставленного тика.
+    // найден и начинается с позиции доставленного тика. Цель движения агенту
+    // не доставлена, поэтому ведётся он до держимой точки, и проба говорит об
+    // этом прямо, а не выдаёт ближайший шаг за весь путь.
     expect(row.status).toBe('found');
+    expect(row.goal).toBe('hold');
+    expect(row.goalEntity).toBe(0);
     expect(row.pathWorldPoints.slice(0, 3)).toEqual([0.5, 0.5, 0]);
     expect(row.pathWorldPoints.length).toBeGreaterThanOrEqual(6);
     // Нить и путь рисуются ломаными закрытого словаря примитивов (RDBG-3).
@@ -409,6 +420,34 @@ describe('RDBG-6/NAV-1: нити пути NPC — из доставленных 
     const lines: number[][] = [];
     source.draw!(probe, { ...NO_DRAW, polyline: (points) => void lines.push([...points]) });
     expect(lines).toEqual([]);
+  });
+
+  it('доставленная цель движения даёт ПОЛНЫЙ путь, огибающий препятствие', () => {
+    // Цель за дырой в центре арены: прямой отрезок сквозь неё не проходит, и
+    // пересчёт обязан вернуть ломаную с изломом, а не отрезок до держимой точки.
+    const source = navPathsDebugSource(NAV_STATS, () => navGrid());
+    const agent = navAgent(1, [1.5, 1.5], 2);
+    const goal = navGoal(2, 4.5, 4.5);
+    const probe = source.probe(state(tickView([agent, goal], NAV_STAT_NAMES)));
+    const row = probe.agents.items[0]!;
+    expect(row.goal).toBe('target');
+    expect(row.goalEntity).toBe(2);
+    expect([row.goalWorldX, row.goalWorldY]).toEqual([4.5, 4.5]);
+    expect(row.status).toBe('found');
+    // Путь ведёт ДО ЦЕЛИ, а не до держимой точки в соседней клетке.
+    expect(row.pathWorldPoints.slice(-3)).toEqual([4.5, 4.5, 0]);
+    expect(row.pathWorldPoints.length).toBeGreaterThan(6);
+  });
+
+  it('цель не доставлена — пересчёт честно ведётся до держимой точки (NET-12)', () => {
+    // Номер цели у агента есть, а самой цели в доставке нет: восстанавливать её
+    // отладке нечем и не из чего (RDBG-6).
+    const source = navPathsDebugSource(NAV_STATS, () => navGrid());
+    const probe = source.probe(state(tickView([navAgent(1, [1.5, 1.5], 7)], NAV_STAT_NAMES)));
+    const row = probe.agents.items[0]!;
+    expect(row.goal).toBe('hold');
+    expect(row.goalEntity).toBe(0);
+    expect([row.goalWorldX, row.goalWorldY]).toEqual([1.5, 1.5]);
   });
 
   it('стат держимой точки не объявлен — «нет данных», а не выдуманная нить', () => {
@@ -457,16 +496,23 @@ describe('RDBG-6/NAV-1: нити пути NPC — из доставленных 
   });
 
   it('пересчёт пути в пробе не двигает счётчики стоимости (RDBG-8)', () => {
-    // Счётчик работы навигации (`navNodes`, PERF-3) исполняется только внутри
-    // тика под подключённым стоком диагностики. Проба живёт в кадре главного
-    // потока, вне тика, — и потому не попадает в сводку ни одним узлом.
+    // Проба снимается ВНУТРИ подключённого стока диагностики — то есть в самых
+    // невыгодных для источника условиях: сток ядра живёт переменной модуля
+    // (DIAG-1), и работа, посчитанная здесь, ушла бы в сводку игрового кадра.
+    // Ноль в `navNodes` держится не моментом вызова, а сборкой навигации
+    // отладочного слоя: она объявлена вне оплачиваемого пути (`cost: false`).
     const entries: DiagnosticRecord[] = [];
     const sink: DiagnosticsSink = { trace: 'systems', record: (entry) => void entries.push(entry) };
     const source = navPathsDebugSource(NAV_STATS, () => navGrid());
-    const frame = state(tickView([navAgent(1, [4.5, 4.5])], NAV_STAT_NAMES));
-    source.probe(frame);
-    withDiagnostics(sink, 1, () => {});
-    source.probe(frame);
+    const agent = navAgent(1, [1.5, 1.5], 2);
+    const frame = state(tickView([agent, navGoal(2, 4.5, 4.5)], NAV_STAT_NAMES));
+    let probed = 0;
+    withDiagnostics(sink, 1, () => {
+      const probe = source.probe(frame);
+      probed = probe.agents.items.length;
+    });
+    // Работа была: путь пересчитан, ломаная есть.
+    expect(probed).toBe(1);
     const cost = entries.filter((entry) => entry.code === 'TICK_COST');
     expect(cost).toHaveLength(1);
     expect(cost[0]?.data?.navNodes).toBe(0);
