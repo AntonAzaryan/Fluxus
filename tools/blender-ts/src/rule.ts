@@ -31,7 +31,7 @@
  * которым живёт валидатор (ED-8): пере-разбор glTF идёт только тогда, когда
  * файл действительно сменился.
  *
- * ## Пять ответов кэша, и ни одного молчаливого
+ * ## Шесть ответов кэша, и ни одного молчаливого
  *
  * - `none` — рядом со сценой нет ни экспорта, ни самого `.blend`: конвейер к
  *   ней отношения не имеет, находки нет и читать нечего (BLND-2).
@@ -46,7 +46,10 @@
  *   не спрашивали, — то самое молчание, ради устранения которого правило и
  *   заведено. Поэтому у него своя находка, а у собирающего — обязанность
  *   обновить кэш до прогона (см. `app/assembly.ts` редактора).
- * - `unavailable` / `rejected` — источник есть, но прочитать или разобрать его
+ * - `unchecked` — среда не ответила, лежит ли рядом со сценой источник:
+ *   отказало перечисление дерева. Отдельно от `unavailable` потому, что чтения
+ *   здесь не было вовсе, и находка не вправе его утверждать (BLND-1).
+ * - `unavailable` / `rejected` — экспорт есть, но прочитать или разобрать его
  *   не удалось: причина называется дословно (ED-12, ED-20).
  * - `ready` — есть с чем сверять.
  */
@@ -94,6 +97,8 @@ const SOURCE_REJECTED = 'sourceRejected';
 const SOURCE_UNREAD = 'sourceUnread';
 /** Источник (`.blend`) рядом со сценой есть, экспорта нет: сверять не с чем. */
 const SOURCE_UNEXPORTED = 'sourceUnexported';
+/** Среда не ответила, лежит ли рядом источник: сопряжённость сцены неизвестна. */
+const SOURCE_UNCHECKED = 'sourceUnchecked';
 
 /** Что известно об источнике сцены прямо сейчас. */
 export type SourceState =
@@ -109,6 +114,14 @@ export type SourceState =
    * самого источника: находке нужно назвать, что именно лежит рядом.
    */
   | { readonly status: 'unexported'; readonly path: ContentPath }
+  /**
+   * Среда не смогла ОТВЕТИТЬ, лежит ли рядом со сценой источник: перечисление
+   * дерева отказало. Своё состояние, а не `unavailable`: там среда не отдала
+   * прочитанный файл, а здесь читать никто и не пробовал — `.blend` не читает
+   * ни импорт, ни редактор (BLND-1, BLND-7), и находка, утверждающая чтение,
+   * называла бы действие, которого конвейер не делает.
+   */
+  | { readonly status: 'unchecked'; readonly path: ContentPath; readonly reason: string }
   /**
    * О сцене ещё не спрашивали: кэш не обновляли ни разу. Отличается от `none`
    * тем же, чем «не проверяли» отличается от «проверили и не нашли».
@@ -183,6 +196,37 @@ function message(error: unknown): string {
 }
 
 /**
+ * Ответ о САМОМ источнике, когда экспорта рядом со сценой нет (BLND-2): лежит ли
+ * `.blend` рядом. Отдельной функцией не ради краткости `refresh`, а потому что
+ * это ДРУГОЙ вопрос: не «что читать», а «принадлежит ли сцена конвейеру».
+ *
+ * Три ответа, и ни одного молчаливого: `unchecked` — среда не смогла ответить
+ * (чтения не было, и находка не вправе его утверждать), `unexported` — источник
+ * есть, экспорта нет, `none` — конвейер к сцене отношения не имеет.
+ *
+ * Прежний `unexported` возвращается ТЕМ ЖЕ объектом: `none` и `unknown` —
+ * синглтоны, `ready` мемоизирован отпечатком, а «состояние не изменилось»
+ * собирающий редактор проверяет тождеством (`app/assembly.ts`). Новый объект на
+ * каждый `refresh` означал бы полный прогон правил на каждое сохранение ещё не
+ * экспортированной сцены — ровно ту плату, которой ED-8 избегает.
+ */
+async function probeBlend(
+  host: ContentTreeHost,
+  blend: ContentPath,
+  known: SourceState | undefined,
+): Promise<SourceState> {
+  let exists = false;
+  try {
+    exists = (await host.stat(blend))?.kind === 'file';
+  } catch (error) {
+    return { status: 'unchecked', path: blend, reason: message(error) };
+  }
+  if (!exists) return NONE;
+  if (known?.status === 'unexported' && known.path === blend) return known;
+  return { status: 'unexported', path: blend };
+}
+
+/**
  * Кэш источников по байтам (ED-8: «кэш по прочитанному»). Хранит разобранные
  * объекты — самое дорогое в цикле, — а слой считает правило на каждый прогон:
  * слой есть функция ещё и от документов, которые автор правит прямо сейчас, и
@@ -221,29 +265,12 @@ export function createSourceCache(
         break;
       }
       if (path === null) {
-        // Экспорта нет — но сопряжённость сцены с конвейером определяет сам
-        // источник (BLND-2), и спросить о нём файловую систему обязательно:
-        // иначе сцена, у которой `.blend` есть, а экспорт ещё не сделан, молча
-        // считалась бы конвейеру не принадлежащей. Это ВОПРОС О НАЛИЧИИ, а не
-        // чтение: `.blend` не читает ни импорт, ни редактор (BLND-1, BLND-7).
-        const blend = sourcePathOf(scene, blendExtension);
-        let hasBlend = false;
-        try {
-          hasBlend = (await host.stat(blend))?.kind === 'file';
-        } catch (error) {
-          const state: SourceState = { status: 'unavailable', path: blend, reason: message(error) };
-          states.set(scene, state);
-          return state;
-        }
-        if (hasBlend) {
-          const state: SourceState = { status: 'unexported', path: blend };
-          states.set(scene, state);
-          return state;
-        }
-        // Ни одного чтения: у сцены без источника читать нечего, и попытка
-        // чтения на каждой валидации была бы платой за отсутствующий файл.
-        states.set(scene, NONE);
-        return NONE;
+        // Экспорта рядом нет — остаётся вопрос о САМОМ источнике (BLND-2). Ни
+        // одного чтения он не стоит: у сцены без источника читать нечего, а
+        // `.blend` не читает ни импорт, ни редактор (BLND-1, BLND-7).
+        const state = await probeBlend(host, sourcePathOf(scene, blendExtension), states.get(scene));
+        states.set(scene, state);
+        return state;
       }
 
       let bytes: Uint8Array;
@@ -332,6 +359,7 @@ export function spatialLayerSyncRule(options: SpatialLayerSyncOptions): Validati
       SOURCE_REJECTED,
       SOURCE_UNREAD,
       SOURCE_UNEXPORTED,
+      SOURCE_UNCHECKED,
     ],
     appliesTo: [kinds.scene],
     severity: 'warning',
@@ -406,6 +434,18 @@ function reportSourceState(run: ValidationRun, state: UnreadySource): void {
       },
       code: SOURCE_UNEXPORTED,
       params: { source: state.path, scene: run.document.id },
+    });
+    return;
+  }
+  if (state.status === 'unchecked') {
+    // Сопряжённость сцены неизвестна: среда не ответила, лежит ли рядом
+    // источник. Молчать нельзя — молчание читалось бы как «источника нет», то
+    // есть как утверждение, которого никто не проверял.
+    run.report({
+      path: [],
+      expected: { kind: 'accepted', by: SPATIAL_LAYER_SYNC_RULE, detail: state.reason },
+      code: SOURCE_UNCHECKED,
+      params: { source: state.path, reason: state.reason },
     });
     return;
   }

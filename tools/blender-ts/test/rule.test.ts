@@ -271,6 +271,43 @@ describe('BLND-2: сопряжённость сцены считается от 
     expect(reads).toEqual([]);
   });
 
+  it('ED-8: тот же ответ — тот же объект, и пересборка отчёта не заказывается зря', async () => {
+    const { host } = tree(withBlendOnly());
+    const sources = createSourceCache(host);
+
+    const first = await sources.refresh(SCENE_ID);
+    const second = await sources.refresh(SCENE_ID);
+
+    // Собирающий редактор сверяет состояние ТОЖДЕСТВОМ (`app/assembly.ts`):
+    // новый объект на каждый refresh означал бы полный прогон правил на каждое
+    // сохранение ещё не экспортированной сцены.
+    expect(second).toBe(first);
+    expect(second.status).toBe('unexported');
+  });
+
+  it('среда не ответила про источник — находка не утверждает чтения, которого не было', async () => {
+    // `.blend` не читает никто (BLND-1, BLND-7), поэтому отказ ОТВЕТА о наличии
+    // и отказ чтения экспорта — разные ответы кэша и разные причины находки.
+    const memory = createMemoryHost({ files: withoutSource() });
+    const host: ContentTreeHost = {
+      ...memory.content,
+      stat(path) {
+        if (path.endsWith('.blend')) throw new Error('среда не умеет перечислять это дерево');
+        return memory.content.stat(path);
+      },
+    };
+    const sources = createSourceCache(host);
+
+    const state = await sources.refresh(SCENE_ID);
+    const editor = session(sceneDocument(), presentationDocument());
+    const issues = issuesOf(editor, spatialLayerSyncRule({ sources }));
+
+    expect(state.status).toBe('unchecked');
+    expect(issues).toHaveLength(1);
+    expect(issues[0]!.reasonKey).toBe('validation.reason.blender.spatialLayerSync.sourceUnchecked');
+    expect(issues[0]!.reasonParams.reason).toContain('перечислять');
+  });
+
   it('появился экспорт — сверка идёт по нему, а не по наличию источника', async () => {
     const { host } = tree({ ...withSource(), [BLEND_ID]: 'BLENDER-v420' });
     const sources = createSourceCache(host);

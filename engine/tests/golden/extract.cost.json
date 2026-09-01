@@ -1,0 +1,29 @@
+{
+  "axis": "extractEntities",
+  "small": 32,
+  "large": 256,
+  "cost": {
+    "small": {
+      "extract": {
+        "extractCalls": 8,
+        "extractChannelValues": 4352,
+        "extractEntitiesCopied": 256,
+        "extractEntitiesScanned": 256,
+        "extractEvents": 0,
+        "extractFloorCellsScanned": 0,
+        "extractStatPairs": 512
+      }
+    },
+    "large": {
+      "extract": {
+        "extractCalls": 8,
+        "extractChannelValues": 34816,
+        "extractEntitiesCopied": 2048,
+        "extractEntitiesScanned": 2048,
+        "extractEvents": 0,
+        "extractFloorCellsScanned": 0,
+        "extractStatPairs": 4096
+      }
+    }
+  }
+}

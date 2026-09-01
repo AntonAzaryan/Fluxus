@@ -13,5 +13,6 @@
   "validation.reason.blender.spatialLayerSync.sourceRejected": "Source \"{source}\" does not pass the import: there is nothing to compare the layer against until the source is fixed: {reason} (BLND-6)",
   "validation.reason.blender.spatialLayerSync.sourceUnread": "The source of scene \"{scene}\" has not been read: the layer was never compared — refresh the source state (the editor assembly does that before the validation pass, BLND-2)",
   "validation.reason.blender.spatialLayerSync.sourceUnexported": "Source \"{source}\" sits next to scene \"{scene}\", but it has no export: the layer of the scene is derived and there is nothing to compare it against — export glTF from Blender and run the import (BLND-2)",
+  "validation.reason.blender.spatialLayerSync.sourceUnchecked": "The environment did not answer whether source \"{source}\" sits next to the scene: {reason} — whether the scene belongs to the pipeline is unknown, and the layer was not compared (BLND-2)",
   "validation.reason.blender.spatialLayerSync.ruleFailed": "Validation rule \"{rule}\" failed on this document: nothing was checked, and that is a defect of the rule, not of the document."
 }

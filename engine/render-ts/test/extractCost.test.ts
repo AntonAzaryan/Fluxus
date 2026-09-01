@@ -23,6 +23,7 @@ import {
   type System,
 } from '@fluxus/core';
 import {
+  CHANNEL_COLUMNS,
   Extractor,
   createCostCounters,
   costSink,
@@ -109,9 +110,6 @@ function stand(): { extractor: Extractor; sim: Simulation; state: ReturnType<typ
   return { extractor, sim, state };
 }
 
-/** Колонок на сущность в плоской форме — множитель объёма канала (SHELL-3). */
-const CHANNEL_COLUMNS = 13;
-
 describe('PERF-2: стадия «экстракция и канал доставки» считает свою работу', () => {
   it('вызовы, просмотренные и скопированные сущности, статы, события и клетки пола', () => {
     const { extractor, sim, state } = stand();
@@ -146,7 +144,9 @@ describe('PERF-2: стадия «экстракция и канал достав
 
     // Канал копирует ровно колонки экстракта (`codec.writeTick`, SHELL-3):
     // сущности × колонки, пары статов (индекс и значение) и пары клеток пола.
-    // Пара пола за прогон одна — выбитая клетка шестого тика.
+    // Пара пола за прогон одна — выбитая клетка шестого тика. Число колонок
+    // берётся из объявления пакета, а не повторяется здесь: сверку его с
+    // раскладкой кодека держит тест оболочки (`client-ts/test/codec.test.ts`).
     expect(counters.extractChannelValues).toBe(
       counters.extractEntitiesCopied * CHANNEL_COLUMNS + counters.extractStatPairs * 2 + 2,
     );

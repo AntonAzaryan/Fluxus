@@ -25,6 +25,10 @@
  *   платформы поведения, NPC-9) и `nav-path.cost.json` (число агентов поиска
  *   пути, NAV-5): те же два размера и та же форма документа, только стадия одна
  *   — `tick`.
+ * - На оси экстракции (PERF-6) — `extract.cost.json` (число сущностей
+ *   доставки): та же форма, стадия `extract`. Записанные матчи стадию эту
+ *   меряют, но осью не являются — их состав фиксирован, и линейность экстракции
+ *   по сущности видна только вторым размером.
  *
  * Значения машинно-независимы по конструкции: ни времени, ни случайности, ни
  * GPU в них нет (PERF-3). Реальное время стережёт `bench.test.ts` — и только на
@@ -62,14 +66,16 @@ import {
   PresentationBench,
   RECORDED_MATCHES,
   benchGrid,
+  extractSizes,
   loadRecording,
   matchBench,
   navPathSizes,
   npcStressSizes,
+  playExtraction,
   playRecording,
   syntheticTick,
+  type AxisSize,
   type BenchPresetName,
-  type SimSize,
   type SyntheticLoad,
 } from './benchLoad.js';
 
@@ -770,42 +776,54 @@ describe('PERF-6: оси масштабирования бенч-нагрузк�
   });
 });
 
-// ------------------------------------- оси стороны симуляции (PERF-6)
+// --------------------------- оси, чья нагрузка описана документом прогона (PERF-6)
 
 /** Стоимость одного размера нагрузки симуляции: сводка стадии тика. */
-function measureSimSize(size: SimSize): StageCost {
+function measureTickSize(size: AxisSize): StageCost {
   const { sink, total } = tickCostCollector();
   runScenario(size.def, sink);
   return sorted(total);
 }
 
+/** Стоимость одного размера нагрузки экстракции: счётчики стадии `extract`. */
+function measureExtractSize(size: AxisSize): StageCost {
+  const counters = createCostCounters();
+  withCostSink(counters, () => {
+    playExtraction(size.def);
+  });
+  return sorted(renderStages(counters).extract);
+}
+
 /**
- * Документ оси стороны симуляции (PERF-6) — той же формы, что у осей рендера:
- * величины обоих размеров рядом со счётчиками обоих, «сначала S, потом L».
- * Второй формы документа стоимости в репозитории не заводится: отношение L/S
- * читается в диффе одинаково у любой оси.
+ * Документ оси (PERF-6) — той же формы, что у осей рендера: величины обоих
+ * размеров рядом со счётчиками обоих, «сначала S, потом L». Второй формы
+ * документа стоимости в репозитории не заводится: отношение L/S читается в
+ * диффе одинаково у любой оси.
  *
- * Стадия здесь ОДНА — `tick`: ни клиента, ни кадра у этих нагрузок нет, а
- * мерить они заведены именно симуляцию. Эталон в общем гейте затем, чтобы
- * удорожание краснело диффом на ревью, а не обнаруживалось на плейтесте;
- * принятие удорожания — та же явная регенерация `npm run golden:cost`.
+ * Стадия у такой оси ОДНА и названа именем секции: у нагрузок симуляции это
+ * `tick` (ни клиента, ни кадра у них нет), у нагрузки экстракции — `extract`.
+ * Эталон в общем гейте затем, чтобы удорожание краснело диффом на ревью, а не
+ * обнаруживалось на плейтесте; принятие удорожания — та же явная регенерация
+ * `npm run golden:cost`.
  */
-function simAxisDocument(
+function axisDocument(
   axis: string,
-  sizes: { readonly small: SimSize; readonly large: SimSize },
+  stage: 'tick' | 'extract',
+  sizes: { readonly small: AxisSize; readonly large: AxisSize },
+  measure: (size: AxisSize) => StageCost,
 ): unknown {
   return {
     axis,
     small: sizes.small.magnitude,
     large: sizes.large.magnitude,
     cost: {
-      small: { tick: measureSimSize(sizes.small) },
-      large: { tick: measureSimSize(sizes.large) },
+      small: { [stage]: measure(sizes.small) },
+      large: { [stage]: measure(sizes.large) },
     },
   };
 }
 
-/** Документ оси, разобранный на части, — вход проверок «не мёртвая» и роста. */
+/** Документ оси стадии тика, разобранный на части, — вход проверок роста. */
 interface SimAxisDocument {
   readonly axis: string;
   readonly small: number;
@@ -813,6 +831,17 @@ interface SimAxisDocument {
   readonly cost: {
     readonly small: { readonly tick: TickCost };
     readonly large: { readonly tick: TickCost };
+  };
+}
+
+/** То же для оси стадии экстракции: секция называется `extract`. */
+interface ExtractAxisDocument {
+  readonly axis: string;
+  readonly small: number;
+  readonly large: number;
+  readonly cost: {
+    readonly small: { readonly extract: StageCost };
+    readonly large: { readonly extract: StageCost };
   };
 }
 
@@ -825,7 +854,7 @@ interface SimAxisDocument {
  * `benchLoad.ts` рядом с её загрузчиком.
  */
 function measureNpcStress(): unknown {
-  return simAxisDocument('npcAgents', npcStressSizes());
+  return axisDocument('npcAgents', 'tick', npcStressSizes(), measureTickSize);
 }
 
 /**
@@ -835,7 +864,7 @@ function measureNpcStress(): unknown {
  * маршрута (см. `navPathSizes`).
  */
 function measureNavPath(): unknown {
-  return simAxisDocument('navAgents', navPathSizes());
+  return axisDocument('navAgents', 'tick', navPathSizes(), measureTickSize);
 }
 
 describe('NAV-5: эталон стоимости поиска пути', () => {
@@ -906,6 +935,51 @@ describe('NPC-9: эталон стоимости массы NPC', () => {
   });
 });
 
+/**
+ * Стоимость экстракции на двух размерах оси «число сущностей доставки» (PERF-2,
+ * PERF-6). Стадия `extract` есть у каждого записанного матча, но записи — это
+ * нагрузка, а не ось: их состав фиксирован, и по одному размеру не видно,
+ * линейна ли экстракция по числу сущностей. Ось отвечает на это вторым
+ * размером — и она же закрывает обязанность PERF-6 иметь ось у КАЖДОЙ стадии,
+ * для которой синтетическую нагрузку построить можно.
+ */
+function measureExtract(): unknown {
+  return axisDocument('extractEntities', 'extract', extractSizes(), measureExtractSize);
+}
+
+describe('PERF-2, PERF-6: эталон стоимости экстракции на двух размерах', () => {
+  it('счётчики стадии экстракции совпадают с эталоном', () => {
+    checkGolden('extract.cost.json', measureExtract());
+  });
+
+  it('экстракция линейна по числу сущностей — отношение L/S равно отношению осей', () => {
+    const document = measureExtract() as ExtractAxisDocument;
+    const small = document.cost.small.extract;
+    const large = document.cost.large.extract;
+    const ratio = document.large / document.small;
+
+    // Тиков поровну: величина оси — сущности, а не длина прогона.
+    expect(large.extractCalls).toBe(small.extractCalls);
+    // Обход мира, копирование колонок, статы и объём, отданный каналу, растут
+    // РОВНО отношением осей: экстракция линейна по сущности. Поиск по сущности
+    // в чужом списке (классическая квадратичность этого шва) сломал бы равенство
+    // на первом же прогоне — ради этого ось и заведена.
+    expect(large.extractEntitiesScanned).toBe(ratio * small.extractEntitiesScanned!);
+    expect(large.extractEntitiesCopied).toBe(ratio * small.extractEntitiesCopied!);
+    expect(large.extractStatPairs).toBe(ratio * small.extractStatPairs!);
+    expect(large.extractChannelValues).toBe(ratio * small.extractChannelValues!);
+  });
+
+  it('нагрузка не мёртвая: обход, статы и объём канала непусты', () => {
+    const document = measureExtract() as ExtractAxisDocument;
+    const small = document.cost.small.extract;
+    expect(small.extractCalls!).toBeGreaterThan(0);
+    expect(small.extractEntitiesCopied!).toBeGreaterThan(0);
+    expect(small.extractStatPairs!).toBeGreaterThan(0);
+    expect(small.extractChannelValues!).toBeGreaterThan(0);
+  });
+});
+
 describe('PERF-3: счётчики машинно-независимы', () => {
   it('повторный прогон в одном процессе даёт побитово тот же документ', () => {
     for (const match of RECORDED_MATCHES) {
@@ -920,6 +994,12 @@ describe('PERF-3: счётчики машинно-независимы', () => {
     const first = scalingDocument();
     expect(scalingDocument()).toEqual(first);
     expect(canonical(scalingDocument())).toBe(canonical(first));
+  });
+
+  it('оси экстракции повторяются так же — на обоих размерах (PERF-2)', () => {
+    const first = measureExtract();
+    expect(measureExtract()).toEqual(first);
+    expect(canonical(measureExtract())).toBe(canonical(first));
   });
 
   it('стресс-нагрузка NPC повторяется так же (NPC-9) — на обоих размерах', () => {

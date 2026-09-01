@@ -13,7 +13,7 @@
  */
 import { describe, expect, it } from 'vitest';
 import { tick, type WorldMode } from '@fluxus/core';
-import { ViewBuffer, type ExtractedTick } from '@fluxus/render';
+import { CHANNEL_COLUMNS, ViewBuffer, type ExtractedTick } from '@fluxus/render';
 import { CODEC_VERSION, readTick, requiredBytes, writeTick } from '../src/index.js';
 import { PLAYER_ID, STEP, TICK_SECONDS, makeExtractor, makeRig, snapshotView } from './fixtures.js';
 
@@ -188,22 +188,26 @@ describe('кодек: значения на границах раскладки 
     expect(requiredBytes(0, 0)).toBe(HEADER_WORDS * 4);
   });
 
-  it('PERF-2: сущность стоит каналу ровно объявленных колонок — 44 байта', () => {
-    // Счётчик стоимости канала (`extractChannelValues` рендера) множит число
-    // сущностей на ЧИСЛО КОЛОНОК плоской формы — тринадцать: `id` (f64), семь
-    // f32 (`x`, `y`, `facingYaw`, `aimYaw`, `motionPhase`, `flightPhase`,
-    // `timeScale`), `kind` (i32) и четыре байтовых (`level`, `flags`, `motion`,
-    // `statCount`). Это 8 + 7×4 + 4 + 4×1 = 44 байта на сущность.
-    //
-    // Шаг в ДВЕ сущности, а не в одну: полный размер кадра выровнен по восьми
-    // байтам, и соседние разности гуляют между 40 и 48, оставаясь теми же 44 в
-    // среднем. Две сущности — 88 байт, кратные восьми, и дополнение сокращается.
-    //
-    // Проверка стоит здесь, потому что здесь живёт раскладка: колонка,
-    // добавленная в плоскую форму и в кодек без правки `CHANNEL_COLUMNS`
-    // (`render-ts/src/extractor.ts`), сделала бы счётчик канала врущим молча —
-    // подорожание доставки в диффе эталона стоимости не появилось бы вовсе.
-    expect(requiredBytes(3, 0) - requiredBytes(1, 0)).toBe(2 * 44);
+  it('PERF-2: сущность стоит каналу ровно объявленных колонок', () => {
+    // Ширины колонок плоской формы в байтах, в порядке секций раскладки: `id`
+    // (f64), семь f32 (`x`, `y`, `facingYaw`, `aimYaw`, `motionPhase`,
+    // `flightPhase`, `timeScale`), `kind` (i32) и четыре байтовых (`level`,
+    // `flags`, `motion`, `statCount`).
+    const columnBytes = [8, 4, 4, 4, 4, 4, 4, 4, 4, 1, 1, 1, 1];
+    const perEntity = columnBytes.reduce((total, width) => total + width, 0);
+
+    // Счётчик стоимости доставки (`extractChannelValues` рендера) множит число
+    // сущностей на ЧИСЛО КОЛОНОК, и число это объявлено там же, где колонки
+    // заполняются. Здесь оно СВЕРЯЕТСЯ с раскладкой, а не повторяется: сойтись
+    // обязаны и длина таблицы ширин, и сумма этих ширин с тем, что кодек
+    // действительно просит под сущность.
+    expect(columnBytes).toHaveLength(CHANNEL_COLUMNS);
+    // Шаг — ВОСЕМЬ сущностей от пустого кадра: полный размер выровнен по восьми
+    // байтам, и разности на малых шагах глотают дополнение (пара сущностей даёт
+    // те же 88 и при 43, и при 45 байтах на сущность). Восемь сущностей — 8×44,
+    // кратное восьми при верной ширине и не кратное при ошибке в байт: лишняя
+    // байтовая колонка (а их в раскладке четыре) краснит эту строку.
+    expect(requiredBytes(8, 0) - requiredBytes(0, 0)).toBe(8 * perEntity);
   });
 
   it('NaN в курсе доезжает как NaN: это «не поворачивать», а не отсутствие поля', () => {
