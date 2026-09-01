@@ -12,22 +12,22 @@
  * можно; знать что-то сверх неё — нельзя.
  *
  * Чего здесь нет и не заводится: таблицы «действие → его аргументы». Персонального
- * набора аргументов у ядра нет — оно его не хранит и не проверяет («Аргумент вне
- * конвенции содержимым не проверяется — предел, зафиксированный в SYS-3»), —
- * а таблица в редакторе была бы второй реализацией семантики DSL, которую ED-1
- * запрещает прямым текстом. Она разъехалась бы с оригиналом при первом же новом
- * аргументе у существующего действия, и тест на покрытие имён этого не поймал бы:
- * имена-то на месте.
+ * набора аргументов у ядра нет — оно ветвится по имени аргумента, а не по имени
+ * действия, — а таблица в редакторе была бы второй реализацией семантики DSL,
+ * которую ED-1 запрещает прямым текстом. Она разъехалась бы с оригиналом при
+ * первом же новом аргументе у существующего действия, и тест на покрытие имён
+ * этого не поймал бы: имена-то на месте.
  *
  * Следствие принимается честно: автору может быть предложен слот, который
  * выбранное действие игнорирует (`cond` у `spawnEntity`). Стоит он ноль —
  * незаполненный слот в документ не пишется (`build.ts`), — а что осмысленно у
  * этого действия, объясняет его описание (ресурс `action.*`, ED-28).
  *
- * Аргумент, которого в конвенции нет (`def` и `duration` у `addTween`, `at` у
- * `carveFloor`), моделью не запрещён: ядро его не структурирует, но исполняет,
- * и запретить его значило бы решить за ядро. Он просто не имеет вида — блок
- * несёт его как выражение по имени, которое дал автор.
+ * Имени вне конвенции модель не знает — и знать незачем: перечень конвенции
+ * закрыт, и аргумент под именем вне него ядро отвергает на регистрации (SYS-3).
+ * Поэтому такое имя не «просто без вида»: документ с ним не грузится, и вердикт
+ * тут, как всегда, за ядром. Новое имя появляется здесь тогда же, когда его
+ * вносят в конвенцию SYS-3, и не раньше.
  */
 
 /** Как ядро обходит аргумент этого имени (`checkAction`, SYS-3). */
@@ -101,6 +101,15 @@ export const CONVENTION_SLOTS: readonly ConventionSlot[] = Object.freeze([
   Object.freeze({ name: 'value', kind: 'expression' } as const),
   Object.freeze({ name: 'nearestTo', kind: 'expression' } as const),
   Object.freeze({ name: 'limit', kind: 'expression' } as const),
+  Object.freeze({ name: 'at', kind: 'expression' } as const),
+  Object.freeze({ name: 'radius', kind: 'expression' } as const),
+  Object.freeze({ name: 'def', kind: 'expression' } as const),
+  Object.freeze({ name: 'from', kind: 'expression' } as const),
+  Object.freeze({ name: 'to', kind: 'expression' } as const),
+  Object.freeze({ name: 'duration', kind: 'expression' } as const),
+  Object.freeze({ name: 'easing', kind: 'expression' } as const),
+  Object.freeze({ name: 'ignoreTimeScale', kind: 'expression' } as const),
+  Object.freeze({ name: 'id', kind: 'expression' } as const),
   Object.freeze({ name: 'name', kind: 'literal', names: 'variable' } as const),
   Object.freeze({ name: 'query', kind: 'query' } as const),
   Object.freeze({ name: 'overrides', kind: 'overrides', names: 'prefabComponent' } as const),

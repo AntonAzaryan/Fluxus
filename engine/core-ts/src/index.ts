@@ -81,9 +81,11 @@ export { EventBus } from './ecs/events.js';
 export * as expr from './dsl/expr.js';
 export * as actions from './dsl/actions.js';
 export type { Action } from './dsl/actions.js';
+// Интерфейса-обёртки над вычислителем в этом списке нет намеренно (EXPR-4):
+// вход вычисления один — функция `evaluate` модуля `dsl/expr.ts`, — и
+// объявление, через которое ничего не проходит, подменяемости не даёт.
 export type {
   Expression,
-  ExpressionEvaluator,
   ExprValue,
   ExprVars,
   ExprWorld,
