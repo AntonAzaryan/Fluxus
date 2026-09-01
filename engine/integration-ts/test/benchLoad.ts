@@ -152,6 +152,93 @@ export function loadNavPath(): ScenarioDef {
   return JSON.parse(readFileSync(join(GOLDEN_DIR, `${NAV_PATH}.scenario.json`), 'utf8')) as ScenarioDef;
 }
 
+// ------------------------------------- размеры осей стороны симуляции (PERF-6)
+
+/**
+ * Один размер оси стоимости стороны симуляции (PERF-6): величина оси и документ
+ * прогона этой величины. Размеры получаются ИЗ ТОЙ ЖЕ нагрузки — прореживанием
+ * либо размножением её агентов, — а не вторым документом рядом: два документа
+ * разошлись бы молча, а размеры одной оси обязаны отличаться ровно её
+ * величиной.
+ */
+export interface SimSize {
+  /** Величина оси — то единственное, чем размеры и различаются. */
+  readonly magnitude: number;
+  readonly def: ScenarioDef;
+}
+
+/** Prefab массового агента нагрузки NPC — им и меряется величина её оси. */
+const NPC_STRESS_AGENT = 'Creep';
+
+/**
+ * Два размера оси «число агентов платформы поведения» (NPC-9, PERF-6).
+ *
+ * Малый размер — КАЖДЫЙ ВТОРОЙ агент документа, а не его первая половина:
+ * агенты разложены по арене порядком записей, и отрезание хвоста двигало бы
+ * заодно и плотность толпы — то есть ось двигала бы две величины сразу, и
+ * отношение L/S нечему было бы приписать (выборка соседей растёт именно
+ * плотностью). Прочие сущности — герои, точки маршрута, режиссёр волн —
+ * остаются на местах у обоих размеров: они не агенты оси.
+ */
+export function npcStressSizes(): { readonly small: SimSize; readonly large: SimSize } {
+  const full = loadNpcStress();
+  const initial = full.scene.initial ?? [];
+  let agent = 0;
+  const thinned = initial.filter((spawn) => {
+    if (spawn.prefab !== NPC_STRESS_AGENT) return true;
+    return agent++ % 2 === 0;
+  });
+  const agents = initial.filter((spawn) => spawn.prefab === NPC_STRESS_AGENT).length;
+  const small: ScenarioDef = { ...full, scene: { ...full.scene, initial: thinned } };
+  return {
+    small: { magnitude: agents - Math.floor(agents / 2), def: small },
+    large: { magnitude: agents, def: full },
+  };
+}
+
+/**
+ * Агенты маршрута, добавляемые большому размеру навигационной оси: свободные
+ * клетки нижнего уровня арены (`nav-path.scenario.json` — колонки 0..3 несут
+ * уровень 0, рампа лежит третьим рядом). Координаты в Q16.16, как их пишет
+ * сам документ нагрузки.
+ */
+const NAV_EXTRA_AGENTS: readonly { readonly x: number; readonly y: number }[] = Object.freeze([
+  { x: 32768, y: 32768 },
+  { x: 163840, y: 32768 },
+  { x: 32768, y: 98304 },
+]);
+
+/**
+ * Два размера оси «число агентов поиска пути» (NAV-5, PERF-6).
+ *
+ * Большой размер получается РАЗМНОЖЕНИЕМ агента маршрута: своя запись у каждого
+ * с собственной клеткой старта, поведение и маршрут — те же. Прореживать здесь
+ * нечего (агент маршрута в документе один), а растить прогон приходится тем,
+ * что и растёт в контенте: числом ищущих путь.
+ */
+export function navPathSizes(): { readonly small: SimSize; readonly large: SimSize } {
+  const base = loadNavPath();
+  const initial = base.scene.initial ?? [];
+  // Агент маршрута — запись с маршрутной привязкой (`NpcRoute`); её и копируем
+  // целиком, чтобы у клонов совпало всё, кроме клетки старта.
+  const walker = initial.find((spawn) => spawn.overrides?.NpcRoute !== undefined);
+  if (walker === undefined) {
+    throw new Error(`${NAV_PATH}: в нагрузке нет агента маршрута — размеры оси построить не из чего`);
+  }
+  const clones = NAV_EXTRA_AGENTS.map((at) => ({
+    ...walker,
+    overrides: { ...walker.overrides, Position: { x: at.x, y: at.y } },
+  }));
+  const large: ScenarioDef = {
+    ...base,
+    scene: { ...base.scene, initial: [...initial, ...clones] },
+  };
+  return {
+    small: { magnitude: 1, def: base },
+    large: { magnitude: 1 + clones.length, def: large },
+  };
+}
+
 /** Крючки прогона записи: сток диагностики ядра и наблюдатель тиков. */
 export interface RecordingHooks {
   readonly diagnostics?: DiagnosticsSink;

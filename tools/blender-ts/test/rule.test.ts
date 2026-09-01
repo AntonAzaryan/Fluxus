@@ -214,11 +214,26 @@ describe('BLND-2: правило сверяет ровно то представ
   });
 });
 
-/** Дерево цели вовсе без источника: ни `.glb`, ни `.gltf` рядом со сценой. */
+/**
+ * Дерево цели вовсе без источника: рядом со сценой нет ни экспорта (`.glb`,
+ * `.gltf`), ни самого `.blend`.
+ */
 function withoutSource(): Record<string, string | Uint8Array> {
   const files = contentFiles();
   delete files['scenes/duel.gltf'];
   return files;
+}
+
+/** Источник level-дизайна, парный сцене по имени (BLND-2). */
+const BLEND_ID = 'scenes/duel.blend';
+
+/**
+ * Дерево, где рядом со сценой лежит САМ источник, а экспорта нет. Содержимое
+ * файла произвольно и читаться не должно: `.blend` не читает ни импорт, ни
+ * редактор (BLND-1), и Blender этому тесту не нужен (BLND-7).
+ */
+function withBlendOnly(): Record<string, string | Uint8Array> {
+  return { ...withoutSource(), [BLEND_ID]: 'BLENDER-v420 (байты источника, читать нечем)' };
 }
 
 describe('BLND-2: сцена без источника живёт как прежде', () => {
@@ -232,6 +247,43 @@ describe('BLND-2: сцена без источника живёт как пре�
     expect(state.status).toBe('none');
     expect(reads).toEqual([]);
     expect(issuesOf(editor, spatialLayerSyncRule({ sources }))).toEqual([]);
+  });
+});
+
+describe('BLND-2: сопряжённость сцены считается от `.blend`, а не от его экспорта', () => {
+  it('источник есть, экспорта нет — предупреждение называет недостающий экспорт', async () => {
+    const { host, reads } = tree(withBlendOnly());
+    const sources = createSourceCache(host);
+
+    const state = await sources.refresh(SCENE_ID);
+    const editor = session(sceneDocument([{ prefab: 'Rock', overrides: {} }]), presentationDocument());
+    const issues = issuesOf(editor, spatialLayerSyncRule({ sources }));
+
+    expect(state.status).toBe('unexported');
+    expect(state.status === 'unexported' ? state.path : '').toBe(BLEND_ID);
+    expect(issues).toHaveLength(1);
+    // Предупреждение, а не ошибка: документ валиден, расхождение процессное.
+    expect(issues[0]!.severity).toBe('warning');
+    expect(issues[0]!.reasonKey).toBe('validation.reason.blender.spatialLayerSync.sourceUnexported');
+    expect(issues[0]!.reasonParams).toMatchObject({ source: BLEND_ID, scene: SCENE_ID });
+    // Наличие источника — ВОПРОС файловой системе, а не чтение: разбирать
+    // `.blend` нечем, и попытки чтения не должно быть ни одной (BLND-7).
+    expect(reads).toEqual([]);
+  });
+
+  it('появился экспорт — сверка идёт по нему, а не по наличию источника', async () => {
+    const { host } = tree({ ...withSource(), [BLEND_ID]: 'BLENDER-v420' });
+    const sources = createSourceCache(host);
+
+    const state = await sources.refresh(SCENE_ID);
+    const editor = session(sceneDocument(), presentationDocument());
+    const issues = issuesOf(editor, spatialLayerSyncRule({ sources }));
+
+    // Экспорт предпочтён источнику: сверять слой можно только с ним.
+    expect(state.status).toBe('ready');
+    expect(state.status === 'ready' ? state.path : '').toBe(SOURCE_ID);
+    expect(issues.length).toBeGreaterThan(0);
+    expect(issues[0]!.reasonKey).toBe('validation.reason.blender.spatialLayerSync.layerDiverged');
   });
 });
 

@@ -16,8 +16,9 @@
  * Имя счётчика подсистемы начинается с её имени (`models*`, `particles*`,
  * `terrain*`, `fog*`): владелец у оси стоимости один, и по префиксу его видно и
  * в отчёте замера, и в дифференциале эталона, не заглядывая в этот файл.
- * Общие поля тракта (`syncTick*`, `frame*`) префикса не носят — их считает шов
- * `PresentationStage`, а не подсистема.
+ * Общие поля тракта (`extract*`, `syncTick*`, `frame*`) имени подсистемы не
+ * носят — их считают швы тракта (`Extractor`, `PresentationStage`), а не
+ * подсистема; названы они своей стадией конвейера (PERF-2).
  *
  * ## Почему сток, а не поля объектов
  *
@@ -50,11 +51,13 @@
  */
 
 /**
- * Стадия конвейера, к которой относится счётчик (PERF-2). Рендер занимает две
- * из объявленных стадий: приём доставки (`syncTick`) и покадровое обновление
- * (`frame`); тик и канал считает воркер-сторона, GPU headless не виден вовсе.
+ * Стадия конвейера, к которой относится счётчик (PERF-2). Рендер занимает три
+ * из объявленных стадий: экстракцию вместе с каналом доставки (`extract` —
+ * воркер-сторона потока тиков, SHELL-2), приём доставки (`syncTick`) и
+ * покадровое обновление (`frame`). Тик считает ядро записями `TICK_COST`
+ * (PERF-3), GPU headless не виден вовсе — его меряет браузерный бенч (PERF-7).
  */
-export type CostStage = 'syncTick' | 'frame';
+export type CostStage = 'extract' | 'syncTick' | 'frame';
 
 /**
  * Счётчики объёма работы рендера. Все поля — плоские числа, инкрементируемые на
@@ -62,6 +65,51 @@ export type CostStage = 'syncTick' | 'frame';
  * замер и переживает его целиком.
  */
 export interface RenderCostCounters {
+  // ------------------------- стадия extract: экстракция и канал доставки (PERF-2)
+
+  /**
+   * Вызовы `extract` — тики, прочитанные экстрактором (SHELL-2). Знаменатель
+   * стадии: «сколько всего» и «сколько на тик» на ревью нужны оба, ровно как у
+   * `ticks` сводки тика.
+   */
+  extractCalls: number;
+  /**
+   * Живые сущности, просмотренные обходом мира. Считается ВЕСЬ обход, а не
+   * только доехавшие: сущность без позиции стоит экстракции проверки, и
+   * удорожание отбора обязано быть видно даже тогда, когда состав доставки не
+   * поменялся.
+   */
+  extractEntitiesScanned: number;
+  /** Сущности, доехавшие в колонки плоской формы, — размер доставки этого тика. */
+  extractEntitiesCopied: number;
+  /**
+   * Пары «индекс имени → значение» геймплейных статов (`match-hud` HUD-8),
+   * записанные в плоскую форму. Своя строка, а не сумма с сущностями: форма
+   * разреженная, и стат, добавленный сборкой, двигает именно её.
+   */
+  extractStatPairs: number;
+  /** События тика, скопированные в доставку (OBS-3): копия на событие. */
+  extractEvents: number;
+  /**
+   * Клетки карты пола, просмотренные зеркалом (TERR-6 → REND-7). Зеркало
+   * сравнивает карту ЦЕЛИКОМ, но только в тики, когда дельта тронула компонент
+   * пола либо мир разорвался (rewind), — поэтому число растёт и площадью
+   * арены, и частотой правок пола, а не одним из двух.
+   */
+  extractFloorCellsScanned: number;
+  /**
+   * Значения плоской формы, пересекающие границу потоков за доставку, — ОСЬ
+   * СТОИМОСТИ КАНАЛА (SHELL-3): кодек оболочки копирует ровно эти колонки и
+   * ничего сверх них, поэтому своего счётчика на стороне канала не заводится
+   * (двух имён у одной величины PERF-2 не допускает).
+   *
+   * Из числа сущностей эта величина НЕ выводится: рост ЧИСЛА КОЛОНОК (новое
+   * поле плоской формы) не двигает ни один другой счётчик, а канал дорожает
+   * ровно на него. Ради этого случая счётчик и заведён — иначе подорожание
+   * канала не видно в диффе эталона вовсе.
+   */
+  extractChannelValues: number;
+
   // ------------------------------------------------- стадия syncTick: доставка
 
   /**
@@ -516,6 +564,16 @@ export interface RenderCostCounters {
  */
 export const COST_COUNTER_STAGES: Readonly<Record<keyof RenderCostCounters, CostStage>> =
   Object.freeze({
+    extractCalls: 'extract',
+    extractEntitiesScanned: 'extract',
+    extractEntitiesCopied: 'extract',
+    extractStatPairs: 'extract',
+    extractEvents: 'extract',
+    extractFloorCellsScanned: 'extract',
+    // Объём формы, уезжающей в канал, — стадия та же: PERF-2 называет
+    // экстракцию и канал ОДНОЙ стадией, а работа обеих половин считается там,
+    // где плоская форма собирается.
+    extractChannelValues: 'extract',
     syncTickDeliveries: 'syncTick',
     syncTickSubsystems: 'syncTick',
     syncTickInstances: 'syncTick',
@@ -577,6 +635,13 @@ export const COST_COUNTER_STAGES: Readonly<Record<keyof RenderCostCounters, Cost
 /** Свежая структура счётчиков — все поля нулями. Создаётся раз на замер. */
 export function createCostCounters(): RenderCostCounters {
   return {
+    extractCalls: 0,
+    extractEntitiesScanned: 0,
+    extractEntitiesCopied: 0,
+    extractStatPairs: 0,
+    extractEvents: 0,
+    extractFloorCellsScanned: 0,
+    extractChannelValues: 0,
     syncTickDeliveries: 0,
     syncTickSubsystems: 0,
     syncTickInstances: 0,

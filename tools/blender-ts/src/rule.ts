@@ -31,10 +31,15 @@
  * которым живёт валидатор (ED-8): пере-разбор glTF идёт только тогда, когда
  * файл действительно сменился.
  *
- * ## Четыре ответа кэша, и ни одного молчаливого
+ * ## Пять ответов кэша, и ни одного молчаливого
  *
- * - `none` — источника рядом со сценой нет: конвейер к ней отношения не имеет,
- *   находки нет и читать нечего (BLND-2).
+ * - `none` — рядом со сценой нет ни экспорта, ни самого `.blend`: конвейер к
+ *   ней отношения не имеет, находки нет и читать нечего (BLND-2).
+ * - `unexported` — `.blend` рядом ЕСТЬ, экспорта нет ни одного. Сцена
+ *   конвейеру принадлежит (пара считается от источника, BLND-2), но сверять
+ *   слой не с чем: импорт идёт от экспорта, а `.blend` не читает никто
+ *   (BLND-1, BLND-3). Своя находка — иначе «сопряжена ли сцена» отвечало бы
+ *   не наличие источника, а факт того, сделан ли уже экспорт.
  * - `unknown` — источник ещё НЕ ЧИТАН: собирающий редактор кэш не обновил либо
  *   обновление ещё идёт. Это не «источника нет»: свести два ответа к одному
  *   значило бы объявить сцену несопряжённой на основании того, что о ней ничего
@@ -74,7 +79,7 @@ import {
 import { generateCellLayer, withCellLayer } from './maps.js';
 import { normalizeDocument, type SourceObject } from './normalize.js';
 import { DEFAULT_DECORATIONS_PATH, DEFAULT_INITIAL_PATH, DEFAULT_TERRAIN_PATH } from './operation.js';
-import { SOURCE_EXTENSIONS, sourcePathOf } from './pairing.js';
+import { BLEND_EXTENSION, SOURCE_EXTENSIONS, sourcePathOf } from './pairing.js';
 import { contextOfValues } from './project.js';
 
 export const SPATIAL_LAYER_SYNC_RULE = 'blender.spatialLayerSync';
@@ -87,11 +92,23 @@ const SOURCE_UNREADABLE = 'sourceUnreadable';
 const SOURCE_REJECTED = 'sourceRejected';
 /** Источник не читан вовсе: сверки не было, и молчать об этом нельзя. */
 const SOURCE_UNREAD = 'sourceUnread';
+/** Источник (`.blend`) рядом со сценой есть, экспорта нет: сверять не с чем. */
+const SOURCE_UNEXPORTED = 'sourceUnexported';
 
 /** Что известно об источнике сцены прямо сейчас. */
 export type SourceState =
-  /** Источника рядом со сценой нет — сцена не сопряжена с конвейером (BLND-2). */
+  /**
+   * Рядом со сценой нет ни экспорта, ни самого `.blend` — сцена не сопряжена с
+   * конвейером (BLND-2), и правило о ней молчит.
+   */
   | { readonly status: 'none' }
+  /**
+   * Источник рядом со сценой ЕСТЬ (`.blend`), а экспорта нет ни одного: сцена
+   * конвейеру принадлежит, но сверить её слой не с чем — импорт идёт от
+   * экспорта, а `.blend` не читает никто (BLND-1, BLND-3). `path` — адрес
+   * самого источника: находке нужно назвать, что именно лежит рядом.
+   */
+  | { readonly status: 'unexported'; readonly path: ContentPath }
   /**
    * О сцене ещё не спрашивали: кэш не обновляли ни разу. Отличается от `none`
    * тем же, чем «не проверяли» отличается от «проверили и не нашли».
@@ -138,6 +155,14 @@ export interface SourceCacheOptions {
    * сопряжённой с текстовым экспортом.
    */
   readonly extensions?: readonly string[];
+  /**
+   * Расширение самого источника; умолчание — `BLEND_EXTENSION`. Кэш его не
+   * ЧИТАЕТ, а только спрашивает файловую систему, лежит ли он рядом (BLND-2):
+   * ответ «сцена сопряжена с конвейером» обязан быть свойством источника, а не
+   * побочным следствием того, сделан ли уже экспорт. Blender для этого не
+   * нужен ни тесту, ни редактору (BLND-7).
+   */
+  readonly blendExtension?: string;
 }
 
 const NONE: SourceState = Object.freeze({ status: 'none' });
@@ -168,6 +193,7 @@ export function createSourceCache(
   options: SourceCacheOptions = {},
 ): SpatialLayerSourceCache {
   const extensions = options.extensions ?? SOURCE_EXTENSIONS;
+  const blendExtension = options.blendExtension ?? BLEND_EXTENSION;
   const states = new Map<DocumentId, SourceState>();
 
   return {
@@ -195,6 +221,25 @@ export function createSourceCache(
         break;
       }
       if (path === null) {
+        // Экспорта нет — но сопряжённость сцены с конвейером определяет сам
+        // источник (BLND-2), и спросить о нём файловую систему обязательно:
+        // иначе сцена, у которой `.blend` есть, а экспорт ещё не сделан, молча
+        // считалась бы конвейеру не принадлежащей. Это ВОПРОС О НАЛИЧИИ, а не
+        // чтение: `.blend` не читает ни импорт, ни редактор (BLND-1, BLND-7).
+        const blend = sourcePathOf(scene, blendExtension);
+        let hasBlend = false;
+        try {
+          hasBlend = (await host.stat(blend))?.kind === 'file';
+        } catch (error) {
+          const state: SourceState = { status: 'unavailable', path: blend, reason: message(error) };
+          states.set(scene, state);
+          return state;
+        }
+        if (hasBlend) {
+          const state: SourceState = { status: 'unexported', path: blend };
+          states.set(scene, state);
+          return state;
+        }
         // Ни одного чтения: у сцены без источника читать нечего, и попытка
         // чтения на каждой валидации была бы платой за отсутствующий файл.
         states.set(scene, NONE);
@@ -281,7 +326,13 @@ export function spatialLayerSyncRule(options: SpatialLayerSyncOptions): Validati
   return {
     id: SPATIAL_LAYER_SYNC_RULE,
     descriptionKey: ruleDescriptionKey(SPATIAL_LAYER_SYNC_RULE),
-    reasonCodes: [LAYER_DIVERGED, SOURCE_UNREADABLE, SOURCE_REJECTED, SOURCE_UNREAD],
+    reasonCodes: [
+      LAYER_DIVERGED,
+      SOURCE_UNREADABLE,
+      SOURCE_REJECTED,
+      SOURCE_UNREAD,
+      SOURCE_UNEXPORTED,
+    ],
     appliesTo: [kinds.scene],
     severity: 'warning',
     check(run) {
@@ -342,6 +393,22 @@ function reportSourceState(run: ValidationRun, state: UnreadySource): void {
   // Сцена без источника живёт как прежде: редактор и ручная правка —
   // полноправные авторы её слоя, и предупреждения нет (BLND-2).
   if (state.status === 'none') return;
+  if (state.status === 'unexported') {
+    // Источник рядом есть, экспорта нет: слой сцены производный (BLND-2), но
+    // сверить его не с чем — импорт идёт от экспорта. Молчание здесь означало
+    // бы «сцена конвейеру не принадлежит», то есть неправду о владении слоем.
+    run.report({
+      path: [],
+      expected: {
+        kind: 'accepted',
+        by: SPATIAL_LAYER_SYNC_RULE,
+        detail: 'экспорт источника не сделан',
+      },
+      code: SOURCE_UNEXPORTED,
+      params: { source: state.path, scene: run.document.id },
+    });
+    return;
+  }
   if (state.status === 'unknown') {
     // Сверки не было ни одной: у собирающего редактора обязанность
     // обновить кэш до прогона, и невыполненная она обязана быть видимой.

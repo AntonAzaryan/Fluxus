@@ -5,20 +5,26 @@
  * ## Что сверяется
  *
  * - На каждом записанном матче (CLI-10) — `engine/tests/golden/<матч>.cost.json`:
- *   счётчики трёх стадий конвейера (PERF-2). Стадия `tick` приезжает записями
- *   диагностики ядра (DIAG-1, уровень `systems`), стадии `syncTick` и `frame` —
- *   стоком счётчиков рендера; принадлежность счётчика стадии объявляет сам
- *   рендер (`COST_COUNTER_STAGES`), а не догадка этого файла.
+ *   счётчики четырёх стадий конвейера (PERF-2). Стадия `tick` приезжает записями
+ *   диагностики ядра (DIAG-1, уровень `systems`), стадии `extract`, `syncTick` и
+ *   `frame` — стоком счётчиков рендера; принадлежность счётчика стадии объявляет
+ *   сам рендер (`COST_COUNTER_STAGES`), а не догадка этого файла.
  *   Одна и та же запись прогоняется ДВАЖДЫ — на пресетах «производительность» и
  *   «ультра» (`render-quality` QUAL-4, design D5): у каждого своя секция
  *   документа, поэтому удорожание пути, работающего и на слабых устройствах,
- *   краснеет отдельной строкой диффа, а не тонет в общем. Стадия `tick` в
- *   документе ОДНА: симуляция от пресета не зависит (QUAL-2), и равенство её
- *   счётчиков между двумя прогонами — часть проверки, а не допущение.
- * - На синтетических осях стоимости (PERF-6) — `engine/tests/golden/scaling.cost.json`:
- *   два размера на ось (число сущностей, наблюдателей, сегментов укрытий,
- *   разрешение маски, число событий эффекта, потолок разбиения террейна), чтобы
- *   суперлинейный рост читался отношением L/S прямо в диффе эталона.
+ *   краснеет отдельной строкой диффа, а не тонет в общем. Стадии `tick` и
+ *   `extract` в документе по ОДНОЙ: ни симуляция, ни копирование мира в плоскую
+ *   форму от пресета не зависят (QUAL-2), и равенство их счётчиков между двумя
+ *   прогонами — часть проверки, а не допущение.
+ * - На синтетических осях стоимости рендера (PERF-6) —
+ *   `engine/tests/golden/scaling.cost.json`: два размера на ось (число сущностей,
+ *   наблюдателей, сегментов укрытий, разрешение маски, число событий эффекта,
+ *   потолок разбиения террейна), чтобы суперлинейный рост читался отношением L/S
+ *   прямо в диффе эталона.
+ * - На осях стороны симуляции (PERF-6) — `npc-stress.cost.json` (число агентов
+ *   платформы поведения, NPC-9) и `nav-path.cost.json` (число агентов поиска
+ *   пути, NAV-5): те же два размера и та же форма документа, только стадия одна
+ *   — `tick`.
  *
  * Значения машинно-независимы по конструкции: ни времени, ни случайности, ни
  * GPU в них нет (PERF-3). Реальное время стережёт `bench.test.ts` — и только на
@@ -58,9 +64,12 @@ import {
   benchGrid,
   loadRecording,
   matchBench,
+  navPathSizes,
+  npcStressSizes,
   playRecording,
   syntheticTick,
   type BenchPresetName,
+  type SimSize,
   type SyntheticLoad,
 } from './benchLoad.js';
 
@@ -138,7 +147,7 @@ function sorted(cost: StageCost): StageCost {
  * `render-ts`, а не догадка по имени.
  */
 function renderStages(counters: RenderCostCounters): Record<CostStage, StageCost> {
-  const stages: Record<CostStage, StageCost> = { frame: {}, syncTick: {} };
+  const stages: Record<CostStage, StageCost> = { extract: {}, frame: {}, syncTick: {} };
   for (const name of Object.keys(counters).sort()) {
     const key = name as keyof RenderCostCounters;
     stages[COST_COUNTER_STAGES[key]][key] = counters[key];
@@ -182,13 +191,15 @@ function runMatch(name: string, preset: BenchPresetName): MatchRun {
 }
 
 /**
- * Документ эталона матча (design D5): стадия тика ОДИН раз, стадии доставки и
- * кадра — секцией на пресет. Разложение именно такое, потому что таково
- * положение дел: симуляция пресета не знает (QUAL-2), а картинка знает.
+ * Документ эталона матча (design D5): стадии тика и экстракции ОДИН раз, стадии
+ * доставки и кадра — секцией на пресет. Разложение именно такое, потому что
+ * таково положение дел: симуляция пресета не знает (QUAL-2), экстракция — тем
+ * более (она читает мир, а не картинку), а доставка и кадр знают.
  */
 function measureMatch(name: string): unknown {
   const presets: Record<string, unknown> = {};
   let tick: StageCost | null = null;
+  let extract: StageCost | null = null;
   for (const preset of BENCH_PRESET_NAMES) {
     const run = runMatch(name, preset);
     const cost = sorted(run.tick);
@@ -199,9 +210,15 @@ function measureMatch(name: string): unknown {
     if (tick === null) tick = cost;
     else expect(cost, `${name}/${preset}: стадия tick`).toEqual(tick);
     const stages = renderStages(run.render);
+    // Экстракция стоит ПЕРЕД качеством (PERF-2): она копирует мир в плоскую
+    // форму, а пресет управляет подачей картинки (QUAL-2). Равенство её
+    // счётчиков между пресетами — такая же проверка, как у стадии тика:
+    // разойдись они, значит пресет дотянулся до состава доставки.
+    if (extract === null) extract = stages.extract;
+    else expect(stages.extract, `${name}/${preset}: стадия extract`).toEqual(extract);
     presets[preset] = { frame: stages.frame, syncTick: stages.syncTick };
   }
-  return { tick, ...presets };
+  return { tick, extract, ...presets };
 }
 
 // -------------------------------------------------- оси масштабирования (PERF-6)
@@ -336,6 +353,18 @@ function measureSize(config: ScalingSize): RenderCostCounters {
 }
 
 /**
+ * Стадии, которые СИНТЕТИЧЕСКАЯ нагрузка осей действительно меряет: доставка и
+ * кадр. Экстрактор в ней не участвует вовсе — плоскую форму собирает
+ * `syntheticTick` руками, — и секция `extract` лежала бы в эталоне нулями, то
+ * есть выглядела бы замером, которого не было (PERF-2: стадия следует месту,
+ * где работа ДЕЙСТВИТЕЛЬНО исполняется).
+ */
+function deliveryStages(counters: RenderCostCounters): Record<'frame' | 'syncTick', StageCost> {
+  const stages = renderStages(counters);
+  return { frame: stages.frame, syncTick: stages.syncTick };
+}
+
+/**
  * Документ осей: величины обоих размеров рядом со счётчиками обоих размеров.
  * Список, а не словарь, чтобы порядок «сначала S, потом L» читался в диффе —
  * отношение L/S и есть то, ради чего эталон заведён.
@@ -347,8 +376,8 @@ function scalingDocument(): unknown {
       small: axis.small.magnitude,
       large: axis.large.magnitude,
       cost: {
-        small: renderStages(measureSize(axis.small)),
-        large: renderStages(measureSize(axis.large)),
+        small: deliveryStages(measureSize(axis.small)),
+        large: deliveryStages(measureSize(axis.large)),
       },
     })),
   };
@@ -394,7 +423,13 @@ describe('PERF-4: голден-гейт стоимости на записанн
 
   it('счётчики бенча не мёртвые: каждая стадия сделала работу на каждом пресете', () => {
     const document = measureMatch('match-fuzz') as Record<string, StageCost | Record<string, StageCost>>;
-    const stages: [string, StageCost][] = [['tick', document.tick as StageCost]];
+    // Стадии, не зависящие от пресета, — сводка тика и экстракция (PERF-2):
+    // обе обязаны быть непустыми, иначе стадия конвейера стоит в эталоне
+    // нулями и гейт стережёт пустоту.
+    const stages: [string, StageCost][] = [
+      ['tick', document.tick as StageCost],
+      ['extract', document.extract as StageCost],
+    ];
     for (const preset of BENCH_PRESET_NAMES) {
       const section = document[preset] as Record<string, StageCost>;
       stages.push([`${preset}/syncTick`, section.syncTick!], [`${preset}/frame`, section.frame!]);
@@ -735,37 +770,72 @@ describe('PERF-6: оси масштабирования бенч-нагрузк�
   });
 });
 
+// ------------------------------------- оси стороны симуляции (PERF-6)
+
+/** Стоимость одного размера нагрузки симуляции: сводка стадии тика. */
+function measureSimSize(size: SimSize): StageCost {
+  const { sink, total } = tickCostCollector();
+  runScenario(size.def, sink);
+  return sorted(total);
+}
+
 /**
- * Стоимость NPC-части тика под массой агентов (`npc-behavior` NPC-9): двести
- * массовых крипов, режиссёр волн, маршрут и двое героев в центре.
+ * Документ оси стороны симуляции (PERF-6) — той же формы, что у осей рендера:
+ * величины обоих размеров рядом со счётчиками обоих, «сначала S, потом L».
+ * Второй формы документа стоимости в репозитории не заводится: отношение L/S
+ * читается в диффе одинаково у любой оси.
  *
- * Стадия здесь ОДНА — `tick`: у нагрузки нет ни клиента, ни кадра, а мерить
- * она заведена именно симуляцию. Эталон в общем гейте затем, чтобы удорожание
- * решения агента краснело диффом на ревью, а не обнаруживалось на плейтесте;
+ * Стадия здесь ОДНА — `tick`: ни клиента, ни кадра у этих нагрузок нет, а
+ * мерить они заведены именно симуляцию. Эталон в общем гейте затем, чтобы
+ * удорожание краснело диффом на ревью, а не обнаруживалось на плейтесте;
  * принятие удорожания — та же явная регенерация `npm run golden:cost`.
+ */
+function simAxisDocument(
+  axis: string,
+  sizes: { readonly small: SimSize; readonly large: SimSize },
+): unknown {
+  return {
+    axis,
+    small: sizes.small.magnitude,
+    large: sizes.large.magnitude,
+    cost: {
+      small: { tick: measureSimSize(sizes.small) },
+      large: { tick: measureSimSize(sizes.large) },
+    },
+  };
+}
+
+/** Документ оси, разобранный на части, — вход проверок «не мёртвая» и роста. */
+interface SimAxisDocument {
+  readonly axis: string;
+  readonly small: number;
+  readonly large: number;
+  readonly cost: {
+    readonly small: { readonly tick: TickCost };
+    readonly large: { readonly tick: TickCost };
+  };
+}
+
+/**
+ * Стоимость NPC-части тика на двух размерах оси «число агентов» (`npc-behavior`
+ * NPC-9, PERF-6): массовые крипы, режиссёр волн, маршрут и двое героев в центре;
+ * малый размер — каждый второй агент (см. `npcStressSizes`).
  *
  * Побитового эталона состояния у нагрузки нет намеренно — основание в
  * `benchLoad.ts` рядом с её загрузчиком.
  */
 function measureNpcStress(): unknown {
-  const { sink, total } = tickCostCollector();
-  runScenario(loadNpcStress(), sink);
-  return { tick: sorted(total) };
+  return simAxisDocument('npcAgents', npcStressSizes());
 }
 
 /**
- * Стоимость навигационной части тика (`pathfinding` NAV-5, PERF-4): сцена, где
- * NPC идут по `findPath` через узкий проход, вдоль обрыва и по рампе.
- *
- * Стадия здесь ОДНА — `tick`: ни клиента, ни кадра у нагрузки нет, а мерить она
- * заведена именно работу поиска. Эталон в общем гейте затем, чтобы подорожавший
- * поиск краснел диффом на ревью, а не обнаруживался на плейтесте; принятие
- * удорожания — та же явная регенерация `npm run golden:cost`.
+ * Стоимость навигационной части тика на двух размерах оси «число агентов поиска
+ * пути» (`pathfinding` NAV-5, PERF-6): сцена, где NPC идут по `findPath` через
+ * узкий проход, вдоль обрыва и по рампе; большой размер размножает агента
+ * маршрута (см. `navPathSizes`).
  */
 function measureNavPath(): unknown {
-  const { sink, total } = tickCostCollector();
-  runScenario(loadNavPath(), sink);
-  return { tick: sorted(total) };
+  return simAxisDocument('navAgents', navPathSizes());
 }
 
 describe('NAV-5: эталон стоимости поиска пути', () => {
@@ -774,13 +844,28 @@ describe('NAV-5: эталон стоимости поиска пути', () => {
   });
 
   it('нагрузка не мёртвая: поиск пути сделал работу и повторяется побитово', () => {
-    const document = measureNavPath() as { tick: TickCost };
-    expect(document.tick.ticks).toBe(loadNavPath().ticks);
+    const document = measureNavPath() as SimAxisDocument;
+    expect(document.cost.large.tick.ticks).toBe(loadNavPath().ticks);
     // Своя строка эталона (PERF-3): работа навигации видна отдельно от работы
     // сетки соседей и от кандидатов broad-phase — в общей сумме удорожание
     // поиска утонуло бы.
-    expect(document.tick.navNodes).toBeGreaterThan(0);
+    expect(document.cost.small.tick.navNodes).toBeGreaterThan(0);
     expect(measureNavPath()).toEqual(document);
+  });
+
+  it('PERF-6: второй размер оси — рост поиска виден отношением, а не одним числом', () => {
+    const document = measureNavPath() as SimAxisDocument;
+    const small = document.cost.small.tick;
+    const large = document.cost.large.tick;
+
+    // Размеры различаются РОВНО величиной оси, и тиков у них поровну: иначе
+    // отношение L/S мерило бы длину прогона.
+    expect(document.large).toBeGreaterThan(document.small);
+    expect(large.ticks).toBe(small.ticks);
+    // Каждый агент ищет путь сам (NAV-5): вчетверо больше ищущих — заметно
+    // больше раскрытых узлов. Порог мягкий намеренно: эталон держит точные
+    // числа, а тест держит СМЫСЛ оси — что она вообще двигает работу поиска.
+    expect(large.navNodes).toBeGreaterThan(small.navNodes);
   });
 });
 
@@ -790,16 +875,34 @@ describe('NPC-9: эталон стоимости массы NPC', () => {
   });
 
   it('нагрузка не мёртвая: работа тика сделана каждым счётчиком объёма', () => {
-    const document = measureNpcStress() as { tick: TickCost };
-    expect(document.tick.ticks).toBe(loadNpcStress().ticks);
-    expect(document.tick.commandsApplied).toBeGreaterThan(0);
+    const document = measureNpcStress() as SimAxisDocument;
+    const large = document.cost.large.tick;
+    expect(large.ticks).toBe(loadNpcStress().ticks);
+    expect(large.commandsApplied).toBeGreaterThan(0);
     // Выборка соседей платформы поведения — СВОЯ строка эталона (NPC-6, NPC-9),
     // и разделение это не косметическое: вся выборка нагрузки приходится на
     // сетку агентов, а broad-phase физики на ней не делает ничего (коллайдеры
     // крипов никого не блокируют). В общем счётчике удорожание луча утонуло бы
     // в этих девяноста тысячах бесследно.
-    expect(document.tick.npcNeighbors).toBeGreaterThan(0);
-    expect(document.tick.broadPhasePairs).toBe(0);
+    expect(large.npcNeighbors).toBeGreaterThan(0);
+    expect(large.broadPhasePairs).toBe(0);
+  });
+
+  it('PERF-6: выборка соседей растёт БЫСТРЕЕ числа агентов — квадратичность видна', () => {
+    const document = measureNpcStress() as SimAxisDocument;
+    const small = document.cost.small.tick;
+    const large = document.cost.large.tick;
+    const agents = document.large / document.small;
+
+    // Размеры отличаются ровно величиной оси: тиков поровну, растёт только
+    // число агентов.
+    expect(large.ticks).toBe(small.ticks);
+    expect(agents).toBeGreaterThan(1);
+    // Ради ЭТОЙ строки PERF-6 и требует двух размеров: осмотренные соседи
+    // растут быстрее, чем сами агенты (каждый добавленный агент и сам ищет
+    // соседей, и попадает в чужие выборки), и суперлинейность читается
+    // отношением L/S прямо в диффе эталона — по одному числу её не видно.
+    expect(large.npcNeighbors).toBeGreaterThan(agents * small.npcNeighbors);
   });
 });
 
@@ -819,7 +922,7 @@ describe('PERF-3: счётчики машинно-независимы', () => {
     expect(canonical(scalingDocument())).toBe(canonical(first));
   });
 
-  it('стресс-нагрузка NPC повторяется так же (NPC-9)', () => {
+  it('стресс-нагрузка NPC повторяется так же (NPC-9) — на обоих размерах', () => {
     const first = measureNpcStress();
     expect(measureNpcStress()).toEqual(first);
     expect(canonical(measureNpcStress())).toBe(canonical(first));

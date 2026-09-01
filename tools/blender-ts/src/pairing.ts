@@ -27,6 +27,26 @@ export const SOURCE_EXTENSION = '.glb';
  */
 export const SOURCE_EXTENSIONS: readonly string[] = Object.freeze(['.glb', '.gltf']);
 
+/**
+ * Сам источник level-дизайна (BLND-2) — файл Blender. Читать его не умеет и не
+ * должен никто: импорт идёт от ЭКСПОРТА (BLND-1, BLND-3). Расширение это нужно
+ * затем, чтобы честно ответить на вопрос «сопряжена ли сцена с конвейером»:
+ * сцена, у которой `.blend` есть, а экспорта ещё нет, конвейеру принадлежит — и
+ * молчать о производности её слоя нельзя.
+ */
+export const BLEND_EXTENSION = '.blend';
+
+/**
+ * Всё, чьё присутствие рядом со сценой делает её сопряжённой с конвейером
+ * (BLND-2): экспорты в порядке предпочтения и сам источник последним. Порядок
+ * значим — сверять слой можно только с экспортом, а `.blend` отвечает лишь на
+ * вопрос о принадлежности сцены конвейеру.
+ */
+export const PAIRED_EXTENSIONS: readonly string[] = Object.freeze([
+  ...SOURCE_EXTENSIONS,
+  BLEND_EXTENSION,
+]);
+
 /** Каталог пути с завершающим слэшем; для верхнего уровня — пустая строка. */
 function directoryOf(path: string): string {
   const slash = path.lastIndexOf('/');
