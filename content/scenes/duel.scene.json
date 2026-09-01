@@ -3636,73 +3636,9 @@
                     { "hasComponent": [{ "var": "candidate" }, "Held"] },
                     false,
                     {
-                      "if": [
-                        {
-                          "!=": [
-                            { "getComponent": [{ "var": "candidate" }, "Owner", "slot"] },
-                            { "getComponent": [{ "var": "owner" }, "Player", "slot"] }
-                          ]
-                        },
-                        {
-                          ">=": [
-                            {
-                              "vec.dot": [
-                                {
-                                  "vec.normalize": [
-                                    {
-                                      "vec.sub": [
-                                        {
-                                          "vec": [
-                                            {
-                                              "getComponent": [
-                                                { "var": "candidate" },
-                                                "Position",
-                                                "x"
-                                              ]
-                                            },
-                                            {
-                                              "getComponent": [
-                                                { "var": "candidate" },
-                                                "Position",
-                                                "y"
-                                              ]
-                                            }
-                                          ]
-                                        },
-                                        {
-                                          "vec": [
-                                            {
-                                              "getComponent": [{ "var": "owner" }, "Position", "x"]
-                                            },
-                                            {
-                                              "getComponent": [{ "var": "owner" }, "Position", "y"]
-                                            }
-                                          ]
-                                        }
-                                      ]
-                                    }
-                                  ]
-                                },
-                                {
-                                  "vec": [
-                                    {
-                                      "cos": [
-                                        { "getComponent": [{ "var": "owner" }, "Input", "aimDir"] }
-                                      ]
-                                    },
-                                    {
-                                      "sin": [
-                                        { "getComponent": [{ "var": "owner" }, "Input", "aimDir"] }
-                                      ]
-                                    }
-                                  ]
-                                }
-                              ]
-                            },
-                            { "cos": [5461] }
-                          ]
-                        },
-                        false
+                      "!=": [
+                        { "getComponent": [{ "var": "candidate" }, "Owner", "slot"] },
+                        { "getComponent": [{ "var": "owner" }, "Player", "slot"] }
                       ]
                     }
                   ]

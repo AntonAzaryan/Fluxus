@@ -683,6 +683,24 @@ describe('NPC-5: threat-таблица фиксированной ёмкости
     expect(sources).not.toContain(heroes[0]);
     expect(sources).toContain(heroes[4]);
   });
+
+  it('вытеснение безусловно: слабый новичок занимает слот наименьшей угрозы', () => {
+    const h = harness({ behaviors: [chaser() as never], bindings: BINDINGS });
+    const creep = h.place('Creep', { Position: { x: 0, y: 0 } });
+    const heroes = [1, 2, 3, 4, 5].map((i) => h.place('Hero', { Position: { x: F(30 + i), y: 0 } }));
+    h.step();
+    // Таблицу заполняют четверо тяжёлых, пятый бьёт слабее любого из них.
+    for (const [index, hero] of heroes.entries()) {
+      h.emit('Damage', { target: creep, source: hero, amount: index < 4 ? 100 : 1 });
+      h.step();
+    }
+    const sources = [0, 1, 2, 3].map((slot) => h.field(creep, NPC_THREAT_COMPONENT, `source${slot}`));
+    // «При переполнении ёмкости SHALL вытесняться наименьшая угроза» (NPC-5)
+    // оговорки о весе новичка не знает: иначе источник, начавший бить позже
+    // прочих, не попал бы в таблицу никогда — накапливать ему негде.
+    expect(sources).toContain(heroes[4]);
+    expect(sources).not.toContain(heroes[0]);
+  });
 });
 
 describe('NPC-5: накопление угрозы ограничено представлением, а не верой в данные', () => {

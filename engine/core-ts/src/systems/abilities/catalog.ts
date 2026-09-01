@@ -272,6 +272,27 @@ function compileTrigger(def: unknown, path: string): CompiledTrigger {
   fail(`${path}.trigger`, `неизвестный вид триггера "${kind}"; допустимы: always, event, input`);
 }
 
+/**
+ * Размер фигуры шага (ABIL-5) — ЛИТЕРАЛ определения, а не выражение. Проверка
+ * стоит на загрузке по общему правилу платформы (ABIL-10): фигура — одно
+ * описание на двух потребителей, и вычисляемый размер разошёл бы их. Симуляция
+ * такое выражение вычислила бы и применила, а превью (`rendering` REND-28)
+ * получает каталог без мира, литерала не находит и не рисует ФИГУРУ ВОВСЕ —
+ * игрок остался бы без изображения зоны, которую каст всё-таки проверяет.
+ *
+ * Прочие числа определения выражениями остаются: `range`, `cooldownTicks`,
+ * `durationTicks` читает только симуляция, и уровень с талантами их законно
+ * меняют (ABIL-2). Размер фигуры от них отличается ровно тем, что его читает
+ * ещё и кадр.
+ */
+function shapeSize(node: unknown, path: string): Expression | undefined {
+  if (node === undefined) return undefined;
+  if (typeof node !== 'number') {
+    fail(path, 'размер фигуры шага — литеральное число: его читает и превью, которому мира не дано (ABIL-5, REND-28)');
+  }
+  return node;
+}
+
 function compileSteps(
   steps: unknown,
   world: WorldState,
@@ -294,19 +315,15 @@ function compileSteps(
     const step = asObject(raw, at);
     const shape = step.shape === undefined ? undefined : asObject(step.shape, `${at}.shape`);
     const shapeKind = shape === undefined ? -1 : keyOf(SHAPE_KINDS, shape.kind, `${at}.shape.kind`);
+    const sizeField = shapeKind === SHAPE_AABB ? 'halfX' : 'radius';
     buffers.steps.push({
       kind: keyOf(STEP_KINDS, step.kind, `${at}.kind`),
       filter: expressionOf(step.filter, world, bound, `${at}.filter`),
       range: expressionOf(step.range, world, SLOT_BOUND_NAMES, `${at}.range`),
       shapeKind,
-      shapeA: expressionOf(
-        shapeKind === SHAPE_AABB ? shape?.halfX : shape?.radius,
-        world,
-        SLOT_BOUND_NAMES,
-        `${at}.shape`,
-      ),
-      shapeB: expressionOf(shape?.halfY, world, SLOT_BOUND_NAMES, `${at}.shape.halfY`),
-      halfAngle: expressionOf(shape?.halfAngle, world, SLOT_BOUND_NAMES, `${at}.shape.halfAngle`),
+      shapeA: shapeSize(shape?.[sizeField], `${at}.shape.${sizeField}`),
+      shapeB: shapeSize(shape?.halfY, `${at}.shape.halfY`),
+      halfAngle: shapeSize(shape?.halfAngle, `${at}.shape.halfAngle`),
     });
   });
 }

@@ -254,6 +254,7 @@ export function buffScene(): SceneDef {
       {
         id: 'passive',
         class: 'positive',
+        stacking: 'independent',
         statMods: [{ component: 'TimeScaleModifiers', value: fixed.fromFloat(1.5) }],
       },
       // Аурный бафф: `refresh` с длительностью в пару тиков.
@@ -433,7 +434,7 @@ function abilityFogScene(): SceneDef {
       },
     ],
     abilityRuntime: { teamField: ['Player', 'slot'] },
-    buffs: [{ id: 'aura', class: 'positive', durationTicks: 10000 }],
+    buffs: [{ id: 'aura', class: 'positive', durationTicks: 10000, stacking: 'independent' }],
     capacity: 64,
   };
 }

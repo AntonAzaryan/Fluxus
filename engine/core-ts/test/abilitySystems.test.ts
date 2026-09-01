@@ -293,8 +293,10 @@ describe('CastPhaseSystem: триггер, гейт и фазы (ABIL-3, ABIL-4,
     h.step(CAST);
     expect(h.slotField(slot, 'phase')).toBe(0);
     const seen: number[] = [];
+    // Кнопка держится: спад бита триггера в фазе, которая его не потребляет, —
+    // прерывание источника `release` (ABIL-6), а тест про число переходов.
     for (let i = 0; i < 4; i++) {
-      h.step();
+      h.step(CAST);
       seen.push(h.slotField(slot, 'phase'));
     }
     expect(seen).toEqual([1, 0, 1, 0]);
@@ -424,6 +426,80 @@ describe('TargetingCommitSystem: цепочка шагов (ABIL-5)', () => {
     // И читать `Position` без владения ядро при этом не пыталось: запрос отсёк
     // кандидата маской компонентов, до всякого чтения поля.
     expect(hasComponent(h.world, ghost, 'Position')).toBe(false);
+  });
+});
+
+// ----------------------------------------------------------- фигура шага
+
+describe('Фигура шага сужает выбор сущности (ABIL-5)', () => {
+  /**
+   * Конус — круг с полууглом (ABIL-5, `physics` PHYS-2): раствор 1/12 оборота
+   * (5461 в Q16.16-доле оборота, FP-7) вокруг оси «начало шага → точка прицела».
+   * Фигура объявлена ОДИН раз: второго её экземпляра в предикате `filter` нет,
+   * и ровно её рисует превью (`rendering` REND-28).
+   */
+  const cone: AbilityDef = {
+    id: 'cone',
+    trigger: { input: { bit: 0 } },
+    confirmBit: 1,
+    phases: [{ id: 'aim', trigger: 'commit' }],
+    targeting: {
+      steps: [
+        {
+          kind: 'unit',
+          range: F(10),
+          filter: { hasComponent: [{ var: 'candidate' }, 'Enemy'] },
+          shape: { kind: 'circle', radius: F(4), halfAngle: 5461 },
+        },
+      ],
+    },
+    effects: [],
+  };
+
+  function stage(def: AbilityDef, foe: { x: number; y: number }): number {
+    const h = harness(scene([def]));
+    const hero = h.place('Hero');
+    h.place('Foe', { Position: { x: foe.x, y: foe.y } });
+    const slot = giveSlot(h, hero);
+    h.step(CAST);
+    h.aim(F(3), 0);
+    h.step(CAST | CONFIRM);
+    return h.slotField(slot, 'step0e');
+  }
+
+  it('цель внутри конуса выбирается', () => {
+    expect(stage(cone, { x: F(3), y: 0 })).toBeGreaterThanOrEqual(0);
+  });
+
+  it('цель вне раствора не выбирается, хотя фильтр и дальность её пропускают', () => {
+    expect(stage(cone, { x: F(3), y: F(3) })).toBe(-1);
+  });
+
+  it('цель за спиной не выбирается: ось конуса смотрит на точку прицела', () => {
+    expect(stage(cone, { x: F(-3), y: 0 })).toBe(-1);
+  });
+
+  it('цель дальше радиуса фигуры не выбирается, хотя `range` её пропускает', () => {
+    expect(stage(cone, { x: F(6), y: 0 })).toBe(-1);
+  });
+
+  it('фигура без полуугла выбор не сужает: превью центрирует её на самой цели', () => {
+    // Ненаправленная фигура описывает область, которую накроют эффекты, и
+    // проверка «цель внутри круга вокруг себя» истинна тождественно (ABIL-5).
+    const area: AbilityDef = {
+      ...cone,
+      targeting: {
+        steps: [
+          {
+            kind: 'unit',
+            range: F(10),
+            filter: { hasComponent: [{ var: 'candidate' }, 'Enemy'] },
+            shape: { kind: 'circle', radius: F(1) },
+          },
+        ],
+      },
+    };
+    expect(stage(area, { x: F(3), y: F(3) })).toBeGreaterThanOrEqual(0);
   });
 });
 
@@ -909,6 +985,30 @@ describe('Прерывания: словарь, умолчания и исход
     expect(eventsOfType(h.step(0), 'Cancelled')[0]?.data.src).toBe(INTERRUPT_RELEASE);
   });
 
+  it('release срывает каст и у определения, которое источник не называло (ABIL-6)', () => {
+    // «Определение SHALL переопределять только отличия — платформенные
+    // умолчания действуют на всё, чего оно не назвало» (ABIL-6): у источника
+    // `release` данных нет, поэтому упоминания в `interrupts` он не требует, а
+    // умолчание строки таблицы — кулдаун целиком.
+    const silent = held({
+      phases: [
+        {
+          id: 'aim',
+          trigger: 'commit',
+          onCancel: [{ emitEvent: { type: 'Cancelled', data: { src: { var: 'lastInterrupt' } } } }],
+        },
+      ],
+    });
+    const h = harness(scene([silent]));
+    const hero = h.place('Hero');
+    const slot = giveSlot(h, hero);
+    h.step(CAST);
+    expect(eventsOfType(h.step(0), 'Cancelled')[0]?.data.src).toBe(INTERRUPT_RELEASE);
+    expect(h.slotField(slot, 'phase')).toBe(-1);
+    // 10 тиков кулдауна минус тик собственной системы кулдаунов.
+    expect(h.cooldown(slot)).toBe(9);
+  });
+
   it('предикат смещения владельца — источник displacement', () => {
     const pushed = held({
       interrupts: { displacement: { when: { hasComponent: [{ var: 'owner' }, 'Pushed'] } } },
@@ -1012,6 +1112,7 @@ describe('CastInterruptSystem: урон посреди каста (ABIL-6, DET-9
     const dot: BuffDef = {
       id: 'dot',
       class: 'negative',
+      stacking: 'independent',
       periodic: {
         everyTicks: 1,
         do: [{ emitEvent: { type: 'Damage', data: { target: { var: 'target' }, amount: F(5) } } }],

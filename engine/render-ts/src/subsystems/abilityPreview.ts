@@ -453,17 +453,22 @@ export class AbilityPreviewSubsystem implements RenderSubsystem {
     if (names === null || ability === null || view === null) return;
     const heightStep = this.ctx?.config.heightStep ?? 1;
     const surface = this.options.surface?.current ?? null;
-    // Начало шага — владелец: от него считается направление и им же
-    // заякорены направленные фигуры (design Decision 10).
+    // Начало шага — то же, что у симуляции (ABIL-5): точка или сущность
+    // ПРЕДЫДУЩЕГО шага, а для первого — владелец. Якорь у проверки и у превью
+    // один, иначе превью обещало бы игроку не ту область, которую проверит
+    // каст, — а на цепочке длиннее одного шага «всегда владелец» расходится с
+    // `stepOriginX/Y` ядра начиная со второго шага.
     poseShell(owner, alpha, heightStep, surface, this.originPose);
-    const origin = this.originPose;
+    let originX = this.originPose.x;
+    let originY = this.originPose.y;
     const count = Math.min(ability.stepCount, names.steps.length);
     const staged = Math.min(this.active.staged, count);
 
     for (let i = 0; i < staged; i++) {
       const step = names.steps[i]!;
       // Сущность шага важнее записанной точки: цель могла сдвинуться с тика
-      // подтверждения, а превью рисует ЕЁ доставленное состояние.
+      // подтверждения, а превью рисует ЕЁ доставленное состояние. Тот же
+      // порядок предпочтения, что у начала шага в ядре.
       const entity = statOf(owner, step.entity);
       const target =
         Number.isInteger(entity) && entity !== NO_ENTITY ? view.entities.get(entity) : undefined;
@@ -477,12 +482,16 @@ export class AbilityPreviewSubsystem implements RenderSubsystem {
         x = this.targetPose.x;
         y = this.targetPose.y;
       }
+      // Нечитаемый шаг рисовать нечем, и началом следующего он не становится:
+      // прежнее начало честнее выдуманной точки.
       if (!Number.isFinite(x) || !Number.isFinite(y)) continue;
-      this.drawStep(ability.stepStart + i, origin.x, origin.y, x, y, false);
+      this.drawStep(ability.stepStart + i, originX, originY, x, y, false);
+      originX = x;
+      originY = y;
     }
 
     if (staged < count && this.local.aiming) {
-      this.drawStep(ability.stepStart + staged, origin.x, origin.y, this.local.x, this.local.y, true);
+      this.drawStep(ability.stepStart + staged, originX, originY, this.local.x, this.local.y, true);
     }
   }
 

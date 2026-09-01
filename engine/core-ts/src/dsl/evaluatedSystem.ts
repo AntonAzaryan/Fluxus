@@ -5,6 +5,12 @@
  * чтение через контекст и запись через Command Buffer (SYS-4, SYS-6). Именно
  * это делает `override` (SYS-7) безопасным — переписывание системы в код не
  * меняет ничего вокруг.
+ *
+ * TimeScale (TIME-5): учитывает или игнорирует — решает КАЖДАЯ система-данные
+ * сама, своим текстом: собственного времени у исполнителя нет, а эффективный
+ * темп сущности читается из мира обычным выражением там, где он нужен автору
+ * (TIME-4). Ответ здесь того же рода, что у твинов (TWEEN-7): у механизма
+ * единого решения нет, оно в данных.
  */
 import { execute, actionNames, requiredArgs, systemError, type Action } from './actions.js';
 import { arityError, signatureOf, type Expression, type OpSignature } from './expr.js';

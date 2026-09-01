@@ -17,6 +17,9 @@
  * порождает два разных действия двух систем, и обе читают ОДНУ и ту же маску
  * из компонента ввода (TICK-4) — собственного состояния фронта у платформы нет
  * (ABIL-3), а «удержание прекращено» обе считают одной функцией.
+ *
+ * TimeScale (TIME-5): игнорирует — шаг накапливается сигналом ввода, а не
+ * временем: считать здесь нечего.
  */
 import * as vector from '../../math/vector.js';
 import { evaluate, typeError } from '../../dsl/expr.js';
@@ -46,6 +49,7 @@ import {
   stepOriginY,
   triggerHoldEnded,
 } from './runtime.js';
+import { StepShapeGate } from './shape.js';
 import {
   NO_ENTITY,
   type EntityId,
@@ -64,6 +68,8 @@ export class TargetingCommitSystem implements System {
   private readonly catalog: AbilityCatalog;
   private readonly scope = new SlotScope();
   private readonly picker = new CandidatePicker();
+  /** Гейт фигуры шага (ABIL-5): один на систему, связывается перед выбором. */
+  private readonly shape = new StepShapeGate();
   private readonly spec: QuerySpec = { all: [ABILITY_SLOT_COMPONENT] };
 
   constructor(catalog: AbilityCatalog) {
@@ -133,6 +139,9 @@ export class TargetingCommitSystem implements System {
         y = targetY;
         break;
       case STEP_UNIT:
+        // Фигура шага заякорена в начале шага и развёрнута на точку прицела
+        // ЭТОГО тика (ABIL-5) — на ту же, по которой выбирается ближайший.
+        this.shape.bind(ctx, ability, step, originX, originY, targetX, targetY, this.scope.vars);
         entity = this.picker.nearest(
           ctx,
           originX,
@@ -141,6 +150,7 @@ export class TargetingCommitSystem implements System {
           targetY,
           this.rangeOf(ctx, ability, step),
           step.filter,
+          this.shape,
           this.scope.vars,
         );
         if (entity !== NO_ENTITY) {
