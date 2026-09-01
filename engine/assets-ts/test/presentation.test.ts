@@ -235,6 +235,40 @@ describe('PRES-2, FOW-10: секция fog — закрытая конфигур
   });
 });
 
+describe('PRES-2, FOW-13: секция stealth — закрытая конфигурация подачи стелса', () => {
+  it('валидная секция принимается и выходит наружу как есть', () => {
+    const stealth = { allyOpacity: 0.5, enemyOpacity: 0.15 };
+    const result = validatePresentationScene({ decorations: [], stealth });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.scene.stealth).toEqual(stealth);
+  });
+
+  it('отсутствие секции — значения по умолчанию у потребителя: наружу секция не выходит', () => {
+    const result = validatePresentationScene({ decorations: [] });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.scene.stealth).toBeUndefined();
+  });
+
+  it('неизвестный ключ секции отвергается адресно, а не игнорируется молча (PRES-2)', () => {
+    expectErrors({ stealth: { allyOpacty: 0.5 } }, /stealth\.allyOpacty: неизвестное поле/);
+  });
+
+  it('доля вне [0, 1] и не-число — адресный отказ по каждому полю', () => {
+    const errors = expectErrors(
+      { stealth: { allyOpacity: 2, enemyOpacity: Number.NaN } },
+      /stealth\.allyOpacity: ожидалась доля непрозрачности из \[0, 1\]/,
+      /stealth\.enemyOpacity: ожидалась доля непрозрачности из \[0, 1\]/,
+    );
+    expect(errors).toHaveLength(2);
+  });
+
+  it('секция не-объектом отвергается адресно', () => {
+    expectErrors({ stealth: 1 }, /stealth: ожидался объект секции подачи стелса/);
+  });
+});
+
 describe('PRES-2: секция lighting — закрытая конфигурация освещения сцены', () => {
   it('валидная секция принимается и выходит наружу как есть', () => {
     const lighting = {

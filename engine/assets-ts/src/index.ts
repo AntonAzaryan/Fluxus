@@ -158,6 +158,7 @@ export { MAX_LUT_SIZE, MIN_LUT_SIZE, parseCubeLut } from './colorLut.js';
 export type {
   DecorationRecord,
   PresentationFog,
+  PresentationStealth,
   PresentationScene,
   PresentationSceneContext,
 } from './presentation.js';

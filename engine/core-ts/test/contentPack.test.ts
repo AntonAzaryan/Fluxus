@@ -35,7 +35,7 @@ const BASE: SceneDef = {
     width: 4,
     height: 3,
     tileSize: 65536,
-    levels: ['0122', '0122', '0011'],
+    levels: ['0112', '0112', '0011'],
     flags: ['..^_', '..^.', '....'],
   },
   arena: { center: { x: 131072, y: 98304 }, radius: 262144 },
@@ -100,7 +100,7 @@ describe('хеш контент-пака (NET-17)', () => {
       arena: { radius: 262144, center: { y: 98304, x: 131072 } },
       terrain: {
         flags: ['..^_', '..^.', '....'],
-        levels: ['0122', '0122', '0011'],
+        levels: ['0112', '0112', '0011'],
         tileSize: 65536,
         height: 3,
         width: 4,
@@ -224,6 +224,21 @@ describe('хеш контент-пака (NET-17)', () => {
       expect(contentPackHash(scene)).toBe(contentPackHash(BASE));
       expect(worldInitHashOf(scene)).not.toBe(worldInitHashOf(BASE));
     }
+  });
+
+  it('softStealthChannels — зона правил: хеш пака двигается, worldInit — нет (FOW-12)', () => {
+    // Жёсткость канала меняет пересчёт видимости при том же мире: таблица в
+    // снапшот не входит, но правила ею другие — граница противоположна ассетам.
+    const soft = withScene({ softStealthChannels: [3] });
+    expect(contentPackHash(soft)).not.toBe(contentPackHash(BASE));
+    expect(worldInitHashOf(soft)).toBe(worldInitHashOf(BASE));
+
+    // Отсутствие поля и пустой список загрузчик не различает — не различает и хеш;
+    // порядок перечисления — множество, нормализуется сортировкой.
+    expect(contentPackHash(withScene({ softStealthChannels: [] }))).toBe(contentPackHash(BASE));
+    expect(contentPackHash(withScene({ softStealthChannels: [4, 1] }))).toBe(
+      contentPackHash(withScene({ softStealthChannels: [1, 4] })),
+    );
   });
 });
 

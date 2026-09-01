@@ -329,7 +329,7 @@ function fogScene(): SceneDef {
           Vision: { radius: fixed.fromInt(1) },
           Visibility: { visibleTo: 0 },
           Team: { id: 0 },
-          Stealth: { active: 0 },
+          StealthSources: {},
         },
       },
     ],

@@ -37,6 +37,8 @@ import { requireModifierList } from '../systems/modifiers.js';
 import {
   visibilityDeclared,
   VisibilitySystem,
+  DETECTION_SOURCES_COMPONENT,
+  STEALTH_SOURCES_COMPONENT,
   VISION_MODIFIER_COMPONENT,
   type VisibilityOptions,
 } from '../systems/visibility.js';
@@ -157,7 +159,7 @@ export function buildSimulation(
 ): BuiltSimulation {
   // Системы, включаемые составом сцены (в том числе `ArenaSystem`), регистрирует
   // сам загрузчик (SER-7); здесь — только те, которым нужна зависимость сборки.
-  const { world, systems, terrain, arena, modifiers, abilities } = loadScene(def.scene);
+  const { world, systems, terrain, arena, modifiers, abilities, stealthHardMask } = loadScene(def.scene);
   // Раскладка точки прицела (TICK-2) включается объявлением полей у компонента
   // ввода сцены, а не флагом документа прогона: точка нужна ровно той сцене,
   // чьи способности целятся ею (ABIL-5), и сцена говорит об этом составом
@@ -184,7 +186,18 @@ export function buildSimulation(
           'фильтру по высоте не у кого спросить уровень сущности (TERR-4, SER-7)',
       );
     }
-    systems.register(new VisibilitySystem(requireModifierList(modifiers, VISION_MODIFIER_COMPONENT)));
+    // Таблица каналов — данные сцены (FOW-12): сцена без тумана маски не несёт,
+    // и пересчёту на ней резать нечего — все каналы жёсткими быть не мешают.
+    systems.register(
+      new VisibilitySystem({
+        lists: {
+          vision: requireModifierList(modifiers, VISION_MODIFIER_COMPONENT),
+          stealth: requireModifierList(modifiers, STEALTH_SOURCES_COMPONENT),
+          detection: requireModifierList(modifiers, DETECTION_SOURCES_COMPONENT),
+        },
+        hardStealthMask: stealthHardMask ?? ~0,
+      }),
+    );
   }
 
   // Расстановка документа прогона — после расстановки сцены, которую применил

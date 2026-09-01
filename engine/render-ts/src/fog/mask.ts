@@ -16,6 +16,10 @@
  * Тени направлены по высоте, как перекрытие симуляции (PHYS-13): ребро
  * отбрасывает тень, только если его верхний уровень выше уровня наблюдателя —
  * с плато открыты и низ, и плато того же уровня за низиной.
+ * Сверх теней reveal обрезан по УРОВНЮ ПОЛА (FOW-9): тексель, чья клетка строго
+ * выше уровня наблюдателя, остаётся под туманом. Одних теней для этого мало — в
+ * проёме рампы (TERR-5) cliff-отрезка нет вовсе, и круг светил бы через проём
+ * на пол верхнего уровня, куда симуляция сущностей не доставляет (FOW-5).
  * Наблюдатели складываются максимумом: пересечение кругов не темнее одного.
  *
  * Тени считаются полярным depth-буфером на наблюдателя (design D3 change
@@ -73,6 +77,57 @@ export function fogRectOf(grid: TerrainGrid): FogWorldRect {
 }
 
 /**
+ * Карта уровней пола для среза reveal по высоте (FOW-9) — та же, что читает
+ * симуляция (TERR-3), плюс размер клетки во float: точка приёма границы
+ * Q16.16 → float здесь же, как у прямоугольника и отрезков (REND-1).
+ *
+ * Начала у карты нет намеренно: сетка террейна привязана к НУЛЮ МИРА — клетку
+ * по точке ядро берёт делением абсолютной координаты на сторону клетки
+ * (TERR-4, `cellAt`), — поэтому и срез индексирует карту абсолютной мировой
+ * координатой текселя, а не его отступом от прямоугольника маски. Совпадение
+ * прямоугольника с сеткой (`fogRectOf`) — частный случай, а не условие:
+ * маска на сдвинутом прямоугольнике режет по тем же клеткам мира.
+ *
+ * Массив уровней переиспользуется, а не копируется: сетка матча иммутабельна
+ * (TERR-6), а документный источник редактора отдаёт новую сетку целиком.
+ */
+export interface FogLevelField {
+  readonly width: number;
+  readonly height: number;
+  /** Размер клетки в мировых единицах. */
+  readonly tileSize: number;
+  readonly levels: Uint8Array;
+}
+
+/** Карта уровней сетки во float (REND-1) — вход среза reveal по высоте (FOW-9). */
+export function fogLevelsOf(grid: TerrainGrid): FogLevelField {
+  return {
+    width: grid.width,
+    height: grid.height,
+    tileSize: grid.tileSize / FIXED_ONE,
+    levels: grid.levels,
+  };
+}
+
+/**
+ * Карта «среза по уровню нет»: одна клетка уровня 0 на весь мир — сторона
+ * клетки бесконечна, значит клеток в мировой единице ноль, и любой тексель
+ * попадает в неё. Порог «строго выше наблюдателя» на ней ложен при любом
+ * уровне (уровни неотрицательны), поэтому маска без карты уровней остаётся
+ * кругом с тенями — так её строят стенды на ровной арене.
+ *
+ * Пустой карте нужен объект, а не `null`, ради цикла по текселям: проверки
+ * «карта есть» в нём тогда нет вовсе, и ветка одна вместо двух.
+ * Массив общий на все такие маски: писать в него некому — срез только читает.
+ */
+const NO_LEVEL_CUT: FogLevelField = {
+  width: 1,
+  height: 1,
+  tileSize: Number.POSITIVE_INFINITY,
+  levels: new Uint8Array(1),
+};
+
+/**
  * Cliff-отрезки сетки во float (REND-1): те же отрезки, что несут `blocksVision`
  * в симуляции (TERR-5, FOW-9), — не выведенные заново, а переиспользованные,
  * вместе с уровнями сторон (PHYS-13).
@@ -125,6 +180,17 @@ function penumbraOf(shadowDistance: number, edgeWidth: number): number {
 }
 
 /**
+ * Клетка карты уровней по мировой координате в клетках; вне сетки берётся
+ * ближайшая — тотальность запроса уровня та же, что в ядре (TERR-4). Зажим
+ * нужен и внутри прямоугольника: маска округляет свой размер до текселя и
+ * последним текселем строки способна выйти за край сетки на доли клетки.
+ */
+function clampCell(cell: number, count: number): number {
+  const index = Math.floor(cell);
+  return index < 0 ? 0 : index >= count ? count - 1 : index;
+}
+
+/**
  * Проход разделяемого блюра кромки (FOW-7): горизонталь пишет промежуточный
  * буфер, вертикаль читает только его. Порционная перестройка идёт ими по
  * очереди — сперва весь горизонтальный, затем весь вертикальный (design D1).
@@ -150,6 +216,14 @@ export class VisibilityMask {
   readonly texelsPerUnit: number;
   readonly width: number;
   readonly height: number;
+  /**
+   * Карта уровней пола для среза reveal по высоте (FOW-9). Сборка матча и
+   * редактор задают её всегда (сетка у подсистемы уже есть); не заданная — это
+   * `NO_LEVEL_CUT`, тождественный срез, а не отсутствующая ветка.
+   */
+  private readonly field: FogLevelField;
+  /** Клеток в мировой единице — множитель вместо деления на тексель. */
+  private readonly cellsPerUnit: number;
   /** Опубликованный растр — единственное, что видят потребители маски. */
   private front: Uint8Array;
   /** Задний растр порционной перестройки; null — порционного пути не было. */
@@ -168,6 +242,8 @@ export class VisibilityMask {
    * той же причине: строка отчитывается вызывающему, не создавая объекта.
    */
   private revealWritten = 0;
+  /** Тексели круга, отброшенные срезом по уровню (FOW-9) — за строку. */
+  private revealCut = 0;
   private revealShadowTests = 0;
 
   /**
@@ -186,18 +262,23 @@ export class VisibilityMask {
     innerSq: 0,
     edgeWidth: 0,
     radius: 0,
-    shadowed: false,
     /** Считать ли полутень фронта: есть тени и есть ненулевая кромка (FOW-7). */
     penumbra: false,
     penumbraStartSq: 0,
+    /** Уровень наблюдателя — порог среза по уровню пола (FOW-9). */
+    level: 0,
   };
 
-  constructor(rect: FogWorldRect, texelsPerUnit: number) {
+  constructor(rect: FogWorldRect, texelsPerUnit: number, field: FogLevelField | null = null) {
     this.rect = rect;
     this.texelsPerUnit = texelsPerUnit;
     this.width = Math.max(1, Math.round(rect.width * texelsPerUnit));
     this.height = Math.max(1, Math.round(rect.height * texelsPerUnit));
     this.front = new Uint8Array(this.width * this.height);
+    this.field = field ?? NO_LEVEL_CUT;
+    // Сторона пустой карты бесконечна, и множитель обращается в ноль сам —
+    // отдельной ветки «карты нет» здесь тоже не заводится.
+    this.cellsPerUnit = 1 / this.field.tileSize;
   }
 
   /** Опубликованный растр: то, что видят потребители маски (design D2). */
@@ -343,8 +424,8 @@ export class VisibilityMask {
     staged.radiusSq = radiusSq;
     staged.innerSq = edgeWidth <= 0 ? radiusSq : inner > 0 ? inner * inner : -1;
     staged.edgeWidth = edgeWidth;
-    staged.shadowed = shadow.casting;
     staged.penumbra = penumbra;
+    staged.level = observer.level;
     // Порог, за которым тексель обязан спросить у полярного буфера свой угол.
     // Прежде им была ближайшая тень ЛЮБОГО направления — ближе неё затенения
     // нет. Полутень фронта (см. `writeReveal`) начинается ДО тени, поэтому
@@ -389,15 +470,23 @@ export class VisibilityMask {
     const scale = this.texelsPerUnit;
     const rectY = this.rect.y;
     const oy = staged.oy;
+    const field = this.field;
     this.revealWritten = 0;
+    this.revealCut = 0;
     this.revealShadowTests = 0;
     for (let ty = y0; ty <= y1; ty++) {
       const wy = rectY + (ty + 0.5) / scale;
-      this.revealRow(target, ty, wy - oy);
+      // Вся строка текселей лежит в одном ряду клеток: ряд среза по уровню
+      // считается раз на строку, а не на тексель (FOW-9). Координата здесь
+      // АБСОЛЮТНАЯ (`wy`, а не `wy - rectY`): карта уровней привязана к нулю
+      // мира, а не к прямоугольнику маски (см. `FogLevelField`).
+      const cellRow = clampCell(wy * this.cellsPerUnit, field.height) * field.width;
+      this.revealRow(target, ty, wy - oy, cellRow);
     }
     const cost = costSink();
     if (cost !== undefined) {
       cost.fogMaskTexelsWritten += this.revealWritten;
+      cost.fogMaskTexelsCut += this.revealCut;
       cost.fogShadowTexelTests += this.revealShadowTests;
     }
     return (y1 - y0 + 1) * (staged.x1 - staged.x0 + 1);
@@ -405,26 +494,53 @@ export class VisibilityMask {
 
   /**
    * Одна строка reveal-полигона подготовленного наблюдателя; `dy` — её отступ
-   * от центра наблюдателя по мировой оси Y.
+   * от центра наблюдателя по мировой оси Y, `cellRow` — начало её ряда клеток в
+   * карте уровней.
    *
    * Всё, что цикл по текселям читает сотню тысяч раз за перестройку, лежит в
    * локальных, а не в полях объекта; счёт записей и углов копится тоже в
    * локальных и уходит в поля один раз на строку, а не на тексель (PERF-3).
    */
-  private revealRow(target: Uint8Array, ty: number, dy: number): void {
+  private revealRow(target: Uint8Array, ty: number, dy: number, cellRow: number): void {
     const staged = this.staged;
-    const { x0, x1, ox, radius, radiusSq, innerSq, edgeWidth, shadowed, penumbra } = staged;
+    const { x0, x1, ox, radius, radiusSq, innerSq, edgeWidth, penumbra } = staged;
     const penumbraStartSq = staged.penumbraStartSq;
     const scale = this.texelsPerUnit;
     const rectX = this.rect.x;
     const dySq = dy * dy;
     const row = ty * this.width;
+    // Срез по уровню пола (FOW-9): карта уровней и порог — в локальных, как и
+    // всё, что читает цикл по текселям.
+    const field = this.field;
+    const levels = field.levels;
+    const cells = field.width;
+    const cellsPerUnit = this.cellsPerUnit;
+    const level = staged.level;
     let written = 0;
+    let cut = 0;
     let shadowTests = 0;
     for (let tx = x0; tx <= x1; tx++) {
-      const dx = rectX + (tx + 0.5) / scale - ox;
+      const wx = rectX + (tx + 0.5) / scale;
+      const dx = wx - ox;
       const distSq = dx * dx + dySq;
+      // Два отказа текселю в одном выходе: он вне круга обзора — или его пол
+      // строго выше наблюдателя и остаётся под туманом независимо от теней
+      // (FOW-9). Одних теней для второго мало: в проёме рампы cliff-отрезка
+      // нет вовсе, и круг светил бы сквозь него наверх.
+      //
+      // Клетка текселя — та, в которой лежит его ЦЕНТР (design D4): на границе
+      // клеток срез поэтому гуляет на полтексела в обе стороны. Это та же
+      // величина, на которую переносит свет блюр кромки, и она заведомо меньше
+      // запаса радиуса (FOW-10), которым визуал и держится консервативнее
+      // геймплея. Координата клетки — АБСОЛЮТНАЯ `wx`: карта уровней привязана
+      // к нулю мира (см. `FogLevelField`), тогда как `dx` ниже отсчитывается от
+      // наблюдателя. Порядок операндов бережёт выборку: вне круга обзора до
+      // карты уровней не доходят.
       if (distSq >= radiusSq) continue;
+      if (levels[cellRow + clampCell(wx * cellsPerUnit, cells)]! > level) {
+        cut++;
+        continue;
+      }
       const current = target[row + tx]!;
       if (current === 255) continue; // уже полностью открыт другим наблюдателем
       // Корень берут не все тексели: во внутреннем круге полного света он
@@ -438,7 +554,10 @@ export class VisibilityMask {
       // Ранний выход до самой дорогой операции цикла: тексель, чьё значение и
       // без гашения не превосходит лежащего, не стоит ни угла, ни корня.
       if (value <= current) continue;
-      if (shadowed && distSq >= penumbraStartSq) {
+      // Отдельного флага «тени есть» условию не нужно: без отобранных укрытий
+      // порог бесконечен (`nearestShadowSq` полярного буфера), и сравнение
+      // ложно на любом тексе́ле — ветка мертва тем же самым числом.
+      if (distSq >= penumbraStartSq) {
         shadowTests++;
         value = this.shadeTexel(value, dist, distSq, dx, dy, edgeWidth, penumbra);
       }
@@ -451,6 +570,7 @@ export class VisibilityMask {
       written++;
     }
     this.revealWritten += written;
+    this.revealCut += cut;
     this.revealShadowTests += shadowTests;
   }
 

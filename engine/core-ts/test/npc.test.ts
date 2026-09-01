@@ -752,6 +752,102 @@ describe('NPC-5, NPC-4: смерть цели ведёт к перевыбору
   });
 });
 
+describe('NPC-10: восприятие уважает стелс и детекцию', () => {
+  /**
+   * Сцена с туманом войны: схемы стелса и детекции дописывает `fog` (FOW-3),
+   * поэтому свой `Team` из объявленных убран — его несёт группа тумана.
+   * Канал 0 — жёсткий, канал 1 объявлен мягким: для выбора цели NPC разницы
+   * быть не должно (NPC-10). `StealthState` ставится тестом руками: платформа
+   * читает свёртку, а не источники, и пересчёт видимости ей для этого не нужен.
+   */
+  const FOG_EXTRA: Partial<SceneDef> = {
+    components: COMPONENTS.filter((schema) => schema.name !== 'Team'),
+    terrain: {
+      width: 8,
+      height: 8,
+      tileSize: ONE,
+      levels: Array.from({ length: 8 }, () => '00000000'),
+      flags: Array.from({ length: 8 }, () => '........'),
+    },
+    fog: true,
+    softStealthChannels: [1],
+  };
+  const HARD = 1 << 0;
+  const SOFT = 1 << 1;
+
+  function fogHarness(): Harness {
+    return harness({ behaviors: [chaser() as never], bindings: BINDINGS }, FOG_EXTRA);
+  }
+
+  it('скрытая цель не выбирается и не участвует входом: агент ведёт себя, как будто её нет', () => {
+    const h = fogHarness();
+    const hidden = h.place('Hero', { Position: { x: F(2), y: 0 } });
+    addComponent(h.world, hidden, 'StealthState', { mask: HARD });
+    const visible = h.place('Hero', { Position: { x: F(6), y: 0 } });
+    const creep = h.place('Creep', { Position: { x: 0, y: 0 } });
+    h.step();
+
+    // Ближе стоит скрытый — но целью становится видимый, как в прогоне без скрытого.
+    expect(h.field(creep, NPC_AGENT_COMPONENT, 'target')).toBe(visible);
+  });
+
+  it('мягкий канал скрывает от выбора целью так же, как жёсткий (FOW-13)', () => {
+    const h = fogHarness();
+    const hidden = h.place('Hero', { Position: { x: F(2), y: 0 } });
+    addComponent(h.world, hidden, 'StealthState', { mask: SOFT });
+    const creep = h.place('Creep', { Position: { x: 0, y: 0 } });
+    h.step();
+
+    expect(h.field(creep, NPC_AGENT_COMPONENT, 'target')).toBe(NO_ENTITY);
+  });
+
+  it('агент с детекцией канала выбирает цель штатно', () => {
+    const h = fogHarness();
+    const hidden = h.place('Hero', { Position: { x: F(2), y: 0 } });
+    addComponent(h.world, hidden, 'StealthState', { mask: HARD });
+    const creep = h.place('Creep', { Position: { x: 0, y: 0 } });
+    addComponent(h.world, creep, 'DetectionState', { mask: HARD });
+    h.step();
+
+    expect(h.field(creep, NPC_AGENT_COMPONENT, 'target')).toBe(hidden);
+  });
+
+  it('цель, ушедшая в стелс, отбрасывается ближайшим пересмотром — не дольше окна каденса (NPC-4)', () => {
+    const h = fogHarness();
+    const hero = h.place('Hero', { Position: { x: F(2), y: 0 } });
+    const creep = h.place('Creep', { Position: { x: 0, y: 0 } });
+    h.step();
+    expect(h.field(creep, NPC_AGENT_COMPONENT, 'target')).toBe(hero);
+
+    // Цель скрылась ПОСЛЕ выбора: запрет NPC-10 действует в точках решений,
+    // удержание ограничено интервалом решений документа (4 тика у chaser).
+    addComponent(h.world, hero, 'StealthState', { mask: HARD });
+    for (let i = 0; i < 4; i++) h.step();
+    expect(h.field(creep, NPC_AGENT_COMPONENT, 'target')).toBe(NO_ENTITY);
+  });
+
+  it('угроза от скрытого источника копится, но целью он не становится, пока скрыт', () => {
+    const h = fogHarness();
+    const hidden = h.place('Hero', { Position: { x: F(3), y: 0 } });
+    addComponent(h.world, hidden, 'StealthState', { mask: HARD });
+    const creep = h.place('Creep', { Position: { x: 0, y: 0 } });
+    h.step();
+    h.emit('Damage', { target: creep, source: hidden, amount: 50 });
+    h.step();
+
+    // Накопление — событийное и политике не мешает (NPC-5)…
+    expect(h.field(creep, NPC_THREAT_COMPONENT, 'value0')).toBeGreaterThan(0);
+    // …но лидер таблицы скрыт и целью не назначен.
+    h.step();
+    expect(h.field(creep, NPC_AGENT_COMPONENT, 'target')).toBe(NO_ENTITY);
+
+    // Стелс спал — накопленная угроза немедленно даёт цель в ближайшее окно решений.
+    setField(h.world, hidden, 'StealthState', 'mask', 0);
+    for (let i = 0; i < 4; i++) h.step();
+    expect(h.field(creep, NPC_AGENT_COMPONENT, 'target')).toBe(hidden);
+  });
+});
+
 describe('NPC-6: движение — политика над навигационным швом', () => {
   it('волна проходит маршрут в сцене без Navigation API', () => {
     const h = harness({ behaviors: [walker() as never], bindings: BINDINGS });

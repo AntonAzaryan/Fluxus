@@ -21,7 +21,7 @@ const BASE: ScenarioDef = {
       width: 4,
       height: 3,
       tileSize: 65536,
-      levels: ['0122', '0122', '0011'],
+      levels: ['0112', '0112', '0011'],
       flags: ['..^_', '..^.', '....'],
     },
     arena: { center: { x: 131072, y: 98304 }, radius: 262144 },
@@ -65,7 +65,7 @@ describe('worldInit hash (DET-1)', () => {
           capacity: 16,
           terrain: {
             flags: ['..^_', '..^.', '....'],
-            levels: ['0122', '0122', '0011'],
+            levels: ['0112', '0112', '0011'],
             tileSize: 65536,
             height: 3,
             width: 4,
@@ -95,7 +95,7 @@ describe('worldInit hash (DET-1)', () => {
 
   it('меняется при другой карте уровней', () => {
     const other = withScene({
-      terrain: { ...BASE.scene.terrain!, levels: ['0123', '0122', '0011'] },
+      terrain: { ...BASE.scene.terrain!, levels: ['0113', '0112', '0011'] },
     });
     expect(hashOf(other)).not.toBe(hashOf(BASE));
   });
@@ -162,7 +162,7 @@ describe('worldInit hash (DET-1)', () => {
     // Сравнение двух прогонов ловит недетерминизм, но не ловит изменение
     // канонического представления: оно двигает хеш одинаково в обоих прогонах.
     // Литерал — единственное, что превращает такой сдвиг в красный тест.
-    expect(hashOf(BASE)).toBe('dd82396b');
+    expect(hashOf(BASE)).toBe('3502ff5b');
   });
 
   it('DET-1: список свободных слотов входит в представление пустым списком', () => {

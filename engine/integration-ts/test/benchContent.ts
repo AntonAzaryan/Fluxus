@@ -363,12 +363,19 @@ const CURVATURE_NODE_STEP = 4;
  * пересборка чанка (REND-7) платит и за плоские клетки, и за разбитые, а
  * потолок `terrain.curvatureTessellation` двигает второе слагаемое квадратично
  * (REND-9), не превращая стенд в генератор миллионов вершин.
+ *
+ * `offset` двигает решётку узлов вместе с решёткой укрытий стенда (`benchGrid`):
+ * стенка обрыва разбивается плотностью ПОДПИРАЕМОГО пола (REND-9), то есть
+ * клетки-столба, и решётка узлов мимо столбов оставила бы стенки одним квадом —
+ * потолок разбиения перестал бы двигать `terrainWallQuads` вовсе. Доля клеток с
+ * кривизной от сдвига не меняется: сдвигается вся решётка целиком.
  */
-export function benchCurvature(grid: TerrainGrid): TerrainCurvatureMap {
+export function benchCurvature(grid: TerrainGrid, offset = 0): TerrainCurvatureMap {
+  const raised = (n: number): boolean => n % CURVATURE_NODE_STEP === offset % CURVATURE_NODE_STEP;
   const rows = Array.from({ length: grid.height + 1 }, (_, ny) =>
     Array.from({ length: grid.width + 1 }, (_, nx) =>
-      nx % CURVATURE_NODE_STEP === 0 && ny % CURVATURE_NODE_STEP === 0
-        ? 1 + ((nx + ny) / CURVATURE_NODE_STEP) % 5
+      raised(nx) && raised(ny)
+        ? 1 + ((nx - offset + (ny - offset)) / CURVATURE_NODE_STEP) % 5
         : 0,
     ),
   );

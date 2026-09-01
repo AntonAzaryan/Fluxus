@@ -16,6 +16,8 @@ import { requireModifierList } from '../src/systems/modifiers.js';
 import {
   teamBit,
   VisibilitySystem,
+  DETECTION_SOURCES_COMPONENT,
+  STEALTH_SOURCES_COMPONENT,
   VISIBILITY_COMPONENT,
   VISION_MODIFIER_COMPONENT,
 } from '../src/systems/visibility.js';
@@ -80,7 +82,16 @@ interface Stand {
 
 function stand(): Stand {
   const loaded = loadScene(SCENE);
-  loaded.systems.register(new VisibilitySystem(requireModifierList(loaded.modifiers, VISION_MODIFIER_COMPONENT)));
+  loaded.systems.register(
+    new VisibilitySystem({
+      lists: {
+        vision: requireModifierList(loaded.modifiers, VISION_MODIFIER_COMPONENT),
+        stealth: requireModifierList(loaded.modifiers, STEALTH_SOURCES_COMPONENT),
+        detection: requireModifierList(loaded.modifiers, DETECTION_SOURCES_COMPONENT),
+      },
+      hardStealthMask: loaded.stealthHardMask ?? ~0,
+    }),
+  );
   const sim: Simulation = {
     systems: loaded.systems,
     worldSeed: 1,

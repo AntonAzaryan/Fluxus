@@ -189,18 +189,22 @@ export {
   fowComponents,
   VISION_COMPONENT,
   VISIBILITY_COMPONENT,
-  STEALTH_COMPONENT,
   TEAM_COMPONENT,
+  STEALTH_STATE_COMPONENT,
+  DETECTION_STATE_COMPONENT,
+  STEALTH_SOURCES_COMPONENT,
+  DETECTION_SOURCES_COMPONENT,
   VISION_SCHEMA,
   VISIBILITY_SCHEMA,
-  STEALTH_SCHEMA,
   TEAM_SCHEMA,
+  STEALTH_STATE_SCHEMA,
+  DETECTION_STATE_SCHEMA,
   VISION_MODIFIER_COMPONENT,
   VISION_SCALE_MIN,
   VISION_SCALE_MAX,
   MAX_TEAMS,
 } from './systems/visibility.js';
-export type { VisibilityOptions } from './systems/visibility.js';
+export type { VisibilityOptions, VisibilityDeps, FowLists } from './systems/visibility.js';
 export { InputSystem, INPUT_FIELDS, INPUT_TARGET_FIELDS, inputTargetDeclared } from './systems/inputSystem.js';
 export type { InputSystemOptions } from './systems/inputSystem.js';
 export {

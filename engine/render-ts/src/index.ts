@@ -233,8 +233,8 @@ export { DEFAULT_FOG_CONFIG, resolveFogConfig } from './fog/config.js';
 export type { FogRenderConfig } from './fog/config.js';
 export type { FogRendererLike, FogStatNames, FogSubsystemOptions } from './fog/contract.js';
 export type { FogLayerCanvas, FogLayerContext, FogMinimapLayer } from './fog/layer.js';
-export { VisibilityMask, edgeGradient, fogRectOf, fogSegmentsOf } from './fog/mask.js';
-export type { FogObserver, FogSmoothPass, FogWorldRect } from './fog/mask.js';
+export { VisibilityMask, edgeGradient, fogLevelsOf, fogRectOf, fogSegmentsOf } from './fog/mask.js';
+export type { FogLevelField, FogObserver, FogSmoothPass, FogWorldRect } from './fog/mask.js';
 // Полярный depth-буфер теней укрытий (design D3): наружу отданы только отрезок
 // укрытия и его тест по высоте — то, из чего маску строит вызывающий. Бины,
 // растеризация дуг и свёртка остаются внутренностями пакета.

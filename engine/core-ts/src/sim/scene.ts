@@ -26,7 +26,13 @@ import {
   ARENA_PREFAB,
   type ArenaDef,
 } from '../systems/arena.js';
-import { fowComponents, VISION_MODIFIER_COMPONENT } from '../systems/visibility.js';
+import {
+  fowComponents,
+  DETECTION_SOURCES_COMPONENT,
+  STEALTH_SOURCES_COMPONENT,
+  VISION_MODIFIER_COMPONENT,
+  type FowLists,
+} from '../systems/visibility.js';
 import { TimeScaleSystem, timeComponents, TIME_SCALE_MODIFIERS_COMPONENT } from '../systems/time.js';
 import { TweenSystem, TWEEN_SCHEMA, type TweenDef } from '../systems/tween.js';
 import { modifierList, DEFAULT_MODIFIER_SLOTS } from '../systems/modifiers.js';
@@ -92,6 +98,13 @@ export interface SceneDef {
    * полей компонентов источников (SER-6, SER-7).
    */
   readonly modifierSlots?: number;
+  /**
+   * Номера мягких стелс-каналов (FOW-12, SER-7): целые `[0, 31]` без повторов.
+   * Не перечисленные каналы — жёсткие; отсутствие поля — все жёсткие
+   * (умолчание консервативно к информации). Требует `fog`. В мир и снапшот
+   * таблица не входит: она порождена конфигом и иммутабельна на матч.
+   */
+  readonly softStealthChannels?: readonly number[];
   /**
    * Таблица определений способностей (ABIL-2): наличие подключает компоненты
    * платформы и её системы. Определения живут полем конфига сцены, а не
@@ -165,6 +178,46 @@ function checkSceneInvariants(def: SceneDef): void {
         'но не объявляет биндинг стороны (abilityRuntime.teamField)',
     );
   }
+  // Таблица мягких каналов без тумана ни к чему не относится (SER-7): молчаливое
+  // игнорирование поля скрыло бы опечатку в конфиге.
+  if (def.softStealthChannels !== undefined && def.fog !== true) {
+    throw new Error(
+      'SER-7: сцена объявляет мягкие стелс-каналы (softStealthChannels) без тумана войны (fog) — ' +
+        'без компонентов тумана нет ни стелс-масок, ни пересчёта (FOW-12)',
+    );
+  }
+}
+
+/**
+ * Маска жёстких каналов из перечисления мягких (FOW-12, SER-7): валидация
+ * адресная, умолчание — все каналы жёсткие. Считается до создания мира: в мир
+ * и снапшот таблица не входит.
+ */
+function hardStealthMask(channels: readonly number[] | undefined): number {
+  // Форма поля проверяется адресно (SER-5, SER-7): не-массив дал бы сырой
+  // TypeError без имени поля и ID требования.
+  if (channels !== undefined && !Array.isArray(channels)) {
+    throw new Error(
+      'SER-7: softStealthChannels — список номеров мягких стелс-каналов (целые [0, 31]), ' +
+        `получено значение типа ${typeof channels}`,
+    );
+  }
+  // Явная аннотация: `Array.isArray` в гарде выше сузил бы элементы до `any`.
+  const list: readonly number[] = channels ?? [];
+  let soft = 0;
+  for (const channel of list) {
+    if (!Number.isInteger(channel) || channel < 0 || channel > 31) {
+      throw new Error(
+        `SER-7: мягкий стелс-канал ${channel} вне диапазона [0, 31] — маска каналов 32-битная (FOW-2, FOW-3)`,
+      );
+    }
+    const bit = 1 << channel;
+    if ((soft & bit) !== 0) {
+      throw new Error(`SER-7: мягкий стелс-канал ${channel} перечислен дважды (softStealthChannels)`);
+    }
+    soft |= bit;
+  }
+  return ~soft;
 }
 
 /**
@@ -177,7 +230,7 @@ function sceneComponents(
   def: SceneDef,
   grid: TerrainGrid | undefined,
   timeScaleModifiers: ModifierList,
-  visionModifiers: ModifierList,
+  fowLists: FowLists,
 ): ComponentSchema[] {
   return [
     ...def.components,
@@ -185,7 +238,7 @@ function sceneComponents(
     ...(def.arena === undefined ? [] : ARENA_COMPONENTS),
     ...(def.timeScale === true ? timeComponents(timeScaleModifiers) : []),
     ...(def.tweens === undefined ? [] : [TWEEN_SCHEMA]),
-    ...(def.fog === true ? fowComponents(visionModifiers) : []),
+    ...(def.fog === true ? fowComponents(fowLists) : []),
     ...(def.abilities === undefined ? [] : ABILITY_COMPONENTS),
     ...(def.buffs === undefined ? [] : BUFF_COMPONENTS),
     ...(def.npc === undefined ? [] : NPC_COMPONENTS),
@@ -311,6 +364,13 @@ export interface Scene {
    * состояние агентов целиком лежит в полях компонентов (NPC-1).
    */
   readonly npc?: NpcCatalog;
+  /**
+   * Маска жёстких стелс-каналов (FOW-12): взведённый бит — канал жёсткий.
+   * Есть, если сцена содержит `fog`. Порождена конфигом
+   * (`softStealthChannels`, SER-7), иммутабельна и в снапшот не входит — как
+   * террейн и таблица способностей; сборка передаёт её `VisibilitySystem`.
+   */
+  readonly stealthHardMask?: number;
 }
 
 export function loadScene(def: SceneDef): Scene {
@@ -320,12 +380,20 @@ export function loadScene(def: SceneDef): Scene {
   const grid = def.terrain === undefined ? undefined : createTerrainGrid(def.terrain);
   const slots = def.modifierSlots ?? DEFAULT_MODIFIER_SLOTS;
   const timeScaleModifiers = modifierList(TIME_SCALE_MODIFIERS_COMPONENT, slots);
-  const visionModifiers = modifierList(VISION_MODIFIER_COMPONENT, slots);
-  const modifiers: ModifierRegistry = new Map([
-    [timeScaleModifiers.component, timeScaleModifiers],
-    [visionModifiers.component, visionModifiers],
-  ]);
-  const components = sceneComponents(def, grid, timeScaleModifiers, visionModifiers);
+  const fowLists: FowLists = {
+    vision: modifierList(VISION_MODIFIER_COMPONENT, slots),
+    stealth: modifierList(STEALTH_SOURCES_COMPONENT, slots, 'mask'),
+    detection: modifierList(DETECTION_SOURCES_COMPONENT, slots, 'mask'),
+  };
+  const modifiers: ModifierRegistry = new Map(
+    [timeScaleModifiers, fowLists.vision, fowLists.stealth, fowLists.detection].map(
+      (list) => [list.component, list] as const,
+    ),
+  );
+  // Валидация таблицы каналов — до создания мира, как остальные инварианты
+  // состава (SER-7); сама маска нужна только сцене с туманом.
+  const stealthHardMask = hardStealthMask(def.softStealthChannels);
+  const components = sceneComponents(def, grid, timeScaleModifiers, fowLists);
   const prefabs = scenePrefabs(def, grid);
   // Коэффициент опоры в prefabs сцены — доля в [0, 1] (ARENA-3): опечатка
   // контента не должна доживать до первого тика.
@@ -372,5 +440,6 @@ export function loadScene(def: SceneDef): Scene {
     ...(arena !== undefined ? { arena } : {}),
     ...(abilities !== undefined ? { abilities } : {}),
     ...(npc !== undefined ? { npc } : {}),
+    ...(def.fog === true ? { stealthHardMask } : {}),
   };
 }

@@ -222,6 +222,10 @@
       "source": "907a85e5",
       "translated": "b0fc3c9b"
     },
+    "operator.maskCovered": {
+      "source": "fe86089a",
+      "translated": "2f2c2b5a"
+    },
     "operator.max": {
       "source": "f5d5b476",
       "translated": "0f274410"
@@ -1049,6 +1053,10 @@
     "schema.scene.prefabs": {
       "source": "899a43e4",
       "translated": "055ed0ca"
+    },
+    "schema.scene.softStealthChannels": {
+      "source": "114f057f",
+      "translated": "cc1acb28"
     },
     "schema.scene.systems": {
       "source": "c55c7efd",

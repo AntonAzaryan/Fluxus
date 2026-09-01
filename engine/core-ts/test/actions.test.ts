@@ -44,12 +44,22 @@ const Slots: ComponentSchema = {
 
 /** Список источников сцены (TIME-7): экземпляр на харнесс, не на модуль (DI-1). */
 const SLOW = modifierList('SlowSources', 2);
-const MODIFIERS: ModifierRegistry = new Map([[SLOW.component, SLOW]]);
+/** Масочный список (FOW-3): значение слота — маска каналов i32, нейтраль 0, свёртка OR. */
+const CLOAK = modifierList('CloakSources', 2, 'mask');
+const MODIFIERS: ModifierRegistry = new Map([
+  [SLOW.component, SLOW],
+  [CLOAK.component, CLOAK],
+]);
 
 const PREFABS: PrefabDef[] = [
   {
     name: 'Hero',
-    components: { Position: { x: 0, y: 0 }, Health: { current: F(100), max: F(100) }, SlowSources: {} },
+    components: {
+      Position: { x: 0, y: 0 },
+      Health: { current: F(100), max: F(100) },
+      SlowSources: {},
+      CloakSources: {},
+    },
   },
   { name: 'Projectile', components: { Position: { x: 0, y: 0 } } },
 ];
@@ -65,7 +75,7 @@ interface Harness {
 const SYSTEM_NAME = 'Test';
 
 function harness(seed = 1234): Harness {
-  const world = createWorld([Position, Health, Shield, Slots, SLOW.schema], PREFABS);
+  const world = createWorld([Position, Health, Shield, Slots, SLOW.schema, CLOAK.schema], PREFABS);
   const commands = createCommandBuffer(world);
   const events = new EventBus();
   const setFieldLog: string[] = [];
@@ -903,6 +913,30 @@ describe('источники-модификаторы из DSL (ACT-1, TIME-8)',
     expect(() =>
       { execute([{ addModifier: { entity: hero, component: SLOW.component, id: 0, value: F(0.5) } }], h.ctx); },
     ).toThrow(/не может быть нулём/);
+  });
+
+  it('масочный список: нейтраль слота 0, свёртка OR, снятие не трогает второй канал (FOW-3)', () => {
+    const h = harness();
+    const hero = spawn(h.world, 'Hero');
+    // Пустой список — пустая маска, а не FIXED_ONE.
+    expect(CLOAK.union(h.ctx, hero)).toBe(0);
+    expect(getField(h.world, hero, CLOAK.component, 'value0')).toBe(0);
+
+    execute(
+      [
+        { addModifier: { entity: hero, component: CLOAK.component, id: 1, value: 1 << 2 } },
+        { addModifier: { entity: hero, component: CLOAK.component, id: 2, value: 1 << 5 } },
+      ],
+      h.ctx,
+    );
+    h.commands.flush();
+    expect(CLOAK.union(h.ctx, hero)).toBe((1 << 2) | (1 << 5));
+
+    execute([{ removeModifier: { entity: hero, component: CLOAK.component, id: 1 } }], h.ctx);
+    h.commands.flush();
+    expect(CLOAK.union(h.ctx, hero)).toBe(1 << 5);
+    // Освобождённый слот вернулся к нейтрали масочного списка — нулю.
+    expect(getField(h.world, hero, CLOAK.component, 'value0')).toBe(0);
   });
 
   it('список, не подключённый сценой, — ошибка, а не действие без эффекта (ACT-1)', () => {

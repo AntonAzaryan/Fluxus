@@ -17,10 +17,27 @@ import { loadScene, type SceneDef } from '../src/sim/scene.js';
 import { initialState, takeSnapshot, tick, type Simulation } from '../src/sim/tick.js';
 import { RingHistory } from '../src/sim/history.js';
 import { createInputLog, createRewindController } from '../src/sim/rewind.js';
-import { teamBit, VisibilitySystem, VISIBILITY_COMPONENT, VISION_MODIFIER_COMPONENT } from '../src/systems/visibility.js';
+import {
+  teamBit,
+  VisibilitySystem,
+  DETECTION_SOURCES_COMPONENT,
+  STEALTH_SOURCES_COMPONENT,
+  VISIBILITY_COMPONENT,
+  VISION_MODIFIER_COMPONENT,
+} from '../src/systems/visibility.js';
 import { requireModifierList } from '../src/systems/modifiers.js';
 import { NO_ENTITY } from '../src/types.js';
-import type { EntityId, FieldOverrides, Snapshot } from '../src/types.js';
+import type { EntityId, FieldOverrides, ModifierRegistry, Snapshot } from '../src/types.js';
+
+/** Зависимости пересчёта (FOW-3, FOW-12): все каналы жёсткие — как до канальной модели. */
+const fowDeps = (modifiers: ModifierRegistry) => ({
+  lists: {
+    vision: requireModifierList(modifiers, VISION_MODIFIER_COMPONENT),
+    stealth: requireModifierList(modifiers, STEALTH_SOURCES_COMPONENT),
+    detection: requireModifierList(modifiers, DETECTION_SOURCES_COMPONENT),
+  },
+  hardStealthMask: ~0,
+});
 
 const F = fixed.fromFloat;
 
@@ -39,7 +56,7 @@ const SCENE: SceneDef = {
         Vision: { radius: F(3) },
         Visibility: { visibleTo: 0 },
         Team: { id: 0 },
-        Stealth: { active: 0 },
+        StealthSources: {},
       },
     },
     {
@@ -49,7 +66,7 @@ const SCENE: SceneDef = {
         Vision: { radius: F(3) },
         Visibility: { visibleTo: 0 },
         Team: { id: 1 },
-        Stealth: { active: 0 },
+        StealthSources: {},
       },
     },
     /** Обстановка без `Visibility`: секретом не является и режется не должна (NET-12). */
@@ -70,7 +87,7 @@ const SCENE_WITH_CARRIERS: SceneDef = {
 
 function harness() {
   const { world, systems, modifiers, terrain } = loadScene(SCENE);
-  systems.register(new VisibilitySystem(requireModifierList(modifiers, VISION_MODIFIER_COMPONENT)));
+  systems.register(new VisibilitySystem(fowDeps(modifiers)));
   const sim: Simulation = { systems, worldSeed: 1, math: mathApi, modifiers, terrain: terrain! };
   const state = initialState(world, 1);
 
@@ -134,7 +151,7 @@ describe('per-client фильтрация снапшота (NET-12)', () => {
    */
   it('носители карты пола и арены остаются во всех персональных снапшотах', () => {
     const { world, systems, terrain, arena, modifiers } = loadScene(SCENE_WITH_CARRIERS);
-    systems.register(new VisibilitySystem(requireModifierList(modifiers, VISION_MODIFIER_COMPONENT)));
+    systems.register(new VisibilitySystem(fowDeps(modifiers)));
     const sim: Simulation = {
       systems,
       worldSeed: 1,
@@ -217,7 +234,7 @@ describe('per-client фильтрация снапшота (NET-12)', () => {
       ],
     };
     const { world, systems, modifiers, terrain } = loadScene(scene);
-    systems.register(new VisibilitySystem(requireModifierList(modifiers, VISION_MODIFIER_COMPONENT)));
+    systems.register(new VisibilitySystem(fowDeps(modifiers)));
     const sim: Simulation = { systems, worldSeed: 1, math: mathApi, modifiers, terrain: terrain! };
     const state = initialState(world, 1);
     const watcher = spawn(world, 'Watcher', { Position: { x: F(0), y: F(0) } });
@@ -278,7 +295,8 @@ describe('своя сущность под стелсом (NET-15)', () => {
     h.step();
     expect(h.present(filterSnapshot(h.state, 0), enemy)).toBe(true);
 
-    setField(h.world, enemy, 'Stealth', 'active', 1);
+    setField(h.world, enemy, STEALTH_SOURCES_COMPONENT, 'id0', 7);
+    setField(h.world, enemy, STEALTH_SOURCES_COMPONENT, 'value0', 1 << 0);
     h.step();
 
     expect(h.mask(enemy)).toBe(teamBit(1));
@@ -500,7 +518,7 @@ describe('сцена без FoW (DI-3)', () => {
 describe('видимость откатывается вместе с миром (REW-11)', () => {
   it('после отката враг снова в снапшоте: фильтр берёт Visibility целевого тика', () => {
     const { world, systems, modifiers, terrain } = loadScene(SCENE);
-    systems.register(new VisibilitySystem(requireModifierList(modifiers, VISION_MODIFIER_COMPONENT)));
+    systems.register(new VisibilitySystem(fowDeps(modifiers)));
     // Террейн отдаётся сборке, как и в остальных стендах файла: без запроса
     // уровня пересчёт видимости не считает, а обрывается (FOW-5) — фильтра по
     // высоте с молчаливым «все уровни нулевые» не существует.

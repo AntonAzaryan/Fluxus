@@ -1,8 +1,10 @@
 /**
  * Чтение мира системами платформы NPC (`npc-behavior` NPC-1): восприятие — это
  * ПРЯМОЕ чтение состояния мира средствами системы, без снапшота и без фильтра
- * видимости. Тумана войны NPC не читает намеренно: он часть авторитетной
- * симуляции, а не её участник, и «честность» ему не нужна.
+ * видимости. Битмаску `Visibility` NPC не читает намеренно — он часть
+ * авторитетной симуляции, а не её участник; стелс при этом платформа уважает
+ * сама (NPC-10, `hiddenFrom`): фильтра снапшота, который прячет невидимое от
+ * бота, у неё нет, и сравнение масок — её обязанность.
  *
  * Здесь же — операции над threat-таблицей фиксированной ёмкости (NPC-5).
  * Накопление читает СНАЧАЛА уже поставленные команды буфера, потом мир (CMD-5):
@@ -66,6 +68,32 @@ export function posY(ctx: SystemContext, handles: NpcHandles, entity: EntityId):
 export function isDead(ctx: SystemContext, handles: NpcHandles, entity: EntityId): boolean {
   const marker = handles.deadMarker;
   return marker !== undefined && ctx.hasByHandle(entity, marker);
+}
+
+/**
+ * Скрыта ли цель от агента (NPC-10): сравнение свёрток стелса цели и детекции
+ * агента (FOW-3), одинаково для жёстких и мягких каналов — мягкий стелс
+ * защищает от выбора целью NPC так же, как от таргетной способности игрока.
+ * Свёртки — производные компоненты пересчёта видимости; системы платформы
+ * стоят в тике раньше якоря 900 и читают значение прошлого пересчёта — та же
+ * свежесть, что у самой `Visibility`. Сцена без тумана скрытых не имеет.
+ */
+export function hiddenFrom(
+  ctx: SystemContext,
+  handles: NpcHandles,
+  agent: EntityId,
+  target: EntityId,
+): boolean {
+  const stealth = handles.stealthState;
+  if (stealth === undefined || !ctx.hasByHandle(target, stealth.component)) return false;
+  const mask = ctx.getByHandle(target, stealth.mask);
+  if (mask === 0) return false;
+  const detection = handles.detectionState;
+  const cover =
+    detection !== undefined && ctx.hasByHandle(agent, detection.component)
+      ? ctx.getByHandle(agent, detection.mask)
+      : 0;
+  return (mask & ~cover) !== 0;
 }
 
 /** Сторона сущности; `undefined` — сцена стороны не объявила либо её у сущности нет. */

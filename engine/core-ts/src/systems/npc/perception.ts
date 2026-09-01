@@ -9,7 +9,7 @@
  */
 import { distSqCompare, distSqLe } from '../../math/fixed.js';
 import { NpcGrid } from './grid.js';
-import { isDead, posX, posY, teamOf } from './runtime.js';
+import { hiddenFrom, isDead, posX, posY, teamOf } from './runtime.js';
 import type { NpcHandles } from './handles.js';
 import type { CompiledNpcBindings } from './model.js';
 import { NO_ENTITY, type EntityId, type Fixed, type QuerySpec, type SystemContext } from '../../types.js';
@@ -99,6 +99,8 @@ export class NpcPerception {
       if (entity === self) continue;
       if (teamOf(ctx, handles, entity) === team) continue;
       if (isDead(ctx, handles, entity)) continue;
+      // NPC-10: скрытая от агента цель не выбирается и во входы не попадает.
+      if (hiddenFrom(ctx, handles, self, entity)) continue;
       const dx = this.grid.xAt(slot) - x;
       const dy = this.grid.yAt(slot) - y;
       if (best !== NO_ENTITY && distSqCompare(dx, dy, bestX, bestY) >= 0) continue;
@@ -142,6 +144,9 @@ export class NpcPerception {
   ): boolean {
     if (target === NO_ENTITY || !ctx.isAlive(target)) return false;
     if (isDead(ctx, handles, target)) return false;
+    // NPC-10: цель, ушедшая в невскрытый стелс, для чувств агента недостижима —
+    // условия документа (`targetOutOfReach`) переключают его штатно.
+    if (hiddenFrom(ctx, handles, self, target)) return false;
     const dx = posX(ctx, handles, target) - posX(ctx, handles, self);
     const dy = posY(ctx, handles, target) - posY(ctx, handles, self);
     return distSqLe(dx, dy, radius);

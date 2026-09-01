@@ -100,6 +100,7 @@
               "hasFloorAt",
               "if",
               "isAlive",
+              "maskCovered",
               "max",
               "min",
               "or",

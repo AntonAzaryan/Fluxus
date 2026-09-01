@@ -180,6 +180,16 @@ export interface RenderCostCounters {
    */
   fogMaskTexelsWritten: number;
   /**
+   * Тексели круга обзора, ОТБРОШЕННЫЕ срезом по уровню пола (`mask.ts`, FOW-9):
+   * их клетка строго выше наблюдателя, и света они не получают независимо от
+   * теней. Своя строка, а не молчаливая убыль `fogMaskTexelsWritten`: срез —
+   * отдельная работа (выборка из карты уровней на тексель круга), и по одной
+   * убыли записей его от тени или от порядка наблюдателей не отличить. Ноль в
+   * эталоне читается как «на этой нагрузке высоты в кадре нет вовсе» — сцена
+   * без перепадов, и путь среза на ней не стережётся.
+   */
+  fogMaskTexelsCut: number;
+  /**
    * Тесты «луч бина × линия отрезка» полярной растеризации теней (`mask.ts`,
    * FOW-9, design D3): бины, пройденные при заполнении depth-буфера
    * наблюдателя, суммарно по отобранным в радиус укрытиям. Ось стоимости
@@ -621,6 +631,7 @@ export const COST_COUNTER_STAGES: Readonly<Record<keyof RenderCostCounters, Cost
     fogMaskClearTexels: 'frame',
     fogMaskTexels: 'frame',
     fogMaskTexelsWritten: 'frame',
+    fogMaskTexelsCut: 'frame',
     fogShadowRayTests: 'frame',
     fogShadowTexelTests: 'frame',
     fogMaskSmoothTexels: 'frame',
@@ -675,6 +686,7 @@ export function createCostCounters(): RenderCostCounters {
     fogMaskClearTexels: 0,
     fogMaskTexels: 0,
     fogMaskTexelsWritten: 0,
+    fogMaskTexelsCut: 0,
     fogShadowRayTests: 0,
     fogShadowTexelTests: 0,
     fogMaskSmoothTexels: 0,

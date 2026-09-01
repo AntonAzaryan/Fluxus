@@ -10,6 +10,7 @@ import {
   createTerrainGrid,
   terrainFlagChar,
   terrainLevelChar,
+  terrainStepPassable,
   terrainPrefab,
   FLOOR_COMPONENT,
   TERRAIN_CELL_KINDS,
@@ -23,13 +24,14 @@ const TILE = fixed.fromInt(2);
 
 /**
  * Четыре клетки в ряд: ступенька 0→1 без рампы, потом рампа 1→2 шириной в два
- * ряда, потом дыра в полу.
+ * ряда, потом дыра в полу. Флаг рампы стоит на НИЖНЕЙ клетке перехода 1→2
+ * (TERR-5), поэтому её уровень — 1, а не 2.
  */
 const def: TerrainDef = {
   width: 4,
   height: 2,
   tileSize: TILE,
-  levels: ['0122', '0122'],
+  levels: ['0112', '0112'],
   flags: ['..^_', '..^.'],
 };
 
@@ -54,13 +56,13 @@ describe('ассет террейна (TERR-2, TERR-3)', () => {
     const grid = createTerrainGrid(def);
     expect(grid.width).toBe(4);
     expect(grid.tileSize).toBe(TILE);
-    expect([...grid.levels]).toEqual([0, 1, 2, 2, 0, 1, 2, 2]);
+    expect([...grid.levels]).toEqual([0, 1, 1, 2, 0, 1, 1, 2]);
     expect([...grid.ramps]).toEqual([0, 0, 1, 0, 0, 0, 1, 0]);
     expect([...grid.floor]).toEqual([1, 1, 1, 0, 1, 1, 1, 1]);
   });
 
   it('отвергает уровень в нижнем регистре', () => {
-    expect(() => createTerrainGrid({ ...def, levels: ['012a', '0122'] })).toThrow(/TERR-3/);
+    expect(() => createTerrainGrid({ ...def, levels: ['011a', '0112'] })).toThrow(/TERR-3/);
   });
 
   it('отвергает карты, переставленные местами', () => {
@@ -68,7 +70,7 @@ describe('ассет террейна (TERR-2, TERR-3)', () => {
   });
 
   it('отвергает рваную сетку', () => {
-    expect(() => createTerrainGrid({ ...def, levels: ['0122', '012'] })).toThrow(/TERR-2/);
+    expect(() => createTerrainGrid({ ...def, levels: ['0112', '011'] })).toThrow(/TERR-2/);
     expect(() => createTerrainGrid({ ...def, flags: ['..^_'] })).toThrow(/TERR-2/);
   });
 
@@ -93,16 +95,17 @@ describe('ассет террейна (TERR-2, TERR-3)', () => {
   });
 
   it('принимает угловую рампу: ширина есть поперёк одного из двух подъёмов (TERR-7)', () => {
-    // У клетки (2, 1) сосед другого уровня есть и по X, и по Y: осей подъёма
-    // две. Поперёк подъёма по X у неё стоит рампа того же уровня (2, 0), и
-    // этого довольно — по широкой стороне переход проходим.
+    // У клетки (1, 1) сосед другого уровня есть и по X, и по Y: осей подъёма
+    // две. Поперёк подъёма по X у неё стоит рампа того же уровня (1, 0), и
+    // этого довольно — по широкой стороне переход проходим. Флаги стоят на
+    // нижних клетках перехода (TERR-5).
     expect(() =>
       createTerrainGrid({
         width: 4,
         height: 3,
         tileSize: TILE,
-        levels: ['0122', '0122', '0011'],
-        flags: ['..^_', '..^.', '....'],
+        levels: ['0011', '0011', '0111'],
+        flags: ['.^..', '.^..', '....'],
       }),
     ).not.toThrow();
   });
@@ -169,6 +172,119 @@ describe('запись карт ассета (TERR-3)', () => {
   });
 });
 
+/**
+ * Сторона флага рампы (TERR-5): флаг принадлежит НИЖНЕЙ клетке перехода,
+ * который он открывает. Карты строятся двумя одинаковыми рядами — рампе нужен
+ * сосед-рампа того же уровня (TERR-7), и горизонтальных границ так не бывает.
+ */
+describe('сторона флага рампы (TERR-5)', () => {
+  const grid = (row: string, flagRow: string) =>
+    createTerrainGrid({
+      width: row.length,
+      height: 2,
+      tileSize: TILE,
+      levels: [row, row],
+      flags: [flagRow, flagRow],
+    });
+
+  it('флаг на нижней клетке перехода — карта валидна', () => {
+    expect(grid('01', '^.').cliffs).toEqual([]);
+  });
+
+  it('флаг на верхней стороне перепада отвергается адресной ошибкой', () => {
+    // Сообщение называет обе клетки и оба уровня: автору карты нужно знать,
+    // какую клетку опустить, а не только что карта плоха.
+    expect(() => grid('01', '.^')).toThrow(
+      /TERR-5: рампа в клетке \(1, 0\) уровня 1 .* сосед \(0, 0\) уровня 0 /,
+    );
+  });
+
+  it('цепочка склона 0→1→2 из двух рамп валидна: нижняя клетка шага — тоже рампа', () => {
+    // Клетка уровня 1 стоит на верхней стороне шага 0→1, но нижняя клетка шага
+    // помечена рампой — переход открыт снизу, и правило соблюдено.
+    expect(grid('012', '^^.').cliffs).toEqual([]);
+  });
+
+  it('терраса «плоская | рампа | плоская» отвергается: шаг 0→1 открыт сверху', () => {
+    expect(() => grid('012', '.^.')).toThrow(/TERR-5/);
+  });
+});
+
+/**
+ * Страж D2 change `ramp-low-ground-visibility`: починка карты — ОПУСКАНИЕ
+ * уровня клетки рампы, а не перенос флага, потому что опускание не двигает
+ * cliff-геометрию. Проверяется на выкройке рампы дуэльной арены (плато уровня 1
+ * с проёмом рампы в поле уровня 0) — не на самом контенте: сцены ядру не видны
+ * (CONT-4), и держит правило форма пары, а не файл.
+ *
+ * Сравниваются не сами отрезки, а то, из чего их строит `buildCliffs`:
+ * проходимость границы (`terrainStepPassable`) и уровни её сторон. Карта «до»
+ * загрузку уже не проходит — построить её `createTerrainGrid`'ом нельзя, а
+ * входы вывода геометрии у неё те же самые.
+ */
+describe('опускание уровня рампы не двигает cliff-геометрию (TERR-5)', () => {
+  /** Выкройка 5×6: плато уровня 1 слева, поле уровня 0 справа, рампа в колонке 2. */
+  const before = {
+    levels: ['11000', '11100', '11100', '11100', '11100', '11000'],
+    flags: ['.....', '..^..', '..^..', '..^..', '..^..', '.....'],
+  };
+  /** Та же выкройка после починки: у клеток рампы уровень нижней стороны. */
+  const after = {
+    levels: ['11000', '11000', '11000', '11000', '11000', '11000'],
+    flags: before.flags,
+  };
+
+  /** Уровни и флаги выкройки в тех же массивах, что читает вывод геометрии. */
+  const arrays = (map: { levels: readonly string[]; flags: readonly string[] }) => {
+    const width = map.levels[0]!.length;
+    const cells = width * map.levels.length;
+    const levels = new Uint8Array(cells);
+    const ramps = new Uint8Array(cells);
+    for (let y = 0; y < map.levels.length; y++) {
+      for (let x = 0; x < width; x++) {
+        levels[y * width + x] = Number(map.levels[y]![x]!);
+        ramps[y * width + x] = map.flags[y]![x] === '^' ? 1 : 0;
+      }
+    }
+    return { width, height: map.levels.length, levels, ramps };
+  };
+
+  /**
+   * Входы вывода cliff-геометрии по всем границам пар: проходимость и уровни
+   * сторон в порядке обхода `buildCliffs` (DET-6).
+   */
+  const cliffInputs = (map: { levels: readonly string[]; flags: readonly string[] }) => {
+    const { width, height, levels, ramps } = arrays(map);
+    const out: string[] = [];
+    for (let y = 0; y < height; y++) {
+      for (let x = 0; x < width; x++) {
+        const i = y * width + x;
+        for (const j of [x + 1 < width ? i + 1 : -1, y + 1 < height ? i + width : -1]) {
+          if (j < 0) continue;
+          const passable = terrainStepPassable(levels, ramps, i, j);
+          out.push(`${i}-${j}: ${passable ? 'проход' : `обрыв ${levels[i]!}/${levels[j]!}`}`);
+        }
+      }
+    }
+    return out;
+  };
+
+  it('карта «до» правки загрузку не проходит, карта «после» — проходит', () => {
+    expect(() =>
+      createTerrainGrid({ width: 5, height: 6, tileSize: TILE, ...before }),
+    ).toThrow(/TERR-5/);
+    expect(() =>
+      createTerrainGrid({ width: 5, height: 6, tileSize: TILE, ...after }),
+    ).not.toThrow();
+  });
+
+  it('проходимость и уровни сторон у всех границ те же', () => {
+    expect(cliffInputs(after)).toEqual(cliffInputs(before));
+    // Анти-вакуумность: карты действительно разные — уровень клетки рампы упал.
+    expect(after.levels).not.toEqual(before.levels);
+  });
+});
+
 describe('cliff-геометрия (TERR-5)', () => {
   /** Два одинаковых ряда: рампа получает соседа того же уровня (TERR-7), горизонтальных границ нет. */
   const edges = (row: string, flagRow: string) =>
@@ -192,7 +308,8 @@ describe('cliff-геометрия (TERR-5)', () => {
   });
 
   it('перепад в единицу с рампой проходим', () => {
-    expect(edges('01', '.^')).toEqual([]);
+    // Флаг — на нижней клетке пары (TERR-5): на верхней он был бы отвергнут.
+    expect(edges('01', '^.')).toEqual([]);
   });
 
   it('перепад больше единицы непроходим даже с рампами', () => {
@@ -293,7 +410,7 @@ describe('запросы террейна (TERR-4)', () => {
     const actor = spawn(world, 'Actor');
     expect(terrain!.levelOf(actor)).toBe(0);
     setField(world, actor, 'Position', 'x', at(2, 0).x);
-    expect(terrain!.levelOf(actor)).toBe(2);
+    expect(terrain!.levelOf(actor)).toBe(1);
   });
 
   it('override уровня приоритетнее производного значения (ARENA-6)', () => {
