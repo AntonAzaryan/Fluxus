@@ -1,8 +1,9 @@
 #!/usr/bin/env node
 // PreToolUse-гард на Bash: ловит shell-обход файловых гардов guard-generated.mjs
 // (sed -i, редирект, mv/rm/tee по защищённым путям — словарь общий,
-// guardRules.mjs) и установку runtime-зависимости в ядро (npm i <pkg> в
-// engine/core-ts без -D): у ядра ноль runtime-зависимостей.
+// guardRules.mjs), установку runtime-зависимости в ядро (npm i <pkg> в
+// engine/core-ts без -D): у ядра ноль runtime-зависимостей, — и обход
+// клиентского pre-push гейта (scripts/git-hooks/pre-push) при git push.
 //
 // Это эвристика по тексту команды, а не парсер bash: она обязана не мешать
 // чтению (cat/grep/diff по эталонам легальны) и потому режет только команды,
@@ -48,6 +49,25 @@ for (const segment of segments) {
     if (rule && segmentWritesTo(segment, token)) {
       emitPreToolUseDecision(rule.decision, `Команда выглядит как запись в защищённый файл (${token}). ${rule.reason}`);
     }
+  }
+}
+
+// Обход pre-push гейта: --no-verify отключает клиентские хуки, -c
+// core.hooksPath=… подменяет их каталог. Гейт клиентский и единственный
+// (scripts/git-hooks/pre-push, npm run check перед пушем в main), поэтому
+// обход — решение человека, не агента: ask, не deny.
+for (const segment of segments) {
+  if (!/\bgit\b[^]*\bpush\b/.test(segment)) continue;
+  const bypass = /(^|\s)--no-verify(\s|=|$)/.test(segment)
+    ? '--no-verify'
+    : /\bcore\.hooksPath\b/.test(segment)
+      ? 'подмена core.hooksPath'
+      : null;
+  if (bypass) {
+    emitPreToolUseDecision(
+      'ask',
+      `git push с обходом клиентского pre-push гейта (${bypass}): пуш в main обязан пройти npm run check (scripts/git-hooks/pre-push) — других ворот у репозитория нет. Обход — осознанное решение человека.`,
+    );
   }
 }
 

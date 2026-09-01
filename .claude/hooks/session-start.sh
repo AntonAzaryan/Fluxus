@@ -44,7 +44,15 @@ if [ -f "$REPO_ROOT/package.json" ]; then
   npm install --prefix "$REPO_ROOT" --no-fund --no-audit
 fi
 
-# 4. Санити-чек: спеки читаются.
+# 4. Клиентский pre-push гейт (scripts/git-hooks/pre-push): пуш в main требует
+#    зелёного npm run check. Раннеров нет, гейт клиентский — это включение
+#    и есть весь «сервер».
+if [ -d "$REPO_ROOT/.git" ]; then
+  git -C "$REPO_ROOT" config core.hooksPath scripts/git-hooks
+  echo "pre-push гейт включён (core.hooksPath=scripts/git-hooks)"
+fi
+
+# 5. Санити-чек: спеки читаются.
 if [ -d "$REPO_ROOT/openspec" ]; then
   ( cd "$REPO_ROOT" && openspec list --specs >/dev/null && echo "OpenSpec видит спеки в openspec/ ✓" )
 fi
