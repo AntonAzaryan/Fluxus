@@ -9,8 +9,13 @@
  * `System` не обходит: читает через `SystemContext`, пишет только через
  * `ctx.commands` (TICK-3, CMD-4).
  *
- * Опциональные зависимости (DI-3): без `ctx.physics` укрытия не отсекают, без
- * `ctx.terrain` не отсекает высота — сцена без них тикает штатно.
+ * Опциональная зависимость (DI-3) здесь одна: без `ctx.physics` укрытия не
+ * отсекают — сцена без физики тикает штатно. Террейн опциональной для ЭТОЙ
+ * системы не является: фильтр по высоте (FOW-5) спрашивает уровень сущности у
+ * террейна, и «уровня нет» означало бы молчаливо выключенный фильтр — с виду
+ * исправную FoW, отличающуюся от настоящей только на сценах с перепадом высот
+ * (`serialization` SER-7). Прогон, включивший пересчёт видимости в сцене без
+ * террейна, отвергает сборка (`sim/build.ts`, FOW-5).
  *
  * Диапазон: `withinRadius` считает квадраты расстояний точной 64-битной
  * арифметикой, а вот `raycast` — нет, и там действует предел ~181 единицы
@@ -18,6 +23,7 @@
  * ставить нельзя.
  */
 import * as fixed from '../math/fixed.js';
+import { componentSchema } from '../ecs/world.js';
 import { BLOCKS_VISION } from './physics.js';
 import { optionalComponentHandle } from './optionalHandle.js';
 import {
@@ -30,7 +36,9 @@ import {
   type ModifierList,
   type System,
   type SystemContext,
+  type TerrainApi,
   type Vec2,
+  type WorldState,
 } from '../types.js';
 
 export const VISION_COMPONENT = 'Vision';
@@ -77,6 +85,16 @@ export const VISION_MODIFIER_COMPONENT = 'VisionModifier';
  */
 export function fowComponents(modifiers: ModifierList): readonly ComponentSchema[] {
   return [VISION_SCHEMA, VISIBILITY_SCHEMA, STEALTH_SCHEMA, TEAM_SCHEMA, modifiers.schema];
+}
+
+/**
+ * Объявлен ли миром компонент видимости — то есть есть ли пересчёту что считать
+ * (FOW-5). Схема компонента — факт сцены, известный до первого тика, поэтому
+ * сборка решает по ней, а не по составу мира на каком-то тике: компоненты
+ * объявляются один раз загрузчиком (SER-7), и новых по ходу матча не заводится.
+ */
+export function visibilityDeclared(world: WorldState): boolean {
+  return componentSchema(world, VISIBILITY_COMPONENT) !== undefined;
 }
 
 /** Клампы стакинга модификаторов обзора (FOW-3): сырой Q16.16 — от слепоты до 4.0. */
@@ -185,6 +203,17 @@ export class VisibilitySystem implements System {
     const targets = ctx.query({ all: [VISIBILITY_COMPONENT, POSITION_COMPONENT] });
     if (targets.length === 0) return;
     const h = (this.handles ??= resolveHandles(ctx));
+    // FOW-5: фолбэка «уровней нет» у фильтра по высоте не существует, поэтому
+    // считать без террейна система не вправе. Сюда доходит только сборка,
+    // собранная мимо `buildSimulation`: та отвергает такой прогон до первого
+    // тика, и это единственная точка, где правило живёт нормой.
+    const terrain = ctx.terrain;
+    if (terrain === undefined) {
+      throw new Error(
+        'FOW-5: пересчёт видимости включён в сцене без террейна — ' +
+          'фильтру по высоте не у кого спросить уровень сущности (TERR-4, SER-7)',
+      );
+    }
 
     // Собственная команда видит свою сущность всегда, в том числе под стелсом
     // (FOW-3, NET-15) — с этого маска и начинается, а не с нуля.
@@ -193,7 +222,7 @@ export class VisibilitySystem implements System {
 
     const observers = ctx.query({ all: [VISION_COMPONENT, TEAM_COMPONENT, POSITION_COMPONENT] });
     for (const observer of observers) {
-      markSeenBy(ctx, h, observer, this.modifiers, next);
+      markSeenBy(ctx, h, terrain, observer, this.modifiers, next);
     }
 
     // FOW-6: команда эмитится только при фактическом изменении битов — иначе
@@ -214,6 +243,7 @@ export class VisibilitySystem implements System {
 function markSeenBy(
   ctx: SystemContext,
   h: VisibilityHandles,
+  terrain: TerrainApi,
   observer: EntityId,
   modifiers: ModifierList,
   next: Map<EntityId, number>,
@@ -221,7 +251,9 @@ function markSeenBy(
   // Наблюдатель отобран запросом по `Team`: сторона у него есть заведомо.
   const bit = teamBit(ctx.getByHandle(observer, h.team!.id));
   const from = positionOf(ctx, h, observer);
-  const level = ctx.terrain?.levelOf(observer);
+  // FOW-5: уровень СУЩНОСТИ, а не уровень точки под ней — у прыгающего и
+  // летящего это разные вещи (LOC-5, ARENA-6).
+  const level = terrain.levelOf(observer);
 
   const candidates = ctx.query({
     all: [VISIBILITY_COMPONENT, POSITION_COMPONENT],
@@ -234,7 +266,7 @@ function markSeenBy(
     if (mask === undefined || (mask & bit) !== 0) continue;
     if (isHidden(ctx, h, candidate)) continue;
     // FOW-5: строго выше — не видно; обратное направление не ограничено.
-    if (level !== undefined && ctx.terrain!.levelOf(candidate) > level) continue;
+    if (terrain.levelOf(candidate) > level) continue;
     if (!hasLineOfSight(ctx, h, observer, from, candidate, level)) continue;
     next.set(candidate, mask | bit);
   }
@@ -278,7 +310,7 @@ function hasLineOfSight(
   observer: EntityId,
   from: Vec2,
   candidate: EntityId,
-  elevation: number | undefined,
+  elevation: number,
 ): boolean {
   if (ctx.physics === undefined) return true;
   const hit = ctx.physics.raycast(from, positionOf(ctx, h, candidate), {
@@ -287,7 +319,7 @@ function hasLineOfSight(
     // Уровень наблюдателя — тот же, что в фильтре по высоте (TERR-4): рёбра
     // своего уровня и ниже луч не перекрывают (PHYS-13) — видно и вниз, и на
     // плато того же уровня через низину.
-    ...(elevation !== undefined ? { elevation } : {}),
+    elevation,
   });
   // Луч упёрся в саму цель — она не перекрыта: собственный коллайдер цели
   // укрытием для неё не является (PHYS-6 исключает только источник).

@@ -158,36 +158,81 @@ function readMap(
 }
 
 /**
- * TERR-7: одиночная клетка-рампа запрещена — на ней агент клинит.
+ * TERR-7: рампа уже двух клеток запрещена — на ней агент клинит. Ширина
+ * меряется ПОПЕРЁК подъёма, и в этом вся проверка.
  *
- * ponytail: проверяется необходимое условие «есть соседняя рампа того же
- * уровня», а не полная ширина перехода: направление подъёма из карты не
- * выводится без разбора связных групп. Полная проверка — вместе с навигацией,
- * которая и задаёт диаметр агента (TERR-7).
+ * Ось подъёма клетки-рампы — та, вдоль которой у неё есть сосед другого уровня:
+ * по ней агент и переходит с уровня на уровень. Ширина перехода — соседняя
+ * клетка-рампа ТОГО ЖЕ уровня по перпендикулярной оси; соседняя рампа другого
+ * уровня шириной не является, она следующая ступень того же подъёма. Две рампы
+ * одного уровня, стоящие друг за другом по направлению подъёма, — по-прежнему
+ * дорожка в одну клетку, и здесь она отвергается.
+ *
+ * Осей подъёма может быть две: угловая рампа заводит на плато и вбок, и вперёд.
+ * Достаточно ширины поперёк одной из них — по широкой стороне такая рампа
+ * проходима, и требовать ширины по обеим значило бы отвергнуть штатную
+ * геометрию (рампа в углу площадки). Осей может не быть ни одной: флаг рампы на
+ * ровном месте перехода не образует, поперечной для него считается любая ось.
  */
 function validateRampWidth(grid: TerrainGrid): void {
-  const { width, height, ramps, levels } = grid;
+  const { width, height, ramps } = grid;
   for (let y = 0; y < height; y++) {
     for (let x = 0; x < width; x++) {
-      const i = y * width + x;
-      if (!ramps[i]) continue;
-      const wide = neighbours(x, y, width, height).some(
-        (j) => ramps[j] === 1 && levels[j] === levels[i],
+      if (ramps[y * width + x] !== 1) continue;
+      const axes = rampAxes(grid, x, y);
+      if (rampWideEnough(axes)) continue;
+      const across = (axes & (RISE_X | RISE_Y)) === 0 ? '' : ' поперёк подъёма';
+      throw new Error(
+        `TERR-7: рампа в клетке (${x}, ${y}) уже двух клеток${across} — агенты застрянут`,
       );
-      if (!wide) {
-        throw new Error(`TERR-7: рампа в клетке (${x}, ${y}) уже двух клеток — агенты застрянут`);
-      }
     }
   }
 }
 
-function neighbours(x: number, y: number, width: number, height: number): number[] {
-  const out: number[] = [];
-  if (x > 0) out.push(y * width + x - 1);
-  if (x + 1 < width) out.push(y * width + x + 1);
-  if (y > 0) out.push((y - 1) * width + x);
-  if (y + 1 < height) out.push((y + 1) * width + x);
-  return out;
+/** Биты разбора соседей клетки-рампы по осям (TERR-7): подъём и ширина. */
+const RISE_X = 1;
+const RISE_Y = 2;
+const WIDE_X = 4;
+const WIDE_Y = 8;
+
+/**
+ * Четыре соседа клетки-рампы, разобранные по осям: сосед ДРУГОГО уровня даёт
+ * подъём по своей оси, соседняя рампа ТОГО ЖЕ уровня — ширину по ней. Список
+ * соседей теряет ровно то, на чём стоит правило, — ось, по которой сосед стоит.
+ */
+function rampAxes(grid: TerrainGrid, x: number, y: number): number {
+  const level = grid.levels[y * grid.width + x]!;
+  return (
+    neighbourAxis(grid, level, x - 1, y, RISE_X, WIDE_X) |
+    neighbourAxis(grid, level, x + 1, y, RISE_X, WIDE_X) |
+    neighbourAxis(grid, level, x, y - 1, RISE_Y, WIDE_Y) |
+    neighbourAxis(grid, level, x, y + 1, RISE_Y, WIDE_Y)
+  );
+}
+
+/** Вклад одного соседа: за краем сетки соседа нет, и подъёма с шириной он не даёт. */
+function neighbourAxis(
+  grid: TerrainGrid,
+  level: number,
+  x: number,
+  y: number,
+  rise: number,
+  wide: number,
+): number {
+  const { width, height, ramps, levels } = grid;
+  if (x < 0 || x >= width || y < 0 || y >= height) return 0;
+  const j = y * width + x;
+  if (levels[j] !== level) return rise;
+  return ramps[j] === 1 ? wide : 0;
+}
+
+/** TERR-7: ширина считается поперёк подъёма; без подъёма годится любая ось. */
+function rampWideEnough(axes: number): boolean {
+  if ((axes & (RISE_X | RISE_Y)) === 0) return (axes & (WIDE_X | WIDE_Y)) !== 0;
+  return (
+    ((axes & RISE_X) !== 0 && (axes & WIDE_Y) !== 0) ||
+    ((axes & RISE_Y) !== 0 && (axes & WIDE_X) !== 0)
+  );
 }
 
 /**

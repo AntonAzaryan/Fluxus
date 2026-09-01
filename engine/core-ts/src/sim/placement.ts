@@ -12,14 +12,15 @@
  * Все три документа приходят сюда одним путём: конфиг сцены — через
  * `loadScene`, сценарий и конфиг матча — через `buildSimulation`. Отдельного
  * разбора расстановки в сетевом слое нет, и потому проверки этого модуля
- * (запись — объект, `prefab` — непустая строка, номер записи в сообщении)
- * действуют и на недоверенный конфиг матча.
+ * (запись — объект, `prefab` — непустая строка, диапазон `support` арены,
+ * номер записи в сообщении) действуют и на недоверенный конфиг матча.
  *
  * Мутирующей поверхности ядра этот модуль не расширяет: расстановку применяют
  * загрузчик сцены и сборка симуляции до первого тика (TICK-3, исключение
  * `worldInit`), а наружу из `index.ts` уходит только тип записи.
  */
 import { spawn } from '../ecs/world.js';
+import { checkArenaSupportOverride } from '../systems/arena.js';
 import type { FieldOverrides, WorldState } from '../types.js';
 
 /**
@@ -70,6 +71,10 @@ export function applyPlacement(
     if (typeof entry.prefab !== 'string' || entry.prefab === '') {
       throw new Error(`${at}: "prefab" — непустая строка (SER-8)`);
     }
+    // Диапазон `support` (ARENA-3): `spawn` проверяет представимость значения в
+    // типе поля (CMD-6), а «доля вне [0, 1]» — правило арены, и живёт оно там.
+    // Здесь оно спрашивается один раз на все три документа расстановки (SER-8).
+    checkArenaSupportOverride(entry.overrides, `${at} ("${entry.prefab}")`);
     try {
       spawn(world, entry.prefab, entry.overrides);
     } catch (error) {
