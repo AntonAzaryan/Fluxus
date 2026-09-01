@@ -76,7 +76,14 @@ function apply(action: string, args: readonly string[]): void {
       // Все шесть параметров запуска (SRV-2) приезжают из ФОРМЫ: перевод полей
       // в параметры живёт в `src/launch.ts` и проверяется тестом — здесь только
       // передача, как и во всём этом файле.
-      void session.start(target, startParamsOf(fields, session.state.matches[0] ?? ''));
+      const form = startParamsOf(fields, session.state.matches[0] ?? '');
+      // Форма, из которой параметров не собрать, — названный отказ, а не кнопка,
+      // молча ничего не делающая, и не подставленное за человека умолчание.
+      if (form.params === undefined) {
+        session.refuse(form.failure);
+        return;
+      }
+      void session.start(target, form.params);
       return;
     }
     case 'stop':

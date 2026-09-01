@@ -132,6 +132,13 @@ export interface ManagerSession {
   admin(hostId: string, serverId: string, op: AdminOp, slot?: number): Promise<void>;
   /** Выбрать хост, на который нацелена форма запуска (MGR-2). */
   setLaunchHost(hostId: string): void;
+  /**
+   * Назвать причину отказа, до протокола НЕ доехавшего: форма запуска заполнена
+   * так, что параметров из неё не собрать (MGR-2). Отказ обязан быть наблюдаем
+   * с названной причиной (SRV-2) независимо от того, на каком слое он случился, —
+   * иначе нажатая кнопка просто ничего не делает.
+   */
+  refuse(reason: string): void;
   setKillOnExit(on: boolean): void;
   /** Закрытие менеджера (MGR-4): политика завершения исполняется здесь. */
   closing(): Promise<void>;
@@ -477,6 +484,10 @@ export function createManagerSession(options: ManagerSessionOptions): ManagerSes
     },
     setLaunchHost(hostId) {
       launchChoice = hostId;
+      changed();
+    },
+    refuse(reason) {
+      notice = reason;
       changed();
     },
     setKillOnExit(on) {

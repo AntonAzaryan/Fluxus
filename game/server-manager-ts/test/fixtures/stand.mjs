@@ -57,6 +57,10 @@ const report = () => {
 
 createServer((socket) => { socket.end(); }).listen(port, '127.0.0.1');
 process.stdout.write('подставной стенд менеджера поднят\n');
+// Аргументы запуска — обычной строкой лога (без маркера управляющей линии):
+// только по ней тест видит, ЧТО агент передал стенду, — параметры запуска
+// (SRV-2) в записи реестра не отражаются.
+process.stdout.write(`аргументы: ${process.argv.slice(2).join(' ')}\n`);
 emit({ t: 'ready', port, players, buildId: 'manager-build', contentPackHash: 'manager-hash' });
 
 let pending = '';

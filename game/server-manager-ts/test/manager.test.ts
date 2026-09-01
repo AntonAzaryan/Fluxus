@@ -47,7 +47,12 @@ afterEach(async () => {
   for (const tree of trees.splice(0)) rmSync(tree, { recursive: true, force: true });
 });
 
-async function liveAgent(matchDocs: readonly string[] = ['duel', 'training']): Promise<Agent> {
+/**
+ * Каталог агента: дерево контента и каталог состояния. Отдельно от самого
+ * агента, потому что ВТОРОЙ агент на том же каталоге — это перезапуск агента
+ * (решение D5), и его серверы он находит по книге процессов.
+ */
+function agentHome(matchDocs: readonly string[] = ['duel', 'training']): string {
   const root = mkdtempSync(join(tmpdir(), 'fluxus-manager-'));
   trees.push(root);
   const contentRoot = join(root, 'content');
@@ -55,18 +60,26 @@ async function liveAgent(matchDocs: readonly string[] = ['duel', 'training']): P
   for (const name of matchDocs) {
     writeFileSync(join(contentRoot, 'matches', `${name}.match.json`), `{"name":"${name}"}\n`);
   }
+  return root;
+}
+
+async function agentOn(root: string): Promise<Agent> {
   const agent = await startAgent({
     controlPort: 0,
     httpPort: 0,
     host: '127.0.0.1',
     stateDir: join(root, 'state'),
     standScript: STAND,
-    contentRoot,
+    contentRoot: join(root, 'content'),
     bundleDir: '',
     versions: { buildId: 'host-build', contentPackHash: 'host-hash', distribution: 'test' },
   });
   agents.push(agent);
   return agent;
+}
+
+function liveAgent(matchDocs: readonly string[] = ['duel', 'training']): Promise<Agent> {
+  return agentOn(agentHome(matchDocs));
 }
 
 function manager(storage: PageStorage = memoryStorage()): ManagerSession {
@@ -390,7 +403,7 @@ describe('форма запуска отдаёт все параметры за�
     // Пустая форма: документ — показанное умолчание, порт «авто», а остальное
     // решает стенд. Ноль вместо `null` у дедлайна означал бы «заполнить ботами
     // немедленно» — не то же самое, что «как решит стенд» (BOT-7).
-    expect(startParamsOf(new Map(), 'matches/duel.match.json')).toEqual({
+    expect(startParamsOf(new Map(), 'matches/duel.match.json').params).toEqual({
       match: 'matches/duel.match.json',
       port: 0,
       bot: '',
@@ -409,7 +422,7 @@ describe('форма запуска отдаёт все параметры за�
       [LAUNCH_FIELDS.onDisconnect, 'pause'],
       [LAUNCH_FIELDS.autoRestart, 'no'],
     ]);
-    expect(startParamsOf(filled, 'matches/duel.match.json')).toEqual({
+    expect(startParamsOf(filled, 'matches/duel.match.json').params).toEqual({
       match: 'matches/training.match.json',
       port: 8081,
       bot: 'bots/normal.json',
@@ -417,6 +430,30 @@ describe('форма запуска отдаёт все параметры за�
       onDisconnect: 'pause',
       autoRestart: false,
     });
+  });
+
+  it('непонятое поле — названный отказ, а не подставленное умолчание (MGR-2, SRV-2)', async () => {
+    // «Пусто» и «введено неверно» — разные вещи: свести вторую к первой значит
+    // поднять сервер не там, где просил человек. Ровно это молчаливое
+    // переназначение отвергает и агент — занятый порт он называет отказом, а не
+    // переезжает на свободный.
+    for (const bad of ['808l', '70000', '-1', '1e3']) {
+      const form = startParamsOf(new Map([[LAUNCH_FIELDS.port, bad]]), 'matches/duel.match.json');
+      expect(form.params).toBeUndefined();
+      expect(form.failure).toContain(bad);
+    }
+    const deadline = startParamsOf(new Map([[LAUNCH_FIELDS.botFill, 'скоро']]), 'matches/duel.match.json');
+    expect(deadline.params).toBeUndefined();
+    expect(deadline.failure).toContain('дедлайн');
+
+    // И причина доезжает до человека тем же путём, что отказы агента (SRV-2).
+    const agent = await liveAgent();
+    const session = manager();
+    await session.addLocal(agent.controlUrl, agent.tokens.issueCode(Date.now()), '');
+    session.refuse(startParamsOf(new Map([[LAUNCH_FIELDS.port, '808l']]), '').failure);
+    expect(nodesOf(managerView(session.state), 'mg-notice')[0]?.text).toContain('808l');
+    // Сервер при этом не поднялся: отказ — это отказ, а не запуск с умолчанием.
+    expect(agent.registry.list()).toEqual([]);
   });
 
   it('выключенный авто-рестарт доезжает до агента параметром запуска', async () => {
@@ -429,9 +466,22 @@ describe('форма запуска отдаёт все параметры за�
       [LAUNCH_FIELDS.autoRestart, 'no'],
       [LAUNCH_FIELDS.onDisconnect, 'hold'],
     ]);
-    await session.start(host, startParamsOf(chosen, ''));
+    await session.start(host, startParamsOf(chosen, '').params!);
     expect(session.state.notice).toBe('');
     expect(agent.registry.list()).toHaveLength(1);
+
+    // Запись реестра ни авто-рестарта, ни политики разрыва не несёт, поэтому
+    // утверждение держится единственным доступным наблюдением — тем, ЧТО агент
+    // передал стенду: `--once` (авто-рестарт выключен) и `--on-disconnect hold`.
+    // Без него тест утверждал бы лишь «сервер поднялся».
+    const server = session.state.servers[0]!.entry.id;
+    await session.select(host, server);
+    expect(
+      await until(() => (session.state.details?.log.join(' ') ?? '').includes('аргументы:')),
+    ).toBe(true);
+    const log = session.state.details!.log.join(' ');
+    expect(log).toContain('--once');
+    expect(log).toContain('--on-disconnect hold');
   });
 });
 
@@ -797,5 +847,47 @@ describe('детали упавшего сервера открываются (M
     // Админ-операции над ушедшим процессом недоступны кнопкой, а не отказом
     // после нажатия (SRV-5).
     expect(walk(view).find((item) => item.action === 'pause')?.disabled).toBe(true);
+  });
+
+  it('сервер, переживший прежнего агента: детали открыты, админ-операции — нет (MGR-3, SRV-5)', async () => {
+    // Второй производитель отказа `not-running`: процесс ЖИВ и держит порт,
+    // поэтому запись числится `listening`, — но stdio ушло вместе с прежним
+    // агентом, и ни одна админ-операция до него не доходит. Судить о доступности
+    // операций по одному состоянию процесса поэтому нельзя.
+    const home = agentHome();
+    const first = await agentOn(home);
+    const before = manager();
+    await before.addLocal(first.controlUrl, first.tokens.issueCode(Date.now()), '');
+    await before.start(before.state.hosts[0]!.id, params());
+    const server = before.state.servers[0]!.entry.id;
+    before.close();
+    // Агент уходит, сервер — нет: процессы серверов не его зависимость (D5).
+    await first.close();
+
+    const second = await agentOn(home);
+    expect(second.survivors.map((entry) => entry.id)).toEqual([server]);
+    const session = manager();
+    await session.addLocal(second.controlUrl, second.tokens.issueCode(Date.now()), '');
+    const host = session.state.hosts[0]!.id;
+
+    await session.select(host, server);
+    expect(session.state.notice).toBe('');
+    expect(session.state.details?.entry.state).toBe('listening');
+
+    const view = managerView(session.state);
+    // Материалов разбора у него нет и быть не должно: процесс не выходил, и
+    // строка «код выхода: —» сообщала бы о крахе, которого не случилось (SRV-6).
+    expect(nodesOf(view, 'mg-details__postmortem')).toEqual([]);
+    // А причина, по которой детали неполны, названа — и названа его словами.
+    expect(nodesOf(view, 'mg-details__limited')[0]?.text).toContain('пережил прежнего агента');
+    // Кнопка админ-операции над матчем недоступна: агент откажет ей ВСЕГДА, и
+    // обещать её человеку значило бы обещать отказ (SRV-5). Ищется она внутри
+    // ДЕТАЛЕЙ и по классу: фазы матча у пережившего сервера нет (отчёт от него
+    // больше не приходит), поэтому называется она «возобновить», а не «пауза».
+    const panel = nodesOf(view, 'mg-details')[0]!;
+    expect(nodesOf(panel, 'mg-action--primary')[0]?.disabled).toBe(true);
+    // Слотов у него нет вовсе: ростер приезжал линией `ready` прежнего процесса,
+    // и выдумывать его агент не станет — перечень пуст, а не заполнен догадками.
+    expect(nodesOf(panel, 'mg-slot')).toEqual([]);
   });
 });

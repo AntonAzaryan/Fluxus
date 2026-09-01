@@ -21,7 +21,7 @@
  * дизайна), и https-страница не смогла бы к нему подключиться из-за mixed
  * content. Шифруется управляющий канал (SRV-3), а не страница игрока.
  */
-import { createReadStream, existsSync, readdirSync, statSync } from 'node:fs';
+import { createReadStream, existsSync, readdirSync, statSync, type Dirent } from 'node:fs';
 import { createServer, type Server } from 'node:http';
 import { join, normalize, resolve, sep } from 'node:path';
 
@@ -151,20 +151,27 @@ function layerFile(layers: readonly string[], pathname: string): string | undefi
  * первым слоем, и совпадение имён означает, что каждый такой запрос ассета
  * получит снимок из бандла вместо живого дерева дистрибутива (SRV-8).
  *
- * Сравниваются именно имена верхнего уровня: копия дерева попадает в бандл
- * целиком (`publicDir` сборки страницы), и её признак — каталоги `scenes`,
- * `matches`, `visuals` рядом с `index.html`. Каталог, которого нет, ничего не
- * заслоняет, а нечитаемый — не повод падать вместо раздачи.
+ * Сравниваются КАТАЛОГИ верхнего уровня: копия дерева попадает в бандл целиком
+ * (`publicDir` сборки страницы), и её признак — каталоги `scenes`, `matches`,
+ * `visuals` рядом с `index.html`. Одинокий одноимённый ФАЙЛ признаком не
+ * является и заслонять вправе: ради этого слои и упорядочены. Каталог, которого
+ * нет, ничего не заслоняет, а нечитаемый — не повод падать вместо раздачи.
  */
 export function contentShadowedBy(bundleDir: string, contentRoot: string): readonly string[] {
   if (bundleDir === '') return [];
-  let names: readonly string[];
+  let entries: readonly Dirent[];
   try {
-    names = readdirSync(contentRoot);
+    entries = readdirSync(contentRoot, { withFileTypes: true });
   } catch {
     return [];
   }
-  return names.filter((name) => existsSync(join(bundleDir, name)));
+  return entries
+    .filter(
+      (entry) =>
+        entry.isDirectory() &&
+        statSync(join(bundleDir, entry.name), { throwIfNoEntry: false })?.isDirectory() === true,
+    )
+    .map((entry) => entry.name);
 }
 
 export async function startHttpServe(options: HttpServeOptions): Promise<HttpServe> {

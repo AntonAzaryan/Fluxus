@@ -25,7 +25,7 @@
  * Запуск: `npm run pack -w @fluxus/desktop-shell -- game [--stage] [--linux dir]`
  */
 import { spawnSync } from 'node:child_process';
-import { cpSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { cpSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -38,13 +38,31 @@ const argv = process.argv.slice(2);
 // всё остальное уезжает упаковщику как есть — включая значения флагов без `=`
 // (`--linux dir`), которые фильтр «только с дефисом» молча терял бы.
 const appIndex = argv.findIndex((arg) => !arg.startsWith('-'));
-const app = appIndex === -1 ? 'game' : argv[appIndex];
 const stageOnly = argv.includes('--stage');
 const passthrough = argv.filter((arg, index) => index !== appIndex && arg !== '--stage');
+
+/** Профили, которые вообще есть: перечень читается из каталога, а не из списка здесь. */
+const profileNames = () =>
+  readdirSync(join(PACKAGE, 'apps'))
+    .filter((name) => name.endsWith('.app.json'))
+    .map((name) => name.slice(0, -'.app.json'.length))
+    .sort();
+
+// Профиль НАЗЫВАЕТСЯ явно: умолчания у команды нет. Прежнее умолчание (`game`)
+// объявляет сервис, поэтому голая команда всегда кончалась отказом раскладки —
+// «отказ по умолчанию» неотличим от сломанной сборки. Что упаковывать, решает
+// человек, а команда лишь перечисляет, из чего выбирать (DSK-1, DSK-5).
+if (appIndex === -1) {
+  console.error('профиль не назван: npm run pack -w @fluxus/desktop-shell -- <профиль> [--stage]');
+  console.error(`профили: ${profileNames().join(', ')}`);
+  process.exit(2);
+}
+const app = argv[appIndex];
 
 const manifestPath = join(PACKAGE, 'apps', `${app}.app.json`);
 if (!existsSync(manifestPath)) {
   console.error(`профиля "${app}" нет: ${manifestPath}`);
+  console.error(`профили: ${profileNames().join(', ')}`);
   process.exit(2);
 }
 const profile = JSON.parse(readFileSync(manifestPath, 'utf8'));
