@@ -10,14 +10,9 @@
 import { describe, expect, it } from 'vitest';
 import { tick as simTick, type SceneDef } from '@fluxus/core';
 import { resolveComposition, type MinimapTerrainSource } from '@fluxus/hud';
-import type { AssetService, VisualManifest } from '@fluxus/assets';
+import { AssetService, type VisualManifest } from '@fluxus/assets';
 import { RemoteHost, WorkerShell } from '@fluxus/client';
-import {
-  HOLD_ONLY_ABILITIES,
-  createDemoHudRegistry,
-  demoHudComposition,
-  markHoldOnlyAbilities,
-} from '../app/hud.js';
+import { createDemoHudRegistry, demoHudComposition } from '../app/hud.js';
 import demoBindings from '../app/bindings.json';
 import { createDemoExtractor } from '../app/extractor.js';
 import {
@@ -29,15 +24,20 @@ import {
   createDemoSimulation,
   stateBit,
 } from '../app/sim.js';
+import { DEMO_REWIND } from '../app/match.js';
 import { dummyContext, syncPortPair } from './fixtures.js';
 import sceneJson from '../../../content/scenes/duel.scene.json';
 
 const SCENE = sceneJson as unknown as SceneDef;
 const CAST = 1 << ACTION_BITS.cast;
 
-/** Заглушки швов сборки: реестрам они нужны только чтобы виды создались. */
+/**
+ * Заглушки швов сборки: реестрам они нужны только чтобы виды создались.
+ * `assets` — НАСТОЯЩИЙ сервис поверх пустого источника: иконки панели живут тем
+ * же слоем ассетов, что модели (HUD-4), и подделывать его нечем.
+ */
 const stubOptions = {
-  assets: {} as unknown as AssetService,
+  assets: new AssetService({ read: () => Promise.reject(new Error('дерева контента нет')) }),
   visuals: { entities: {} } as VisualManifest,
   terrain: { terrain: null } as MinimapTerrainSource,
 };
@@ -220,62 +220,60 @@ describe('headless-прогон демо: статы и фаза полёта д
 });
 
 /**
- * Кнопка ульты в панели способностей: она ПОКАЗЫВАЕТ кулдаун, но не кастует —
- * скраб перемотки живёт на удержании клавиши, а контракт действий HUD формы
- * «держу/отпустил» не имеет (HUD-2). Значит она обязана и ВЫГЛЯДЕТЬ нерабочей:
- * живая на вид кнопка, ведущая в `() => undefined`, обещает игроку действие,
- * которого не произойдёт.
+ * Кнопка ульты в панели способностей: она показывает кулдаун И кастуется —
+ * формой «удержание» (HUD-2). Скраб перемотки живёт на удержании органа
+ * управления, и с появлением этой формы у контракта действий HUD кнопка
+ * перестала быть заглушкой: выключенной кнопки с подсказкой «только клавишей»
+ * на её месте больше нет.
  */
 describe('панель способностей не обещает нажатий, которых не выполнит (HUD-2)', () => {
-  /** Фейковая кнопка: пометке нужен только `setAttribute`. */
-  function fakeButton(ability: string): {
-    ability: string;
-    attrs: Record<string, string>;
-    setAttribute(name: string, value: string): void;
-  } {
-    const attrs: Record<string, string> = {};
-    return {
-      ability,
-      attrs,
-      setAttribute(name, value) {
-        attrs[name] = value;
-      },
-    };
-  }
-
-  it('кнопка ульты помечена нерабочей и называет клавишу удержания', () => {
-    const buttons = ['cast', 'rewind'].map(fakeButton);
-    const root = {
-      querySelectorAll: (selector: string) =>
-        buttons.filter((button) => selector.includes(`"${button.ability}"`)),
-    };
-    const marked = markHoldOnlyAbilities(root, demoBindings.keyboardMouse.keys);
-    expect(marked).toEqual([...HOLD_ONLY_ABILITIES]);
-
-    const rewind = buttons.find((button) => button.ability === 'rewind')!;
-    expect(rewind.attrs.disabled).toBe('');
-    expect(rewind.attrs['aria-disabled']).toBe('true');
-    // Клавиша — из той же раскладки, что и весь ввод: второго словаря нет.
-    expect(rewind.attrs.title).toContain('X');
-    expect(rewind.attrs.style).toContain('opacity');
-
-    // Работающие кнопки пометка не трогает: гасится ровно то, что не работает.
-    const cast = buttons.find((button) => button.ability === 'cast')!;
-    expect(cast.attrs).toEqual({});
-  });
-
-  it('помеченная способность всё равно показывает свой кулдаун', () => {
-    // Пометка снимает нажатие, а не запись панели: игрок обязан видеть, сколько
-    // ждать, — иначе ульта исчезла бы из HUD совсем.
+  /** Запись панели по имени способности — из значения композиции. */
+  function abilityRecord(action: string): Record<string, unknown> {
     const composition = demoHudComposition({ controls: true, matchPause: true, tickMs: 16 });
     const cooldowns = composition.entries.find((entry) => entry.widget === 'cooldowns')!;
-    const abilities = cooldowns.params!.abilities as readonly Record<string, string>[];
-    for (const action of HOLD_ONLY_ABILITIES) {
-      const record = abilities.find((ability) => ability.action === action)!;
-      expect(record.stat).toBe(STATS.cooldown(action));
-      expect(record.maxStat).toBe(STATS.cooldownMax(action));
-      // И слот действия у неё объявлен: без него клик валился бы исключением.
-      expect(cooldowns.actions![action]).toBeDefined();
+    const abilities = cooldowns.params!.abilities as readonly Record<string, unknown>[];
+    return abilities.find((ability) => ability.action === action)!;
+  }
+
+  it('ульта отката объявлена формой «удержание» и обычным мировым действием', () => {
+    const rewind = abilityRecord('rewind');
+    // Форма — данные композиции (HUD-2): виджет о смысле способности не знает.
+    expect(rewind.hold).toBe(true);
+    // Действие — мировое, то есть тот же ввод, что от назначенной клавиши;
+    // presentation-заглушки `() => undefined` на его месте больше нет.
+    const registry = createDemoHudRegistry(stubOptions);
+    expect(registry.action('hero.rewind')).toEqual({ target: 'world', action: 'rewind' });
+  });
+
+  it('удерживаемых способностей ровно одна, остальные — фронт', () => {
+    for (const action of COOLDOWN_ABILITIES) {
+      expect(abilityRecord(action).hold).toBe(action === 'rewind');
     }
+  });
+
+  it('помеченная удержанием способность всё равно показывает свой кулдаун', () => {
+    // Форма органа управления не отменяет оверлея: игрок обязан видеть, сколько
+    // ждать.
+    const rewind = abilityRecord('rewind');
+    expect(rewind.stat).toBe(STATS.cooldown('rewind'));
+    expect(rewind.maxStat).toBe(STATS.cooldownMax('rewind'));
+    const composition = demoHudComposition({ controls: true, matchPause: true, tickMs: 16 });
+    const cooldowns = composition.entries.find((entry) => entry.widget === 'cooldowns')!;
+    expect(cooldowns.actions!.rewind).toBeDefined();
+  });
+
+  it('кнопка и клавиша ульты ссылаются на одно действие, а его бит — на бит матча', () => {
+    // Второго словаря «действие → бит» сборка не заводит: кнопка панели и
+    // клавиша раскладки называют одно семантическое имя (INP-4), а бит у имени
+    // один. Проверяется СВЯЗЬ, а не число: номер бита выводится из раскладки
+    // `ACTION_BITS`, и прибивать его константой значило бы ловить не расхождение,
+    // а любую перестановку списка.
+    const keys = demoBindings.keyboardMouse.keys as Readonly<Record<string, string>>;
+    expect(Object.values(keys)).toContain('rewind');
+    expect(abilityRecord('rewind').action).toBe('rewind');
+    // Орган ВЕДЕНИЯ скраба — тот же бит, и его номер называет документ матча
+    // (`rewind.holdButton`): разошлись бы — удержание кнопки кастовало ульту, а
+    // точку остановки не вело (NET-11, REW-13).
+    expect(ACTION_BITS.rewind).toBe(DEMO_REWIND?.holdButton);
   });
 });

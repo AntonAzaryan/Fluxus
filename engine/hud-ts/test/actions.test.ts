@@ -57,6 +57,61 @@ describe('кнопка неотличима от клавиши (HUD-2)', () => 
     expect(fromHud.buttons).toBe(1 << ACTION_BITS.jump);
   });
 
+  it('удержание кнопки даёт тот же кадр, что удержание клавиши (HUD-2)', () => {
+    // Путь клавиши: зажали и не отпускали — бит стоит в каждом кадре подряд.
+    const keySampler = new InputSampler({ actionBits: ACTION_BITS });
+    const keyboard = new KeyboardMouseSource({
+      bindings: {
+        move: { up: 'KeyW', down: 'KeyS', left: 'KeyA', right: 'KeyD' },
+        keys: { Space: 'jump' },
+        pointerButtons: {},
+      },
+    });
+    keySampler.add(keyboard);
+    keyboard.handleKeyDown('Space');
+    const keyFrames = [keySampler.sample(), keySampler.sample()];
+    keyboard.handleKeyUp('Space');
+    keyFrames.push(keySampler.sample());
+
+    // Путь кнопки HUD: та же пара «взял / отпустил» на том же сэмплере.
+    const { registry, facade } = facadeBench();
+    registry.registerAction('jumpButton', { target: 'world', action: 'jump' });
+    const hudSampler = new InputSampler({ actionBits: ACTION_BITS });
+    hudSampler.add(facade);
+    facade.hold('jumpButton');
+    const hudFrames = [hudSampler.sample(), hudSampler.sample()];
+    facade.release('jumpButton');
+    hudFrames.push(hudSampler.sample());
+
+    expect(hudFrames).toEqual(keyFrames);
+    expect(hudFrames.map((frame) => frame.buttons)).toEqual([1 << ACTION_BITS.jump, 1 << ACTION_BITS.jump, 0]);
+  });
+
+  it('снятие фасада с сэмплера гасит удержания (INP-5)', () => {
+    const { registry, facade } = facadeBench();
+    registry.registerAction('jumpButton', { target: 'world', action: 'jump' });
+    const sampler = new InputSampler({ actionBits: ACTION_BITS });
+    sampler.add(facade);
+    facade.hold('jumpButton');
+    expect([...facade.held()]).toEqual(['jump']);
+    sampler.remove(facade);
+    expect([...facade.held()]).toEqual([]);
+  });
+
+  it('удержание команды машины состояний — названная ошибка (HUD-2)', () => {
+    const { registry, facade } = facadeBench();
+    registry.registerAction('pauseButton', { target: 'control', action: 'pause' });
+    facade.start(() => undefined);
+    expect(() => { facade.hold('pauseButton'); }).toThrow('форма мирового действия-ввода');
+    expect(() => { facade.release('pauseButton'); }).toThrow('форма мирового действия-ввода');
+  });
+
+  it('удержание без сэмплера — ошибка, а не тихая потеря', () => {
+    const { registry, facade } = facadeBench();
+    registry.registerAction('jumpButton', { target: 'world', action: 'jump' });
+    expect(() => { facade.hold('jumpButton'); }).toThrow('не добавлен в сэмплер');
+  });
+
   it('мировое действие без сэмплера — ошибка, а не тихая потеря', () => {
     const { registry, facade } = facadeBench();
     registry.registerAction('castButton', { target: 'world', action: 'cast' });
