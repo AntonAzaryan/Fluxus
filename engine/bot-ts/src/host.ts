@@ -22,6 +22,7 @@
  * (NTR-2). Место исполнения выбирает сборка — `src/worker/`.
  */
 import type {
+  LocomotionOptions,
   NavigationOptions,
   PhysicsOptions,
   Serializer,
@@ -61,6 +62,8 @@ export interface BotSeatOptions {
   readonly version: GameVersion;
   /** Зависимости сборки мира (NTR-14) — те же, что у клиента человека. */
   readonly physics?: PhysicsOptions;
+  /** Как ввод превращается в движение (NTR-14) — наравне с физикой. */
+  readonly locomotion?: LocomotionOptions;
   readonly visibility?: VisibilityOptions;
   /**
    * Включение и параметры поиска пути (NTR-14): зависимость сборки наравне с
@@ -111,6 +114,7 @@ export class BotSeat {
       content: options.content,
       ...(options.role !== undefined ? { role: options.role } : {}),
       ...(options.physics !== undefined ? { physics: options.physics } : {}),
+      ...(options.locomotion !== undefined ? { locomotion: options.locomotion } : {}),
       ...(options.visibility !== undefined ? { visibility: options.visibility } : {}),
       ...(options.navigation !== undefined ? { navigation: options.navigation } : {}),
       ...(options.interpolationDelayMs !== undefined

@@ -13,7 +13,13 @@
  * подпутями пакета оболочки: боту не нужны ни DOM, ни рендер, и тянуть их
  * корневым модулем ради сорока строк транспорта незачем.
  */
-import type { NavigationOptions, PhysicsOptions, SceneDef, VisibilityOptions } from '@fluxus/core';
+import type {
+  LocomotionOptions,
+  NavigationOptions,
+  PhysicsOptions,
+  SceneDef,
+  VisibilityOptions,
+} from '@fluxus/core';
 import type { ConnectionRole, Transport, TransportServer } from '@fluxus/net';
 import { shellPort } from '@fluxus/client/protocol';
 import { portTransport } from '@fluxus/client/portTransport';
@@ -130,6 +136,8 @@ export interface BotWorkerInit {
   readonly wireFormat?: BotWireFormat;
   /** Зависимости сборки мира (NTR-14) — те же значения, что у сервера матча. */
   readonly physics?: PhysicsOptions;
+  /** Как ввод превращается в движение (NTR-14) — наравне с физикой. */
+  readonly locomotion?: LocomotionOptions;
   readonly visibility?: VisibilityOptions;
   /**
    * Включение и параметры поиска пути (NTR-14): зависимость сборки наравне с

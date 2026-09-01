@@ -10,7 +10,13 @@
  */
 import { botWorkerInit, type BotWireFormat, type BotWorkerSeat, type MessageChannelLike, type PortConnections, type RawPort } from '../assembly.js';
 import type { WorldViewNames } from '../worldView.js';
-import type { NavigationOptions, PhysicsOptions, SceneDef, VisibilityOptions } from '@fluxus/core';
+import type {
+  LocomotionOptions,
+  NavigationOptions,
+  PhysicsOptions,
+  SceneDef,
+  VisibilityOptions,
+} from '@fluxus/core';
 
 /** Структурный минимум воркера: только отправка сообщения с переносом портов. */
 export interface WorkerLike {
@@ -30,6 +36,14 @@ export interface AttachBotsOptions {
   /** Формат кадра сервера матча (SER-3); отсутствие — умолчание протокола. */
   readonly wireFormat?: BotWireFormat;
   readonly physics?: PhysicsOptions;
+  /**
+   * Как ввод превращается в движение (NTR-14) — зависимость сборки наравне с
+   * физикой: бот предсказывает тики (NTR-10) и обязан поднимать мир тем же
+   * набором систем, что сервер. Раскладку зависимостей задаёт `matchFile.mjs`
+   * (`CLIENT_BUILD_FIELDS`), и полнота этих полей проверяется типом в
+   * `test/buildFields.test.ts`.
+   */
+  readonly locomotion?: LocomotionOptions;
   readonly visibility?: VisibilityOptions;
   /**
    * Включение и параметры поиска пути (NTR-14): зависимость сборки наравне с
@@ -55,6 +69,7 @@ export function attachBots(options: AttachBotsOptions): void {
     scene: options.scene,
     ...(options.wireFormat !== undefined ? { wireFormat: options.wireFormat } : {}),
     ...(options.physics !== undefined ? { physics: options.physics } : {}),
+    ...(options.locomotion !== undefined ? { locomotion: options.locomotion } : {}),
     ...(options.visibility !== undefined ? { visibility: options.visibility } : {}),
     ...(options.navigation !== undefined ? { navigation: options.navigation } : {}),
     ...(options.names !== undefined ? { names: options.names } : {}),

@@ -29,8 +29,12 @@ import { FIXED_ONE } from '@fluxus/core';
  * Координатные поля нагрузки события: мировая точка и вектор направления. Оба
  * приезжают из симуляции в Q16.16 (FP-1) и за эту границу уходят float'ами в
  * мировых единицах — как всё остальное в пакете рендера (REND-1).
+ *
+ * Наружу перечень не уходит: потребитель у него один — перевод ниже, а
+ * опубликованный список звал бы читать нагрузку по именам полей где-то ещё,
+ * то есть заводить второе место, знающее про координаты события.
  */
-export const EVENT_FIXED_FIELDS: readonly string[] = ['x', 'y', 'dirX', 'dirY'];
+const FIXED_FIELDS: readonly string[] = ['x', 'y', 'dirX', 'dirY'];
 
 /**
  * Копия нагрузки события с координатными полями, приведёнными к float. Копия, а
@@ -43,7 +47,7 @@ export function renderEventData(
   data: Readonly<Record<string, number>>,
 ): Readonly<Record<string, number>> {
   const out: Record<string, number> = { ...data };
-  for (const field of EVENT_FIXED_FIELDS) {
+  for (const field of FIXED_FIELDS) {
     const value = out[field];
     if (value !== undefined) out[field] = value / FIXED_ONE;
   }

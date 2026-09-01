@@ -19,7 +19,7 @@ import type { BotWireFormat, BotWorkerInit } from '../assembly.js';
 import { parseBotBehavior } from '../behavior.js';
 import { brainFactoryByKind } from '../brains/registry.js';
 import type { ArenaCenter } from '../brains/layers/plan.js';
-import { BotHost } from '../host.js';
+import { BotHost, type BotSeatOptions } from '../host.js';
 import { parseBotProfile } from '../profile.js';
 import { botTerrain } from '../terrainView.js';
 
@@ -66,6 +66,26 @@ function serializerOf(format: BotWireFormat | undefined): Serializer | undefined
   return serializer;
 }
 
+/** Секции сборки мира, которые бот получает из описания матча (NTR-14). */
+type BotBuildOptions = Pick<BotSeatOptions, 'physics' | 'locomotion' | 'visibility' | 'navigation'>;
+
+/**
+ * Зависимости сборки мира из init-сообщения (NTR-14) — ровно те секции, которые
+ * оно объявило: отсутствующая ключом со значением `undefined` не становится,
+ * потому что опции клиента отличают «не назвали» от «назвали пустым». Отдельной
+ * функцией — тем же приёмом и по той же причине, что `clientBuildOptions` у
+ * запускалок: перечень секций виден одним местом, а не растворён в теле сборки
+ * воркера. Полнота перечня проверяется типом (`test/buildFields.test.ts`).
+ */
+function botBuildOptions(init: BotWorkerInit): BotBuildOptions {
+  return {
+    ...(init.physics !== undefined ? { physics: init.physics } : {}),
+    ...(init.locomotion !== undefined ? { locomotion: init.locomotion } : {}),
+    ...(init.visibility !== undefined ? { visibility: init.visibility } : {}),
+    ...(init.navigation !== undefined ? { navigation: init.navigation } : {}),
+  };
+}
+
 /**
  * Поднимает ботов init-сообщения: по `MatchClient` на слот, по транспорту на
  * порт, мозг — по имени из реестра (BOT-2, BOT-4).
@@ -86,9 +106,7 @@ export function startBotWorker(init: BotWorkerInit, options: BotWorkerOptions = 
   // бота: считаются один раз, до цикла по местам.
   const shared = {
     content: pack,
-    ...(init.physics !== undefined ? { physics: init.physics } : {}),
-    ...(init.visibility !== undefined ? { visibility: init.visibility } : {}),
-    ...(init.navigation !== undefined ? { navigation: init.navigation } : {}),
+    ...botBuildOptions(init),
     ...(serializer !== undefined ? { serializer } : {}),
     ...(options.now !== undefined ? { now: options.now } : {}),
   };

@@ -47,8 +47,13 @@ describe('зависимость односторонняя', () => {
 const MUTATING_MODULES = /\/ecs\/(commands|world)\.js$/;
 
 /**
- * Операции над миром, публикацию которых TICK-3 объявляет несуществующей, и
- * фабрика, отдающая их все разом (`createCommandBuffer` плюс `flush()`,
+ * Имена, публикация которых расширила бы мутирующую поверхность ядра. Перечень
+ * тот же, что `index.ts` объявляет внутренним у себя в шапке (TICK-3), и
+ * состоит он из трёх частей: операции над миром (`spawn`…`addTag`), служебные
+ * операции жизненного цикла хранилища (`createWorld`, `fromPlain`,
+ * `copyWorldInto`, `clearDirty`, `componentMasks` — последняя отдаёт живой
+ * `Uint32Array` состава компонентов, то есть запись в него мимо команд) и
+ * фабрика, отдающая мутаторы все разом (`createCommandBuffer` плюс `flush()`,
  * применяющий накопленное к миру немедленно).
  */
 const MUTATOR_MEMBERS = new Set([
@@ -58,6 +63,11 @@ const MUTATOR_MEMBERS = new Set([
   'addComponent',
   'removeComponent',
   'addTag',
+  'createWorld',
+  'fromPlain',
+  'copyWorldInto',
+  'clearDirty',
+  'componentMasks',
   'createCommandBuffer',
 ]);
 
@@ -232,6 +242,16 @@ describe('поверхность ядра не расширялась', () => {
         'export const spawnAny = worldModule.spawn;\n',
     );
     expect(assignedMutators(viaNamespace)).toHaveLength(1);
+
+    // Служебные операции хранилища — тот же запрет и тот же довод (TICK-3):
+    // перечень сторожа обязан покрывать весь список, объявленный внутренним в
+    // шапке `index.ts`, а не только пять операций над сущностями.
+    const lifecycle = fake(
+      "import * as worldModule from './ecs/world.js';\n" +
+        'export const rebuild = worldModule.copyWorldInto;\n' +
+        'export const masks = worldModule.componentMasks;\n',
+    );
+    expect(assignedMutators(lifecycle)).toHaveLength(2);
 
     // Исключение TICK-3 под своим именем — законно; чтение мира — тоже.
     const sanctioned = fake(

@@ -49,7 +49,10 @@ export declare const LAUNCHER_FIELDS: readonly [
 
 /**
  * Поля документа, которые запускалка отдаёт КЛИЕНТУ (NTR-14): подмножество
- * `MATCH_DOCUMENT_FIELDS`, полнота которого проверяется типом в тестах.
+ * `MATCH_DOCUMENT_FIELDS`. Полнота считается от документа матча (список минус
+ * секции, объявленные серверными поимённо), а принимаемость каждого имени
+ * опциями клиента — типом; обе половины живут в `test/matchFile.test.ts`.
+ * Раскладку бота ту же проверяет `engine/bot-ts/test/buildFields.test.ts`.
  */
 export declare const CLIENT_BUILD_FIELDS: readonly ['physics', 'locomotion', 'visibility', 'navigation'];
 

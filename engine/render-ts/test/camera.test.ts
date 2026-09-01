@@ -133,13 +133,32 @@ describe('CameraRig: snap при разрыве цели (CAM-5)', () => {
    * Сценарий «Rewind под free-камерой» с обратной стороны: перемотка поднимает
    * признак разрыва ВСЕМУ миру (`snapAll` REND-2), а герой при этом стоит.
    * Камера, слушающаяся признака, дёрнулась бы ни на чём.
+   *
+   * Кадров сглаживания здесь НАРОЧНО мало: доехав до цели, камера стоит в ней
+   * с точностью до последних битов, и «прыжок» от «проезда» на такой дистанции
+   * не отличить — тест был бы зелёным и на прежней, безусловной реализации
+   * прыжка. Пять кадров оставляют камеру заметно позади цели, и прыжок виден
+   * как посадка в неё ровно.
    */
   it('признак разрыва при неподвижной цели камеру не двигает (CAM-5)', () => {
-    const { rig, input } = makeRig({ startX: 0, startY: 0 });
-    settle(rig, input, target(3, 0), 300);
-    const before = rig.focusX;
-    rig.update(input, 1 / 60, target(3, 0, true));
-    expect(rig.focusX).toBeCloseTo(before, 10);
+    // Две одинаковые камеры, пять кадров сглаживания: до цели ещё далеко, и
+    // прыжок от проезда отличим. Разница между ними — только признак разрыва
+    // на последнем кадре, цель у обеих не сдвинулась ни на единицу.
+    const flagged = makeRig({ startX: 0, startY: 0 });
+    const smooth = makeRig({ startX: 0, startY: 0 });
+    settle(flagged.rig, flagged.input, target(3, 0), 5);
+    settle(smooth.rig, smooth.input, target(3, 0), 5);
+    const before = flagged.rig.focusX;
+    expect(before).toBeGreaterThan(0);
+    expect(3 - before).toBeGreaterThan(1); // камера заметно позади цели
+
+    flagged.rig.update(flagged.input, 1 / 60, target(3, 0, true));
+    smooth.rig.update(smooth.input, 1 / 60, target(3, 0));
+    // Признак сам по себе не решает ничего: кадр вышел ровно тем же, каким был
+    // бы без него, — камера продолжает сглаживание и в цель не садится.
+    expect(flagged.rig.focusX).toBe(smooth.rig.focusX);
+    expect(flagged.rig.focusX).toBeGreaterThan(before);
+    expect(3 - flagged.rig.focusX).toBeGreaterThan(1);
   });
 
   it('смещение меряется от прошлого кадра и после свободной панорамы (CAM-5)', () => {
