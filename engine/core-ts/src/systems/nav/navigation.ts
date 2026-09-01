@@ -30,7 +30,14 @@ import type {
   Vec2,
 } from '../../types.js';
 
-/** Зависимости сборки навигации (DI-3): числа геймдизайнера, не ядра. */
+/**
+ * Поверхность поля `navigation` ДОКУМЕНТА ПРОГОНА (`cli-testing` CLI-2,
+ * `netcode-transport` NTR-14, SER-7): числа геймдизайнера, не ядра (DI-3).
+ *
+ * Ровно эти поля публикует опубликованная схема документа (SER-5), и состав их
+ * закрыт с обеих сторон: поля, которого схема не называет, у документа быть не
+ * должно так же, как не должно быть поля, которое схема отвергает.
+ */
 export interface NavigationOptions {
   /** Предельное число раскрытых узлов одного запроса (NAV-5). */
   readonly budget: number;
@@ -40,6 +47,16 @@ export interface NavigationOptions {
    * ограничен и остаётся тотальным (NAV-5).
    */
   readonly maxAgentRadius: Fixed;
+}
+
+/**
+ * Параметры сборки навигации — поверхность документа плюс то, чем распоряжается
+ * ВЫЗЫВАЮЩАЯ СБОРКА, а не автор документа (SER-5). Отдельным типом, потому что
+ * второе полем документа быть MUST NOT: путь из JSON к переключателю счётчиков
+ * стоимости означал бы, что документ прогона вправе отменить учёт своей же
+ * работы (PERF-3).
+ */
+export interface NavigationBuildOptions extends NavigationOptions {
   /**
    * Считать ли работу запросов в счётчики стоимости тика (PERF-3). По умолчанию
    * да: сборка симуляции — оплачиваемый путь.
@@ -92,7 +109,7 @@ const BUDGET_EXHAUSTED: PathResult = Object.freeze({
  * Terrain API, — до первого тика: карты производны от иммутабельного ассета, в
  * снапшот не входят и при перемотке не пересобираются (NAV-3).
  */
-export function buildNavigation(grid: TerrainGrid, options: NavigationOptions): NavigationApi {
+export function buildNavigation(grid: TerrainGrid, options: NavigationBuildOptions): NavigationApi {
   checkOptions(grid, options);
   const nav = bakeNavGrid(grid);
   const search = new NavSearch(nav);
@@ -145,7 +162,7 @@ export function buildNavigation(grid: TerrainGrid, options: NavigationOptions): 
  * физике путями выглядела бы исправной навигацией и расходилась бы с нормой
  * только там, где это дорого заметить.
  */
-function checkOptions(grid: TerrainGrid, options: NavigationOptions): void {
+function checkOptions(grid: TerrainGrid, options: NavigationBuildOptions): void {
   const { budget, maxAgentRadius } = options;
   if (!Number.isInteger(budget) || budget < 1) {
     throw new Error(`NAV-5: бюджет поиска — целое ≥ 1, получено ${String(budget)}`);

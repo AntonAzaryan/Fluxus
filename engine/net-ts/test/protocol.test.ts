@@ -12,7 +12,8 @@ import {
   type ClientMessage,
   type ServerMessage,
 } from '../src/protocol/messages.js';
-import { BUILD_ID, duelConfig, harness, hello, inputMessage, wireInput } from './fixtures.js';
+import { loadScene, world as worldApi } from '@fluxus/core';
+import { BUILD_ID, duelConfig, duelScene, harness, hello, inputMessage, wireInput } from './fixtures.js';
 
 const serializers = [msgpackSerializer, jsonSerializer];
 
@@ -60,6 +61,36 @@ describe('кодирование кадра', () => {
   it('битые байты дают ProtocolError, а не падение сериализатора наружу', () => {
     const codec = serverCodec(msgpackSerializer);
     expect(() => codec.decode(Uint8Array.from([0xc1, 0xff, 0xff]))).toThrow(ProtocolError);
+  });
+
+  /**
+   * SER-2: порядок ключей сериализатор не задаёт — он кодирует готовую
+   * plain-форму как есть. Проверяется на плоской форме мира, потому что её
+   * верхний уровень идёт в порядке SER-1, а не по алфавиту, и сортировка в
+   * кодеке переставляла бы ровно тот уровень, которому SER-1 и SER-6
+   * переставляться прямо запрещают. Карты имён данных внутри формы (компоненты,
+   * поля, теги) приезжают отсортированными от самого ядра — их порядок держит
+   * `toPlain`, а не кодек.
+   */
+  it('плоская форма мира едет на провод в порядке SER-1, а не по алфавиту', () => {
+    const world = worldApi.toPlain(loadScene(duelScene()).world);
+    const expected = Object.keys(world);
+    // Порядок формы — не алфавитный: иначе проверка ниже была бы тавтологией.
+    expect(expected).not.toEqual([...expected].sort());
+
+    for (const serializer of serializers) {
+      const message: ServerMessage = {
+        type: 'Snapshot',
+        epoch: 0,
+        tick: 0,
+        snapshot: { tick: 0, world, events: [], mode: 'Running' },
+      };
+      const decoded = serverCodec(serializer).encode(message);
+      const back = clientCodec(serializer).decode(decoded) as ServerMessage & {
+        snapshot: { world: Record<string, unknown> };
+      };
+      expect(Object.keys(back.snapshot.world), serializer.name).toEqual(expected);
+    }
   });
 });
 

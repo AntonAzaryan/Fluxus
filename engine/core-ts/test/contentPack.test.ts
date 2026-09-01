@@ -314,3 +314,115 @@ describe('хеш контент-пака: определения способн�
     expect(contentPackHash(reordered)).toBe(contentPackHash(ABILITY));
   });
 });
+
+/**
+ * Та же сцена с платформой поведения NPC (NET-17 п. 11; SER-7, NPC-2). Документ
+ * поведения минимален, но несёт то, что правит дизайнер: интервал решений,
+ * дистанции, состав состояний и порог перехода.
+ */
+const BOSS = {
+  schema: 1,
+  name: 'boss',
+  tier: 'elite',
+  decision: { intervalTicks: 1 },
+  ranges: { sense: 1310720, attack: 65536, arrive: 65536, separation: 131072 },
+  speed: 65536,
+  states: [
+    {
+      name: 'press',
+      actions: [
+        {
+          executor: 'seekTarget',
+          considerations: [
+            { input: 'targetKnown', curve: { type: 'linear', slope: 65536, intercept: 0 }, weight: 65536 },
+          ],
+        },
+      ],
+      transitions: [{ to: 'press', when: { kind: 'healthBelow', value: 32768 } }],
+    },
+  ],
+} as const;
+
+const NPC: SceneDef = withScene({
+  npc: {
+    behaviors: [BOSS],
+    bindings: { position: 'Position', health: ['Health', 'value'] },
+    decisionBudget: 8,
+  },
+});
+
+const withNpcScene = (patch: Partial<SceneDef>): SceneDef => ({ ...NPC, ...patch });
+
+describe('хеш контент-пака: платформа поведения NPC (NET-17)', () => {
+  it('дизайнер переписал поведение босса — хеши не совпадают', () => {
+    // Дыра, которую этот пункт закрывает: состав компонентов, расстановка и хеш
+    // `worldInit` у сторон совпадают, а босс у одного кайтит, у другого давит.
+    // Прежде такой матч стартовал, и стороны считали мир по разным правилам.
+    const rewritten = withNpcScene({
+      npc: { ...NPC.npc!, behaviors: [{ ...BOSS, decision: { intervalTicks: 6 } }] },
+    });
+    expect(contentPackHash(rewritten)).not.toBe(contentPackHash(NPC));
+  });
+
+  it('биндинги, бюджет решений и таблица волн — тоже правила', () => {
+    // Биндинг меняет смысл величин при тех же документах (NPC-1), бюджет —
+    // каденс дорогих пересмотров (NPC-4), волны — состав того, что выходит на
+    // арену (NPC-8).
+    const rebound = withNpcScene({ npc: { ...NPC.npc!, bindings: { position: 'Position' } } });
+    expect(contentPackHash(rebound)).not.toBe(contentPackHash(NPC));
+
+    const budget = withNpcScene({ npc: { ...NPC.npc!, decisionBudget: 2 } });
+    expect(contentPackHash(budget)).not.toBe(contentPackHash(NPC));
+
+    const waves = withNpcScene({
+      npc: {
+        ...NPC.npc!,
+        waves: {
+          cap: 8,
+          entries: [{ prefab: 'Unit', count: 3, behavior: 0, delayTicks: 30, spacingTicks: 5 }],
+        },
+      },
+    });
+    expect(contentPackHash(waves)).not.toBe(contentPackHash(NPC));
+  });
+
+  it('отсутствующий и пустой блок npc дают разные хеши', () => {
+    // Та же граница, что у твинов и таблиц платформы способностей: без блока в
+    // мире нет ни её компонентов, ни её систем (SER-7), то есть другой формат
+    // снапшота; блок с пустой таблицей поведений состав не меняет.
+    const { npc: _npc, ...withoutNpc } = NPC;
+    expect(contentPackHash({ ...withoutNpc, npc: { behaviors: [] } })).not.toBe(
+      contentPackHash(withoutNpc as SceneDef),
+    );
+  });
+
+  it('переформатирование документа поведения хеш не меняет', () => {
+    // Хеш считается от канонического представления, а не от записи документа
+    // (NET-17): другой порядок ключей — тот же документ.
+    const reordered = withNpcScene({
+      npc: {
+        decisionBudget: 8,
+        bindings: { health: ['Health', 'value'], position: 'Position' },
+        behaviors: [
+          {
+            states: BOSS.states,
+            speed: BOSS.speed,
+            ranges: BOSS.ranges,
+            decision: BOSS.decision,
+            tier: BOSS.tier,
+            name: BOSS.name,
+            schema: BOSS.schema,
+          },
+        ],
+      },
+    });
+    expect(contentPackHash(reordered)).toBe(contentPackHash(NPC));
+  });
+
+  it('заменён ассет арены — хеш не меняется и при объявленной платформе NPC', () => {
+    // Контроль границы двух зон (NET-17 против DET-1): появление блока `npc` её
+    // не двигает.
+    const otherArena = withNpcScene({ arena: { center: { x: 0, y: 0 }, radius: 131072 } });
+    expect(contentPackHash(otherArena)).toBe(contentPackHash(NPC));
+  });
+});
