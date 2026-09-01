@@ -85,7 +85,10 @@ function mutatingBindings(sf: ts.SourceFile): {
     if (!ts.isStringLiteral(statement.moduleSpecifier)) continue;
     if (!MUTATING_MODULES.test(statement.moduleSpecifier.text)) continue;
     const clause = statement.importClause;
-    if (clause === undefined || clause.isTypeOnly) continue;
+    // `import type * as … from` рантайм-имени не заводит. Признак берётся
+    // `phaseModifier`, а не устаревшим `isTypeOnly` (TS 5.9): у отложенного
+    // импорта (`import defer`) тот же слот, и различает их именно ключевое слово.
+    if (clause === undefined || clause.phaseModifier === ts.SyntaxKind.TypeKeyword) continue;
     const bindings = clause.namedBindings;
     if (bindings === undefined) continue;
     if (ts.isNamespaceImport(bindings)) namespaces.add(bindings.name.text);
