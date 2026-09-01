@@ -234,6 +234,24 @@ describe('BLND-12: правка источника в дереве перепо�
     expect(issues[0]!.path).toEqual(['initial', 0]);
   });
 
+  it('BLND-2: появившийся рядом `.blend` без экспорта делает сцену сопряжённой', async () => {
+    // Сцена открыта без источника вовсе: правило молчит, автор — полноправный
+    // владелец её слоя.
+    const { host, state } = await opened(EDITED_INITIAL, null);
+    expect(syncIssues(state)).toEqual([]);
+
+    // Дизайнер положил рядом сам `.blend`, экспорта ещё нет. С этого момента
+    // слой сцены производный, и молчать о нём нельзя — хотя сверить его не с
+    // чем: читать `.blend` нечем и незачем (BLND-1, BLND-7).
+    host.set('levels/arena.blend', 'BLENDER-v420 (байты источника, читать нечем)');
+    await settle();
+
+    const issues = syncIssues(state);
+    expect(issues).toHaveLength(1);
+    expect(issues[0]!.severity).toBe('warning');
+    expect(issues[0]!.reasonKey).toContain('sourceUnexported');
+  });
+
   it('исчезнувшее расхождение гаснет тем же путём', async () => {
     const { host, state } = await opened(EDITED_INITIAL);
     expect(syncIssues(state)).toHaveLength(1);

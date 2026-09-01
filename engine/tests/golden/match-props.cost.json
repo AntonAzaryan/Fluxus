@@ -8,6 +8,15 @@
     "raycasts": 0,
     "ticks": 16
   },
+  "extract": {
+    "extractCalls": 16,
+    "extractChannelValues": 960,
+    "extractEntitiesCopied": 64,
+    "extractEntitiesScanned": 64,
+    "extractEvents": 0,
+    "extractFloorCellsScanned": 0,
+    "extractStatPairs": 64
+  },
   "performance": {
     "frame": {
       "fogDissolveTexels": 17408,

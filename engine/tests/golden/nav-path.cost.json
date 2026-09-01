@@ -1,11 +1,29 @@
 {
-  "tick": {
-    "broadPhasePairs": 231,
-    "commandsApplied": 283,
-    "expressions": 0,
-    "navNodes": 531,
-    "npcNeighbors": 609,
-    "raycasts": 0,
-    "ticks": 24
+  "axis": "navAgents",
+  "small": 1,
+  "large": 4,
+  "cost": {
+    "small": {
+      "tick": {
+        "broadPhasePairs": 231,
+        "commandsApplied": 283,
+        "expressions": 0,
+        "navNodes": 531,
+        "npcNeighbors": 609,
+        "raycasts": 0,
+        "ticks": 24
+      }
+    },
+    "large": {
+      "tick": {
+        "broadPhasePairs": 1205,
+        "commandsApplied": 703,
+        "expressions": 0,
+        "navNodes": 899,
+        "npcNeighbors": 913,
+        "raycasts": 0,
+        "ticks": 24
+      }
+    }
   }
 }

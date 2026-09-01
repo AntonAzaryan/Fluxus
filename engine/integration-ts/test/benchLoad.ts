@@ -55,6 +55,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import * as THREE from 'three';
 import {
+  FIXED_ONE,
   buildSimulation,
   createTerrainGrid,
   tick,
@@ -62,6 +63,7 @@ import {
   type EntityId,
   type InputFrame,
   type ScenarioDef,
+  type ScenarioSpawn,
   type TerrainGrid,
   type TickResult,
 } from '@fluxus/core';
@@ -150,6 +152,182 @@ export const NAV_PATH = 'nav-path';
 
 export function loadNavPath(): ScenarioDef {
   return JSON.parse(readFileSync(join(GOLDEN_DIR, `${NAV_PATH}.scenario.json`), 'utf8')) as ScenarioDef;
+}
+
+// ------------------------------------- размеры осей стороны симуляции (PERF-6)
+
+/**
+ * Один размер оси стоимости, нагрузка которой описывается документом прогона
+ * (PERF-6): величина оси и документ этой величины. Размеры получаются ИЗ ТОЙ ЖЕ
+ * нагрузки — прореживанием, размножением агентов либо порождением по числу, — а
+ * не вторым документом рядом: два рукописных документа разошлись бы молча, а
+ * размеры одной оси обязаны отличаться ровно её величиной.
+ */
+export interface AxisSize {
+  /** Величина оси — то единственное, чем размеры и различаются. */
+  readonly magnitude: number;
+  readonly def: ScenarioDef;
+}
+
+/** Prefab массового агента нагрузки NPC — им и меряется величина её оси. */
+const NPC_STRESS_AGENT = 'Creep';
+
+/**
+ * Два размера оси «число агентов платформы поведения» (NPC-9, PERF-6).
+ *
+ * Малый размер — КАЖДЫЙ ВТОРОЙ агент документа, а не его первая половина:
+ * агенты разложены по арене порядком записей, и отрезание хвоста двигало бы
+ * заодно и плотность толпы — то есть ось двигала бы две величины сразу, и
+ * отношение L/S нечему было бы приписать (выборка соседей растёт именно
+ * плотностью). Прочие сущности — герои, точки маршрута, режиссёр волн —
+ * остаются на местах у обоих размеров: они не агенты оси.
+ */
+export function npcStressSizes(): { readonly small: AxisSize; readonly large: AxisSize } {
+  const full = loadNpcStress();
+  const initial = full.scene.initial ?? [];
+  let agent = 0;
+  const thinned = initial.filter((spawn) => {
+    if (spawn.prefab !== NPC_STRESS_AGENT) return true;
+    return agent++ % 2 === 0;
+  });
+  const agents = initial.filter((spawn) => spawn.prefab === NPC_STRESS_AGENT).length;
+  const small: ScenarioDef = { ...full, scene: { ...full.scene, initial: thinned } };
+  return {
+    small: { magnitude: agents - Math.floor(agents / 2), def: small },
+    large: { magnitude: agents, def: full },
+  };
+}
+
+/**
+ * Агенты маршрута, добавляемые большому размеру навигационной оси: свободные
+ * клетки нижнего уровня арены (`nav-path.scenario.json` — колонки 0..3 несут
+ * уровень 0, рампа лежит третьим рядом). Координаты в Q16.16, как их пишет
+ * сам документ нагрузки.
+ */
+const NAV_EXTRA_AGENTS: readonly { readonly x: number; readonly y: number }[] = Object.freeze([
+  { x: 32768, y: 32768 },
+  { x: 163840, y: 32768 },
+  { x: 32768, y: 98304 },
+]);
+
+/**
+ * Два размера оси «число агентов поиска пути» (NAV-5, PERF-6).
+ *
+ * Большой размер получается РАЗМНОЖЕНИЕМ агента маршрута: своя запись у каждого
+ * с собственной клеткой старта, поведение и маршрут — те же. Прореживать здесь
+ * нечего (агент маршрута в документе один), а растить прогон приходится тем,
+ * что и растёт в контенте: числом ищущих путь.
+ */
+export function navPathSizes(): { readonly small: AxisSize; readonly large: AxisSize } {
+  const base = loadNavPath();
+  const initial = base.scene.initial ?? [];
+  // Агент маршрута — запись с маршрутной привязкой (`NpcRoute`); её и копируем
+  // целиком, чтобы у клонов совпало всё, кроме клетки старта.
+  const walker = initial.find((spawn) => spawn.overrides?.NpcRoute !== undefined);
+  if (walker === undefined) {
+    throw new Error(`${NAV_PATH}: в нагрузке нет агента маршрута — размеры оси построить не из чего`);
+  }
+  const clones = NAV_EXTRA_AGENTS.map((at) => ({
+    ...walker,
+    overrides: { ...walker.overrides, Position: { x: at.x, y: at.y } },
+  }));
+  const large: ScenarioDef = {
+    ...base,
+    scene: { ...base.scene, initial: [...initial, ...clones] },
+  };
+  return {
+    small: { magnitude: 1, def: base },
+    large: { magnitude: 1 + clones.length, def: large },
+  };
+}
+
+// ------------------------------------------- ось стадии экстракции (PERF-6)
+
+/**
+ * Тиков в синтетической нагрузке экстракции. Число фиксировано у ОБОИХ
+ * размеров: величина оси — сущности, и длина прогона двигаться вместе с ней не
+ * должна, иначе отношение L/S мерило бы две величины сразу.
+ */
+const EXTRACT_TICKS = 8;
+
+/** Сущностей в ряду раскладки: сетка, а не линия, — позиции разложены по арене. */
+const EXTRACT_ROW = 16;
+
+/**
+ * Синтетическая нагрузка стадии `extract` на N сущностей (PERF-6): документ
+ * прогона, поднимаемый ОБЩИМ путём сборки (`prepareRecording`), как и записанные
+ * матчи. Систем у сцены нет вовсе: экстракция читает состояние мира, и её
+ * стоимость определяется составом сущностей, а не тем, что с ними делает тик, —
+ * а лишняя работа систем только зашумила бы прогон.
+ *
+ * Сущности несут поля обоих статов доставки (`MATCH_STAT_SOURCES`), поэтому ось
+ * двигает и пары статов: стат — колонка плоской формы, и рост её объёма обязан
+ * читаться той же осью, что и рост числа сущностей.
+ */
+function extractLoad(entities: number): ScenarioDef {
+  const initial: ScenarioSpawn[] = [];
+  for (let i = 0; i < entities; i++) {
+    initial.push({
+      prefab: 'Runner',
+      overrides: {
+        Position: { x: (i % EXTRACT_ROW) * FIXED_ONE, y: Math.floor(i / EXTRACT_ROW) * FIXED_ONE },
+        Player: { slot: i % 2 },
+        Collider: { radius: FIXED_ONE / 4 },
+      },
+    });
+  }
+  return {
+    name: `extract-${entities}`,
+    seed: 20260901,
+    ticks: EXTRACT_TICKS,
+    scene: {
+      components: [
+        { name: 'Position', fields: { x: 'fixed', y: 'fixed' } },
+        { name: 'Player', fields: { slot: 'i32' } },
+        { name: 'Collider', fields: { radius: 'fixed' } },
+      ],
+      prefabs: [
+        {
+          name: 'Runner',
+          tags: ['Runner'],
+          components: { Position: { x: 0, y: 0 }, Player: { slot: 0 }, Collider: { radius: 0 } },
+        },
+      ],
+      initial,
+    },
+  };
+}
+
+/**
+ * Два размера оси «число сущностей доставки» (PERF-6) для стадии `extract`.
+ * Восьмикратный разрыв — тот же порядок, что у оси сущностей рендера: линейную
+ * экстракцию он показывает ровным отношением, а любую суперлинейность (поиск по
+ * сущности в чужом списке) — непропорциональным.
+ */
+export function extractSizes(): { readonly small: AxisSize; readonly large: AxisSize } {
+  return {
+    small: { magnitude: 32, def: extractLoad(32) },
+    large: { magnitude: 256, def: extractLoad(256) },
+  };
+}
+
+/**
+ * Прогон нагрузки экстракции: тики строит общий путь сборки, каждый читает
+ * `Extractor` — ровно тот шов, на котором сняты счётчики стадии `extract`
+ * (PERF-2). Презентационного тракта здесь нет: ось меряет экстракцию, и
+ * доставка с кадром только смешали бы в документ чужие стадии.
+ */
+export function playExtraction(def: ScenarioDef): void {
+  const kindOf = benchKinds();
+  const extractor = new Extractor({
+    kindOf: (_state, entity) => kindOf(entity),
+    stats: MATCH_STAT_SOURCES,
+  });
+  playRecording(def, {
+    onTick: (result) => {
+      extractor.extract(result);
+    },
+  });
 }
 
 /** Крючки прогона записи: сток диагностики ядра и наблюдатель тиков. */

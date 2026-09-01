@@ -95,6 +95,8 @@ export { LEVEL_UNIT, generateCellLayer, withCellLayer } from './maps.js';
 export type { CellLayer } from './maps.js';
 
 export {
+  BLEND_EXTENSION,
+  PAIRED_EXTENSIONS,
   SCENE_SUFFIX,
   SOURCE_EXTENSION,
   SOURCE_EXTENSIONS,

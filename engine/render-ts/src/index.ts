@@ -117,7 +117,7 @@ export type { DecorationInstance } from './decorations.js';
 
 // Половины хоста по границе потоков (client-shell SHELL-2): Extractor —
 // воркер-сторона (единственный читатель мира), ViewBuffer — main-сторона.
-export { Extractor, ENTITY_MOVING, ENTITY_LEVEL_OVERRIDE } from './extractor.js';
+export { Extractor, CHANNEL_COLUMNS, ENTITY_MOVING, ENTITY_LEVEL_OVERRIDE } from './extractor.js';
 export type { ExtractedTick, ExtractorConfig } from './extractor.js';
 // Перевод нагрузки события на входной границе (REND-1). Наружу уходит потому,
 // что производителей событий у рендера два, и второй — сетевая оболочка
