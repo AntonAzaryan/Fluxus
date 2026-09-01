@@ -202,8 +202,10 @@ function hardStealthMask(channels: readonly number[] | undefined): number {
         `получено значение типа ${typeof channels}`,
     );
   }
+  // Явная аннотация: `Array.isArray` в гарде выше сузил бы элементы до `any`.
+  const list: readonly number[] = channels ?? [];
   let soft = 0;
-  for (const channel of channels ?? []) {
+  for (const channel of list) {
     if (!Number.isInteger(channel) || channel < 0 || channel > 31) {
       throw new Error(
         `SER-7: мягкий стелс-канал ${channel} вне диапазона [0, 31] — маска каналов 32-битная (FOW-2, FOW-3)`,

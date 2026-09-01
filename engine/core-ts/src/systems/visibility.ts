@@ -321,14 +321,13 @@ function publishState(
   handle: { readonly component: ComponentHandle; readonly mask: FieldHandle } | undefined,
   component: string,
   sourcesComponent: string,
-  sources: ArrayLike<EntityId>,
+  sources: Iterable<EntityId>,
   foldOf: (entity: EntityId) => number,
 ): void {
   // Компонента состояния нет в схемах сцены — публиковать некуда; в группе
   // тумана (FOW-3) он есть всегда, случай этот — рукотворные миры тестов.
   if (handle === undefined) return;
-  for (let i = 0; i < sources.length; i++) {
-    const entity = sources[i]!;
+  for (const entity of sources) {
     const mask = foldOf(entity);
     if (ctx.hasByHandle(entity, handle.component)) {
       if (mask !== ctx.getByHandle(entity, handle.mask)) {
