@@ -50,6 +50,7 @@ import {
   type MatchClient,
   type Transport,
 } from '@fluxus/net';
+import { renderEventData } from '@fluxus/render';
 import type { Extractor, RenderEvent } from '@fluxus/render';
 import { ShellSender, type SenderOptions } from './sender.js';
 import { InputLatch, routeMainMessage } from './inputLatch.js';
@@ -65,10 +66,15 @@ const NO_EVENTS: readonly GameEvent[] = [];
  * Факты пачки — событиями рендера. Тик у них тик ПАЧКИ, а не применяемого
  * состояния (NTR-15): и раскладка ожидания, и выпуск хвоста говорят об этом
  * одинаково, поэтому перевод здесь один.
+ *
+ * Это ВТОРОЙ вход событий в рендер — первый у потока тиков (`Extractor`), — и
+ * входная граница у него та же: координатные поля нагрузки приводятся к float
+ * здесь, тем же переводом рендера (REND-1, `renderEventData`), а не вторым
+ * таким же на месте.
  */
 function pushRenderEvents(out: RenderEvent[], batch: DeliveredEvents): void {
   for (const event of batch.events) {
-    out.push({ type: event.type, tick: batch.tick, data: event.data });
+    out.push({ type: event.type, tick: batch.tick, data: renderEventData(event.data) });
   }
 }
 

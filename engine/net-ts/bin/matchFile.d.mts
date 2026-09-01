@@ -51,7 +51,7 @@ export declare const LAUNCHER_FIELDS: readonly [
  * Поля документа, которые запускалка отдаёт КЛИЕНТУ (NTR-14): подмножество
  * `MATCH_DOCUMENT_FIELDS`, полнота которого проверяется типом в тестах.
  */
-export declare const CLIENT_BUILD_FIELDS: readonly ['physics', 'visibility', 'navigation'];
+export declare const CLIENT_BUILD_FIELDS: readonly ['physics', 'locomotion', 'visibility', 'navigation'];
 
 /** Зависимости сборки мира для клиента — ровно объявленные документом секции. */
 export declare function clientBuildOptions(

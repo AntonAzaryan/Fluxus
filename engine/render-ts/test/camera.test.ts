@@ -107,6 +107,57 @@ describe('CameraRig: snap при разрыве цели (CAM-5)', () => {
     expect(rig.focusX).toBeGreaterThan(0);
     expect(rig.focusX).toBeLessThan(5);
   });
+
+  /**
+   * Порогом владеет CAM-5, а не политика рендера: та применяет snap по РОДУ
+   * разрыва (спавн, телепорт, rewind), величины у неё нет. Поэтому
+   * подпороговый телепорт камера доводит сглаживанием — «расхождение политик
+   * намеренно».
+   */
+  it('подпороговый разрыв со snap-флагом доводится сглаживанием (CAM-5)', () => {
+    const { rig, input } = makeRig({ startX: 0, startY: 0, config: { snapDistance: 2 } });
+    settle(rig, input, target(0, 0), 60);
+    rig.update(input, 1 / 60, target(1, 0, true));
+    expect(rig.focusX).toBeGreaterThan(0);
+    expect(rig.focusX).toBeLessThan(1);
+  });
+
+  it('порог берётся из конфига камеры: тот же разрыв при меньшем пороге — прыжок (CAM-1, CAM-5)', () => {
+    const { rig, input } = makeRig({ startX: 0, startY: 0, config: { snapDistance: 0.5 } });
+    settle(rig, input, target(0, 0), 60);
+    rig.update(input, 1 / 60, target(1, 0, true));
+    expect(rig.focusX).toBe(1);
+  });
+
+  /**
+   * Сценарий «Rewind под free-камерой» с обратной стороны: перемотка поднимает
+   * признак разрыва ВСЕМУ миру (`snapAll` REND-2), а герой при этом стоит.
+   * Камера, слушающаяся признака, дёрнулась бы ни на чём.
+   */
+  it('признак разрыва при неподвижной цели камеру не двигает (CAM-5)', () => {
+    const { rig, input } = makeRig({ startX: 0, startY: 0 });
+    settle(rig, input, target(3, 0), 300);
+    const before = rig.focusX;
+    rig.update(input, 1 / 60, target(3, 0, true));
+    expect(rig.focusX).toBeCloseTo(before, 10);
+  });
+
+  it('смещение меряется от прошлого кадра и после свободной панорамы (CAM-5)', () => {
+    const { rig, input } = makeRig({ startX: 0, startY: 0, config: { snapDistance: 2 } });
+    settle(rig, input, target(0, 0), 60);
+    // Панорама открепляет камеру (CAM-3), но цель всё это время видна и стоит.
+    input.panX = 1;
+    settle(rig, input, target(0, 0), 30);
+    input.panX = 0;
+    resetCameraInput(input);
+    input.followToggle = true;
+    rig.update(input, 1 / 60, target(0, 0));
+    resetCameraInput(input);
+    // Разрыв на единицу — подпороговый и после возвращения в follow: память о
+    // позиции цели свежая, а не оставшаяся с момента открепления.
+    rig.update(input, 1 / 60, target(1, 0, true));
+    expect(rig.focusX).not.toBe(1);
+  });
 });
 
 describe('CameraRig: режимы и переходы (CAM-2)', () => {

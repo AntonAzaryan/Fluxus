@@ -18,8 +18,16 @@ import type { WorldState } from '../../types.js';
 
 const NO_ACTIONS: readonly Action[] = [];
 
-/** Ширина маски кнопок и маски лока — 32 бита, как у `bitTest` (EXPR-2). */
-const BIT_MAX = 31;
+/**
+ * Номер бита МАСКИ КНОПОК: значимые биты 0..15 (TICK-2). Ширину задаёт то
+ * требование и только оно — «любой потребитель маски SHALL исходить из той же
+ * ширины», — а собственная ширина в геймплейной системе объявлена там же
+ * расхождением с нормой. Индексы 0..31 оператора `bitTest` (EXPR-2) вторым
+ * определением ширины не являются: он общий над произвольной `i32`-маской, и
+ * его же область определения носит маска лока (LOC-7), которая через эту
+ * проверку не проходит — она читается целым числом.
+ */
+const BIT_MAX = 15;
 
 export function fail(path: string, message: string): never {
   throw new Error(`${path}: ${message}`);
@@ -41,9 +49,19 @@ export function literalName(value: unknown, path: string): string {
   return value;
 }
 
+/**
+ * Номер бита маски кнопок из недоверенного документа (ABIL-3): бит запуска,
+ * подтверждения и отмены. Бит выше пятнадцатого — отказ на загрузке, а не
+ * молча принятая кнопка: до провода он не доедет (маска — u16, TICK-2), и
+ * способность оказалась бы ненажимаемой без единого сообщения.
+ */
 export function bitOf(value: unknown, path: string): number {
   if (typeof value !== 'number' || !Number.isInteger(value) || value < 0 || value > BIT_MAX) {
-    fail(path, `ожидался номер бита — целое 0..${BIT_MAX}, получено ${JSON.stringify(value)}`);
+    fail(
+      path,
+      `ожидался номер бита маски кнопок — целое 0..${BIT_MAX} (ABIL-3, ширина маски u16 по TICK-2), ` +
+        `получено ${JSON.stringify(value)}`,
+    );
   }
   return value;
 }

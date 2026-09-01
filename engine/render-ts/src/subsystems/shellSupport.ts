@@ -15,7 +15,6 @@
  * вещи для того, кто это предупреждение читает. Сам приём «сказать один раз» —
  * `warnOnce.ts`: им пользуется и камера, подсистемой не являющаяся.
  */
-import { FIXED_ONE } from '@fluxus/core';
 import type { EntityView, TickView } from '../types.js';
 import type { VisualSurface } from '../visualSurface.js';
 
@@ -97,9 +96,10 @@ export interface EventPoint {
  * Точка события в мировых координатах (REND-23, REND-24): координатные поля
  * события, а нет их — позиция сущности события. `false` — играть событие негде.
  *
- * Fixed-point приходится делить здесь, потому что схему события задаёт контент
- * (см. `RenderEvent.data` в `types.ts`). Разбор один на обе подсистемы-оболочки:
- * второй его записью «нет координат — возьми сущность» разошлось бы с первой.
+ * Обе величины — float: координаты события приведены на входной границе рендера
+ * (REND-1, `eventData.ts`), позиция сущности приезжает такой же из
+ * presentation-состояния. Разбор один на обе подсистемы-оболочки: второй его
+ * записью «нет координат — возьми сущность» разошлось бы с первой.
  */
 export function eventPointOf(
   data: Readonly<Record<string, number>>,
@@ -107,8 +107,8 @@ export function eventPointOf(
   out: EventPoint,
 ): boolean {
   if (data.x !== undefined && data.y !== undefined) {
-    out.x = data.x / FIXED_ONE;
-    out.y = data.y / FIXED_ONE;
+    out.x = data.x;
+    out.y = data.y;
     return true;
   }
   const entity = data.entity ?? data.source;

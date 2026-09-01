@@ -18,6 +18,7 @@ import {
   settle,
   versionOf,
 } from './fixtures.js';
+import { parseServerMessage } from '../src/protocol/messages.js';
 import type { RejectMessage, WelcomeMessage } from '../src/protocol/messages.js';
 
 describe('сверка версии (NET-16)', () => {
@@ -83,6 +84,8 @@ describe('сверка версии (NET-16)', () => {
 
 describe('Welcome', () => {
   it('несёт слот, состав, хеш worldInit и темп — но не содержимое сцены', () => {
+    // Состав сообщения перечислен требованием поимённо (NTR-5) и закрыт:
+    // «свободных полей на будущее … MUST NOT быть» (NTR-4).
     const config = duelConfig();
     const { server } = harness(config);
     server.connect(1);
@@ -103,6 +106,25 @@ describe('Welcome', () => {
     // Сцена названа ссылкой: раздавать контент-пак матча сервер не должен (NET-16).
     expect(message.match.sceneRef).toBe('duel');
     expect(JSON.stringify(message)).not.toContain('components');
+  });
+
+  /**
+   * `seed` на провод не едет (SES-4): клиент `tick()` не исполняет (NTR-10),
+   * стартовый мир поднимает с нулём, и контрольная сумма `worldInit` от seed'а
+   * не зависит вовсе. Поле, которого никто не читает, — то самое «свободное
+   * поле на будущее», которого NTR-4 не допускает.
+   */
+  it('seed на провод не едет: его нет ни в отправленном сообщении, ни в разобранном (NTR-5, SES-4)', () => {
+    const config = duelConfig();
+    const { server } = harness(config);
+    server.connect(1);
+    server.receive(1, hello('p2', config.version));
+
+    const message = server.drain()[0]!.message as WelcomeMessage;
+    expect(message).not.toHaveProperty('seed');
+    // Разбор на клиенте поле тоже не заводит — даже если оно приехало.
+    const parsed = parseServerMessage({ ...(message as object), seed: 99 });
+    expect(parsed).not.toHaveProperty('seed');
   });
 });
 

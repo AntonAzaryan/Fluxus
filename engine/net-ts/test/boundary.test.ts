@@ -39,6 +39,15 @@ describe('зависимость односторонняя', () => {
   });
 });
 
+/**
+ * Модули ECS, чьи ЗНАЧЕНИЯ мутируют мир: хранилище и командный буфер. Типы из
+ * них публиковать можно — тип не мутирует; значение — нет.
+ */
+const MUTATING_MODULES = /\/ecs\/(commands|world)\.js$/;
+
+/** `export ... from '<модуль>'` — одним разбором на обе формы, именную и звёздную. */
+const REEXPORT = /export\s+(type\s+)?(?:\*(?:\s+as\s+\w+)?|\{[^}]*\})\s+from\s+'([^']+)'/g;
+
 describe('поверхность ядра не расширялась', () => {
   it('мутирующий хелпер остался ровно один — worldInitSpawn', () => {
     const index = readFileSync(join(CORE_ROOT, 'src/index.ts'), 'utf8');
@@ -46,6 +55,26 @@ describe('поверхность ядра не расширялась', () => {
       .filter((name) => new RegExp(`^\\s*export (const|function) ${name}\\b`, 'm').test(index));
     expect(exportedMutators).toEqual([]);
     expect(index).toContain('export const worldInitSpawn');
+  });
+
+  /**
+   * Тот же запрет, но по имени не поймать: фабрика `createCommandBuffer`
+   * называется иначе, а отдаёт ровно те пять операций сразу — и `flush()`,
+   * применяющий их к миру немедленно. Поэтому правило шире перечня имён: из
+   * модулей ECS-мутации публичная поверхность ре-экспортирует только ТИПЫ
+   * (TICK-3). Единственное исключение требования — расстановка `worldInit` —
+   * уходит наружу присваиванием под собственным именем (`worldInitSpawn`),
+   * а не ре-экспортом, и проверяется тестом выше.
+   */
+  it('из модулей ECS-мутации наружу уходят только типы: фабрика мутатора — тот же side-channel (TICK-3)', () => {
+    const index = readFileSync(join(CORE_ROOT, 'src/index.ts'), 'utf8');
+    const offenders: string[] = [];
+    for (const [statement, typeOnly, specifier] of index.matchAll(REEXPORT)) {
+      if (!MUTATING_MODULES.test(specifier!)) continue;
+      if (typeOnly !== undefined) continue;
+      offenders.push(statement.replace(/\s+/g, ' '));
+    }
+    expect(offenders).toEqual([]);
   });
 
   it('сетевой слой обходится опубликованной поверхностью', () => {

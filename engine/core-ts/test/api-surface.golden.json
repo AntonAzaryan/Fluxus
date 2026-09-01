@@ -137,7 +137,6 @@
   "contentPackForm",
   "contentPackHash",
   "createArenaApi",
-  "createCommandBuffer",
   "createInputLog",
   "createJsonlSink",
   "createPhysicsApi",

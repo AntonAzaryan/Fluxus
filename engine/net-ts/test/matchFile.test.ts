@@ -268,27 +268,61 @@ describe('раскладка зависимостей сборки для кли
   });
 
   /**
-   * Полнота списка проверяется ТИПОМ: секция документа, которую опции клиента
-   * матча принимают, но раскладка не называет, делает `Missing` непустым, и
-   * тогда `true` не присваивается — `npm run typecheck` краснеет ещё до
-   * прогона. Ровно этой проверки не хватало, когда у клиента появилось поле
-   * `navigation`.
+   * Полнота списка выводится ИЗ ДОКУМЕНТА МАТЧА, а не из опций клиента:
+   * «обе стороны SHALL получать зависимости сборки из одного описания матча»
+   * (NTR-14), поэтому счёт идёт от секций документа, а серверными объявляются
+   * поимённо — с причиной. Прежняя проверка шла обратным ходом, от
+   * `MatchClientOptions`, и потому была согласована сама с собой: секции
+   * `locomotion` не было ни в раскладке, ни в опциях клиента, и разность
+   * оставалась пустой при живом расхождении с документом.
+   *
+   * Новая секция документа теперь краснит этот тест своим именем, пока её не
+   * отнесли к одной из двух половин осознанно.
    */
-  it('список покрывает все зависимости сборки, которые клиент принимает', () => {
-    type ClientBuildField = keyof MatchClientOptions & (typeof MATCH_DOCUMENT_FIELDS)[number];
-    type Missing = Exclude<ClientBuildField, (typeof CLIENT_BUILD_FIELDS)[number]>;
-    const complete: [Missing] extends [never] ? true : false = true;
-    expect(complete).toBe(true);
+  const SERVER_ONLY_FIELDS: Readonly<Record<string, string>> = {
+    players: 'ростер приезжает клиенту в Welcome (NTR-5), а не раскладкой сборки',
+    seed: 'клиент tick() не исполняет (NTR-10) и поднимает мир с нулём — в хеш worldInit seed не входит',
+    sceneRef: 'сцену клиент резолвит своим контент-паком (NET-16)',
+    initial: 'расстановка приезжает описанием матча в Welcome (NTR-5)',
+    name: 'имя матча зависимостью сборки мира не является',
+    teams: 'точка зрения слота — серверная политика фильтрации снапшота (NET-12)',
+    tickRate: 'темп приезжает клиенту в Welcome (NTR-5)',
+    snapshotRate: 'темп приезжает клиенту в Welcome (NTR-5)',
+    inputDelay: 'темп приезжает клиенту в Welcome (NTR-5)',
+    inputWindow: 'окно приёма ввода приезжает в Welcome (NTR-7)',
+    eventRepeat: 'глубина повтора потока событий приезжает в Welcome (NTR-15)',
+    rewind: 'историю ведёт сервер (NET-11); клиенту из неё нужен только номер бита ведения скраба',
+    pause: 'правила паузы исполняет сервер (NTR-20)',
+  };
+
+  it('список клиента — поля документа минус объявленные серверными (NTR-14)', () => {
+    for (const field of Object.keys(SERVER_ONLY_FIELDS)) {
+      expect(MATCH_DOCUMENT_FIELDS, `"${field}" — не поле документа матча`).toContain(field);
+    }
+    const expected = MATCH_DOCUMENT_FIELDS.filter((field) => !(field in SERVER_ONLY_FIELDS));
+    expect([...CLIENT_BUILD_FIELDS].sort()).toEqual([...expected].sort());
+  });
+
+  /**
+   * Обратная сторона того же: каждое имя раскладки клиент действительно
+   * ПРИНИМАЕТ. Проверяется типом — `npm run typecheck` краснеет до прогона,
+   * если список назовёт секцию, которой у опций клиента нет.
+   */
+  it('каждую названную секцию опции клиента матча принимают', () => {
+    type Unknown = Exclude<(typeof CLIENT_BUILD_FIELDS)[number], keyof MatchClientOptions>;
+    const accepted: [Unknown] extends [never] ? true : false = true;
+    expect(accepted).toBe(true);
   });
 
   it('едут ровно объявленные документом секции, без `undefined`-ключей', () => {
     const full = document({ navigation: { budget: 256, maxAgentRadius: 16384 } });
     expect(clientBuildOptions(full)).toEqual({
       physics: full.physics,
+      locomotion: full.locomotion,
       visibility: full.visibility,
       navigation: full.navigation,
     });
-    const bare = documentWithout('physics', 'visibility');
+    const bare = documentWithout('physics', 'locomotion', 'visibility');
     expect(Object.keys(clientBuildOptions(bare))).toEqual([]);
   });
 

@@ -41,6 +41,7 @@ import {
   type FlightPhaseSource,
   type StatSource,
 } from './statSources.js';
+import { renderEventData } from './eventData.js';
 import type { RenderEvent } from './types.js';
 
 /** Конвенция физики ядра: компонент скорости с полями `x`/`y` (Q16.16 за тик). */
@@ -518,9 +519,13 @@ export class Extractor {
     // Копия переживает dispatch (OBS-3): view ядра дальше не удерживается.
     // Массив на тик новый: view.events прошлого тика не мутируется под
     // подсистемой, удерживающей его до следующего syncTick.
+    //
+    // Здесь же — входная граница нагрузки (REND-1): координатные поля события
+    // уходят дальше float'ами в мировых единицах, как всё остальное в пакете
+    // рендера (`eventData.ts`).
     let events: RenderEvent[] | null = null;
     for (const event of result.events) {
-      (events ??= []).push({ type: event.type, tick: result.tick, data: { ...event.data } });
+      (events ??= []).push({ type: event.type, tick: result.tick, data: renderEventData(event.data) });
     }
     return events ?? EMPTY_EVENTS;
   }
@@ -528,8 +533,12 @@ export class Extractor {
   /**
    * Направление атаки/каста для bone-контроля (REND-5) из событий тика.
    * Конвенции полей события: `entity`/`source` — кастующий (EVENT_ENTITY_FIELDS
-   * ядра); направление — `dirX`/`dirY` (вектор Q16.16), иначе `x`/`y` (точка
-   * мира), иначе `target` (сущность — берём её позицию).
+   * ядра); направление — `dirX`/`dirY` (вектор), иначе `x`/`y` (точка мира),
+   * иначе `target` (сущность — берём её позицию).
+   *
+   * Координаты события здесь УЖЕ float: события приезжают сюда после
+   * `copyEvents`, то есть за входной границей (REND-1). Делится на `FIXED_ONE`
+   * только читаемое прямо из мира — позиции сущностей.
    */
   private captureAim(state: WorldState, tick: number, events: readonly RenderEvent[]): void {
     for (const event of events) {
@@ -555,14 +564,14 @@ export class Extractor {
     const dirX = event.data.dirX;
     const dirY = event.data.dirY;
     if (dirX !== undefined && dirY !== undefined && (dirX !== 0 || dirY !== 0)) {
-      return Math.atan2(dirY / FIXED_ONE, dirX / FIXED_ONE);
+      return Math.atan2(dirY, dirX);
     }
     const cx = world.getField(state, caster, POSITION_COMPONENT, 'x') / FIXED_ONE;
     const cy = world.getField(state, caster, POSITION_COMPONENT, 'y') / FIXED_ONE;
     const px = event.data.x;
     const py = event.data.y;
     if (px !== undefined && py !== undefined) {
-      return Math.atan2(py / FIXED_ONE - cy, px / FIXED_ONE - cx);
+      return Math.atan2(py - cy, px - cx);
     }
     const target = event.data.target;
     if (

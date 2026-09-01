@@ -119,6 +119,11 @@ export type { DecorationInstance } from './decorations.js';
 // воркер-сторона (единственный читатель мира), ViewBuffer — main-сторона.
 export { Extractor, ENTITY_MOVING, ENTITY_LEVEL_OVERRIDE } from './extractor.js';
 export type { ExtractedTick, ExtractorConfig } from './extractor.js';
+// Перевод нагрузки события на входной границе (REND-1). Наружу уходит потому,
+// что производителей событий у рендера два, и второй — сетевая оболочка
+// (SHELL-4): факты с провода входят в рендер мимо `Extractor`, и перевод у них
+// обязан быть тем же самым, а не вторым таким же.
+export { renderEventData, EVENT_FIXED_FIELDS } from './eventData.js';
 // Объявляемые сборкой источники величин: фаза полёта (REND-12) и статы (HUD-8).
 export { MAX_STATS } from './statSources.js';
 export type { FlightPhaseSource, StatSource } from './statSources.js';

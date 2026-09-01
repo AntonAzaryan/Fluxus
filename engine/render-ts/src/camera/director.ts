@@ -24,7 +24,7 @@
  * очередью накопленных тряск (CAM-5, CAM-6). Длящиеся — от присутствия
  * состояния на сущности-цели в снапшоте (`EntityView.states`).
  */
-import { FIXED_ONE, type EntityId } from '@fluxus/core';
+import type { EntityId } from '@fluxus/core';
 import {
   cameraEffectParams,
   clampCameraEffectParam,
@@ -62,6 +62,19 @@ export interface CameraEffectsDirectorOptions {
    */
   readonly stateComponents?: readonly string[];
   readonly stack?: EffectStack;
+  /**
+   * Глобальный множитель силы эффектов (CAM-6) — параметр конфига камеры
+   * (`CameraConfig.effectsMultiplier`, CAM-1), поэтому приезжает он сюда числом
+   * из ТОГО ЖЕ конфига, которым сборка настраивает rig. Ноль — полное
+   * отключение (доступность при укачивании): финальная поза всегда равна
+   * логической, события и состояния игнорируются без ошибок.
+   *
+   * Отдельно от `stack` потому, что стек — механизм, а множитель — политика:
+   * сборка, своего стека не приносящая (обычный случай), настраивает им стек по
+   * умолчанию, а принесшая вправе назвать оба — тогда число выигрывает, как
+   * назначенное позже.
+   */
+  readonly effectsMultiplier?: number;
   /** Канал предупреждений; по умолчанию console.warn. */
   readonly warn?: (message: string) => void;
 }
@@ -122,6 +135,7 @@ export class CameraEffectsDirector {
     this.description = options.description ?? CAMERA_EFFECTS_DESCRIPTION;
     this.stateComponents = options.stateComponents ?? [];
     this.stack = options.stack ?? new EffectStack();
+    if (options.effectsMultiplier !== undefined) this.stack.multiplier = options.effectsMultiplier;
     this.warnOnce = createWarnOnce(options.warn);
   }
 
@@ -187,14 +201,13 @@ export class CameraEffectsDirector {
 
   /**
    * Ослабление импульса расстоянием от точки наблюдения (CAM-6): позиция
-   * события — поля `x`/`y` (Q16.16), иначе позиция сущности `entity`/`source`
-   * из снапшота, иначе — без ослабления. `radius` — параметр привязки, и
-   * читается он по описанию (CAM-9), а не по литералу ключа.
+   * события — поля `x`/`y`, иначе позиция сущности `entity`/`source` из
+   * снапшота, иначе — без ослабления. `radius` — параметр привязки, и читается
+   * он по описанию (CAM-9), а не по литералу ключа.
    *
-   * Деление на `FIXED_ONE` здесь — единственное место, где fixed-point живёт за
-   * входной границей рендера (REND-1): полезная нагрузка события копируется
-   * поле в поле, а какие её поля координатные, знает контент, а не рендер (см.
-   * `RenderEvent.data` в `types.ts`).
+   * Все три величины здесь — float в мировых единицах: координаты события
+   * приведены на входной границе рендера (REND-1, `eventData.ts`), позиция
+   * сущности приезжает такой же из presentation-состояния.
    */
   private falloff(
     view: TickView,
@@ -208,8 +221,8 @@ export class CameraEffectsDirector {
     let x: number | null = null;
     let y: number | null = null;
     if (data.x !== undefined && data.y !== undefined) {
-      x = data.x / FIXED_ONE;
-      y = data.y / FIXED_ONE;
+      x = data.x;
+      y = data.y;
     } else {
       const source = data.entity ?? data.source;
       const entity = source === undefined ? undefined : view.entities.get(source);

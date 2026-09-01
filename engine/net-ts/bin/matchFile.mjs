@@ -123,7 +123,7 @@ function rejectUnknownFields(carried) {
  * только то, что нужно ЕГО сборке мира. Полнота его проверяется типом в
  * `test/matchFile.test.ts` — против опций клиента матча, а не на глаз.
  */
-export const CLIENT_BUILD_FIELDS = ['physics', 'visibility', 'navigation'];
+export const CLIENT_BUILD_FIELDS = ['physics', 'locomotion', 'visibility', 'navigation'];
 
 /**
  * Зависимости сборки мира для клиента — ровно те секции документа, которые он

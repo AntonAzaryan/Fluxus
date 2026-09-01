@@ -580,3 +580,45 @@ describe('RenderHost: направление каста из событий (REN
     expect(view.aimYaw).toBeNull();
   });
 });
+
+describe('RenderHost: входная граница нагрузки события (REND-1)', () => {
+  /**
+   * «Конверсия Q16.16 → float SHALL происходить на входе в рендер … и MUST NOT
+   * происходить глубже» — значит, за границей нагрузка события уже float, и
+   * потребителю (тряска камеры CAM-6, точка оболочки REND-23) делить нечего.
+   * Приводятся ровно координатные поля: ссылка на сущность — целый номер, а
+   * поле, смысл которого задаёт контент, рендер не трогает вовсе.
+   */
+  it('координаты события переходят границу float’ами, ссылки и прочие поля — как есть', () => {
+    const boom: System = {
+      name: 'Boom',
+      order: 41,
+      run(ctx) {
+        if (ctx.tick !== 1) return;
+        for (const entity of ctx.query({ all: ['Position'] })) {
+          ctx.events.emit('Boom', {
+            entity,
+            x: F(3),
+            y: F(-2.5),
+            dirX: F(1),
+            dirY: 0,
+            amount: 7,
+          });
+        }
+      },
+    };
+    const { scene, sim } = makeScene([boom]);
+    const runner = spawnRunner(scene, 0.5, 0.5, 0, 0);
+    const state = initialState(scene.world, 7);
+    const { host } = makeHost(scene);
+
+    dispatch(tick(sim, state), [host]);
+    const event = host.view.events.find((entry) => entry.type === 'Boom')!;
+    expect(event.data.x).toBe(3);
+    expect(event.data.y).toBe(-2.5);
+    expect(event.data.dirX).toBe(1);
+    expect(event.data.dirY).toBe(0);
+    expect(event.data.entity).toBe(runner);
+    expect(event.data.amount).toBe(7);
+  });
+});

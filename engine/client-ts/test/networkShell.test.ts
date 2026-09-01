@@ -136,10 +136,11 @@ function matchConfig(
 function probe(): {
   subsystem: RenderSubsystem;
   views: unknown[];
-  events: { tick: number | undefined; type: string }[];
+  events: { tick: number | undefined; type: string; data: Readonly<Record<string, number>> }[];
 } {
   const views: unknown[] = [];
-  const events: { tick: number | undefined; type: string }[] = [];
+  const events: { tick: number | undefined; type: string; data: Readonly<Record<string, number>> }[] =
+    [];
   return {
     views,
     events,
@@ -148,7 +149,9 @@ function probe(): {
       init: () => {},
       syncTick(view: TickView) {
         views.push(snapshotView(view));
-        for (const event of view.events) events.push({ tick: event.tick, type: event.type });
+        for (const event of view.events) {
+          events.push({ tick: event.tick, type: event.type, data: event.data });
+        }
       },
       updateFrame: () => {},
     },
@@ -765,5 +768,15 @@ describe('одна подсистема в обеих сборках оболо�
     expect(net.probe.events.every((event) => typeof event.tick === 'number')).toBe(true);
     expect(net.probe.events.length).toBeGreaterThan(0);
     expect(localProbe.events.length).toBeGreaterThan(0);
+    // И нагрузка их одинакова по форме: обе сцены эмитят `dirY` в Q16.16
+    // (`FIXED_ONE`), а подсистема в обеих сборках видит float в мировых
+    // единицах — входная граница у потока тиков и у фактов с провода одна и та
+    // же (REND-1, SHELL-4).
+    const dirYOf = (
+      events: { type: string; data: Readonly<Record<string, number>> }[],
+      type: string,
+    ): number | undefined => events.find((event) => event.type === type)?.data.dirY;
+    expect(dirYOf(localProbe.events, 'CastFireball')).toBe(1);
+    expect(dirYOf(net.probe.events, PULSE_EVENT)).toBe(1);
   });
 });

@@ -308,6 +308,28 @@ describe('Проверки загрузки определений (ABIL-10)', (
     expect(failing({ interrupts: { stunned: {} } })).toThrow(/неизвестный источник прерывания/);
   });
 
+  /**
+   * Ширина маски кнопок — u16 (TICK-2), и «любой потребитель маски SHALL
+   * исходить из той же ширины». Бит выше пятнадцатого до провода не доедет,
+   * поэтому способность на нём — ошибка ЗАГРУЗКИ, а не «кнопка почему-то не
+   * работает» на плейтесте: клиентский сэмплер бита выше 15 не ставит вовсе, а
+   * сетевая граница такой кадр отвергает.
+   */
+  it('номер бита кнопки вне u16 — ошибка загрузки во всех трёх полях маски (ABIL-3, TICK-2)', () => {
+    expect(failing({ trigger: { input: { bit: 16 } } })).toThrow(
+      /trigger\.input\.bit: ожидался номер бита маски кнопок — целое 0\.\.15 \(ABIL-3, ширина маски u16 по TICK-2\), получено 16/,
+    );
+    expect(failing({ confirmBit: 20 })).toThrow(/confirmBit: ожидался номер бита маски кнопок — целое 0\.\.15/);
+    expect(failing({ cancelBit: 31 })).toThrow(/cancelBit: ожидался номер бита маски кнопок — целое 0\.\.15/);
+    // Отрицательный и дробный отвергаются той же проверкой и после сужения.
+    expect(failing({ trigger: { input: { bit: -1 } } })).toThrow(/trigger\.input\.bit/);
+    expect(failing({ trigger: { input: { bit: 1.5 } } })).toThrow(/trigger\.input\.bit/);
+  });
+
+  it('старший значимый бит маски (15) принимается — граница включающая (TICK-2)', () => {
+    expect(failing({ trigger: { input: { bit: 15 } }, confirmBit: 15, cancelBit: 0 })).not.toThrow();
+  });
+
   it('неизвестная переменная в эффекте — ошибка загрузки, а не молчаливый undefined', () => {
     expect(failing({ effects: [{ emitEvent: { type: 'Cast', data: { v: { var: 'nope' } } } }] })).toThrow(
       /переменная "nope" не связана/,

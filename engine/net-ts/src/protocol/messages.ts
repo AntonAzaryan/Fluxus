@@ -259,11 +259,18 @@ export interface Pacing {
   readonly eventRepeat: number;
 }
 
+/**
+ * `seed` в составе НЕТ намеренно (NTR-5, SES-4): клиент `tick()` не исполняет
+ * (NTR-10), стартовый мир поднимает с нулём вместо присланного значения, и
+ * контрольная сумма `worldInit` (DET-1) от него не зависит. Поле, которое никто
+ * не читает, — то самое «свободное поле на будущее», которого NTR-4 не
+ * допускает. Ростер (`players`), наоборот, клиенту жизненно нужен: без него он
+ * не соберёт стартовый мир и не сверит контрольную сумму.
+ */
 export interface WelcomeMessage {
   readonly type: 'Welcome';
   readonly slot: number;
   readonly players: readonly string[];
-  readonly seed: number;
   readonly match: MatchDescriptor;
   readonly worldInitHash: string;
   readonly pacing: Pacing;
@@ -703,7 +710,6 @@ export function parseServerMessage(value: unknown): ServerMessage {
         type: 'Welcome',
         slot: int(source, 'slot', 'Welcome', 0, players.length - 1),
         players: players as readonly string[],
-        seed: int(source, 'seed', 'Welcome', I32_MIN, I32_MAX),
         match: {
           sceneRef: str(match, 'sceneRef', 'Welcome.match'),
           initial: initial as readonly ScenarioSpawn[],

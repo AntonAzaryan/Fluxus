@@ -49,7 +49,11 @@ export interface CameraPose {
 export interface FollowTarget {
   readonly x: number;
   readonly y: number;
-  /** Разрыв непрерывности цели в последнем тике — прыгнуть без проезда (CAM-5). */
+  /**
+   * РОД разрыва непрерывности цели в последнем тике, поднятый политикой рендера
+   * (REND-2). Прыжок камеры — не он один: величину сравнивает с собственным
+   * порогом сама камера (CAM-5, `CameraConfig.snapDistance`).
+   */
   readonly snap: boolean;
 }
 
@@ -216,6 +220,14 @@ export class CameraRig {
   private framing = false;
   private framingX = 0;
   private framingY = 0;
+  /**
+   * Позиция follow-цели на ПРОШЛОМ кадре: по ней меряется её смещение, когда
+   * рендер поднял признак разрыва (CAM-5). `null` — цели на прошлом кадре не
+   * было (её нет вовсе, она только что появилась или сменилась), и мерить
+   * тогда не от чего.
+   */
+  private lastTargetX: number | null = null;
+  private lastTargetY: number | null = null;
   /** Fly-состояние; за пределами fly не используется. */
   private flyX = 0;
   private flyY = 0;
@@ -389,6 +401,13 @@ export class CameraRig {
     } else {
       this.updateGrounded(input, dt, target);
     }
+    // Позиция цели запоминается на КАЖДОМ кадре и во всех режимах, а не только
+    // в follow: смещение (CAM-5) — свойство цели, а не режима, и вернувшийся из
+    // free-панорамы кадр обязан мерить его от свежей позиции, а не от той, на
+    // которой follow прервался. Цели нет — память чистится: догонять после
+    // паузы в существовании цели нечего, это разрыв по определению.
+    this.lastTargetX = target === null ? null : target.x;
+    this.lastTargetY = target === null ? null : target.y;
     return this.pose;
   }
 
@@ -447,10 +466,18 @@ export class CameraRig {
     this.distance += (this.desiredDistance - this.distance) * ease(cfg.zoomSmoothing, dt);
   }
 
-  /** Проезд точки наблюдения за follow-целью (CAM-5). */
+  /**
+   * Проезд точки наблюдения за follow-целью (CAM-5).
+   *
+   * Признак `target.snap` — РОД разрыва, поднятый политикой рендера (REND-2:
+   * спавн, телепорт, rewind/replay); величины у неё нет, и порога камере она не
+   * даёт. Порогом владеет CAM-5, поэтому прыжок случается не по признаку, а по
+   * признаку И смещению цели больше `snapDistance` (CAM-1): «подпороговый
+   * телепорт инстанс снапит, а камера доводит сглаживанием — она следует за
+   * целью, а не рисует её».
+   */
   private advanceFollow(target: FollowTarget, dt: number): void {
-    if (target.snap) {
-      // Разрыв цели (телепорт, rewind) — прыжок без проезда (CAM-5).
+    if (target.snap && this.targetJumped(target)) {
       this.targetX = target.x;
       this.targetY = target.y;
       return;
@@ -458,6 +485,19 @@ export class CameraRig {
     const s = ease(this.config.followSmoothing, dt);
     this.targetX += (target.x - this.targetX) * s;
     this.targetY += (target.y - this.targetY) * s;
+  }
+
+  /**
+   * Смещение цели с прошлого кадра больше собственного порога камеры (CAM-5).
+   * Прошлой позиции нет — разрыв надпороговый: цель только что появилась
+   * (спавн) или сменилась, и «доехать сглаживанием» тут значило бы проехать
+   * через всю арену от чужой точки.
+   */
+  private targetJumped(target: FollowTarget): boolean {
+    if (this.lastTargetX === null || this.lastTargetY === null) return true;
+    const dx = target.x - this.lastTargetX;
+    const dy = target.y - this.lastTargetY;
+    return Math.hypot(dx, dy) > this.config.snapDistance;
   }
 
   /**

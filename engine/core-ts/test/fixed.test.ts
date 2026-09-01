@@ -227,6 +227,50 @@ describe('sqrt — целочисленный алгоритм без Math.sqrt'
     expect(f(fixed.sqrt(F(1000)))).toBeCloseTo(Math.sqrt(1000), 2);
   });
 
+  /**
+   * DET-2 запрещает libm «ни при каких условиях», поэтому сид больше не
+   * приходит из `Math.sqrt`, и точность держится на самом алгоритме. Проверяется
+   * ОПРЕДЕЛЕНИЕ isqrt на эталоне BigInt (в тестах он легален, как и у mul,
+   * FP-2): `s² ≤ a·2^16 < (s+1)²`. Такое s единственно, поэтому проверка
+   * определением заодно и есть обещание «ответ тот же до бита, каким бы ни был
+   * сид» — второй реализации ядра (CORE-2) сверяться тоже с ним.
+   *
+   * Перебор — по местам, где ломаются именно приближения: длина двоичной записи
+   * меняется у степеней двойки, коррекции ±1 работают у точных квадратов,
+   * стартовая догадка максимальна у границы i32.
+   */
+  it('точный isqrt на границах, степенях двойки и точных квадратах (FP-6, DET-2)', () => {
+    const probes = new Set<number>();
+    for (let a = 1; a <= 20000; a++) probes.add(a); // малые значения целиком
+    for (let bit = 0; bit <= 30; bit++) {
+      for (const delta of [-1, 0, 1]) {
+        const a = (1 << bit) + delta;
+        if (a >= 1) probes.add(a);
+      }
+    }
+    // Точные квадраты по всему диапазону и их соседи: n = a·2^16 — полный
+    // квадрат ровно тогда, когда полный квадрат сам операнд.
+    for (let k = 1; k * k <= fixed.INT32_MAX; k += 137) {
+      for (const delta of [-1, 0, 1]) {
+        const a = k * k + delta;
+        if (a >= 1 && a <= fixed.INT32_MAX) probes.add(a);
+      }
+    }
+    for (const a of [fixed.INT32_MAX, fixed.INT32_MAX - 1, 46340 * 46340, 46341 * 46341 - 1]) {
+      if (a >= 1 && a <= fixed.INT32_MAX) probes.add(a);
+    }
+    // Равномерный шаг по всему диапазону — на случай промаха перечисленных мест.
+    for (let a = 1; a < fixed.INT32_MAX; a += 3_000_017) probes.add(a);
+
+    const wrong: string[] = [];
+    for (const a of probes) {
+      const s = BigInt(fixed.sqrt(a));
+      const n = BigInt(a) * BigInt(FIXED_ONE);
+      if (!(s * s <= n && n < (s + 1n) * (s + 1n))) wrong.push(`${a} → ${s}`);
+    }
+    expect(wrong).toEqual([]);
+  });
+
   it('отрицательный операнд (FP-6): возвращает 0 без исключения, одинаково в debug и release', async () => {
     const { sink, entries } = collector();
 

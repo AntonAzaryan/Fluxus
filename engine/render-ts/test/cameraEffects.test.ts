@@ -8,7 +8,6 @@ import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import {
-  FIXED_ONE,
   fixed,
   initialState,
   loadScene,
@@ -135,11 +134,9 @@ describe('EffectStack и эффекты (CAM-6)', () => {
 });
 
 describe('CameraEffectsDirector (CAM-6, ASSET-8)', () => {
-  const explosion = (x: number, y: number) => ({
-    type: 'Boom',
-    tick: 1,
-    data: { x: x * FIXED_ONE, y: y * FIXED_ONE },
-  });
+  // Координаты события — float в мировых единицах: перевод сделан на входной
+  // границе рендера (REND-1), а `TickView` здесь конструируется уже за ней.
+  const explosion = (x: number, y: number) => ({ type: 'Boom', tick: 1, data: { x, y } });
 
   const shakeAmount = (stack: EffectStack): number => {
     const o = offsetOf(stack);
@@ -198,6 +195,37 @@ describe('CameraEffectsDirector (CAM-6, ASSET-8)', () => {
     expect(isZero(offsetOf(director.stack))).toBe(true);
   });
 
+  /**
+   * Сценарий «Множитель ноль» (CAM-6) с той стороны, с какой до выключателя
+   * дотягивается АВТОР: множитель — параметр конфига камеры (CAM-1), и
+   * приезжает он диспетчеру числом. Сборка, своего стека не приносящая, —
+   * обычный случай (так собран демо-клиент), и раньше выключатель ей был
+   * недоступен вовсе: стек по умолчанию всегда получал множитель 1.
+   */
+  it('множитель конфига 0 отключает эффекты и при стеке по умолчанию (CAM-1, CAM-6)', () => {
+    const director = new CameraEffectsDirector({
+      tables: { events: { Boom: { effect: 'shake', amplitude: 1, decay: 0 } } },
+      effectsMultiplier: 0,
+    });
+    director.onTick(makeTickView([], { freshEvents: true, events: [explosion(0, 0)] }), 0, 0, null);
+    for (let i = 0; i < 10; i++) expect(director.stack.apply(LOGICAL, 1 / 60)).toEqual(LOGICAL);
+  });
+
+  it('множитель конфига 0.5 — половина амплитуды того же события (CAM-6)', () => {
+    const tables = { events: { Boom: { effect: 'shake', amplitude: 1, decay: 0 } } };
+    const view = makeTickView([], { freshEvents: true, events: [explosion(0, 0)] });
+    // Умолчание множителя — единица: конфиг камеры его таким и объявляет.
+    const full = new CameraEffectsDirector({ tables });
+    const half = new CameraEffectsDirector({ tables, effectsMultiplier: 0.5 });
+    full.onTick(view, 0, 0, null);
+    half.onTick(view, 0, 0, null);
+    // Тряска детерминирована (value-noise от времени эффекта), стеки идут одним
+    // и тем же шагом — значит, отличаться они вправе ровно множителем.
+    const amplitude = shakeAmount(full.stack);
+    expect(amplitude).toBeGreaterThan(0);
+    expect(shakeAmount(half.stack)).toBeCloseTo(amplitude / 2, 12);
+  });
+
   it('длящийся эффект следует присутствию состояния на цели (CAM-6)', () => {
     const hero = 7 as EntityId;
     const director = new CameraEffectsDirector({
@@ -237,11 +265,9 @@ describe('CameraEffectsDirector (CAM-6, ASSET-8)', () => {
  * правки диспетчера».
  */
 describe('Описание типов эффектов (CAM-9)', () => {
-  const explosion = (x: number, y: number) => ({
-    type: 'Boom',
-    tick: 1,
-    data: { x: x * FIXED_ONE, y: y * FIXED_ONE },
-  });
+  // Координаты события — float в мировых единицах: перевод сделан на входной
+  // границе рендера (REND-1), а `TickView` здесь конструируется уже за ней.
+  const explosion = (x: number, y: number) => ({ type: 'Boom', tick: 1, data: { x, y } });
 
   /** Эффект-свидетель: запоминает поданные числа и сдвигает позу на амплитуду. */
   class Nudge implements ImpulseEffect, LastingEffect {

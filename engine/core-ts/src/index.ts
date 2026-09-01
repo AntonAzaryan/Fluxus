@@ -59,8 +59,18 @@ export type { PrefabDef, PlainWorld } from './ecs/world.js';
 export * as entityIndex from './ecs/entityIndex.js';
 export * as componentMask from './ecs/componentMask.js';
 export { query } from './ecs/query.js';
-export { createCommandBuffer } from './ecs/commands.js';
-export type { CommandBufferHandle } from './ecs/commands.js';
+/**
+ * Фабрики командного буфера в публичной поверхности нет намеренно (TICK-3):
+ * `createCommandBuffer` принимает ЛЮБОЙ живой мир и отдаёт ровно те операции,
+ * публикацию которых требование называет несуществующей (`spawn`, `destroy`,
+ * `addComponent`, `removeComponent`, `setField`), а `flush()` применяет их к
+ * миру немедленно — то есть вне тика. Внутри системы этот канал легален, но
+ * буфер там выдаёт сам тик через `ctx.commands` (DET-7), и отдельного экспорта
+ * для этого не нужно. Вместе с фабрикой не публикуется и тип её выдачи
+ * (`CommandBufferHandle`): употребить его снаружи нечем. Контракт самих
+ * операций (`CommandBuffer` в `types.ts`) публичен и дальше — по нему пишутся
+ * системы.
+ */
 export { EventBus } from './ecs/events.js';
 
 // dsl — evaluate-системы и выражения из JSON

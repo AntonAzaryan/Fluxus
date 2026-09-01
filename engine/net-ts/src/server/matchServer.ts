@@ -1325,7 +1325,6 @@ export class MatchServer {
       type: 'Welcome',
       slot,
       players: this.config.players,
-      seed: this.config.seed,
       match: { sceneRef: this.config.sceneRef, initial: this.config.initial ?? [] },
       worldInitHash: this.worldInitHash,
       pacing: this.pacing,

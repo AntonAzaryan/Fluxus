@@ -122,6 +122,7 @@ export const DEMO_NAVIGATION: NavigationOptions | undefined = doc.navigation;
  */
 export const DEMO_CLIENT_BUILD_FIELDS: typeof CLIENT_BUILD_FIELDS = [
   'physics',
+  'locomotion',
   'visibility',
   'navigation',
 ];
@@ -136,6 +137,7 @@ export function demoClientBuildOptions(
   // самим списком, а не с переписанными в нём именами.
   return {
     ...(config.physics !== undefined ? { physics: config.physics } : {}),
+    ...(config.locomotion !== undefined ? { locomotion: config.locomotion } : {}),
     ...(config.visibility !== undefined ? { visibility: config.visibility } : {}),
     ...(config.navigation !== undefined ? { navigation: config.navigation } : {}),
   };

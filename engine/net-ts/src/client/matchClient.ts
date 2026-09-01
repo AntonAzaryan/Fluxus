@@ -17,6 +17,7 @@ import {
   type ComponentSchema,
   type Fixed,
   type InputFrame,
+  type LocomotionOptions,
   type PhysicsOptions,
   type PlainSnapshot,
   type SceneDef,
@@ -72,6 +73,14 @@ export interface MatchClientOptions {
   readonly observer?: boolean;
   /** Зависимости сборки (DI-3): приезжают со сборкой клиента, а не с провода. */
   readonly physics?: PhysicsOptions;
+  /**
+   * Как ввод превращается в движение (NTR-14): зависимость сборки наравне с
+   * физикой, пересчётом видимости и поиском пути, и приезжает она обеим
+   * сторонам из одного описания матча. Без неё мир клиента поднимался бы БЕЗ
+   * `LocomotionSystem`, то есть другим составом систем, чем серверный, — тем
+   * самым расхождением, которого требование и не допускает.
+   */
+  readonly locomotion?: LocomotionOptions;
   readonly visibility?: VisibilityOptions;
   /**
    * Включение и параметры поиска пути (NTR-14): зависимость сборки наравне с
@@ -621,6 +630,7 @@ export class MatchClient {
         players,
         initial: match.initial,
         ...(this.options.physics !== undefined ? { physics: this.options.physics } : {}),
+        ...(this.options.locomotion !== undefined ? { locomotion: this.options.locomotion } : {}),
         ...(this.options.visibility !== undefined ? { visibility: this.options.visibility } : {}),
         ...(this.options.navigation !== undefined ? { navigation: this.options.navigation } : {}),
       });

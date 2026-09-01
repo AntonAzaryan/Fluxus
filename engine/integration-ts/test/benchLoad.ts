@@ -55,7 +55,6 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import * as THREE from 'three';
 import {
-  FIXED_ONE,
   buildSimulation,
   createTerrainGrid,
   tick,
@@ -790,12 +789,15 @@ export interface SyntheticLoad {
 export function syntheticTick(load: SyntheticLoad): ExtractedTick {
   const count = load.entities;
   const shots = load.shots ?? 0;
+  // Нагрузка синтетическая и строится СРАЗУ в плоской форме, то есть за
+  // входной границей рендера (REND-1): координаты события здесь float в
+  // мировых единицах — ровно такие, какими их отдаёт `renderEventData`.
   const events: RenderEvent[] = Array.from({ length: shots }, (_, i) => ({
     type: BENCH_BURST_EVENT,
     tick: 1,
     data: {
-      x: Math.round(((i % load.extent) + 0.5) * FIXED_ONE),
-      y: Math.round((Math.floor(i / load.extent) + 0.5) * FIXED_ONE),
+      x: (i % load.extent) + 0.5,
+      y: Math.floor(i / load.extent) + 0.5,
     },
   }));
   const ext: ExtractedTick = {

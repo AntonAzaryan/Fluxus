@@ -1447,6 +1447,11 @@ async function main(): Promise<void> {
       // Камера: поверхность и границы — из той же сетки, что рендер террейна
       // (CAM-2, CAM-3); эффекты — по таблицам манифеста (ASSET-7, CAM-6).
       const ground = terrainGroundApi(grid, HEIGHT_STEP);
+      // Конфиг камеры читается ОДИН раз на обе половины конвейера: rig берёт из
+      // него кадр и порог рывка (CAM-1, CAM-5), диспетчер — глобальный
+      // множитель силы эффектов (CAM-6). Второе чтение секции означало бы, что
+      // «ноль эффектов» в манифесте выключает эффекты только в одной из них.
+      const cameraConfig = cameraConfigFromManifest(manifest.cameraConfig);
       rig = new CameraRig({
         groundHeightAt: ground.groundHeightAt,
         bounds: ground.bounds,
@@ -1457,11 +1462,15 @@ async function main(): Promise<void> {
         startY: (ground.bounds.minY + ground.bounds.maxY) / 2,
         // Настроечные числа кадра — из секции манифеста поверх умолчаний кода
         // (CAM-1, ASSET-10): нет секции или параметра — умолчание кода.
-        config: cameraConfigFromManifest(manifest.cameraConfig),
+        config: cameraConfig,
       });
       director = new CameraEffectsDirector({
         tables: manifest.cameraEffects,
         description: CAMERA_EFFECTS_DESCRIPTION,
+        // Множитель силы эффектов — из того же конфига (CAM-6): `0` в секции
+        // манифеста выключает тряску целиком, и дотянуться до выключателя
+        // автору доступно данными, а не правкой сборки.
+        effectsMultiplier: rig.config.effectsMultiplier,
         // Тот же список, по которому Extractor воркера выставляет биты
         // `EntityView.states` (`sim.ts`): без него запись таблицы `states`
         // манифеста не находит своего бита и эффект не включается никогда.
