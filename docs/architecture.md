@@ -33,7 +33,8 @@
 │  └────────────────────────────────────────────┘  │
 │        ▲ DI        ▲ DI            ▲ DI          │
 │    Math API   Physics API      Navigation API    │
-│               (обяз. при FoW)  (нет реализации)  │
+│               (обяз. при FoW)  (NAV-7..NAV-10,   │
+│                                systems/nav/)     │
 └──────────────▲───────────────────────────────────┘
                │ worldInit: террейн (immutable) + стартовая расстановка
                │ tick(state, inputs) → TickResult
