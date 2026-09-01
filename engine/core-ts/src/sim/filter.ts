@@ -38,7 +38,7 @@ import { query } from '../ecs/query.js';
 import { cloneWorld, destroy, getField, isAlive, scrubFields } from '../ecs/world.js';
 import { teamBit, VISIBILITY_COMPONENT } from '../systems/visibility.js';
 import { takeSnapshot } from './tick.js';
-import type { EntityId, GameEvent, SimulationState, Snapshot } from '../types.js';
+import type { EntityId, GameEvent, ReadonlySimulationState, Snapshot } from '../types.js';
 
 /**
  * Без фильтрации: спектейтор, реплей, дебаг, golden-файлы CLI (NET-15, CLI-5).
@@ -87,8 +87,8 @@ export const relevantEntityVisible: EventVisibility = (event, isVisible) => {
   return !referenced;
 };
 
-/** `SimulationState` от `Snapshot` отличает rng: там реестр, здесь снятый срез. */
-function isSnapshot(source: Snapshot | SimulationState): source is Snapshot {
+/** Состояние от `Snapshot` отличает rng: там реестр, здесь снятый срез. */
+function isSnapshot(source: Snapshot | ReadonlySimulationState): source is Snapshot {
   return Array.isArray(source.rng);
 }
 
@@ -114,7 +114,7 @@ function isSnapshot(source: Snapshot | SimulationState): source is Snapshot {
  * фильтр снимается целиком, а не по каналам (NTR-9).
  */
 export function filterSnapshot(
-  source: Snapshot | SimulationState,
+  source: Snapshot | ReadonlySimulationState,
   viewpoint: number,
   eventVisibility: EventVisibility = relevantEntityVisible,
 ): Snapshot {

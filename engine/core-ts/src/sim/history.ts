@@ -9,7 +9,7 @@
  * процессе живут независимо.
  */
 import { takeSnapshot } from './tick.js';
-import type { HistoryProvider, SimulationState, Snapshot } from '../types.js';
+import type { HistoryProvider, ReadonlySimulationState, Snapshot } from '../types.js';
 
 export interface RingHistoryOptions {
   /** Тиков между снапшотами (SNAP-4). 1 — каждый тик. */
@@ -49,7 +49,7 @@ export class RingHistory implements HistoryProvider {
   }
 
   /** Снимает снапшот, если тик кратен интервалу (SNAP-4). */
-  record(state: SimulationState): void {
+  record(state: ReadonlySimulationState): void {
     if (state.tick % this.interval !== 0) return;
     this.push(takeSnapshot(state));
   }

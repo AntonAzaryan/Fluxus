@@ -27,8 +27,8 @@ import {
   RingHistory,
   takeSnapshot,
   type HistoryProvider,
+  type ReadonlySimulationState,
   type RingHistoryOptions,
-  type SimulationState,
   type Snapshot,
 } from '@fluxus/core';
 
@@ -72,8 +72,12 @@ export class BranchHistory implements MatchHistory {
    * Правило интервала (SNAP-4) повторено здесь ровно затем, чтобы зеркало
    * содержало то же, что кольцо: снимать снапшот дважды нельзя, а узнать у
    * кольца, записало ли оно этот, нечем.
+   *
+   * Принимает read-only проекцию наравне с провайдером ядра (OBS-1, SNAP-2):
+   * тело только читает — номер тика и снятие снапшота, — а зовут историю из
+   * `onTick`, где на руках отчёт о тике, а не состояние хоста.
    */
-  record(state: SimulationState): void {
+  record(state: ReadonlySimulationState): void {
     if (state.tick % this.options.interval !== 0) return;
     this.push(takeSnapshot(state));
   }
