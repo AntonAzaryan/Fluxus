@@ -34,7 +34,12 @@ import {
 } from '../systems/physics.js';
 import { buildNavigation, type NavigationOptions } from '../systems/nav/navigation.js';
 import { requireModifierList } from '../systems/modifiers.js';
-import { VisibilitySystem, VISION_MODIFIER_COMPONENT, type VisibilityOptions } from '../systems/visibility.js';
+import {
+  visibilityDeclared,
+  VisibilitySystem,
+  VISION_MODIFIER_COMPONENT,
+  type VisibilityOptions,
+} from '../systems/visibility.js';
 import { applyPlacement, type ScenarioSpawn } from './placement.js';
 import { loadScene, type SceneDef } from './scene.js';
 import type { SystemRegistry } from '../systems/registry.js';
@@ -168,6 +173,17 @@ export function buildSimulation(
   // Видимость считается по финальным позициям тика, поэтому регистрируется
   // после физики (FOW-6).
   if (def.visibility !== undefined) {
+    // FOW-5: фильтр по высоте спрашивает уровень сущности у террейна, и фолбэка
+    // «все уровни нулевые» у него нет. Дверь, которую закрывает SER-7 (`fog` без
+    // `terrain`), закрыта не до конца: пересчёт включает документ прогона, а
+    // компоненты видимости сцена вправе объявить и руками. Точка отказа — та же,
+    // что у навигации без террейна (NAV-3), и по тому же основанию.
+    if (terrain === undefined && visibilityDeclared(world)) {
+      throw new Error(
+        'FOW-5: документ прогона просит пересчёт видимости (visibility) в сцене без террейна (terrain) — ' +
+          'фильтру по высоте не у кого спросить уровень сущности (TERR-4, SER-7)',
+      );
+    }
     systems.register(new VisibilitySystem(requireModifierList(modifiers, VISION_MODIFIER_COMPONENT)));
   }
 

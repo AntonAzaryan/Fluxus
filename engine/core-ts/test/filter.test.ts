@@ -499,9 +499,12 @@ describe('сцена без FoW (DI-3)', () => {
  */
 describe('видимость откатывается вместе с миром (REW-11)', () => {
   it('после отката враг снова в снапшоте: фильтр берёт Visibility целевого тика', () => {
-    const { world, systems, modifiers } = loadScene(SCENE);
+    const { world, systems, modifiers, terrain } = loadScene(SCENE);
     systems.register(new VisibilitySystem(requireModifierList(modifiers, VISION_MODIFIER_COMPONENT)));
-    const sim: Simulation = { systems, worldSeed: 1, math: mathApi, modifiers };
+    // Террейн отдаётся сборке, как и в остальных стендах файла: без запроса
+    // уровня пересчёт видимости не считает, а обрывается (FOW-5) — фильтра по
+    // высоте с молчаливым «все уровни нулевые» не существует.
+    const sim: Simulation = { systems, worldSeed: 1, math: mathApi, modifiers, terrain: terrain! };
     const state = initialState(world, 1);
 
     spawn(world, 'Watcher', { Position: { x: F(0), y: F(0) } });

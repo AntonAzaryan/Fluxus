@@ -321,6 +321,10 @@ function supportHarness(withPhysics = true) {
       setField(world, entity, 'Position', 'x', F(x));
       setField(world, entity, 'Position', 'y', F(y));
     },
+    /** Мутация «цепкости» по ходу матча (ARENA-3): здесь напрямую, в бою — командой политики. */
+    setSupport: (entity: number, support: number) => {
+      setField(world, entity, ARENA_STATE_COMPONENT, 'support', support);
+    },
     step: (): readonly GameEvent[] => [...tick(sim, state).events],
   };
 }
@@ -388,5 +392,42 @@ describe('опорная область (ARENA-5, support)', () => {
     // Сырое дробное вместо Q16.16 — та же ошибка контента.
     expect(() => withSupport(0.5)).toThrow(/ARENA-3/);
     expect(() => withSupport(FIXED_ONE)).not.toThrow();
+  });
+
+  it('support вне [0, 1] в переопределении расстановки отвергается тем же правилом (ARENA-3, SER-8)', () => {
+    // Вторая половина первой дороги сценария: значение задаётся не заготовкой, а
+    // поверх неё — записью расстановки. Документ формата один на сцену, сценарий
+    // и конфиг матча (SER-8), поэтому и точка проверки одна.
+    const withPlacement = (support: number) =>
+      loadScene({
+        ...SUPPORT_SCENE,
+        initial: [{ prefab: 'Walker', overrides: { [ARENA_STATE_COMPONENT]: { support } } }],
+      });
+    expect(() => withPlacement(F(3))).toThrow(/ARENA-3/);
+    // Сообщение называет запись документа: расстановку в десять записей иначе
+    // пришлось бы перебирать вручную (SER-8).
+    expect(() => withPlacement(F(3))).toThrow(/запись #0/);
+    expect(() => withPlacement(F(0.5))).not.toThrow();
+  });
+
+  it('support, записанный по ходу матча, обрывает тик (ARENA-3)', () => {
+    const h = supportHarness();
+    const heavy = h.place('Heavy', 4.5, 4.5);
+    expect(types(h.step())).toEqual([]);
+    // Вторая дорога сценария — мутация. Опорная площадка втрое больше коллайдера
+    // геометрического смысла не имеет, и «стоит на полу» над дырой в три своих
+    // размера ядро не считает: значение отвергается, а не применяется.
+    h.setSupport(heavy, F(3));
+    expect(() => h.step()).toThrow(/ARENA-3/);
+  });
+
+  it('мутация в пределах [0, 1] — штатная: «цепкость» вправе меняться геймплеем (ARENA-3)', () => {
+    const h = supportHarness();
+    const heavy = h.place('Heavy', 5.2, 4.5);
+    // Опора 0.5 × инрадиус 0.6 = 0.3 достаёт до клетки с полом — провала нет.
+    expect(types(h.step())).toEqual([]);
+    // Опора обнулилась: проверка выродилась в центр, а центр — над дырой.
+    h.setSupport(heavy, 0);
+    expect(types(h.step())).toEqual(['FellThroughFloor']);
   });
 });

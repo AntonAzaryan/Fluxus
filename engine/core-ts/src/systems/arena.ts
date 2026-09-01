@@ -19,6 +19,7 @@ import {
   type ArenaApi,
   type ComponentSchema,
   type EntityId,
+  type FieldOverrides,
   type Fixed,
   type System,
   type SystemContext,
@@ -84,6 +85,15 @@ export const ARENA_COMPONENTS: readonly ComponentSchema[] = [
 ];
 
 /**
+ * Единственное правило диапазона `support` (ARENA-3): Q16.16-доля вписанной
+ * окружности коллайдера в `[0, 1]`. Обе дороги сценария требования — заготовка
+ * и мутация — судят по нему, второй копии правила в ядре нет.
+ */
+function supportOutOfRange(support: number): boolean {
+  return !Number.isInteger(support) || support < 0 || support > FIXED_ONE;
+}
+
+/**
  * Валидация `support` в prefabs сцены (ARENA-3): доля вне `[0, 1]` не имеет
  * геометрического смысла и отвергается на загрузке, а не проявляется поведением.
  */
@@ -91,11 +101,25 @@ export function checkArenaSupport(prefabs: readonly PrefabDef[]): void {
   for (const prefab of prefabs) {
     const support = prefab.components[ARENA_STATE_COMPONENT]?.support;
     if (support === undefined) continue;
-    if (!Number.isInteger(support) || support < 0 || support > FIXED_ONE) {
+    if (supportOutOfRange(support)) {
       throw new Error(
         `ARENA-3: prefab "${prefab.name}" — "support" вне [0, 1] в Q16.16 (получено ${support})`,
       );
     }
+  }
+}
+
+/**
+ * Та же проверка на переопределениях записи расстановки (ARENA-3, SER-8):
+ * заготовку сцены отвергает `checkArenaSupport`, но `support` задаётся и
+ * поверх неё — расстановкой сцены, сценария или конфига матча. Точка одна на
+ * все три документа (`sim/placement.ts`), потому что формат расстановки один.
+ */
+export function checkArenaSupportOverride(overrides: FieldOverrides | undefined, at: string): void {
+  const support = overrides?.[ARENA_STATE_COMPONENT]?.support;
+  if (support === undefined) return;
+  if (supportOutOfRange(support)) {
+    throw new Error(`${at}: ARENA-3: "support" вне [0, 1] в Q16.16 (получено ${support})`);
   }
 }
 
@@ -152,8 +176,10 @@ export function createArenaApi(world: WorldState, def: ArenaDef, entity: EntityI
  * краем политика отсчитывает сама от полученного события. Причина смены
  * стороны роли не играет — кнокбэк и сужение радиуса дают один и тот же факт.
  *
- * Обходятся только сущности с `ArenaState`: кто участвует в проверке, решает
- * контент через prefab, а не ядро.
+ * Обходятся только сущности с `ArenaState` И позицией: кто участвует в
+ * проверке, решает контент через prefab, а не ядро, — а без позиции проверять
+ * нечего, точки у такой сущности нет. Отсюда и граница проверки диапазона
+ * `support` (ARENA-3): она идёт по тем же сущностям, что и весь обход.
  */
 export class ArenaSystem implements System {
   readonly name = 'Arena';
@@ -182,12 +208,25 @@ function updateArenaState(ctx: SystemContext, arena: ArenaApi, entity: EntityId)
     if (inside === 0) ctx.events.emit(LEFT_ARENA_EVENT, { entity });
   }
 
+  // ARENA-3, вторая дорога сценария: значение, записанное по ходу матча, ядру
+  // приходит уже в поле, и отвергнуть его валидацией документа некому. Читается
+  // оно у каждой обходимой системой сущности (`ArenaState` вместе с позицией) и
+  // на каждом тике — независимо от того, дойдёт ли дело до проверки пола:
+  // «цепкость» втрое больше коллайдера не становится осмысленной оттого, что
+  // сущность в полёте.
+  const support = ctx.get(entity, ARENA_STATE_COMPONENT, 'support');
+  if (supportOutOfRange(support)) {
+    throw new Error(
+      `ARENA-3: сущность ${entity} — "support" вне [0, 1] в Q16.16 (получено ${support})`,
+    );
+  }
+
   // ARENA-5: пол проверяется только у стоящих на земле. Override уровня
   // (ARENA-6) означает, что сущность в полёте — снаряд над дырой не падает.
   // Без террейна проверять нечем (DI-3).
   const terrain = ctx.terrain;
   if (terrain === undefined || ctx.has(entity, LEVEL_OVERRIDE_COMPONENT)) return;
-  const onFloor = standsOnFloor(ctx, terrain, entity, position) ? 1 : 0;
+  const onFloor = standsOnFloor(ctx, terrain, support, entity, position) ? 1 : 0;
   if (onFloor !== ctx.get(entity, ARENA_STATE_COMPONENT, 'onFloor')) {
     ctx.commands.setField(entity, ARENA_STATE_COMPONENT, 'onFloor', onFloor);
     if (onFloor === 0) ctx.events.emit(FELL_THROUGH_FLOOR_EVENT, { entity });
@@ -199,14 +238,17 @@ function updateArenaState(ctx: SystemContext, arena: ArenaApi, entity: EntityId)
  * пересекает хотя бы одну клетку с полом. Вырождение в точку — и поведение,
  * тождественное проверке по центру, — при нулевом `support`, без коллайдера
  * (уменьшать нечего) и без Physics API (форма коллайдера ядру неизвестна, DI-3).
+ *
+ * Само значение `support` приходит аргументом: читает и проверяет его диапазон
+ * вызывающая сторона (ARENA-3), одинаково для сущности в полёте и на земле.
  */
 function standsOnFloor(
   ctx: SystemContext,
   terrain: TerrainApi,
+  support: Fixed,
   entity: EntityId,
   position: Vec2,
 ): boolean {
-  const support = ctx.get(entity, ARENA_STATE_COMPONENT, 'support');
   if (support !== 0 && ctx.physics !== undefined) {
     const inradius = ctx.physics.inradiusOf(entity);
     if (inradius !== undefined) {
