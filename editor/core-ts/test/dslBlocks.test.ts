@@ -199,42 +199,58 @@ describe('ED-5: каталог блоков — закрытые наборы я
 
 /**
  * ED-1: конвенция SYS-3 — не таблица в редакторе, а то, как ядро обходит
- * аргумент этого имени. Каждый зонд ломает содержимое одного слота и требует,
- * чтобы отказ ядра назвал этот слот путём. Слот, который ядро не обходит, зонда
- * бы не прошёл.
+ * аргумент этого имени. Каждый зонд ломает содержимое одного слота и требует от
+ * отказа ядра двух вещей сразу: назвать слот путём И назвать причину, которая
+ * бывает только у пройденного содержимого («неизвестный оператор», «компонент
+ * не зарегистрирован», «ожидался строковый литерал»).
+ *
+ * Одного пути мало с тех пор, как имя вне конвенции ядро отвергает само
+ * (SYS-3): его отказ тоже несёт путь с этим именем, и зонд, проверяющий только
+ * путь, прошёл бы на слоте, которого ядро не обходит вовсе, — то есть перестал
+ * бы ловить расхождение модели с ядром, ради которого и написан. Отсюда третья
+ * проверка: причина отказа НЕ про конвенцию.
  */
 describe('ED-1: слоты блока — те аргументы, которые обходит ядро', () => {
-  const PROBES: Readonly<Record<string, JsonObject>> = {
-    do: { do: [{ nope: {} }] },
-    then: { then: [{ nope: {} }] },
-    else: { else: [{ nope: {} }] },
-    values: { values: { f: { nope: [] } } },
-    data: { data: { f: { nope: [] } } },
-    bindings: { bindings: { f: { nope: [] } } },
-    entity: { entity: { nope: [] } },
-    cond: { cond: { nope: [] } },
-    bound: { bound: { nope: [] } },
-    value: { value: { nope: [] } },
-    nearestTo: { nearestTo: { nope: [] } },
-    limit: { limit: { nope: [] } },
-    at: { at: { nope: [] } },
-    radius: { radius: { nope: [] } },
-    def: { def: { nope: [] } },
-    from: { from: { nope: [] } },
-    to: { to: { nope: [] } },
-    duration: { duration: { nope: [] } },
-    easing: { easing: { nope: [] } },
-    ignoreTimeScale: { ignoreTimeScale: { nope: [] } },
-    id: { id: { nope: [] } },
-    name: { name: 42 },
-    query: { query: { all: ['Nope'] } },
-    overrides: { prefab: 'grunt', overrides: { Nope: {} } },
-    component: { component: 'Nope' },
-    field: { field: 42 },
-    prefab: { prefab: 'nope' },
-    type: { type: 42 },
-    as: { as: 42 },
-    subStream: { subStream: 42 },
+  /** Зонд слота: чем ломаем содержимое и какой причиной ядро обязано ответить. */
+  interface Probe {
+    readonly node: JsonObject;
+    readonly reason: RegExp;
+  }
+
+  const UNKNOWN_OP = /неизвестный оператор "nope"/;
+  const NOT_A_LITERAL = /ожидался строковый литерал/;
+
+  const PROBES: Readonly<Record<string, Probe>> = {
+    do: { node: { do: [{ nope: {} }] }, reason: /неизвестное действие "nope"/ },
+    then: { node: { then: [{ nope: {} }] }, reason: /неизвестное действие "nope"/ },
+    else: { node: { else: [{ nope: {} }] }, reason: /неизвестное действие "nope"/ },
+    values: { node: { values: { f: { nope: [] } } }, reason: UNKNOWN_OP },
+    data: { node: { data: { f: { nope: [] } } }, reason: UNKNOWN_OP },
+    bindings: { node: { bindings: { f: { nope: [] } } }, reason: UNKNOWN_OP },
+    entity: { node: { entity: { nope: [] } }, reason: UNKNOWN_OP },
+    cond: { node: { cond: { nope: [] } }, reason: UNKNOWN_OP },
+    bound: { node: { bound: { nope: [] } }, reason: UNKNOWN_OP },
+    value: { node: { value: { nope: [] } }, reason: UNKNOWN_OP },
+    nearestTo: { node: { nearestTo: { nope: [] } }, reason: UNKNOWN_OP },
+    limit: { node: { limit: { nope: [] } }, reason: UNKNOWN_OP },
+    at: { node: { at: { nope: [] } }, reason: UNKNOWN_OP },
+    radius: { node: { radius: { nope: [] } }, reason: UNKNOWN_OP },
+    def: { node: { def: { nope: [] } }, reason: UNKNOWN_OP },
+    from: { node: { from: { nope: [] } }, reason: UNKNOWN_OP },
+    to: { node: { to: { nope: [] } }, reason: UNKNOWN_OP },
+    duration: { node: { duration: { nope: [] } }, reason: UNKNOWN_OP },
+    easing: { node: { easing: { nope: [] } }, reason: UNKNOWN_OP },
+    ignoreTimeScale: { node: { ignoreTimeScale: { nope: [] } }, reason: UNKNOWN_OP },
+    id: { node: { id: { nope: [] } }, reason: UNKNOWN_OP },
+    name: { node: { name: 42 }, reason: NOT_A_LITERAL },
+    query: { node: { query: { all: ['Nope'] } }, reason: /компонент "Nope" не зарегистрирован/ },
+    overrides: { node: { prefab: 'grunt', overrides: { Nope: {} } }, reason: /не содержит компонент "Nope"/ },
+    component: { node: { component: 'Nope' }, reason: /компонент "Nope" не зарегистрирован/ },
+    field: { node: { field: 42 }, reason: NOT_A_LITERAL },
+    prefab: { node: { prefab: 'nope' }, reason: /prefab "nope" не зарегистрирован/ },
+    type: { node: { type: 42 }, reason: NOT_A_LITERAL },
+    as: { node: { as: 42 }, reason: NOT_A_LITERAL },
+    subStream: { node: { subStream: 42 }, reason: NOT_A_LITERAL },
   };
 
   it('зонд есть на каждый слот конвенции и слот — на каждый зонд', () => {
@@ -242,11 +258,16 @@ describe('ED-1: слоты блока — те аргументы, которы�
   });
 
   for (const slot of CONVENTION_SLOTS) {
-    it(`слот "${slot.name}" ядро обходит и называет путём`, () => {
+    it(`слот "${slot.name}" ядро обходит, называет путём и судит по содержимому`, () => {
       // Имя действия зонду безразлично: `checkAction` ветвится по имени
       // аргумента, а не по имени действия, — в этом и состоит конвенция.
-      const message = rejection(systemOf({ let: PROBES[slot.name]! }));
+      const probe = PROBES[slot.name]!;
+      const message = rejection(systemOf({ let: probe.node }));
       expect(message).toContain(`.${slot.name}`);
+      // Причина — от содержимого слота, а не от того, что имя ядру незнакомо:
+      // иначе зонд прошёл бы и на слоте, которого ядро не обходит.
+      expect(message).toMatch(probe.reason);
+      expect(message).not.toContain('вне конвенции');
     });
   }
 
@@ -254,7 +275,11 @@ describe('ED-1: слоты блока — те аргументы, которы�
     // Перечень конвенции закрыт (SYS-3): имя вне него — отказ ядра, а не
     // непроверенное содержимое. Таблицы «действие → его аргументы» в редакторе
     // при этом по-прежнему нет: вердикт выносит ядро, а не вторая модель.
-    expect(rejection(systemOf({ let: { do: [], nope: { alsoNope: [] } } }))).toContain('.nope');
+    // Контроль зондов выше: у имени вне конвенции причина отказа своя, и по ней
+    // он отличим от слота, который ядро действительно обходит.
+    expect(rejection(systemOf({ let: { do: [], nope: { alsoNope: [] } } }))).toContain(
+      'вне конвенции имён Action DSL',
+    );
     expect(conventionSlot('nope')).toBeUndefined();
     expect(conventionSlot('cond')).toEqual({ name: 'cond', kind: 'expression' });
   });
