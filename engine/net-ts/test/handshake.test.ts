@@ -18,8 +18,10 @@ import {
   settle,
   versionOf,
 } from './fixtures.js';
+import { MatchClient } from '../src/client/matchClient.js';
+import { contentPack } from '../src/content/pack.js';
 import { parseServerMessage } from '../src/protocol/messages.js';
-import type { RejectMessage, WelcomeMessage } from '../src/protocol/messages.js';
+import type { RejectMessage, WelcomeMessage, WireSnapshot } from '../src/protocol/messages.js';
 
 describe('сверка версии (NET-16)', () => {
   it('расхождение сборки отклоняет вход и называет половину', () => {
@@ -146,9 +148,35 @@ describe('сверка данных матча (DET-1)', () => {
     expect(client.phase).toBe('closed');
     expect(client.closeReason).toBe('data-mismatch');
     expect(client.closeDetail).toContain(server.worldInitHash);
-    // До первого тика матча дело не дошло: слот занят не был, матч не стартовал.
+    // Сверка завершилась ДО первого действия самого клиента (NTR-5): ни одного
+    // кадра ввода он не отправил и ни одного снапшота не применил. Матч при
+    // этом мог бы уже идти — сервер подтверждения не ждёт и ждать ему нечем
+    // (NTR-4); здесь он стоит в лобби просто потому, что второй слот пуст.
+    expect(client.metrics.inputsSent).toBe(0);
+    expect(client.latest).toBeUndefined();
     expect(server.phase).toBe('lobby');
     expect(server.tick).toBe(0);
+  });
+
+  it('снапшот прежде Welcome рвёт соединение ошибкой протокола, а не обходит сверку (NTR-5)', () => {
+    // Сверять пришедшее состояние не с чем: своего `worldInit` у клиента ещё
+    // нет, и применить снапшот значило бы нарисовать мир, тождественность
+    // которого никто не проверял.
+    const scene = duelScene();
+    const client = new MatchClient({
+      playerId: 'p1',
+      version: versionOf(scene),
+      content: contentPack({ duel: scene }),
+    });
+
+    // Содержимое кадра здесь роли не играет: до `Welcome` он не разбирается
+    // вовсе — разбирать его нечем.
+    const snapshot = { tick: 1, world: {}, events: [], mode: 'Running' } as unknown as WireSnapshot;
+    client.receive({ type: 'Snapshot', epoch: 0, tick: 1, snapshot }, 0);
+
+    expect(client.phase).toBe('closed');
+    expect(client.closeReason).toBe('protocol-error');
+    expect(client.closeDetail).toContain('Welcome');
   });
 
   it('неизвестная клиенту сцена даёт тот же исход, и сцена ему не досылается', async () => {

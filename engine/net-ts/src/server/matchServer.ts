@@ -22,12 +22,15 @@ import {
   createInputLog,
   createRewindController,
   dispatch,
+  eventVisibilityByName,
   filterSnapshot,
   tick as advanceTick,
   world as coreWorld,
+  MAX_TEAMS,
   VIEWPOINT_ALL,
   type EntityId,
   type EventVisibility,
+  type EventVisibilityName,
   type ExemptEntry,
   type InputFrame,
   type InputLog,
@@ -43,6 +46,7 @@ import {
   type TickResult,
   type VisibilityOptions,
   type WorldMode,
+  type WorldState,
 } from '@fluxus/core';
 import { BranchHistory, type MatchHistory } from '../match/history.js';
 import {
@@ -52,7 +56,7 @@ import {
   type RewindRequestWarn,
 } from '../match/rewindRequest.js';
 import type { MatchTrace } from '../match/trace.js';
-import { buildMatchWorld } from '../match/world.js';
+import { buildMatchWorld, slotTeams } from '../match/world.js';
 import { createServerMetrics, type ServerMetrics } from '../metrics.js';
 import type { ConnectionId } from '../transport/transport.js';
 import type {
@@ -84,11 +88,19 @@ export interface MatchConfig {
   readonly initial?: readonly ScenarioSpawn[];
   readonly name?: string;
   /**
-   * `viewpoint` слота (NET-12). По умолчанию — сам слот: в FFA каждый игрок сам
-   * себе команда. Умолчание безопасное: сцена без тумана даёт пустой запрос
-   * видимости, и фильтр не режет ничего, а сцена с туманом режет по своей
-   * команде. Умолчания «всё видно» здесь быть не может — это wallhack по
-   * невнимательности.
+   * `viewpoint` слота (NET-12, NTR-9). Поля нет — точка зрения слота берётся из
+   * МИРА матча: это команда сущности, несущей его номер (`Team.id` у сущности с
+   * `Player.slot`), и второго мнения о ней быть не должно. Мир, команд не
+   * называющий вовсе (сцена без `Team`), даёт точкой зрения номер слота: в FFA
+   * каждый игрок сам себе команда, а резать в такой сцене нечего.
+   *
+   * Поле остаётся ради матчей, где точка зрения слота НЕ выводится из мира
+   * (сущность слота появляется по ходу матча, а не расстановкой), и объявленная
+   * им команда обязана совпасть с командой сущности этого слота: расхождение —
+   * отказ сборки матча, а не молча действующая чужая точка зрения. Снапшот,
+   * отобранный по чужой команде, отнял бы у игрока его собственную сущность
+   * (NET-15) и выдал бы ему чужую видимость. Умолчания «всё видно» здесь быть не
+   * может — это wallhack по невнимательности.
    */
   readonly teams?: readonly number[];
   readonly tickRate?: number;
@@ -181,16 +193,23 @@ export interface MatchConfig {
    */
   readonly navigation?: NavigationOptions;
   /**
-   * Действующий предикат видимости события (NET-13) — параметр, а не зашитое
-   * решение (NTR-9): точная политика при разной видимости источника и цели
-   * остаётся открытым геймплейным вопросом, и закрытие его будет сменой ЭТОГО
-   * поля, а не правкой ядра или сетевого слоя.
+   * ИМЯ действующего предиката видимости события (NET-13) — параметр, а не
+   * зашитое решение (NTR-9): точная политика при разной видимости источника и
+   * цели остаётся открытым геймплейным вопросом, и закрытие его — смена ЭТОГО
+   * поля документа матча, а не правка ядра или сетевого слоя.
+   *
+   * Имя из закрытого набора (`any-referenced`, `all-referenced`), а не функция:
+   * функцию документ матча не выражает вовсе, и поле, которое умеет назвать
+   * только сборка запуска, оставляло бы геймдизайнера без адреса правки —
+   * закрытие вопроса требовало бы пересборки игры. Набор закрыт нормой NET-13, и
+   * расширение его — правка спеки; незнакомое имя роняет сборку матча названным
+   * отказом (`eventVisibilityByName`).
    *
    * Отсутствие поля означает предикат, нормированный NET-13, — а не умолчание
    * конкретной сборки: величина, приезжающая молчанием, была бы политикой,
    * выбранной тем, кто первым написал код.
    */
-  readonly eventVisibility?: EventVisibility;
+  readonly eventVisibility?: EventVisibilityName;
   readonly observers?: readonly TickObserver[];
   /**
    * Трейс матча (DIAG-8): sink симуляции и приёмник отметок ветви истории
@@ -544,6 +563,47 @@ function checkPlayers(config: MatchConfig): void {
   });
 }
 
+/**
+ * Точка зрения каждого слота (NET-12, NET-15, NTR-9) — считается один раз, на
+ * сборке матча, по УЖЕ ПОДНЯТОМУ миру.
+ *
+ * Правило одно: точка зрения слота есть команда его сущности. Конфиг вправе
+ * назвать её сам — но не вправе назвать другую: расхождение с миром означает,
+ * что фильтр отберёт снапшот по чужой команде, и игрок не найдёт в нём даже
+ * собственной сущности (NET-15). Отказ поэтому здесь и до первого тика, а не
+ * пустой мир у игрока в бою.
+ *
+ * Мир, о команде слота ничего не утверждающий (сцены без `Team`), даёт точкой
+ * зрения номер слота: в FFA каждый игрок сам себе команда, а резать в такой
+ * сцене нечего — предикат вырезания читает маску `Visibility`, которой в ней
+ * тоже нет (NET-12).
+ */
+function resolveViewpoints(config: MatchConfig, world: WorldState): readonly number[] {
+  const teams = slotTeams(world, config.players.length);
+  return config.players.map((_playerId, slot) => {
+    const declared = config.teams?.[slot];
+    const actual = teams[slot];
+    if (declared !== undefined && actual !== undefined && declared !== actual) {
+      throw new Error(
+        `MatchConfig: слот ${slot} объявлен командой ${declared}, а его сущность в мире — командой ${actual} ` +
+          `(NET-12, NET-15). Точка зрения слота — команда его сущности; уберите поле "teams" либо приведите ` +
+          `расстановку в соответствие с ним`,
+      );
+    }
+    const viewpoint = declared ?? actual ?? slot;
+    // Тот же диапазон, что у объявленных команд (FOW-2): число вне его не
+    // является командой, а `VIEWPOINT_ALL` игровому слоту не выдаётся ни при
+    // каких условиях (NTR-9). Проверяется и выведенное из мира значение —
+    // маска видимости 32-битная независимо от того, кто назвал номер.
+    if (!Number.isInteger(viewpoint) || viewpoint < 0 || viewpoint >= MAX_TEAMS) {
+      throw new Error(
+        `MatchConfig: точка зрения слота ${slot} (${viewpoint}) вне диапазона команд [0, ${MAX_TEAMS - 1}] (FOW-2)`,
+      );
+    }
+    return viewpoint;
+  });
+}
+
 /** Числовые ручки матча после умолчаний — то, что сервер держит полями. */
 interface MatchRates {
   readonly tickRate: number;
@@ -704,7 +764,18 @@ export class MatchServer {
    * поле отвечает на «кто говорит за слот прямо сейчас», второе — на «занят ли
    * слот ростером».
    */
+  /**
+   * Точка зрения каждого слота (NET-12, NTR-9) — величина матча, а не тика:
+   * считается на сборке по поднятому миру и дальше не пересматривается.
+   */
+  private readonly viewpoints: readonly number[];
   private readonly slotConnection: (ConnectionId | undefined)[];
+  /**
+   * Предикат, названный конфигом матча по имени (NET-13, NTR-9), разрешённый
+   * один раз на сборке: незнакомое имя роняет матч до первого тика, а не молча
+   * возвращает норму.
+   */
+  private readonly eventVisibility: EventVisibility | undefined;
   private readonly slotClaimed: boolean[];
   /**
    * Запертые слоты (NTR-19): обратимый админ-запрет владельцу занимать свой
@@ -779,6 +850,10 @@ export class MatchServer {
     // Умолчания и проверки числовых ручек — одним разбором, в том же порядке:
     // отказ обязан назвать первую же неверную ручку, а не последнюю.
     const rates = resolveRates(config);
+    // Имя предиката разрешается до подъёма мира: опечатка в документе матча
+    // обязана называть себя раньше, чем матч соберётся (NET-13, NTR-9).
+    this.eventVisibility =
+      config.eventVisibility === undefined ? undefined : eventVisibilityByName(config.eventVisibility);
     this.tickRate = rates.tickRate;
     this.snapshotRate = rates.snapshotRate;
     this.snapshotEvery = rates.snapshotEvery;
@@ -821,6 +896,9 @@ export class MatchServer {
     this.sim = built.sim;
     this.state = built.state;
     this.worldInitHash = built.worldInitHash;
+    // Точка зрения слота выводится из мира и потому считается после его подъёма
+    // (NET-12, NET-15): раньше о командах сущностей знать неоткуда.
+    this.viewpoints = resolveViewpoints(config, built.state.world);
 
     const slots = config.players.length;
     this.metrics = createServerMetrics(slots);
@@ -1583,14 +1661,13 @@ export class MatchServer {
 
   /**
    * `viewpoint` соединения (NET-12, NTR-9). Наблюдателю — `VIEWPOINT_ALL`,
-   * игроку — команда его слота либо сам слот. Одно место на все каналы:
-   * разойтись `viewpoint`'ом между снапшотом и потоком событий значило бы
-   * завести второй отбор там, где NET-13 требует один.
+   * игроку — точка зрения его слота, посчитанная на сборке (`resolveViewpoints`):
+   * команда его сущности в мире. Одно место на все каналы: разойтись
+   * `viewpoint`'ом между снапшотом и потоком событий значило бы завести второй
+   * отбор там, где NET-13 требует один.
    */
   private viewpointOf(connection: Connection): number {
-    return connection.phase === 'observer'
-      ? VIEWPOINT_ALL
-      : (this.config.teams?.[connection.slot] ?? connection.slot);
+    return connection.phase === 'observer' ? VIEWPOINT_ALL : this.viewpoints[connection.slot]!;
   }
 
   /**
@@ -1606,9 +1683,9 @@ export class MatchServer {
    * (NTR-1), а не правкой по ходу сетевой работы; до него живём копией и меряем.
    */
   private filterFor(viewpoint: number): Snapshot {
-    return this.config.eventVisibility === undefined
+    return this.eventVisibility === undefined
       ? filterSnapshot(this.state, viewpoint)
-      : filterSnapshot(this.state, viewpoint, this.config.eventVisibility);
+      : filterSnapshot(this.state, viewpoint, this.eventVisibility);
   }
 
   /**

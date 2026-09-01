@@ -238,6 +238,15 @@ function eventConfig(spec: SceneSpec, overrides: Partial<MatchConfig> = {}): Mat
     scene: markedScene(spec),
     snapshotRate: BROADCAST_RATE,
     eventRepeat: 0,
+    // Команду каждого героя называет расстановка, а не номер его слота: точка
+    // зрения слота выводится из мира (NET-12, NET-15), и «слот 1 = команда 1» —
+    // совпадение дуэли, а не правило. Без этой пары строк оба героя оказались бы
+    // в команде A (умолчание префаба), и клиент B смотрел бы на мир глазами
+    // команды, которой в мире нет.
+    initial: [
+      { prefab: 'Hero', overrides: { Team: { id: TEAM_A } } },
+      { prefab: 'Hero', overrides: { Player: { slot: 1 }, Team: { id: TEAM_B } } },
+    ],
     ...overrides,
   });
   return config;

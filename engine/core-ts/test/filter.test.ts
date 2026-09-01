@@ -6,7 +6,12 @@ import { query } from '../src/ecs/query.js';
 import { indexOf as rawIndexOf } from '../src/ecs/entityIndex.js';
 import { ARENA_COMPONENT } from '../src/systems/arena.js';
 import { FLOOR_COMPONENT } from '../src/systems/terrain.js';
-import { filterSnapshot, relevantEntityVisible, VIEWPOINT_ALL } from '../src/sim/filter.js';
+import {
+  eventVisibilityByName,
+  filterSnapshot,
+  relevantEntityVisible,
+  VIEWPOINT_ALL,
+} from '../src/sim/filter.js';
 import { snapshotToPlain } from '../src/sim/serialization.js';
 import { loadScene, type SceneDef } from '../src/sim/scene.js';
 import { initialState, takeSnapshot, tick, type Simulation } from '../src/sim/tick.js';
@@ -341,6 +346,41 @@ describe('фильтрация событий (NET-13)', () => {
     h.state.events.emit('Collision', { entity: h.enemy, other: -1 });
     expect(filterSnapshot(h.state, 0).events).toHaveLength(0);
     expect(filterSnapshot(h.state, 1).events).toHaveLength(1);
+  });
+
+  /**
+   * NET-13 «Действующий предикат»: набор имён ЗАКРЫТ, и оба имени отвечают на
+   * открытый геймплейный вопрос «видима цель, источник в тумане» с двух сторон.
+   * Здесь и проверяется, что ответы у них разные — иначе поле конфига матча не
+   * закрывало бы вопрос ничем.
+   */
+  it('два имени закрытого набора расходятся ровно на разной видимости сторон', () => {
+    const h = apart();
+    // Урон видимой своей сущности от невидимого врага: названы обе стороны, и
+    // видима из них одна.
+    h.state.events.emit('DamageDealt', { source: h.enemy, target: h.watcher });
+
+    const any = filterSnapshot(h.state, 0, eventVisibilityByName('any-referenced'));
+    expect(any.events.map((e) => e.type)).toEqual(['DamageDealt']);
+
+    const all = filterSnapshot(h.state, 0, eventVisibilityByName('all-referenced'));
+    expect(all.events).toEqual([]);
+
+    // Умолчание фильтра — нормированный NET-13 предикат, то есть `any-referenced`.
+    expect(eventVisibilityByName('any-referenced')).toBe(relevantEntityVisible);
+  });
+
+  it('событие, не называющее ни одной сущности, общее при обоих именах', () => {
+    const h = apart();
+    h.state.events.emit('RoundEnded', { winner: 1 });
+    for (const name of ['any-referenced', 'all-referenced'] as const) {
+      const types = filterSnapshot(h.state, 0, eventVisibilityByName(name)).events.map((e) => e.type);
+      expect(types, name).toEqual(['RoundEnded']);
+    }
+  });
+
+  it('имя вне закрытого набора — названный отказ, а не молчаливый возврат к норме', () => {
+    expect(() => eventVisibilityByName('freeze')).toThrow(/"freeze" неизвестен \(NET-13\)/);
   });
 
   /**

@@ -28,6 +28,7 @@ export declare const MATCH_DOCUMENT_FIELDS: readonly [
   'inputDelay',
   'inputWindow',
   'eventRepeat',
+  'eventVisibility',
   'rewind',
   'pause',
   'physics',
@@ -44,7 +45,6 @@ export declare const LAUNCHER_FIELDS: readonly [
   'observers',
   'trace',
   'rewindWarn',
-  'eventVisibility',
 ];
 
 /**
