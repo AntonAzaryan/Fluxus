@@ -45,9 +45,11 @@ describe('guard: сканер границы контента ловит каж�
     // имя контентной директории ищется на любом уровне пути, а не у родителя.
     writeFileSync(join(root, 'pkg-ts/src/bots/easy.json'), '{}');
     writeFileSync(join(root, 'pkg-ts/src/bots/behaviors/classic.json'), '{}');
-    // Карта кривизны (assets ASSET-7) названа назначением, а не видом: опознаёт
-    // её дерево визуалов, в котором она лежит.
-    writeFileSync(join(root, 'pkg-ts/src/visuals/arena-curvature.json'), '{}');
+    // Карта кривизны (assets ASSET-7) названа назначением, а не видом: ловится
+    // по имени, поэтому её копия ВНЕ дерева визуалов границу тоже не проезжает.
+    writeFileSync(join(root, 'pkg-ts/src/arena-curvature.json'), '{}');
+    // А документ дерева визуалов с произвольным именем опознаёт место.
+    writeFileSync(join(root, 'pkg-ts/src/visuals/skins.json'), '{}');
     // Эмиттерный ассет (ASSET-14) и иконка интерфейса (match-hud HUD-4) —
     // presentation-документы дерева контента наравне с моделью и текстурой.
     writeFileSync(join(root, 'pkg-ts/src/torch.effect.json'), '{}');
@@ -81,6 +83,7 @@ describe('guard: сканер границы контента ловит каж�
   it('сцена, парные слои, матч, манифест, модель, текстура, эффект, иконка и документы ботов краснят', () => {
     const files = scanContentLocation({ rootDir: root }).map((v) => v.file);
     expect(files).toEqual([
+      'pkg-ts/src/arena-curvature.json',
       'pkg-ts/src/bots/behaviors/classic.json',
       'pkg-ts/src/bots/easy.json',
       'pkg-ts/src/cast.svg',
@@ -95,7 +98,7 @@ describe('guard: сканер границы контента ловит каж�
       'pkg-ts/src/manifest.json',
       'pkg-ts/src/skin.png',
       'pkg-ts/src/torch.effect.json',
-      'pkg-ts/src/visuals/arena-curvature.json',
+      'pkg-ts/src/visuals/skins.json',
     ]);
   });
 
@@ -109,7 +112,10 @@ describe('guard: сканер границы контента ловит каж�
     const kinds = new Map(scanContentLocation({ rootDir: root }).map((v) => [v.file, v.message]));
     expect(kinds.get('pkg-ts/src/cast.svg')).toContain('HUD-4');
     expect(kinds.get('pkg-ts/src/torch.effect.json')).toContain('ASSET-14');
-    expect(kinds.get('pkg-ts/src/visuals/arena-curvature.json')).toContain('ASSET-2');
+    // Карта кривизны — по имени (ASSET-7), любой другой документ дерева
+    // визуалов — по месту (ASSET-2): два признака, а не один.
+    expect(kinds.get('pkg-ts/src/arena-curvature.json')).toContain('ASSET-7');
+    expect(kinds.get('pkg-ts/src/visuals/skins.json')).toContain('ASSET-2');
     expect(kinds.get('pkg-ts/src/bots/behaviors/classic.json')).toContain('BOT-8');
   });
 
