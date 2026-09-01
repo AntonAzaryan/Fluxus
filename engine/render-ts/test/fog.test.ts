@@ -16,6 +16,7 @@ import {
   FogSubsystem,
   VisibilityMask,
   edgeGradient,
+  fogLevelsOf,
   fogRectOf,
   fogSegmentsOf,
   createCostCounters,
@@ -44,6 +45,21 @@ import {
 function gridWithPillar(): TerrainGrid {
   const levels = Array.from({ length: 8 }, (_, y) => (y === 4 ? '00001000' : '00000000'));
   const flags = Array.from({ length: 8 }, () => '........');
+  return createTerrainGrid({ width: 8, height: 8, tileSize: 65536, levels, flags });
+}
+
+/**
+ * Арена 8×8 со ступенькой 0→1 по x = 4 и проёмом рампы в клетках (3, 3) и
+ * (3, 4): флаг стоит на НИЖНЕЙ клетке перехода, поэтому её уровень — 0
+ * (TERR-5). Граница рампы проходима, и cliff-отрезка в проёме нет вовсе —
+ * пол верхнего уровня за проёмом держит под туманом ОДИН срез по уровню, а не
+ * тень, и стенд поэтому годится и маске, и подсистеме над ней (FOW-9).
+ */
+function gridWithRamp(): TerrainGrid {
+  const levels = Array.from({ length: 8 }, () => '00001111');
+  const flags = Array.from({ length: 8 }, (_unused, y) =>
+    y === 3 || y === 4 ? '...^....' : '........',
+  );
   return createTerrainGrid({ width: 8, height: 8, tileSize: 65536, levels, flags });
 }
 
@@ -242,6 +258,59 @@ describe('FOW-9: 2D shadow-casting по cliff-отрезкам', () => {
     const fromDip = new VisibilityMask(fogRectOf(grid), 4);
     fromDip.reveal({ x: 3.5, y: 4.5, radius: 7, level: 0 }, 0.25, segments);
     expect(fromDip.valueAt(6.5, 4.5)).toBe(0);
+  });
+
+  it('проём рампы не светит наверх: пол строго выше наблюдателя под туманом (FOW-9)', () => {
+    const grid = gridWithRamp();
+    const segments = fogSegmentsOf(grid);
+    // Наблюдатель на клетке рампы — она несёт нижний уровень перехода (TERR-5),
+    // ровно как доставленный `currLevel` сущности на подъёме.
+    const observer = { x: 3.5, y: 3.5, radius: 4, level: 0 };
+    const mask = new VisibilityMask(fogRectOf(grid), 4, fogLevelsOf(grid));
+    mask.reveal(observer, 0.25, segments);
+    // Пол верхнего уровня за проёмом — под туманом: симуляция сущностей туда
+    // не доставляет (FOW-5), и картинка это повторяет.
+    expect(mask.valueAt(5.5, 3.5)).toBe(0);
+    // Свой уровень срез не трогает: под ногами и вокруг по-прежнему светло.
+    expect(mask.valueAt(3.5, 3.5)).toBe(1);
+    expect(mask.valueAt(2.5, 3.5)).toBeGreaterThan(0);
+
+    // Анти-вакуумность: одни тени этого не дают — в проёме отрезка нет, и без
+    // среза по уровню круг светит сквозь него на плато.
+    const unclipped = new VisibilityMask(fogRectOf(grid), 4);
+    unclipped.reveal(observer, 0.25, segments);
+    expect(unclipped.valueAt(5.5, 3.5)).toBeGreaterThan(0);
+  });
+
+  it('срез по уровню идёт по клеткам МИРА, а не по прямоугольнику маски (FOW-9)', () => {
+    // Сетка привязана к нулю мира (TERR-4), поэтому карта уровней индексируется
+    // абсолютной координатой текселя. Прямоугольник маски с этим нулём совпадать
+    // не обязан: здесь маска покрывает только правую половину арены.
+    const levels = Array.from({ length: 8 }, () => '00001100');
+    const flags = Array.from({ length: 8 }, () => '........');
+    const grid = createTerrainGrid({ width: 8, height: 8, tileSize: 65536, levels, flags });
+    const mask = new VisibilityMask({ x: 4, y: 0, width: 4, height: 8 }, 4, fogLevelsOf(grid));
+    mask.reveal({ x: 6.5, y: 3.5, radius: 3, level: 0 }, 0.25, []);
+    // Клетки 4 и 5 — уровня 1, то есть выше наблюдателя: под туманом.
+    expect(mask.valueAt(4.5, 3.5)).toBe(0);
+    expect(mask.valueAt(5.5, 3.5)).toBe(0);
+    // Клетки 6 и 7 — его собственного уровня: открыты. Считай маска клетку по
+    // отступу от прямоугольника, обе пары поменялись бы местами.
+    expect(mask.valueAt(6.5, 3.5)).toBe(1);
+    expect(mask.valueAt(7.5, 3.5)).toBeGreaterThan(0);
+  });
+
+  it('срез по уровню не трогает пол своего уровня и ниже (FOW-9)', () => {
+    // Плато слева (колонки 0–1) и справа (колонки 6–7), низина посередине.
+    const levels = Array.from({ length: 8 }, () => '11000011');
+    const flags = Array.from({ length: 8 }, () => '........');
+    const grid = createTerrainGrid({ width: 8, height: 8, tileSize: 65536, levels, flags });
+    const mask = new VisibilityMask(fogRectOf(grid), 4, fogLevelsOf(grid));
+    // Наблюдатель на левом плато: низина ниже его уровня, дальнее плато — того
+    // же уровня, и срез касается только пола СТРОГО выше.
+    mask.reveal({ x: 1.5, y: 4.5, radius: 7, level: 1 }, 0.25, fogSegmentsOf(grid));
+    expect(mask.valueAt(4.5, 4.5)).toBeGreaterThan(0);
+    expect(mask.valueAt(6.5, 4.5)).toBeGreaterThan(0);
   });
 
   /**
@@ -536,6 +605,39 @@ describe('FOW-7, FOW-9: отбор наблюдателей из доставл�
     expect(fog.visibility.valueAt(4 + between, 4)).toBeLessThan(0.05);
     // Внутри визуального радиуса свет есть.
     expect(fog.visibility.valueAt(4 + 3 * conservatism - 0.5, 4)).toBeGreaterThan(0);
+  });
+
+  /**
+   * Проводка среза по уровню от подсистемы к маске (FOW-9, design D4): карту
+   * уровней сетки маске отдаёт подсистема, и без этой передачи тесты самой
+   * маски остались бы зелёными — стенд бы просто не резал. Проём рампы стенду
+   * обязателен: за cliff-отрезком тексель погасила бы тень, и срез по уровню не
+   * читался бы отдельно от неё.
+   */
+  it('подсистема доводит карту уровней до маски: проём рампы не светит наверх (FOW-9)', () => {
+    const stand = (x: number, level: number): FogSubsystem => {
+      const fog = new FogSubsystem({
+        grid: gridWithRamp(),
+        stats: STATS,
+        hero: () => 1,
+        config: { edgeWidth: STAND_EDGE },
+        createCanvas: fogCanvasFactory(),
+      });
+      fog.init(makeRenderContext());
+      fog.syncTick(makeTickView([observerView(1, x, 3.5, 0, 4, level)]));
+      buildFogMask(fog);
+      return fog;
+    };
+
+    // Наблюдатель на клетке рампы несёт НИЖНИЙ уровень перехода (TERR-5).
+    const fromRamp = stand(3.5, 0);
+    // Свой уровень открыт, а пол верхнего уровня за проёмом — нет.
+    expect(fromRamp.visibility.valueAt(2.5, 3.5)).toBeGreaterThan(0);
+    expect(fromRamp.visibility.valueAt(5.5, 3.5)).toBe(0);
+
+    // Анти-вакуумность: срез зависит от УРОВНЯ наблюдателя, а не гасит
+    // возвышенный пол всегда — с плато та же точка открыта.
+    expect(stand(5.5, 1).visibility.valueAt(5.5, 3.5)).toBe(1);
   });
 
   it('пока статы героя не доставлены, маска не строится и конвейер прежний', () => {
@@ -919,7 +1021,9 @@ describe('бюджетная перестройка маски и коалеси
 
   it('окно рассеивания сжимается по мере схождения, а устоявшаяся сцена платит ноль', () => {
     const { fog, canvases } = cachedSubsystem();
-    fog.syncTick(makeTickView([observerView(1, 4.5, 4.5, 0, 3)]));
+    // Наблюдатель стоит НА возвышенной клетке (4, 4) и несёт её уровень: иначе
+    // срез reveal по уровню пола (FOW-9) погасил бы клетку под его же ногами.
+    fog.syncTick(makeTickView([observerView(1, 4.5, 4.5, 0, 3, 1)]));
     buildFogMask(fog);
 
     // Кадры рассеивания идут по грязным блокам (design D5): работа убывает по

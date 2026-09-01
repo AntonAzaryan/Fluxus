@@ -76,7 +76,14 @@ import {
   REBUILD_BUDGET_MASK_AREAS,
   SIGNATURE_PREFIX,
 } from '../fog/rebuild.js';
-import { VisibilityMask, fogRectOf, fogSegmentsOf, type FogWorldRect } from '../fog/mask.js';
+import {
+  VisibilityMask,
+  fogLevelsOf,
+  fogRectOf,
+  fogSegmentsOf,
+  type FogLevelField,
+  type FogWorldRect,
+} from '../fog/mask.js';
 import type { FogSegment } from '../fog/shadowDepth.js';
 
 /**
@@ -118,6 +125,8 @@ export class FogSubsystem implements RenderSubsystem {
   private ctx: RenderContext | null = null;
   private rect: FogWorldRect;
   private segments: readonly FogSegment[];
+  /** Карта уровней пола сетки — срез reveal по высоте (FOW-9, design D4). */
+  private field: FogLevelField;
   private mask: VisibilityMask;
   /**
    * Показанная маска — то, что сэмплируют пост-проход и миникарта. Сходится к
@@ -187,7 +196,8 @@ export class FogSubsystem implements RenderSubsystem {
     // Приём сетки — точка входной границы (REND-1, TERR-2): дальше только float.
     this.rect = fogRectOf(this.grid);
     this.segments = fogSegmentsOf(this.grid);
-    this.mask = new VisibilityMask(this.rect, this.current.resolution);
+    this.field = fogLevelsOf(this.grid);
+    this.mask = new VisibilityMask(this.rect, this.current.resolution, this.field);
     this.shown = new Uint8Array(this.mask.data.length);
     this.dirty = new FogDirtyBlocks(this.mask.width, this.mask.height);
     this.authoredBudget = options.rebuildBudget;
@@ -630,7 +640,7 @@ export class FogSubsystem implements RenderSubsystem {
     (this.postMaterial.uniforms.uStrength as { value: number }).value = next.strength;
     (this.postMaterial.uniforms.uColor as { value: THREE.Color }).value.set(next.color);
     if (next.resolution !== previous.resolution) {
-      this.mask = new VisibilityMask(this.rect, next.resolution);
+      this.mask = new VisibilityMask(this.rect, next.resolution, this.field);
       this.shown = new Uint8Array(this.mask.data.length);
       // Растр другого разрешения — другая блочная сетка и другой бюджет; порции
       // в полёте писали в прежний растр, и достраивать их некуда (design D3).

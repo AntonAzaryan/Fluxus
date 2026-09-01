@@ -111,6 +111,7 @@ export function createTerrainGrid(def: TerrainDef): TerrainGrid {
 
   const grid: TerrainGrid = { width, height, tileSize, levels, ramps, floor, cliffs: [] };
   validateRampWidth(grid);
+  validateRampSide(grid);
   return { ...grid, cliffs: buildCliffs(grid) };
 }
 
@@ -176,6 +177,49 @@ function validateRampWidth(grid: TerrainGrid): void {
       );
       if (!wide) {
         throw new Error(`TERR-7: рампа в клетке (${x}, ${y}) уже двух клеток — агенты застрянут`);
+      }
+    }
+  }
+}
+
+/**
+ * TERR-5: флаг рампы принадлежит НИЖНЕЙ клетке перехода, который он открывает,
+ * — клетка-рампа MUST NOT иметь соседа по стороне с уровнем на единицу ниже, не
+ * помеченного рампой. Цепочка склона проходит проверку: нижняя клетка шага —
+ * тоже рампа.
+ *
+ * Сторона флага — инвариант модели, а не стиль карты: от неё зависит уровень
+ * сущности на рампе (TERR-4), а через него — видимость (`fog-of-war` FOW-5).
+ * С флагом на верхней стороне сущность на подъёме несёт уже верхний уровень:
+ * снизу она не видна, а плато открывается ей с подошвы.
+ */
+function validateRampSide(grid: TerrainGrid): void {
+  const { width, height, ramps, levels } = grid;
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      const i = y * width + x;
+      if (!ramps[i]) continue;
+      const level = levels[i]!;
+      for (const j of neighbours(x, y, width, height)) {
+        const below = levels[j]!;
+        if (ramps[j] === 1 || below !== level - 1) continue;
+        // Координаты соседа — обратный ход к его индексу.
+        //
+        // DET-2, условие 5: делимое `j - nx` кратно ширине, поэтому частное
+        // целое и от конвенции округления не зависит. Ограничено оно, как и в
+        // `wordCount`, не проверкой, а аллокацией: `j` — индекс в `levels` и
+        // `ramps`, то есть меньше площади сетки, а карты уровней и флагов уже
+        // лежат в `Uint8Array` этой длины — площадь помещается в память
+        // процесса и до 2^53 не дотягивается. Отрицательным делимое не бывает
+        // (индекс неотрицателен, `nx` — остаток от него): условие 4
+        // неприменимо.
+        const nx = j % width;
+        const ny = (j - nx) / width;
+        throw new Error(
+          `TERR-5: рампа в клетке (${x}, ${y}) уровня ${level} стоит на верхней стороне перехода: ` +
+            `сосед (${nx}, ${ny}) уровня ${below} ниже на единицу и рампой не помечен — ` +
+            `флаг рампы принадлежит нижней клетке пары`,
+        );
       }
     }
   }

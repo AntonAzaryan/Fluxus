@@ -35,7 +35,7 @@ const BASE: SceneDef = {
     width: 4,
     height: 3,
     tileSize: 65536,
-    levels: ['0122', '0122', '0011'],
+    levels: ['0112', '0112', '0011'],
     flags: ['..^_', '..^.', '....'],
   },
   arena: { center: { x: 131072, y: 98304 }, radius: 262144 },
@@ -100,7 +100,7 @@ describe('хеш контент-пака (NET-17)', () => {
       arena: { radius: 262144, center: { y: 98304, x: 131072 } },
       terrain: {
         flags: ['..^_', '..^.', '....'],
-        levels: ['0122', '0122', '0011'],
+        levels: ['0112', '0112', '0011'],
         tileSize: 65536,
         height: 3,
         width: 4,

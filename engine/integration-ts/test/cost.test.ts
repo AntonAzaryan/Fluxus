@@ -406,6 +406,32 @@ describe('PERF-4: голден-гейт стоимости на записанн
     expect((document.tick as StageCost).ticks).toBe(loadRecording('match-fuzz').ticks);
   });
 
+  /**
+   * Стенд матча не вправе МОЛЧА выродиться: арена стенда синтетическая, а
+   * позиции наблюдателей приезжают записью, и достаточно одного из двух
+   * сдвинуться, чтобы туман на матче перестал делать работу — эталон при этом
+   * останется зелёным, потому что ноль сходится с нулём (PERF-4).
+   *
+   * Четыре пути маски поэтому проверяются на КАЖДОЙ записи и КАЖДОМ пресете
+   * отдельно: отбор укрытий в радиус (тени вообще исполняются), запись света
+   * (круг не выброшен целиком), обращения текселя к полярному буферу и срез по
+   * уровню пола (FOW-9). Последний виден отдельным счётчиком именно затем,
+   * чтобы стенд, на котором наблюдатель стоит «внутри» столба или, наоборот,
+   * не видит ни одной высоты, краснел здесь, а не проходил эталоном из нулей.
+   */
+  it('PERF-4: пути тумана на каждой записи живые — вырождение стенда не проходит молча', () => {
+    for (const match of RECORDED_MATCHES) {
+      for (const preset of BENCH_PRESET_NAMES) {
+        const where = `${match}/${preset}`;
+        const render = runMatch(match, preset).render;
+        expect(render.fogNearSegments, `${where}: тени`).toBeGreaterThan(0);
+        expect(render.fogMaskTexelsWritten, `${where}: запись света`).toBeGreaterThan(0);
+        expect(render.fogShadowTexelTests, `${where}: обращения к буферу теней`).toBeGreaterThan(0);
+        expect(render.fogMaskTexelsCut, `${where}: срез по уровню (FOW-9)`).toBeGreaterThan(0);
+      }
+    }
+  });
+
   it('QUAL-4: потолок производительного пресета кусает — грубая маска дешевле авторской', () => {
     const performance = runMatch('match-walk', 'performance');
     const ultra = runMatch('match-walk', 'ultra');
