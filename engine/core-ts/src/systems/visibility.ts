@@ -70,8 +70,10 @@ export const TEAM_SCHEMA: ComponentSchema = {
 /**
  * FOW-3: эффективная стелс-маска сущности — OR занятых слотов `StealthSources`.
  * Производный компонент: пишет его пересчёт видимости, и только при изменении;
- * потребители (условия таргетинга, доставка, подача) читают его, а не слоты —
- * свёртка в каждом потребителе была бы вторым определением эффективной маски.
+ * сущности с ненулевой свёрткой пересчёт дописывает его сам (`publishState`) —
+ * объявлять его заранее контент не обязан. Потребители (условия таргетинга,
+ * доставка, подача) читают его, а не слоты — свёртка в каждом потребителе была
+ * бы вторым определением эффективной маски.
  */
 export const STEALTH_STATE_SCHEMA: ComponentSchema = {
   name: STEALTH_STATE_COMPONENT,
@@ -260,7 +262,12 @@ export class VisibilitySystem implements System {
 
   run(ctx: SystemContext): void {
     const targets = ctx.query({ all: [VISIBILITY_COMPONENT, POSITION_COMPONENT] });
-    if (targets.length === 0) return;
+    const stealthSources = ctx.query({ all: [STEALTH_SOURCES_COMPONENT] });
+    const detectionSources = ctx.query({ all: [DETECTION_SOURCES_COMPONENT] });
+    // Ранний выход только когда системе не о ком говорить ВООБЩЕ: публикация
+    // свёрток (FOW-3) обязана идти и на тике без единой пары Visibility+Position
+    // — иначе носитель источников без позиции хранил бы чёрствую маску (FOW-5).
+    if (targets.length === 0 && stealthSources.length === 0 && detectionSources.length === 0) return;
     const h = (this.handles ??= resolveHandles(ctx));
 
     // Собственная команда видит свою сущность всегда, в том числе под стелсом
@@ -273,7 +280,10 @@ export class VisibilitySystem implements System {
       stealthOf.set(target, this.deps.lists.stealth.union(ctx, target));
     }
 
-    const observers = ctx.query({ all: [VISION_COMPONENT, TEAM_COMPONENT, POSITION_COMPONENT] });
+    const observers =
+      targets.length === 0
+        ? []
+        : ctx.query({ all: [VISION_COMPONENT, TEAM_COMPONENT, POSITION_COMPONENT] });
     for (const observer of observers) {
       markSeenBy(ctx, h, observer, this.deps, stealthOf, next);
     }
@@ -286,36 +296,55 @@ export class VisibilitySystem implements System {
       ctx.commands.setField(target, VISIBILITY_COMPONENT, 'visibleTo', mask);
     }
 
-    publishStates(ctx, h, this.deps, stealthOf);
+    publishState(ctx, h.stealthState, STEALTH_STATE_COMPONENT, STEALTH_SOURCES_COMPONENT, stealthSources, (entity) =>
+      stealthOf.get(entity) ?? this.deps.lists.stealth.union(ctx, entity),
+    );
+    publishState(ctx, h.detectionState, DETECTION_STATE_COMPONENT, DETECTION_SOURCES_COMPONENT, detectionSources, (entity) =>
+      this.deps.lists.detection.union(ctx, entity),
+    );
   }
 }
 
 /**
- * FOW-3: свёртки публикуются производными компонентами `StealthState`/
- * `DetectionState` — по правилу FOW-6, только при изменении, иначе состояние
- * dirty каждый тик и сетевая дельта теряет смысл. Носитель состояния — любой,
- * кто объявил компонент: цель без `Visibility` и вард без `Vision` публикуются
- * наравне с остальными.
+ * FOW-3: свёртка публикуется производным компонентом состояния — по правилу
+ * FOW-6, только при изменении, иначе состояние dirty каждый тик и сетевая
+ * дельта теряет смысл. Носитель — каждый, у кого есть список источников:
+ * сущности с ненулевой свёрткой пересчёт ДОПИСЫВАЕТ компонент состояния сам
+ * (командой, как `AbilityVisibilitySystem` дописывает `Visibility` спутнику) —
+ * объявлять его заранее контент не обязан, и непарный `StealthSources` не
+ * оставляет потребителей (NPC-10, EXPR-2, доставка FOW-13) с нулём при
+ * взведённой маске. Носитель состояния БЕЗ списка источников публикуется той
+ * же свёрткой — нулевой: осиротевшее состояние гаснет, а не черствеет.
  */
-function publishStates(
+function publishState(
   ctx: SystemContext,
-  h: VisibilityHandles,
-  deps: VisibilityDeps,
-  stealthOf: ReadonlyMap<EntityId, number>,
+  handle: { readonly component: ComponentHandle; readonly mask: FieldHandle } | undefined,
+  component: string,
+  sourcesComponent: string,
+  sources: ArrayLike<EntityId>,
+  foldOf: (entity: EntityId) => number,
 ): void {
-  if (h.stealthState !== undefined) {
-    for (const entity of ctx.query({ all: [STEALTH_STATE_COMPONENT] })) {
-      const mask = stealthOf.get(entity) ?? deps.lists.stealth.union(ctx, entity);
-      if (mask === ctx.getByHandle(entity, h.stealthState.mask)) continue;
-      ctx.commands.setField(entity, STEALTH_STATE_COMPONENT, 'mask', mask);
+  // Компонента состояния нет в схемах сцены — публиковать некуда; в группе
+  // тумана (FOW-3) он есть всегда, случай этот — рукотворные миры тестов.
+  if (handle === undefined) return;
+  for (let i = 0; i < sources.length; i++) {
+    const entity = sources[i]!;
+    const mask = foldOf(entity);
+    if (ctx.hasByHandle(entity, handle.component)) {
+      if (mask !== ctx.getByHandle(entity, handle.mask)) {
+        ctx.commands.setField(entity, component, 'mask', mask);
+      }
+    } else if (mask !== 0) {
+      ctx.commands.addComponent(entity, component, { mask });
     }
   }
-  if (h.detectionState !== undefined) {
-    for (const entity of ctx.query({ all: [DETECTION_STATE_COMPONENT] })) {
-      const mask = deps.lists.detection.union(ctx, entity);
-      if (mask === ctx.getByHandle(entity, h.detectionState.mask)) continue;
-      ctx.commands.setField(entity, DETECTION_STATE_COMPONENT, 'mask', mask);
-    }
+  // Носитель состояния БЕЗ списка источников: свёртка нулевая по определению —
+  // осиротевшее состояние гаснет, а не черствеет. Носители со списком уже
+  // обработаны выше, второй команды им не ставится.
+  for (const entity of ctx.query({ all: [component] })) {
+    if (ctx.has(entity, sourcesComponent)) continue;
+    if (ctx.getByHandle(entity, handle.mask) === 0) continue;
+    ctx.commands.setField(entity, component, 'mask', 0);
   }
 }
 

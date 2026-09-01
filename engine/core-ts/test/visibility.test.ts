@@ -524,6 +524,42 @@ describe('публикация свёрток StealthState/DetectionState (FOW-3
     expect(idle.changes.changedEntities(DETECTION_STATE_COMPONENT).size).toBe(0);
   });
 
+  it('непарный StealthSources: состояние дописывается пересчётом при ненулевой свёртке', () => {
+    const h = harness();
+    h.place('Watcher', { Position: { x: F(1), y: F(1) } });
+    // Носитель источников БЕЗ объявленного состояния и без Visibility: контент
+    // не обязан спаривать компоненты сам — иначе потребители состояния (NPC-10,
+    // maskCovered, доставка FOW-13) молча видели бы нуль при взведённой маске.
+    const bearer = h.place('Wall', { Position: { x: F(2), y: F(2) } });
+    addComponent(h.world, bearer, STEALTH_SOURCES_COMPONENT, {});
+    h.step();
+    // Свёртка нулевая — компонент не дописан: пустого состояния не публикуется.
+    expect(getField(h.world, bearer, STEALTH_STATE_COMPONENT, 'mask')).toBe(0);
+
+    setField(h.world, bearer, STEALTH_SOURCES_COMPONENT, 'id0', 7);
+    setField(h.world, bearer, STEALTH_SOURCES_COMPONENT, 'value0', CH);
+    h.step();
+    expect(getField(h.world, bearer, STEALTH_STATE_COMPONENT, 'mask')).toBe(CH);
+
+    // Источник снят — дописанное состояние гаснет, а не черствеет.
+    setField(h.world, bearer, STEALTH_SOURCES_COMPONENT, 'id0', 0);
+    setField(h.world, bearer, STEALTH_SOURCES_COMPONENT, 'value0', 0);
+    h.step();
+    expect(getField(h.world, bearer, STEALTH_STATE_COMPONENT, 'mask')).toBe(0);
+  });
+
+  it('публикация идёт и на тике без единой пары Visibility+Position (FOW-5)', () => {
+    const h = harness();
+    // В мире НЕТ целей пересчёта — только носитель источников детекции.
+    const ward = h.place('Wall', { Position: { x: F(1), y: F(1) } });
+    addComponent(h.world, ward, DETECTION_SOURCES_COMPONENT, {});
+    setField(h.world, ward, DETECTION_SOURCES_COMPONENT, 'id0', 3);
+    setField(h.world, ward, DETECTION_SOURCES_COMPONENT, 'value0', CH);
+    h.step();
+
+    expect(getField(h.world, ward, DETECTION_STATE_COMPONENT, 'mask')).toBe(CH);
+  });
+
   it('система раньше якоря 900 читает свёртку прошлого пересчёта', () => {
     const h = harness();
     const enemy = h.place('Enemy', { Position: { x: F(1), y: F(3) } });
@@ -604,6 +640,11 @@ describe('туман войны без террейна отвергается �
     expect(() => loadScene({ ...SCENE, softStealthChannels: [32] })).toThrow(/\[0, 31\]/);
     expect(() => loadScene({ ...SCENE, softStealthChannels: [-1] })).toThrow(/\[0, 31\]/);
     expect(() => loadScene({ ...SCENE, softStealthChannels: [3, 3] })).toThrow(/дважды/);
+  });
+
+  it('не-массив в softStealthChannels — адресный отказ, а не сырой TypeError (SER-5)', () => {
+    const broken = { ...SCENE, softStealthChannels: 3 as unknown as readonly number[] };
+    expect(() => loadScene(broken)).toThrow(/SER-7.*softStealthChannels/);
   });
 
   it('без перечисления все каналы жёсткие, с перечислением мягкие биты сняты (FOW-12)', () => {

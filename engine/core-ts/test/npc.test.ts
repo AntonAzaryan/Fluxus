@@ -794,6 +794,20 @@ describe('NPC-10: восприятие уважает стелс и детекц
     expect(h.field(creep, NPC_AGENT_COMPONENT, 'target')).toBe(hidden);
   });
 
+  it('цель, ушедшая в стелс, отбрасывается ближайшим пересмотром — не дольше окна каденса (NPC-4)', () => {
+    const h = fogHarness();
+    const hero = h.place('Hero', { Position: { x: F(2), y: 0 } });
+    const creep = h.place('Creep', { Position: { x: 0, y: 0 } });
+    h.step();
+    expect(h.field(creep, NPC_AGENT_COMPONENT, 'target')).toBe(hero);
+
+    // Цель скрылась ПОСЛЕ выбора: запрет NPC-10 действует в точках решений,
+    // удержание ограничено интервалом решений документа (4 тика у chaser).
+    addComponent(h.world, hero, 'StealthState', { mask: HARD });
+    for (let i = 0; i < 4; i++) h.step();
+    expect(h.field(creep, NPC_AGENT_COMPONENT, 'target')).toBe(NO_ENTITY);
+  });
+
   it('угроза от скрытого источника копится, но целью он не становится, пока скрыт', () => {
     const h = fogHarness();
     const hidden = h.place('Hero', { Position: { x: F(3), y: 0 } });

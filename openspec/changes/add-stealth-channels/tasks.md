@@ -22,7 +22,7 @@
 ## 5. Миграция потребителей и эталоны
 
 - [x] 5.1 Перевести фикстуры и тесты с `Stealth { active }` на источник в `StealthSources` (`core-ts/test`, `net-ts/test/fixtures.ts`, `integration-ts/test/eventDelivery.test.ts`), обновить `editor/ui-ts/src/areas/objectsSchemas.ts` и `game/demo-ts/app/sim.ts`; проверка — `npm test` пакетов ядра, net, integration, editor-ui зелёный.
-- [x] 5.2 Регенерация эталонов: `npm run golden` и `npm run golden:cost` (рост стоимости `VisibilitySystem` принимается явно); проверка — дифф базлайнов в коммите, `npm test` зелёный.
+- [x] 5.2 Регенерация эталонов: `npm run golden` и `npm run golden:cost`; проверка — дифф базлайнов в коммите, `npm test` зелёный. Оговорка: cost-дифф пуст не потому, что стоимость не выросла, а потому, что ни одна cost-запись (`match-*`) не объявляет `fog` — пересчёт видимости на них не исполняется; fog-сценарий в cost-базлайнах — отдельная работа (design, Risks).
 
 ## 6. Презентация (минимум FOW-13)
 

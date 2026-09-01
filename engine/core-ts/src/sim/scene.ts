@@ -194,6 +194,14 @@ function checkSceneInvariants(def: SceneDef): void {
  * и снапшот таблица не входит.
  */
 function hardStealthMask(channels: readonly number[] | undefined): number {
+  // Форма поля проверяется адресно (SER-5, SER-7): не-массив дал бы сырой
+  // TypeError без имени поля и ID требования.
+  if (channels !== undefined && !Array.isArray(channels)) {
+    throw new Error(
+      'SER-7: softStealthChannels — список номеров мягких стелс-каналов (целые [0, 31]), ' +
+        `получено значение типа ${typeof channels}`,
+    );
+  }
   let soft = 0;
   for (const channel of channels ?? []) {
     if (!Number.isInteger(channel) || channel < 0 || channel > 31) {
