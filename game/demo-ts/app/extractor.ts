@@ -58,6 +58,11 @@ export const DEMO_STATS: readonly StatSource[] = Object.freeze([
   // описывает HUD-8.
   { name: STATS.charge, component: 'Charging', field: 'ticks' },
   { name: STATS.aim, component: 'Input', field: 'aimDir' },
+  // Свёртки стелса и детекции (FOW-3) — входы подачи стелса (`stealthTint.ts`,
+  // FOW-13). Производные компоненты пишет пересчёт видимости; у сущности без
+  // них записи молча нет — ровно сценарий HUD-8.
+  { name: STATS.stealthMask, component: 'StealthState', field: 'mask' },
+  { name: STATS.detectionMask, component: 'DetectionState', field: 'mask' },
   // Кулдаун лежит на сущности-слоте владельца (ABIL-1, ABIL-7), а едет на нём
   // самом: слот `Position` не несёт и в поток тиков не попадает (NET-12).
   // Слотовая форма источника — `slotIndex` записи (`statSources.ts`).

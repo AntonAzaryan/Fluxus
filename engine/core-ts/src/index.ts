@@ -48,10 +48,15 @@ export const world = {
 } as const;
 
 /**
- * Единственный мутирующий хелпер в публичной поверхности: расстановка
+ * Единственный мутатор ECS-уровня в публичной поверхности: расстановка
  * `worldInit` ДО первого `tick()` (TICK-3, исключение 1; DET-1). Порядок
  * вызовов входит в воспроизводимость — он задаёт выданные ID (ID-2).
  * Вызов после первого тика — нарушение TICK-3, а не поддержанный сценарий.
+ *
+ * Экспортируемых исключений у TICK-3 два, и второе — `restoreSnapshot` ниже
+ * (исключения 2 и 4): мир оно тоже меняет, но операцией ECS-уровня не является —
+ * единица его работы — состояние целиком, а не поле, сущность или состав
+ * компонентов.
  */
 export const worldInitSpawn = worldModule.spawn;
 
@@ -76,9 +81,11 @@ export { EventBus } from './ecs/events.js';
 export * as expr from './dsl/expr.js';
 export * as actions from './dsl/actions.js';
 export type { Action } from './dsl/actions.js';
+// Интерфейса-обёртки над вычислителем в этом списке нет намеренно (EXPR-4):
+// вход вычисления один — функция `evaluate` модуля `dsl/expr.ts`, — и
+// объявление, через которое ничего не проходит, подменяемости не даёт.
 export type {
   Expression,
-  ExpressionEvaluator,
   ExprValue,
   ExprVars,
   ExprWorld,
@@ -182,18 +189,22 @@ export {
   fowComponents,
   VISION_COMPONENT,
   VISIBILITY_COMPONENT,
-  STEALTH_COMPONENT,
   TEAM_COMPONENT,
+  STEALTH_STATE_COMPONENT,
+  DETECTION_STATE_COMPONENT,
+  STEALTH_SOURCES_COMPONENT,
+  DETECTION_SOURCES_COMPONENT,
   VISION_SCHEMA,
   VISIBILITY_SCHEMA,
-  STEALTH_SCHEMA,
   TEAM_SCHEMA,
+  STEALTH_STATE_SCHEMA,
+  DETECTION_STATE_SCHEMA,
   VISION_MODIFIER_COMPONENT,
   VISION_SCALE_MIN,
   VISION_SCALE_MAX,
   MAX_TEAMS,
 } from './systems/visibility.js';
-export type { VisibilityOptions } from './systems/visibility.js';
+export type { VisibilityOptions, VisibilityDeps, FowLists } from './systems/visibility.js';
 export { InputSystem, INPUT_FIELDS, INPUT_TARGET_FIELDS, inputTargetDeclared } from './systems/inputSystem.js';
 export type { InputSystemOptions } from './systems/inputSystem.js';
 export {
@@ -307,6 +318,15 @@ export type {
 } from './systems/abilities/model.js';
 
 // sim — сборка сцены и прогон тиков
+// `restoreSnapshot` в этой строке — исключения 2 и 4 TICK-3: применение снапшота
+// ядром при перемотке (REW-2) и применение авторитетного снапшота сетевой
+// оболочкой, у которой собственного тика нет вовсе (`client-shell` SHELL-8,
+// NTR-10). Требование велит публиковать эту операцию отдельно от read-only
+// поверхности и по назначению; мутирующей поверхности общего назначения это не
+// расширяет: единица её работы — состояние целиком, а не поле, сущность или
+// состав компонентов, то есть ни одна из операций, публикацию которых TICK-3
+// объявляет несуществующей (перечень — в шапке `world` выше). Комментарий
+// строчный намеренно: doc-блок приписал бы объяснение всей строке экспортов.
 export { tick, dispatch, initialState, takeSnapshot, restoreSnapshot } from './sim/tick.js';
 export type { Simulation } from './sim/tick.js';
 export { RingHistory } from './sim/history.js';
@@ -320,8 +340,14 @@ export type {
   RewindController,
   RewindOptions,
 } from './sim/rewind.js';
-export { filterSnapshot, relevantEntityVisible, VIEWPOINT_ALL, EVENT_ENTITY_FIELDS } from './sim/filter.js';
-export type { EventVisibility } from './sim/filter.js';
+export {
+  filterSnapshot,
+  relevantEntityVisible,
+  eventVisibilityByName,
+  VIEWPOINT_ALL,
+  EVENT_ENTITY_FIELDS,
+} from './sim/filter.js';
+export type { EventVisibility, EventVisibilityName } from './sim/filter.js';
 export { loadScene } from './sim/scene.js';
 export type { Scene, SceneDef } from './sim/scene.js';
 /**

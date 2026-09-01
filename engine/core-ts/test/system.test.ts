@@ -25,7 +25,14 @@ function nativeSystems(): readonly System[] {
     new TweenSystem([]),
     new PhysicsSystem(new PhysicsWorld([])),
     new ArenaSystem(),
-    new VisibilitySystem(modifierList(VISION_MODIFIER_COMPONENT)),
+    new VisibilitySystem({
+      lists: {
+        vision: modifierList(VISION_MODIFIER_COMPONENT),
+        stealth: modifierList('StealthSources', undefined, 'mask'),
+        detection: modifierList('DetectionSources', undefined, 'mask'),
+      },
+      hardStealthMask: ~0,
+    }),
   ];
 }
 

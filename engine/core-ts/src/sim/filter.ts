@@ -38,7 +38,8 @@ import { query } from '../ecs/query.js';
 import { cloneWorld, destroy, getField, isAlive, scrubFields } from '../ecs/world.js';
 import { teamBit, VISIBILITY_COMPONENT } from '../systems/visibility.js';
 import { takeSnapshot } from './tick.js';
-import type { EntityId, GameEvent, SimulationState, Snapshot } from '../types.js';
+import { NO_ENTITY } from '../types.js';
+import type { EntityId, GameEvent, ReadonlySimulationState, Snapshot } from '../types.js';
 
 /**
  * Без фильтрации: спектейтор, реплей, дебаг, golden-файлы CLI (NET-15, CLI-5).
@@ -51,10 +52,35 @@ export const VIEWPOINT_ALL = -1;
  * предикат»). Параметр он потому, что точная политика при разной видимости
  * источника и цели остаётся открытым геймплейным вопросом; действующее значение
  * при этом не умолчание реализации, а норма (`relevantEntityVisible` ниже), и
- * называет его поле конфига матча (NTR-9) — то есть закрытие вопроса будет
- * правкой контента, а не правкой ядра или сетевого слоя.
+ * называет его ИМЕНЕМ поле конфига матча (NTR-9) — то есть закрытие вопроса
+ * будет правкой контента, а не правкой ядра или сетевого слоя.
+ *
+ * Функция здесь — форма механизма, а не форма настройки: снаружи предикат
+ * выбирается именем из закрытого набора (`eventVisibilityByName`), потому что
+ * документ матча — JSON, а норма обязана быть одинаковой в обеих реализациях
+ * ядра (CLI-6). Функцией параметр остаётся ради самого ядра: реплей, golden и
+ * тесты зовут фильтр напрямую.
  */
 export type EventVisibility = (event: GameEvent, isVisible: (entity: EntityId) => boolean) => boolean;
+
+/**
+ * Имя действующего предиката видимости события (NET-13). Набор ЗАКРЫТ нормой —
+ * ровно два имени, и оба отвечают на открытый геймплейный вопрос «что делать при
+ * разной видимости источника и цели» с двух сторон:
+ *
+ * - `any-referenced` — нормированный NET-13 предикат: событие уходит, если видима
+ *   ХОТЯ БЫ ОДНА названная в его данных сущность (урон от невидимого источника по
+ *   видимой цели доезжает);
+ * - `all-referenced` — событие уходит, только если видимы ВСЕ названные (тот же
+ *   урон не доезжает: источник в тумане).
+ *
+ * Закрытым набор обязан быть по той же причине, что и набор имён полей-ссылок
+ * ниже: догадка о незнакомом имени разошлась бы между двумя реализациями ядра
+ * (CLI-6), а предикат произвольной формы в JSON-документе был бы вторым языком
+ * рядом с языком выражений. Расширение набора — правка спеки (NET-13), как у
+ * закрытых наборов действий и операторов (ACT-1, EXPR-6).
+ */
+export type EventVisibilityName = 'all-referenced' | 'any-referenced';
 
 /**
  * Имена полей данных события, считающихся ссылками на сущности. Набор ЗАКРЫТ
@@ -65,6 +91,23 @@ export type EventVisibility = (event: GameEvent, isVisible: (entity: EntityId) =
  * закрытых наборов действий и операторов (ACT-1, EXPR-6).
  */
 export const EVENT_ENTITY_FIELDS: readonly string[] = ['entity', 'other', 'source', 'target'];
+
+/**
+ * Сущность, НАЗВАННАЯ событием в поле `field`, либо `undefined` — поля нет либо
+ * в нём стоит код «ссылки нет» (ECS-6, `NO_ENTITY`).
+ *
+ * Пустая ссылка сущности не называет (NET-13): поле присутствует, а ссылки в нём
+ * нет. Считать её названной значило бы называть сущность, которой не существует,
+ * — `isVisible` на ней ложен всегда, и под `all-referenced` любое событие с
+ * незаполненной ссылкой (урон от арены без `source`) гасилось бы у ВСЕХ
+ * получателей независимо от видимости того, о ком событие. Правило одно на оба
+ * имени набора и живёт в одном месте: разойдись предикаты здесь, и «названная
+ * сущность» значило бы у них разное.
+ */
+function namedEntity(event: GameEvent, field: string): EntityId | undefined {
+  const value = event.data[field];
+  return value === undefined || value === NO_ENTITY ? undefined : value;
+}
 
 /**
  * Действующий предикат, нормированный NET-13: событие уходит клиенту, если
@@ -79,16 +122,58 @@ export const EVENT_ENTITY_FIELDS: readonly string[] = ['entity', 'other', 'sourc
 export const relevantEntityVisible: EventVisibility = (event, isVisible) => {
   let referenced = false;
   for (const field of EVENT_ENTITY_FIELDS) {
-    const value = event.data[field];
-    if (value === undefined) continue;
+    const entity = namedEntity(event, field);
+    if (entity === undefined) continue;
     referenced = true;
-    if (isVisible(value)) return true;
+    if (isVisible(entity)) return true;
   }
   return !referenced;
 };
 
-/** `SimulationState` от `Snapshot` отличает rng: там реестр, здесь снятый срез. */
-function isSnapshot(source: Snapshot | SimulationState): source is Snapshot {
+/**
+ * Второй предикат закрытого набора (NET-13): событие уходит клиенту, только если
+ * видимы ВСЕ названные в его данных сущности. Событие, не называющее ни одной,
+ * остаётся общим и уходит всем — эта половина нормы одна на оба имени и от
+ * выбора политики не зависит.
+ *
+ * Имя у него есть затем, чтобы закрытие открытого геймплейного вопроса было
+ * правкой документа матча: `any-referenced` и `all-referenced` — это два ответа
+ * на один вопрос («видима цель, источник в тумане»), а не оптимизация и её
+ * вариант.
+ */
+const allReferencedVisible: EventVisibility = (event, isVisible) => {
+  for (const field of EVENT_ENTITY_FIELDS) {
+    const entity = namedEntity(event, field);
+    if (entity !== undefined && !isVisible(entity)) return false;
+  }
+  return true;
+};
+
+/** Закрытый набор целиком: имя → предикат. Порядок имён — алфавитный (ACT-3). */
+const EVENT_VISIBILITY: Readonly<Record<EventVisibilityName, EventVisibility>> = {
+  'all-referenced': allReferencedVisible,
+  'any-referenced': relevantEntityVisible,
+};
+
+/**
+ * Предикат по имени из конфига матча (NET-13, NTR-9) — единственная дорога от
+ * документа к механизму. Незнакомое имя SHALL быть названным отказом, а не
+ * молчаливым откатом к норме: «freeze» вместо «all-referenced» означало бы
+ * политику, которой в документе не написано, и разошлось бы с NTR-9 ровно так
+ * же, как проглоченная опечатка в имени секции.
+ */
+export function eventVisibilityByName(name: string): EventVisibility {
+  const predicate = (EVENT_VISIBILITY as Record<string, EventVisibility | undefined>)[name];
+  if (predicate === undefined) {
+    throw new Error(
+      `предикат видимости события "${name}" неизвестен (NET-13): ${Object.keys(EVENT_VISIBILITY).join(', ')}`,
+    );
+  }
+  return predicate;
+}
+
+/** Состояние от `Snapshot` отличает rng: там реестр, здесь снятый срез. */
+function isSnapshot(source: Snapshot | ReadonlySimulationState): source is Snapshot {
   return Array.isArray(source.rng);
 }
 
@@ -103,8 +188,9 @@ function isSnapshot(source: Snapshot | SimulationState): source is Snapshot {
  * получить до первого кадра (SHELL-5). Направление умолчания держится тестом,
  * а не этим комментарием (`test/filter.test.ts`).
  *
- * Своя сущность в собственном снапшоте остаётся даже под `Stealth` (NET-15):
- * бит своей команды `VisibilitySystem` взводит безусловно (FOW-3).
+ * Своя сущность в собственном снапшоте остаётся даже скрытой любым
+ * стелс-каналом (NET-15): бит своей команды `VisibilitySystem` взводит
+ * безусловно, до всех фильтров (FOW-3).
  *
  * Шина тика уходит в результат отобранной тем же предикатом и тем же вызовом,
  * что и поток событий (NET-18, NTR-15): разойдись предикат или момент, клиент
@@ -114,7 +200,7 @@ function isSnapshot(source: Snapshot | SimulationState): source is Snapshot {
  * фильтр снимается целиком, а не по каналам (NTR-9).
  */
 export function filterSnapshot(
-  source: Snapshot | SimulationState,
+  source: Snapshot | ReadonlySimulationState,
   viewpoint: number,
   eventVisibility: EventVisibility = relevantEntityVisible,
 ): Snapshot {

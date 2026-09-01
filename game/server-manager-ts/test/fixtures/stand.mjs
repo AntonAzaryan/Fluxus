@@ -57,6 +57,10 @@ const report = () => {
 
 createServer((socket) => { socket.end(); }).listen(port, '127.0.0.1');
 process.stdout.write('подставной стенд менеджера поднят\n');
+// Аргументы запуска — обычной строкой лога (без маркера управляющей линии):
+// только по ней тест видит, ЧТО агент передал стенду, — параметры запуска
+// (SRV-2) в записи реестра не отражаются.
+process.stdout.write(`аргументы: ${process.argv.slice(2).join(' ')}\n`);
 emit({ t: 'ready', port, players, buildId: 'manager-build', contentPackHash: 'manager-hash' });
 
 let pending = '';
@@ -90,4 +94,16 @@ setInterval(() => {
 
 process.on('SIGTERM', () => { process.exit(0); });
 process.on('SIGINT', () => { process.exit(0); });
+
+// Документ матча со словом `crash` в имени — договорённость ТЕСТА, а не
+// протокола: так же устроен подставной стенд агента. Выход ненулевым кодом —
+// после того как порт уже отвечает, иначе это несостоявшийся запуск, а не краш
+// идущего сервера (SRV-6).
+if (String(at('match') ?? '').includes('crash')) {
+  setTimeout(() => {
+    process.stdout.write('подставной стенд менеджера падает\n');
+    process.exit(7);
+  }, 250);
+}
+
 setInterval(() => {}, 60_000);

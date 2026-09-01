@@ -9,7 +9,7 @@
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { startHttpServe, type HttpServe } from '../src/httpServer.js';
+import { contentShadowedBy, startHttpServe, type HttpServe } from '../src/httpServer.js';
 import {
   CONTROL_LINE_PREFIX,
   decodeStandCommand,
@@ -125,6 +125,47 @@ describe('раздача клиента и дерева контента (SRV-8)
     // И страница, и адрес сервера в параметре ведут на публичный хост.
     expect(link.hostname).toBe('host.example');
     expect(link.searchParams.get('server')).toBe('ws://host.example:8080');
+  });
+});
+
+/**
+ * «Агент SHALL раздавать … собранный клиентский бандл и ДЕРЕВО КОНТЕНТА СВОЕГО
+ * ДИСТРИБУТИВА» (SRV-8). Бандл идёт первым слоем, поэтому копия дерева внутри
+ * него — не лишние байты, а подмена: сервер матча читал бы `content/`, а
+ * страница игрока свой снимок, и рукопожатие разошлось бы по хешу контент-пака
+ * (NTR-5). Такой бандл собран не тем конфигом, и раздача называет это отказом.
+ */
+describe('снимок дерева внутри бандла — названный отказ (SRV-8)', () => {
+  it('бандл с копией дерева контента раздачу не поднимает', async () => {
+    const box = sandbox();
+    boxes.push(box);
+    const bundleDir = join(box.contentRoot, '..', 'baked');
+    mkdirSync(join(bundleDir, 'matches'), { recursive: true });
+    writeFileSync(join(bundleDir, 'index.html'), '<!doctype html>');
+    // Снимок месячной давности: тот самый, что кладёт в бандл сборка страницы
+    // с `publicDir: content/`.
+    writeFileSync(join(bundleDir, 'matches', 'duel.match.json'), '{"name":"старый"}\n');
+
+    await expect(
+      startHttpServe({ port: 0, host: '127.0.0.1', bundleDir, contentRoot: box.contentRoot }),
+    ).rejects.toThrow(/копию дерева контента/);
+  });
+
+  it('бандл без копии дерева поднимается, и заслонять ему нечего', async () => {
+    const box = sandbox();
+    boxes.push(box);
+    const bundleDir = join(box.contentRoot, '..', 'clean');
+    mkdirSync(join(bundleDir, 'assets'), { recursive: true });
+    writeFileSync(join(bundleDir, 'index.html'), '<!doctype html>');
+    writeFileSync(join(bundleDir, 'assets', 'app.js'), 'export const app = 1;\n');
+    expect(contentShadowedBy(bundleDir, box.contentRoot)).toEqual([]);
+
+    const serve = await startHttpServe({ port: 0, host: '127.0.0.1', bundleDir, contentRoot: box.contentRoot });
+    serves.push(serve);
+    // Документ матча приезжает из ЖИВОГО дерева дистрибутива — того самого, по
+    // которому агент поднимает сервер матча.
+    const asset = await fetch(`http://127.0.0.1:${String(serve.port)}/matches/duel.match.json`);
+    expect(await asset.text()).toContain('duel');
   });
 });
 

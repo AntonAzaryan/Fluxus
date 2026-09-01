@@ -8,6 +8,7 @@
 import { symlink } from 'node:fs/promises';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
+import { openApp, shadowedNames } from '../src/host/app.js';
 import { createHostRoot } from '../src/host/root.js';
 import { createStaticServer, mimeOf, requestPath } from '../src/host/serve.js';
 import { dropTree, linkDirectory, makeTree, text, FILE_LINKS_ALLOWED } from './support.js';
@@ -33,6 +34,57 @@ describe('тип содержимого', () => {
     expect(mimeOf('scenes/duel.scene.json')).toContain('application/json');
     expect(mimeOf('visuals/models/hero.glb')).toBe('model/gltf-binary');
     expect(mimeOf('visuals/models/hero.mdx')).toBe('application/octet-stream');
+  });
+});
+
+/**
+ * Снимок дерева внутри бандла (DSK-4): контейнер раздаёт приложению ЖИВОЕ дерево
+ * контента, и бандл, несущий в себе его копию, заслонил бы живые байты первым же
+ * слоем — правка документа переставала бы доезжать до кадра, а виноватым
+ * выглядел бы контейнер. Признак — совпадение КАТАЛОГОВ верхнего уровня; та же
+ * сверка (и по той же причине) стоит в раздаче агента хоста (`server-control`
+ * SRV-8), но повторена здесь: контейнер от пакетов репозитория не зависит (DSK-3).
+ */
+describe('бандл со снимком дерева (DSK-4)', () => {
+  it('копия каталогов корня — названный отказ, а одноимённый файл — нет', async () => {
+    const workspace = await makeTree({
+      'baked/index.html': 'страница',
+      'baked/matches/duel.match.json': '{"name":"снимок"}',
+      'content/index.html': 'дерево',
+      'content/matches/duel.match.json': '{"name":"живой"}',
+    });
+    // Каталог `matches` есть в обоих — это и есть запечённая копия дерева.
+    expect(shadowedNames(`${workspace}/baked`, `${workspace}/content`)).toEqual(['matches']);
+    expect(() =>
+      openApp({
+        profile: {
+          id: 'снимок',
+          title: 'снимок',
+          bundle: `${workspace}/baked`,
+          entry: 'index.html',
+          roots: [
+            { id: 'content', label: 'content', directory: `${workspace}/content`, writable: false, serve: true },
+          ],
+          capabilities: [],
+          services: [],
+          window: { width: 800, height: 600 },
+        },
+      }),
+    ).toThrow(/копию корня/);
+    await dropTree(workspace);
+  });
+
+  it('одинокий одноимённый файл копией дерева не считается', async () => {
+    // `index.html` лежит и в бандле, и в корне — обычное дело, и ровно ради него
+    // слои упорядочены: бандл закрывает файл собой (см. «слои раздачи»).
+    const workspace = await makeTree({
+      'bundle/index.html': 'бандл',
+      'bundle/assets/app.js': 'app',
+      'content/index.html': 'дерево',
+      'content/visuals/manifest.json': '{"visuals":{}}',
+    });
+    expect(shadowedNames(`${workspace}/bundle`, `${workspace}/content`)).toEqual([]);
+    await dropTree(workspace);
   });
 });
 

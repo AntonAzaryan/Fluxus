@@ -225,6 +225,21 @@ describe('хеш контент-пака (NET-17)', () => {
       expect(worldInitHashOf(scene)).not.toBe(worldInitHashOf(BASE));
     }
   });
+
+  it('softStealthChannels — зона правил: хеш пака двигается, worldInit — нет (FOW-12)', () => {
+    // Жёсткость канала меняет пересчёт видимости при том же мире: таблица в
+    // снапшот не входит, но правила ею другие — граница противоположна ассетам.
+    const soft = withScene({ softStealthChannels: [3] });
+    expect(contentPackHash(soft)).not.toBe(contentPackHash(BASE));
+    expect(worldInitHashOf(soft)).toBe(worldInitHashOf(BASE));
+
+    // Отсутствие поля и пустой список загрузчик не различает — не различает и хеш;
+    // порядок перечисления — множество, нормализуется сортировкой.
+    expect(contentPackHash(withScene({ softStealthChannels: [] }))).toBe(contentPackHash(BASE));
+    expect(contentPackHash(withScene({ softStealthChannels: [4, 1] }))).toBe(
+      contentPackHash(withScene({ softStealthChannels: [1, 4] })),
+    );
+  });
 });
 
 describe('хеш контент-пака: определения способностей и баффов (NET-17)', () => {

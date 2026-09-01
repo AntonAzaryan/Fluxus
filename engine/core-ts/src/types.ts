@@ -303,9 +303,16 @@ export interface ModifierList {
   readonly schema: ComponentSchema;
   /**
    * Произведение значений занятых слотов, клампленное в `[lo, hi]`. У
-   * сущности без компонента источников — `FIXED_ONE`.
+   * сущности без компонента источников — `FIXED_ONE`. Осмысленно только для
+   * списка множителей (`values: 'scale'`).
    */
   product(ctx: SystemContext, entity: EntityId, lo: Fixed, hi: Fixed): Fixed;
+  /**
+   * Побитовое OR значений занятых слотов — свёртка масочного списка
+   * (`values: 'mask'`, FOW-3). У сущности без компонента источников — `0`:
+   * нейтраль масочного слота — пустая маска, а не `FIXED_ONE`.
+   */
+  union(ctx: SystemContext, entity: EntityId): number;
   /** Добавляет или обновляет источник по `id`. Бросает, если свободных слотов нет. */
   add(ctx: SystemContext, entity: EntityId, id: number, value: Fixed): void;
   /** Снимает источник по `id`; отсутствующий id — не ошибка (TIME-8). */
@@ -422,6 +429,7 @@ export const DIAGNOSTIC_CODES = [
   'MASK_INDEX_OUT_OF_RANGE',
   'MASK_COMPONENT_OUT_OF_RANGE',
   'COMPONENT_READ_WITHOUT_OWNERSHIP',
+  'COMPONENT_WRITE_WITHOUT_OWNERSHIP',
   'RNG_BOUND_INVALID',
   'SINK_THREW',
   // трейс
@@ -573,7 +581,11 @@ export interface ChangeSet {
 }
 
 export interface TickResult {
-  readonly state: SimulationState;
+  /**
+   * То же состояние, продвинутое на тик (TICK-1), — read-only проекцией
+   * (OBS-1): отчёт наблюдаем, а не является каналом записи (TICK-3).
+   */
+  readonly state: ReadonlySimulationState;
   readonly tick: number;
   readonly mode: WorldMode;
   readonly isReplay: boolean;
@@ -601,19 +613,50 @@ export interface RngStreamState {
   readonly state: Uint32Array;
 }
 
-/** Реестр именованных стримов; его состояние входит в снапшот мира (RNG-5, SNAP-1). */
-export interface RngRegistry {
-  forSystem(systemName: string): RngStreams;
+/**
+ * Read-only проекция реестра стримов — то, каким он виден из отчёта о тике
+ * (OBS-1). Снять состояние можно, выдать стрим — нет: у выданного стрима есть
+ * `next()`, то есть шаг генератора, а состояние стримов входит в снапшот
+ * (RNG-5, SNAP-1) — сдвинуть его вне тика значило бы менять состояние
+ * симуляции в обход Command Buffer (TICK-3).
+ */
+export interface ReadonlyRngRegistry {
   snapshot(): RngStreamState[];
+}
+
+/** Реестр именованных стримов; его состояние входит в снапшот мира (RNG-5, SNAP-1). */
+export interface RngRegistry extends ReadonlyRngRegistry {
+  forSystem(systemName: string): RngStreams;
   restore(entries: readonly RngStreamState[]): void;
+}
+
+/**
+ * Состояние симуляции, видимое из отчёта о тике (OBS-1): объём тот же, что у
+ * `SimulationState` (SNAP-1), а канала записи нет ни у одной части.
+ *
+ * Отдельным типом оно существует потому, что `readonly` на полях `TickResult`
+ * запрещает подменить ссылку, но не запрещает переписать то, на что она
+ * указывает: номер тика, режим мира, шину событий и стримы RNG. Все они —
+ * части состояния симуляции (SNAP-1), и запись в них из `onTick` была бы
+ * изменением мира вне тика внешним слоем, то есть тем самым side-channel,
+ * который отрицает TICK-3. Мир (ECS) закрыт и так — `WorldState`
+ * непрозрачен, — а соседние части состояния закрывает этот тип.
+ */
+export interface ReadonlySimulationState {
+  readonly world: WorldState;
+  readonly tick: number;
+  readonly rng: ReadonlyRngRegistry;
+  readonly events: ReadonlyEventLog;
+  readonly mode: WorldMode;
 }
 
 /**
  * Состояние симуляции. Мутабельно (TICK-1): `tick()` продвигает его на месте,
  * а история прошлого живёт снапшотами в `HistoryProvider` (SNAP-4), а не
- * копией на каждом тике.
+ * копией на каждом тике. Владеет им хост, поднявший симуляцию; наружу через
+ * отчёт о тике уходит его read-only проекция (OBS-1).
  */
-export interface SimulationState {
+export interface SimulationState extends ReadonlySimulationState {
   readonly world: WorldState;
   tick: number;
   readonly rng: RngRegistry;
@@ -638,8 +681,12 @@ export interface Snapshot {
  * (SNAP-4), а не общий компромиссный буфер.
  */
 export interface HistoryProvider {
-  /** Снимает снапшот, если текущий тик подходит под политику провайдера (SNAP-4). */
-  record(state: SimulationState): void;
+  /**
+   * Снимает снапшот, если текущий тик подходит под политику провайдера (SNAP-4).
+   * Read-only проекции хватает: снятие снапшота — чтение, а ведёт историю чаще
+   * всего наблюдатель, у которого на руках отчёт о тике (OBS-1).
+   */
+  record(state: ReadonlySimulationState): void;
   /** Ближайший снапшот с тиком ≤ `tick`; при более глубоком запросе — самый старый (REW-1). */
   nearest(tick: number): Snapshot | undefined;
   /** Самый старый доступный тик — предел глубины перемотки (REW-1). */

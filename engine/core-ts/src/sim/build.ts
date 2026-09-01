@@ -34,7 +34,13 @@ import {
 } from '../systems/physics.js';
 import { buildNavigation, type NavigationOptions } from '../systems/nav/navigation.js';
 import { requireModifierList } from '../systems/modifiers.js';
-import { VisibilitySystem, VISION_MODIFIER_COMPONENT, type VisibilityOptions } from '../systems/visibility.js';
+import {
+  VisibilitySystem,
+  DETECTION_SOURCES_COMPONENT,
+  STEALTH_SOURCES_COMPONENT,
+  VISION_MODIFIER_COMPONENT,
+  type VisibilityOptions,
+} from '../systems/visibility.js';
 import { applyPlacement, type ScenarioSpawn } from './placement.js';
 import { loadScene, type SceneDef } from './scene.js';
 import type { SystemRegistry } from '../systems/registry.js';
@@ -152,7 +158,7 @@ export function buildSimulation(
 ): BuiltSimulation {
   // Системы, включаемые составом сцены (в том числе `ArenaSystem`), регистрирует
   // сам загрузчик (SER-7); здесь — только те, которым нужна зависимость сборки.
-  const { world, systems, terrain, arena, modifiers, abilities } = loadScene(def.scene);
+  const { world, systems, terrain, arena, modifiers, abilities, stealthHardMask } = loadScene(def.scene);
   // Раскладка точки прицела (TICK-2) включается объявлением полей у компонента
   // ввода сцены, а не флагом документа прогона: точка нужна ровно той сцене,
   // чьи способности целятся ею (ABIL-5), и сцена говорит об этом составом
@@ -168,7 +174,18 @@ export function buildSimulation(
   // Видимость считается по финальным позициям тика, поэтому регистрируется
   // после физики (FOW-6).
   if (def.visibility !== undefined) {
-    systems.register(new VisibilitySystem(requireModifierList(modifiers, VISION_MODIFIER_COMPONENT)));
+    // Таблица каналов — данные сцены (FOW-12): сцена без тумана маски не несёт,
+    // и пересчёту на ней резать нечего — все каналы жёсткими быть не мешают.
+    systems.register(
+      new VisibilitySystem({
+        lists: {
+          vision: requireModifierList(modifiers, VISION_MODIFIER_COMPONENT),
+          stealth: requireModifierList(modifiers, STEALTH_SOURCES_COMPONENT),
+          detection: requireModifierList(modifiers, DETECTION_SOURCES_COMPONENT),
+        },
+        hardStealthMask: stealthHardMask ?? ~0,
+      }),
+    );
   }
 
   // Расстановка документа прогона — после расстановки сцены, которую применил

@@ -341,6 +341,7 @@ const EXPR_8_TABLE: readonly string[] = [
   'fromInt',
   'toInt',
   'bitTest',
+  'maskCovered',
   // сравнения
   '<',
   '<=',
@@ -411,6 +412,7 @@ const EXPR_8_SHAPES: Readonly<Record<string, ExpectedShape>> = {
   fromInt: { min: 1, max: 1 },
   toInt: { min: 1, max: 1 },
   bitTest: { min: 2, max: 2, ranges: [[1, 0, 31]] },
+  maskCovered: { min: 2, max: 2 },
   // сравнения
   '<': { min: 2, max: 2 },
   '<=': { min: 2, max: 2 },
@@ -465,9 +467,9 @@ describe('состав таблицы операторов (EXPR-8)', () => {
     expect([...operators].sort()).toEqual([...EXPR_8_TABLE].sort());
   });
 
-  it('в таблице ровно 44 оператора', () => {
-    expect(EXPR_8_TABLE.length).toBe(44);
-    expect(new Set(EXPR_8_TABLE).size).toBe(44);
+  it('в таблице ровно 45 операторов', () => {
+    expect(EXPR_8_TABLE.length).toBe(45);
+    expect(new Set(EXPR_8_TABLE).size).toBe(45);
   });
 
   it('перечень форм покрывает таблицу целиком и ничего сверх неё', () => {
@@ -638,6 +640,30 @@ describe('bitTest (EXPR-2)', () => {
 
   it('номер бита вне 0..31 — ошибка', () => {
     expect(() => evaluate({ bitTest: [1, 32] }, world)).toThrow(/0\.\.31/);
+  });
+});
+
+describe('maskCovered (EXPR-2)', () => {
+  it('истина, когда каждый взведённый бит покрыт', () => {
+    expect(evaluate({ maskCovered: [0b0101, 0b0111] }, world)).toBe(true);
+    expect(evaluate({ maskCovered: [0b0101, 0b0001] }, world)).toBe(false);
+    expect(evaluate({ maskCovered: [0b0101, 0b0101] }, world)).toBe(true);
+  });
+
+  it('пустая маска покрыта любой, в том числе пустой', () => {
+    expect(evaluate({ maskCovered: [0, 0] }, world)).toBe(true);
+    expect(evaluate({ maskCovered: [0, 0b1111] }, world)).toBe(true);
+  });
+
+  it('маски — сырые i32: знаковый бит 31 сравнивается как бит, а не как знак', () => {
+    expect(evaluate({ maskCovered: [-2147483648, -2147483648] }, world)).toBe(true);
+    expect(evaluate({ maskCovered: [-2147483648, 0x7fffffff] }, world)).toBe(false);
+  });
+
+  it('не-число в аргументе — ошибка вычисления', () => {
+    expect(() => evaluate({ maskCovered: [true as unknown as number, 1] }, world)).toThrow(
+      /maskCovered/,
+    );
   });
 });
 

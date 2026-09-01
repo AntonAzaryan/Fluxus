@@ -19,6 +19,7 @@ export { hostBook, hostIdOf, memoryStorage, pageStorage, HOST_BOOK_KEY } from '.
 export type { HostBook, KnownHost, PageStorage } from './hostBook.js';
 export { AGENT_SERVICE, managerBridge, parseLocalAgentAddress, startLocalAgent } from './localAgent.js';
 export type { LocalAgentAddress, ManagerBridge } from './localAgent.js';
+export { AUTO_RESTART_CHOICES, LAUNCH_FIELDS, ON_DISCONNECT_CHOICES, startParamsOf } from './launch.js';
 export { managerView, walk } from './view.js';
 export type { UiNode } from './view.js';
 export { MANAGER_STYLES, MANAGER_TOKENS } from './theme.js';

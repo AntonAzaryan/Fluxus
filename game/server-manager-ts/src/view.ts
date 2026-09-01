@@ -12,7 +12,8 @@
  * дерево сравнимо, а слой монтирования решает, что делать по имени.
  */
 import type { ManagerState, ServerDetails, ServerRow } from './session.js';
-import type { SlotView } from '@fluxus/server-agent/protocol';
+import type { ServerEntry, SlotView } from '@fluxus/server-agent/protocol';
+import { AUTO_RESTART_CHOICES, LAUNCH_FIELDS, ON_DISCONNECT_CHOICES } from './launch.js';
 
 export interface UiNode {
   readonly tag: string;
@@ -46,7 +47,7 @@ function rttText(slot: SlotView): string {
   return slot.rtt.kind === 'pending' ? '…' : '—';
 }
 
-function slotRow(details: ServerDetails, slot: SlotView): UiNode {
+function slotRow(details: ServerDetails, slot: SlotView, live: boolean): UiNode {
   const paused = details.entry.pause !== 'running';
   return node('div', `mg-slot mg-slot--${slot.status}`, [
     text('span', 'mg-slot__name', slot.playerId),
@@ -68,8 +69,9 @@ function slotRow(details: ServerDetails, slot: SlotView): UiNode {
       action: 'disconnect-player',
       args: [details.host, details.entry.id, String(slot.slot)],
       // Отвязывать нечего у слота без живого соединения — и кнопка это
-      // показывает недоступностью, а не отказом после нажатия.
-      disabled: slot.status !== 'active' && slot.status !== 'connecting',
+      // показывает недоступностью, а не отказом после нажатия. У сервера без
+      // живого процесса недоступны и все остальные админ-операции (SRV-5).
+      disabled: !live || (slot.status !== 'active' && slot.status !== 'connecting'),
     },
     {
       tag: 'button',
@@ -78,7 +80,7 @@ function slotRow(details: ServerDetails, slot: SlotView): UiNode {
       text: slot.status === 'removed' ? 'вернуть' : 'убрать',
       action: slot.status === 'removed' ? 'unbar-slot' : 'bar-slot',
       args: [details.host, details.entry.id, String(slot.slot)],
-      disabled: paused && slot.status !== 'removed',
+      disabled: !live || (paused && slot.status !== 'removed'),
     },
   ]);
 }
@@ -99,10 +101,49 @@ function metricsRow(details: ServerDetails): UiNode {
   );
 }
 
+/**
+ * Разбор ушедшего процесса (SRV-6): код выхода и путь к сохранённым материалам —
+ * то, с чего начинается утро после ночного краша. Оба поля приезжают записью
+ * реестра, и не показать их значило бы отправить человека искать каталог разбора
+ * руками по диску.
+ *
+ * Сорвавшееся сохранение НАЗЫВАЕТСЯ здесь же, а не подменяется прочерком:
+ * «материалов нет» и «сохранить их не удалось» — разные новости (SRV-6).
+ */
+function postmortemRow(entry: ServerEntry): UiNode {
+  const materials =
+    entry.postmortemFailure !== null
+      ? `материалы разбора не сохранены: ${entry.postmortemFailure}`
+      : entry.postmortem === null
+        ? 'материалов разбора нет'
+        : `материалы разбора: ${entry.postmortem}`;
+  return text(
+    'div',
+    'mg-details__postmortem',
+    `код выхода: ${entry.exitCode === null ? '—' : String(entry.exitCode)} · ${materials}`,
+  );
+}
+
 /** Окно деталей сервера (MGR-3). */
 function detailsPanel(details: ServerDetails): UiNode {
   const entry = details.entry;
   const frozen = entry.pause !== 'running';
+  // Админ-операции идут через ЖИВОЙ сервер матча (SRV-5): у процесса, которого
+  // агент не достаёт, кнопки недоступны, а не отказывают после нажатия. Сами
+  // детали при этом открыты — ради них в упавший сервер и кликают (SRV-6).
+  //
+  // Признак — ПАРА, а не одно состояние процесса: отказ `not-running` у агента
+  // два производителя. Второй — сервер, переживший прежнего агента: его запись
+  // числится `listening`, потому что порт он и вправду держит, но stdio ушло
+  // вместе с прежним процессом, и до него не доходит ни одна админ-операция
+  // («доступны только реестр и остановка»). Именно это и означает непустой
+  // `limited`: подписка отказала — живого процесса у агента нет.
+  const live =
+    details.limited === '' && (entry.state === 'listening' || entry.state === 'starting');
+  // Материалы разбора — про УШЕДШИЙ процесс, и ключ у них свой: у пережившего
+  // прежнего агента сервера процесс жив, выхода не было, и строка «код выхода: —»
+  // сообщала бы о крахе, которого не случилось (SRV-6).
+  const exited = entry.state === 'crashed' || entry.state === 'stopped';
   return node('section', 'mg-details', [
     text('h2', 'mg-details__title', `${entry.id} · ${entry.match}`),
     text(
@@ -112,15 +153,23 @@ function detailsPanel(details: ServerDetails): UiNode {
         // Состояние паузы ВИДНО в деталях сервера (MGR-3).
         (frozen ? ` · пауза: ${entry.pause ?? ''}` : ''),
     ),
+    // Материалы разбора показываются РОВНО у того сервера, чей процесс ушёл.
+    ...(exited ? [postmortemRow(entry)] : []),
+    // Названная причина неполноты деталей (SRV-2): подписки на процесс, которого
+    // нет, не бывает, и человек видит, почему в окне нет счётчиков.
+    ...(details.limited === ''
+      ? []
+      : [text('div', 'mg-details__limited', `детали ограничены: ${details.limited}`)]),
     {
       tag: 'button',
       cls: 'mg-action mg-action--primary',
       text: frozen ? 'возобновить' : 'пауза',
       action: frozen ? 'resume' : 'pause',
       args: [details.host, entry.id],
+      disabled: !live,
     },
     metricsRow(details),
-    node('div', 'mg-slots', entry.slots.map((slot) => slotRow(details, slot))),
+    node('div', 'mg-slots', entry.slots.map((slot) => slotRow(details, slot, live))),
     text('h3', 'mg-details__logTitle', 'хвост лога'),
     node(
       'pre',
@@ -150,6 +199,10 @@ function serverRow(row: ServerRow, selected: ServerDetails | undefined): UiNode 
     },
     text('span', 'mg-server__state', entry.state),
     text('span', 'mg-server__phase', entry.phase ?? '—'),
+    // Счётчик рестартов перечислен в ОБЩЕМ списке (MGR-2), а не только в
+    // деталях: круги матча — то, по чему сервер, отыгравший ночь подряд,
+    // отличается от только что поднятого, и ради этого не должно быть клика.
+    text('span', 'mg-server__restarts', `рестартов: ${String(entry.restarts)}`),
     text('span', 'mg-server__slots', `${String(busy)}/${String(entry.slots.length)}`),
     text('span', 'mg-server__address', entry.address),
     {
@@ -203,27 +256,50 @@ function hostsPanel(state: ManagerState): UiNode {
   ]);
 }
 
+/** Поле формы: подпись рядом с полем — иначе шесть полей неразличимы (MGR-2). */
+const field = (label: string, control: UiNode): UiNode =>
+  node('label', 'mg-field', [text('span', 'mg-field__label', label), control]);
+
+/** Выпадающий список из перечня «значение — подпись». */
+const choice = (
+  action: string,
+  value: string,
+  options: readonly { readonly value: string; readonly label: string }[],
+): UiNode => ({
+  tag: 'select',
+  cls: 'mg-input',
+  action,
+  value,
+  children: options.map((option) => ({ tag: 'option', text: option.label, value: option.value })),
+});
+
+/**
+ * Форма запуска (MGR-2): «запустить сервер с параметрами запуска (SRV-2)» — а
+ * SRV-2 называет эти параметры поимённо, и все шесть обязаны быть в форме.
+ * Подставленная константа вместо поля — это параметр, которого у админа нет:
+ * выключить авто-рестарт или назвать политику разрыва ему было бы нечем.
+ */
 function launchPanel(state: ManagerState): UiNode {
   const connected = state.hosts.filter((host) => host.connected);
   return node('section', 'mg-launch', [
     text('h2', 'mg-launch__title', 'запустить сервер'),
-    {
+    field('хост', {
       // ЦЕЛЕВОЙ хост запуска (MGR-2): без выбора форма молча целилась бы в
       // первый попавшийся, а список документов принадлежал бы другому хосту.
       tag: 'select',
       cls: 'mg-input',
-      action: 'launch-host',
+      action: LAUNCH_FIELDS.host,
       value: state.launchHost,
       children: connected.map((host) => ({
         tag: 'option',
         text: host.local ? `${host.label} (локальный)` : host.label,
         value: host.id,
       })),
-    },
-    {
+    }),
+    field('документ матча', {
       tag: 'select',
       cls: 'mg-input',
-      action: 'launch-match',
+      action: LAUNCH_FIELDS.match,
       // Умолчание НАЗВАНО, а не подразумевается: `<select>` без значения
       // показывал бы первый документ, а запуск без выбора уходил бы со своим
       // собственным умолчанием — форма обещала бы не то, что запускает (MGR-2).
@@ -231,8 +307,23 @@ function launchPanel(state: ManagerState): UiNode {
       // Документы матча — из перечня ЦЕЛЕВОГО хоста (решение D11): дерева
       // контента у профиля менеджера нет вовсе, список приходит от его агента.
       children: state.matches.map((match) => ({ tag: 'option', text: match, value: match })),
-    },
-    { tag: 'input', cls: 'mg-input', value: '0', action: 'launch-port' },
+    }),
+    field('порт (0 — авто)', { tag: 'input', cls: 'mg-input', value: '0', action: LAUNCH_FIELDS.port }),
+    // Профиль бота — ПУТЬ внутри дерева контента, и вводится он строкой, а не
+    // выбирается списком: перечня профилей у протокола нет (агент перечисляет
+    // только документы матча, решение D11), а заводить его ради необязательного
+    // параметра значило бы менять протокол мимоходом. Пустая строка — умолчание
+    // стенда; путь мимо дерева контента агент отвергает названной причиной
+    // (`unknown-match`), и отказ доезжает до человека как всякий другой (SRV-2).
+    field('профиль бота', { tag: 'input', cls: 'mg-input', value: '', action: LAUNCH_FIELDS.bot }),
+    field('дедлайн бот-заполнителя, мс', {
+      tag: 'input',
+      cls: 'mg-input',
+      value: '',
+      action: LAUNCH_FIELDS.botFill,
+    }),
+    field('политика разрыва', choice(LAUNCH_FIELDS.onDisconnect, '', ON_DISCONNECT_CHOICES)),
+    field('авто-рестарт', choice(LAUNCH_FIELDS.autoRestart, 'yes', AUTO_RESTART_CHOICES)),
     { tag: 'button', cls: 'mg-action mg-action--primary', text: 'запустить', action: 'start' },
   ]);
 }

@@ -21,6 +21,14 @@ const TERRAIN_TAG = 'terrain';
 export class FloorMirror {
   /** Текущее зеркало: байт на клетку, row-major. Мутирует только `sync`. */
   readonly bits: Uint8Array;
+  /**
+   * Сколько клеток сравнил последний `sync` — вход счётчика стоимости стадии
+   * экстракции (`performance-budget` PERF-2, PERF-3). Величиной, а не стоком:
+   * сток читает шов потока тиков один раз на вызов (`extractor.ts`), а зеркало о
+   * стоке не знает — и ранний выход «террейна в мире нет» честно даёт ноль
+   * просмотренных клеток вместо полной карты.
+   */
+  lastScanned = 0;
   private readonly grid: TerrainGrid;
   /** Имена полей-слов компонента пола в порядке возрастания индекса слова. */
   private fields: readonly string[] | null = null;
@@ -38,6 +46,7 @@ export class FloorMirror {
    * (либо при разрыве непрерывности — rewind мог откатить пол без дельты).
    */
   sync(state: WorldState): number[] {
+    this.lastScanned = 0;
     const entity = this.findEntity(state);
     if (entity === null) return [];
     if (this.fields === null) {
@@ -61,6 +70,7 @@ export class FloorMirror {
           changed.push(cell);
         }
       }
+      this.lastScanned += Math.max(0, top - base);
     }
     return changed;
   }

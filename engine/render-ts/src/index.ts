@@ -117,7 +117,7 @@ export type { DecorationInstance } from './decorations.js';
 
 // Половины хоста по границе потоков (client-shell SHELL-2): Extractor —
 // воркер-сторона (единственный читатель мира), ViewBuffer — main-сторона.
-export { Extractor, ENTITY_MOVING, ENTITY_LEVEL_OVERRIDE } from './extractor.js';
+export { Extractor, CHANNEL_COLUMNS, ENTITY_MOVING, ENTITY_LEVEL_OVERRIDE } from './extractor.js';
 export type { ExtractedTick, ExtractorConfig } from './extractor.js';
 // Перевод нагрузки события на входной границе (REND-1). Наружу уходит потому,
 // что производителей событий у рендера два, и второй — сетевая оболочка
@@ -218,7 +218,7 @@ export type { CellRect, TerrainGeometryData } from './subsystems/terrainGeometry
 
 // Подсистема моделей (REND-3..6) и переподача манифеста визуалов (REND-17).
 // Наружу инстанс виден преобразованием и границами, а не узлом сцены (REND-3).
-export { ModelsSubsystem } from './subsystems/models.js';
+export { ANIMATION_STATES, ModelsSubsystem } from './subsystems/models.js';
 export type {
   InstancePose,
   ModelInstanceView,

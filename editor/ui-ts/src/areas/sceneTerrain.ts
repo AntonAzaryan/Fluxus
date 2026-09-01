@@ -93,15 +93,6 @@ export const MAX_LEVEL = TERRAIN_LEVEL_MAX;
  */
 export type { TerrainCellKind };
 
-/**
- * Палитра смещений панели кисти — UI-подборка, а не диапазон формата: формат
- * предела не несёт (ASSET-7), и операция принимает любой целый множитель.
- * Ступени — от четверти решётки до полутора шагов высоты в обе стороны.
- */
-export const CURVATURE_OFFSETS: readonly number[] = Object.freeze([
-  -48, -32, -24, -16, -12, -8, -4, -2, -1, 0, 1, 2, 4, 8, 12, 16, 24, 32, 48,
-]);
-
 const ASSET_PATH: OperationParamSpec = {
   type: 'path',
   optional: true,

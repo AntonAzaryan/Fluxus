@@ -17,6 +17,8 @@ import {
   resolveParticlesByKind,
   resolveParticlesByState,
   resolveVisual,
+  manifestAssetRefs,
+  resolveVisualClaim,
   resolveVisualEmitter,
   resolveVisualLight,
   resolveVisualTier,
@@ -1066,5 +1068,125 @@ describe('validateManifest: блок света записи (ASSET-16)', () => 
       /entities\.a\.light\.type: обязательное поле — род источника/,
     );
     expect(errors.some((e) => e.includes('light.angle'))).toBe(false);
+  });
+});
+
+/**
+ * Перечень ссылок манифеста на ассеты — тоже один на репозиторий: по нему
+ * правило редактора подсвечивает ссылку в никуда (`editor` ED-14), а проверка
+ * контента (`integration-ts`) отбирает документы эффектов и разбирает их
+ * (ASSET-14). Вид ссылки назван словарём реестра загрузчиков (ASSET-3), потому
+ * что спрашивающему, который ссылку РАЗБИРАЕТ, нужен именно загрузчик.
+ */
+describe('manifestAssetRefs: где в манифесте лежат ID ассетов (ASSET-6)', () => {
+  const parsed = (value: unknown) => {
+    const result = validateManifest(value);
+    if (!result.ok) throw new Error(result.errors.join('; '));
+    return result.manifest;
+  };
+
+  it('перечисляет модели, текстуры скинов, эмиттеры обеих секций и карту кривизны', () => {
+    const refs = manifestAssetRefs(
+      parsed({
+        entities: {
+          Hero: { model: 'visuals/hero.mdx', skins: { red: { '0': 'visuals/hero-red.png' } } },
+        },
+        decorations: { torch: { effect: 'visuals/effects/torch.effect.json' } },
+        particles: { byKind: { Fireball: { effect: 'visuals/effects/trail.effect.json' } } },
+        terrain: { curvatureMap: 'visuals/terrain/curvature.json' },
+      }),
+    );
+    expect(refs).toEqual([
+      { path: ['entities', 'Hero', 'model'], asset: 'visuals/hero.mdx', kind: 'model' },
+      {
+        path: ['entities', 'Hero', 'skins', 'red', '0'],
+        asset: 'visuals/hero-red.png',
+        kind: 'texture',
+      },
+      {
+        path: ['decorations', 'torch', 'effect'],
+        asset: 'visuals/effects/torch.effect.json',
+        kind: 'particle-effect',
+      },
+      {
+        path: ['particles', 'byKind', 'Fireball', 'effect'],
+        asset: 'visuals/effects/trail.effect.json',
+        kind: 'particle-effect',
+      },
+      {
+        path: ['terrain', 'curvatureMap'],
+        asset: 'visuals/terrain/curvature.json',
+        kind: 'terrain-curvature',
+      },
+    ]);
+  });
+
+  it('манифест без ссылок отдаёт пустой перечень, а не бросает', () => {
+    expect(manifestAssetRefs(parsed({ entities: {} }))).toEqual([]);
+  });
+
+  it('секция эффектов ссылок на ассеты не несёт: её примитивы рисует рендер (REND-23)', () => {
+    const refs = manifestAssetRefs(
+      parsed({
+        entities: {},
+        effects: { byKind: { Fireball: { primitive: 'sphere', color: '#f80', radius: 1 } } },
+      }),
+    );
+    expect(refs).toEqual([]);
+  });
+});
+
+/**
+ * Заявка вида (`rendering` REND-37) — один ответ на репозиторий: по нему
+ * подсистема моделей решает, ставить ли заглушку, а правило пары редактора
+ * (`editor` ED-19) — называть ли prefab без записи рассинхронизацией.
+ */
+describe('resolveVisualClaim: кто рисует вид без модельной записи (REND-37)', () => {
+  const manifest = (extra: Record<string, unknown>): Parameters<typeof resolveVisualClaim>[0] => {
+    const result = validateManifest({ entities: { Hero: { model: 'visuals/hero.mdx' } }, ...extra });
+    if (!result.ok) throw new Error(result.errors.join('; '));
+    return result.manifest;
+  };
+
+  it('вид без заявки — null: пустой ответ значит «записи нет» (ASSET-6)', () => {
+    expect(resolveVisualClaim(manifest({}), 'Fireball')).toBeNull();
+    // Модельная запись заявкой не является: её рисует сама подсистема моделей.
+    expect(resolveVisualClaim(manifest({}), 'Hero')).toBeNull();
+  });
+
+  it('запись `effects.byKind` заявляет вид за подсистему эффектов (REND-23)', () => {
+    const value = manifest({
+      effects: { byKind: { Fireball: { primitive: 'sphere', color: '#f80', radius: 1 } } },
+    });
+    expect(resolveVisualClaim(value, 'Fireball')).toBe('effect');
+  });
+
+  it('запись `particles.byKind` заявляет вид за подсистему частиц (REND-24)', () => {
+    const value = manifest({
+      particles: { byKind: { Torchlight: { effect: 'visuals/effects/torch.effect.json' } } },
+    });
+    expect(resolveVisualClaim(value, 'Torchlight')).toBe('particles');
+  });
+
+  it('эмиттерный decoration-вид заявляет себя сам (ASSET-14)', () => {
+    const value = manifest({ decorations: { torch: { effect: 'visuals/effects/torch.effect.json' } } });
+    expect(resolveVisualClaim(value, 'torch')).toBe('particles');
+  });
+
+  it('вид с обеими заявками отдаётся частицам: объём-прокси положен нарисованному (REND-37)', () => {
+    const value = manifest({
+      effects: { byKind: { BossFire: { primitive: 'sphere', color: '#f40', radius: 2 } } },
+      particles: { byKind: { BossFire: { effect: 'visuals/effects/fire.effect.json' } } },
+    });
+    expect(resolveVisualClaim(value, 'BossFire')).toBe('particles');
+  });
+
+  it('таблицы `byState` и `byEvent` вида заявлять не вправе (REND-37)', () => {
+    const value = manifest({
+      effects: { byState: { Shielded: { primitive: 'sphere', color: '#08f', radius: 1 } } },
+      particles: { byEvent: { Exploded: { effect: 'visuals/effects/boom.effect.json' } } },
+    });
+    expect(resolveVisualClaim(value, 'Shielded')).toBeNull();
+    expect(resolveVisualClaim(value, 'Exploded')).toBeNull();
   });
 });

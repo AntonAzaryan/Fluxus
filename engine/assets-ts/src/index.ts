@@ -126,6 +126,7 @@ export {
   resolveVisualLight,
   resolveVisualTier,
   resolveVisualEmitter,
+  resolveVisualClaim,
   isEmitterVisual,
   resolveEffectByKind,
   resolveEffectByState,
@@ -136,8 +137,10 @@ export {
   resolveLodThresholds,
   DEFAULT_LOD_THRESHOLDS,
   visualKeys,
+  manifestAssetRefs,
   DEFAULT_SURFACE_ALIGN,
 } from './manifest.js';
+export type { VisualAssetRef, VisualClaim } from './manifest.js';
 
 // эмиттерный ассет — документ эффекта частиц (ASSET-14)
 export type { ParticleEffectDocument, ParticleEffectNode } from './particleEffect.js';
@@ -155,6 +158,7 @@ export { MAX_LUT_SIZE, MIN_LUT_SIZE, parseCubeLut } from './colorLut.js';
 export type {
   DecorationRecord,
   PresentationFog,
+  PresentationStealth,
   PresentationScene,
   PresentationSceneContext,
 } from './presentation.js';

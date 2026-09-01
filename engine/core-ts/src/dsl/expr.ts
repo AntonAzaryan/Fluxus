@@ -72,11 +72,6 @@ export class ExprCell {
  */
 export type ExprVars = Readonly<Record<string, ExprValue | ExprCell>>;
 
-/** Точка подмены реализации (EXPR-4). */
-export interface ExpressionEvaluator {
-  evaluate(expr: Expression, world: ExprWorld, vars?: ExprVars): ExprValue;
-}
-
 const NO_VARS: ExprVars = {};
 
 /**
@@ -89,6 +84,18 @@ function isNode(value: unknown): value is Readonly<Record<string, unknown>> {
   return typeof value === 'object' && value !== null;
 }
 
+/**
+ * ЕДИНСТВЕННЫЙ вход вычисления выражения в ядре (EXPR-4). Им пользуются все
+ * трое: исполнитель действий (ACT-1), нативные системы, читающие выражения
+ * контента (платформа способностей, `ability-system` ABIL-2), и валидация на
+ * регистрации — та берёт отсюда же форму применения оператора (`signatureOf`,
+ * EXPR-8). Второго вычислителя в ядре нет, и замена этого — замена модуля.
+ *
+ * Внедряемого экземпляра за интерфейсом здесь нет намеренно (EXPR-4): держать
+ * его пришлось бы либо модульным синглтоном (DI-1: две симуляции в одном
+ * процессе разделили бы состояние), либо полем контракта границы (SYS-5) —
+ * правкой контракта ради подмены, которой в тике не делает никто.
+ */
 export function evaluate(expr: Expression, world: ExprWorld, vars: ExprVars = NO_VARS): ExprValue {
   if (typeof expr === 'number' || typeof expr === 'boolean') return expr;
   if (!isNode(expr)) {
@@ -119,9 +126,6 @@ export function evaluate(expr: Expression, world: ExprWorld, vars: ExprVars = NO
   countCostExpression();
   return def.fn(args, world, vars);
 }
-
-/** Реализация по умолчанию за абстракцией EXPR-4. */
-export const evaluator: ExpressionEvaluator = { evaluate };
 
 // --------------------------------------------------------------- сигнатуры
 
@@ -465,9 +469,9 @@ const OPS: Record<string, OpDef> = Object.freeze({
   fromInt: def(1, num1('fromInt', (m, a) => m.fromInt(a))),
   toInt: def(1, num1('toInt', (m, a) => m.toInt(a))),
   /**
-   * Проверка бита маски `i32` — сырое целое, без Q16.16 (EXPR-2). Единственная
-   * битовая операция в таблице: маска читается по одному биту, арифметика над
-   * ней не определена, а фронт кнопки (TICK-4) иначе в JSON не выразить.
+   * Проверка бита маски `i32` — сырое целое, без Q16.16 (EXPR-2). Маска
+   * читается по одному биту, арифметика над ней не определена, а фронт кнопки
+   * (TICK-4) иначе в JSON не выразить.
    *
    * Литеральный номер бита до тика не доживает — его отвергает регистрация по
    * `ranges` (SYS-3); проверка ниже остаётся ради вычисляемого (SYS-9).
@@ -484,6 +488,18 @@ const OPS: Record<string, OpDef> = Object.freeze({
     },
     { ranges: [[1, BIT_LO, BIT_HI]] },
   ),
+  /**
+   * Покрытие маски (EXPR-2): истина, когда каждый взведённый бит `mask` взведён
+   * и в `cover`; пустая маска покрыта любой. Второй и последний предикат над
+   * масками рядом с `bitTest` — сравнение стелса с детекцией (FOW-3) иначе
+   * требовало бы перебора всех 32 каналов. Возвращает булево: сырых масок в
+   * арифметику таблица не выпускает.
+   */
+  maskCovered: def(2, (args, w, v) => {
+    const mask = num(evaluate(args[0]!, w, v), 'maskCovered');
+    const cover = num(evaluate(args[1]!, w, v), 'maskCovered');
+    return (mask & ~cover) === 0;
+  }),
 
   // сравнения: Q16.16 монотонен, поэтому сравнение обычное числовое
   '<': def(2, num2('<', (_m, a, b) => a < b)),

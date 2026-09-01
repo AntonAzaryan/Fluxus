@@ -29,6 +29,7 @@ import type { CompiledNpcBindings } from './model.js';
 import { ABILITY_SLOT_COMPONENT } from '../abilities/components.js';
 import { resolveSlotHandles, type SlotHandles } from '../abilities/handles.js';
 import { optionalComponentHandle } from '../optionalHandle.js';
+import { DETECTION_STATE_COMPONENT, STEALTH_STATE_COMPONENT } from '../visibility.js';
 import type { ComponentHandle, FieldHandle, SystemContext } from '../../types.js';
 
 /** Слот threat-таблицы (NPC-5): handle для чтения и имя поля — для команд и `peekField` (CMD-5). */
@@ -51,6 +52,12 @@ interface NpcHealthHandles {
   readonly max: FieldHandle;
 }
 
+/** Свёртка стелса или детекции (FOW-3): компонент и его поле `mask`. */
+interface NpcMaskHandles {
+  readonly component: ComponentHandle;
+  readonly mask: FieldHandle;
+}
+
 export interface NpcHandles {
   readonly posX: FieldHandle;
   readonly posY: FieldHandle;
@@ -58,6 +65,13 @@ export interface NpcHandles {
   readonly deadMarker: ComponentHandle | undefined;
   readonly team: NpcTeamHandles | undefined;
   readonly health: NpcHealthHandles | undefined;
+  /**
+   * Стелс цели и детекция агента (NPC-10, FOW-3): восприятие NPC — прямое
+   * чтение мира, фильтр снапшота его не касается, поэтому уважение стелса —
+   * обязанность платформы. `undefined` — сцена без тумана войны: скрытых нет.
+   */
+  readonly stealthState: NpcMaskHandles | undefined;
+  readonly detectionState: NpcMaskHandles | undefined;
 
   readonly agent: ComponentHandle;
   readonly agentAction: FieldHandle;
@@ -118,6 +132,8 @@ function threatSlots(ctx: SystemContext): NpcThreatSlotHandles[] {
  */
 export function resolveNpcHandles(ctx: SystemContext, bindings: CompiledNpcBindings): NpcHandles {
   const team = optionalComponentHandle(ctx, bindings.teamComponent);
+  const stealthState = optionalComponentHandle(ctx, STEALTH_STATE_COMPONENT);
+  const detectionState = optionalComponentHandle(ctx, DETECTION_STATE_COMPONENT);
   return {
     posX: ctx.resolveField(bindings.position, 'x'),
     posY: ctx.resolveField(bindings.position, 'y'),
@@ -132,6 +148,14 @@ export function resolveNpcHandles(ctx: SystemContext, bindings: CompiledNpcBindi
           max: ctx.resolveField(bindings.healthMaxComponent, bindings.healthMaxField),
         }
       : undefined,
+    stealthState:
+      stealthState === undefined
+        ? undefined
+        : { component: stealthState, mask: ctx.resolveField(STEALTH_STATE_COMPONENT, 'mask') },
+    detectionState:
+      detectionState === undefined
+        ? undefined
+        : { component: detectionState, mask: ctx.resolveField(DETECTION_STATE_COMPONENT, 'mask') },
 
     agent: ctx.resolveComponent(NPC_AGENT_COMPONENT),
     agentAction: ctx.resolveField(NPC_AGENT_COMPONENT, 'action'),

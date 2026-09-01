@@ -148,6 +148,7 @@ const WORLD_OPS: readonly string[] = [
   'isAlive',
   'eventField',
   'bitTest',
+  'maskCovered',
   'hasFloorAt',
   'raycastHit',
   'raycastEntity',

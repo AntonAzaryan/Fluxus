@@ -349,4 +349,40 @@ describe('наблюдаемость (OBS-1..3)', () => {
     expect(result.isReplay).toBe(false);
     expect(result.changes.isEmpty).toBe(true);
   });
+
+  it('отчёт о тике не даёт записи ни в одну часть состояния (OBS-1, TICK-3)', () => {
+    const state = freshState();
+    const result = tick(makeSim([moveSystem]), state);
+
+    // Строки ниже не компилируются, и это и есть проверка: «read-only отчёт»
+    // держится ТИПОМ, а не обещанием. Неизменяемость полей `TickResult`
+    // запрещает подменить ссылку, но не запрещает переписать то, на что она
+    // указывает, — поэтому наружу уходит проекция, а не состояние хоста.
+    //
+    // Тело намеренно не исполняется: исполнив его, проверка сама провела бы то
+    // изменение состояния вне тика, которое отрицает (TICK-3).
+    const forbiddenWrites = (): void => {
+      // @ts-expect-error номер тика в отчёте только читается (OBS-1)
+      result.state.tick = 999;
+      // @ts-expect-error режим мира переключает RewindController, а не наблюдатель (WSM-5)
+      result.state.mode = 'Paused';
+    };
+    expect(typeof forbiddenWrites).toBe('function');
+
+    // Мутирующих методов нет и у соседних частей состояния: обращение к ним не
+    // компилируется, хотя в рантайме за проекцией лежат те же живые объекты —
+    // проверка про поверхность отчёта, а не про его содержимое.
+    // @ts-expect-error эмит в шину — работа системы внутри тика (OBS-1, EVT-2)
+    const emit: unknown = result.state.events.emit;
+    // @ts-expect-error восстановление стримов RNG — операция ядра при перемотке (RNG-5)
+    const restoreRng: unknown = result.state.rng.restore;
+    // @ts-expect-error выдача стрима — шаг генератора, то есть запись в состояние (SNAP-1)
+    const forSystem: unknown = result.state.rng.forSystem;
+    expect([emit, restoreRng, forSystem].every((member) => typeof member === 'function')).toBe(true);
+
+    // Отчёт при этом остаётся живым view на то же состояние (TICK-1, OBS-3).
+    expect(result.state).toBe(state);
+    expect(result.state.tick).toBe(1);
+    expect(result.state.mode).toBe('Running');
+  });
 });

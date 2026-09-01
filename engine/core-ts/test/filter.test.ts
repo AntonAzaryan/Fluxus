@@ -6,16 +6,38 @@ import { query } from '../src/ecs/query.js';
 import { indexOf as rawIndexOf } from '../src/ecs/entityIndex.js';
 import { ARENA_COMPONENT } from '../src/systems/arena.js';
 import { FLOOR_COMPONENT } from '../src/systems/terrain.js';
-import { filterSnapshot, relevantEntityVisible, VIEWPOINT_ALL } from '../src/sim/filter.js';
+import {
+  eventVisibilityByName,
+  filterSnapshot,
+  relevantEntityVisible,
+  VIEWPOINT_ALL,
+} from '../src/sim/filter.js';
 import { snapshotToPlain } from '../src/sim/serialization.js';
 import { loadScene, type SceneDef } from '../src/sim/scene.js';
 import { initialState, takeSnapshot, tick, type Simulation } from '../src/sim/tick.js';
 import { RingHistory } from '../src/sim/history.js';
 import { createInputLog, createRewindController } from '../src/sim/rewind.js';
-import { teamBit, VisibilitySystem, VISIBILITY_COMPONENT, VISION_MODIFIER_COMPONENT } from '../src/systems/visibility.js';
+import {
+  teamBit,
+  VisibilitySystem,
+  DETECTION_SOURCES_COMPONENT,
+  STEALTH_SOURCES_COMPONENT,
+  VISIBILITY_COMPONENT,
+  VISION_MODIFIER_COMPONENT,
+} from '../src/systems/visibility.js';
 import { requireModifierList } from '../src/systems/modifiers.js';
 import { NO_ENTITY } from '../src/types.js';
-import type { EntityId, FieldOverrides, Snapshot } from '../src/types.js';
+import type { EntityId, FieldOverrides, ModifierRegistry, Snapshot } from '../src/types.js';
+
+/** Зависимости пересчёта (FOW-3, FOW-12): все каналы жёсткие — как до канальной модели. */
+const fowDeps = (modifiers: ModifierRegistry) => ({
+  lists: {
+    vision: requireModifierList(modifiers, VISION_MODIFIER_COMPONENT),
+    stealth: requireModifierList(modifiers, STEALTH_SOURCES_COMPONENT),
+    detection: requireModifierList(modifiers, DETECTION_SOURCES_COMPONENT),
+  },
+  hardStealthMask: ~0,
+});
 
 const F = fixed.fromFloat;
 
@@ -34,7 +56,7 @@ const SCENE: SceneDef = {
         Vision: { radius: F(3) },
         Visibility: { visibleTo: 0 },
         Team: { id: 0 },
-        Stealth: { active: 0 },
+        StealthSources: {},
       },
     },
     {
@@ -44,7 +66,7 @@ const SCENE: SceneDef = {
         Vision: { radius: F(3) },
         Visibility: { visibleTo: 0 },
         Team: { id: 1 },
-        Stealth: { active: 0 },
+        StealthSources: {},
       },
     },
     /** Обстановка без `Visibility`: секретом не является и режется не должна (NET-12). */
@@ -65,7 +87,7 @@ const SCENE_WITH_CARRIERS: SceneDef = {
 
 function harness() {
   const { world, systems, modifiers, terrain } = loadScene(SCENE);
-  systems.register(new VisibilitySystem(requireModifierList(modifiers, VISION_MODIFIER_COMPONENT)));
+  systems.register(new VisibilitySystem(fowDeps(modifiers)));
   const sim: Simulation = { systems, worldSeed: 1, math: mathApi, modifiers, terrain: terrain! };
   const state = initialState(world, 1);
 
@@ -129,7 +151,7 @@ describe('per-client фильтрация снапшота (NET-12)', () => {
    */
   it('носители карты пола и арены остаются во всех персональных снапшотах', () => {
     const { world, systems, terrain, arena, modifiers } = loadScene(SCENE_WITH_CARRIERS);
-    systems.register(new VisibilitySystem(requireModifierList(modifiers, VISION_MODIFIER_COMPONENT)));
+    systems.register(new VisibilitySystem(fowDeps(modifiers)));
     const sim: Simulation = {
       systems,
       worldSeed: 1,
@@ -212,7 +234,7 @@ describe('per-client фильтрация снапшота (NET-12)', () => {
       ],
     };
     const { world, systems, modifiers, terrain } = loadScene(scene);
-    systems.register(new VisibilitySystem(requireModifierList(modifiers, VISION_MODIFIER_COMPONENT)));
+    systems.register(new VisibilitySystem(fowDeps(modifiers)));
     const sim: Simulation = { systems, worldSeed: 1, math: mathApi, modifiers, terrain: terrain! };
     const state = initialState(world, 1);
     const watcher = spawn(world, 'Watcher', { Position: { x: F(0), y: F(0) } });
@@ -273,7 +295,8 @@ describe('своя сущность под стелсом (NET-15)', () => {
     h.step();
     expect(h.present(filterSnapshot(h.state, 0), enemy)).toBe(true);
 
-    setField(h.world, enemy, 'Stealth', 'active', 1);
+    setField(h.world, enemy, STEALTH_SOURCES_COMPONENT, 'id0', 7);
+    setField(h.world, enemy, STEALTH_SOURCES_COMPONENT, 'value0', 1 << 0);
     h.step();
 
     expect(h.mask(enemy)).toBe(teamBit(1));
@@ -341,6 +364,76 @@ describe('фильтрация событий (NET-13)', () => {
     h.state.events.emit('Collision', { entity: h.enemy, other: -1 });
     expect(filterSnapshot(h.state, 0).events).toHaveLength(0);
     expect(filterSnapshot(h.state, 1).events).toHaveLength(1);
+  });
+
+  /**
+   * NET-13 «Действующий предикат»: набор имён ЗАКРЫТ, и оба имени отвечают на
+   * открытый геймплейный вопрос «видима цель, источник в тумане» с двух сторон.
+   * Здесь и проверяется, что ответы у них разные — иначе поле конфига матча не
+   * закрывало бы вопрос ничем.
+   */
+  it('два имени закрытого набора расходятся ровно на разной видимости сторон', () => {
+    const h = apart();
+    // Урон видимой своей сущности от невидимого врага: названы обе стороны, и
+    // видима из них одна.
+    h.state.events.emit('DamageDealt', { source: h.enemy, target: h.watcher });
+
+    const any = filterSnapshot(h.state, 0, eventVisibilityByName('any-referenced'));
+    expect(any.events.map((e) => e.type)).toEqual(['DamageDealt']);
+
+    const all = filterSnapshot(h.state, 0, eventVisibilityByName('all-referenced'));
+    expect(all.events).toEqual([]);
+
+    // Умолчание фильтра — нормированный NET-13 предикат, то есть `any-referenced`.
+    expect(eventVisibilityByName('any-referenced')).toBe(relevantEntityVisible);
+  });
+
+  it('событие, не называющее ни одной сущности, общее при обоих именах', () => {
+    const h = apart();
+    h.state.events.emit('RoundEnded', { winner: 1 });
+    for (const name of ['any-referenced', 'all-referenced'] as const) {
+      const types = filterSnapshot(h.state, 0, eventVisibilityByName(name)).events.map((e) => e.type);
+      expect(types, name).toEqual(['RoundEnded']);
+    }
+  });
+
+  /**
+   * NET-13: значение поля-ссылки, равное коду «ссылки нет» (ECS-6), сущности НЕ
+   * называет. Проверяется на `all-referenced`, потому что цена ошибки видна
+   * именно там: сочти пустую ссылку названной — и урон от арены, у которого нет
+   * источника, погас бы у всех получателей разом, независимо от видимости цели.
+   */
+  it('пустая ссылка сущности не называет — ни при одном имени набора', () => {
+    const h = apart();
+    // Урон по своей видимой сущности без источника: поле есть, ссылки в нём нет.
+    h.state.events.emit('DamageDealt', { source: NO_ENTITY, target: h.watcher });
+
+    for (const name of ['any-referenced', 'all-referenced'] as const) {
+      const types = filterSnapshot(h.state, 0, eventVisibilityByName(name)).events.map((e) => e.type);
+      expect(types, name).toEqual(['DamageDealt']);
+    }
+
+    // И обратная половина: пустая ссылка не делает событие видимым — решает
+    // единственная НАЗВАННАЯ сущность, а она команде 0 не видна.
+    const h2 = apart();
+    h2.state.events.emit('DamageDealt', { source: NO_ENTITY, target: h2.enemy });
+    for (const name of ['any-referenced', 'all-referenced'] as const) {
+      expect(filterSnapshot(h2.state, 0, eventVisibilityByName(name)).events, name).toEqual([]);
+      expect(filterSnapshot(h2.state, 1, eventVisibilityByName(name)).events, name).toHaveLength(1);
+    }
+  });
+
+  it('событие, все ссылки которого пусты, общее: названо в нём никого', () => {
+    const h = apart();
+    h.state.events.emit('ArenaShrink', { source: NO_ENTITY, other: NO_ENTITY });
+    for (const name of ['any-referenced', 'all-referenced'] as const) {
+      const types = filterSnapshot(h.state, 0, eventVisibilityByName(name)).events.map((e) => e.type);
+      expect(types, name).toEqual(['ArenaShrink']);
+    }
+  });
+
+  it('имя вне закрытого набора — названный отказ, а не молчаливый возврат к норме', () => {
+    expect(() => eventVisibilityByName('freeze')).toThrow(/"freeze" неизвестен \(NET-13\)/);
   });
 
   /**
@@ -425,7 +518,7 @@ describe('сцена без FoW (DI-3)', () => {
 describe('видимость откатывается вместе с миром (REW-11)', () => {
   it('после отката враг снова в снапшоте: фильтр берёт Visibility целевого тика', () => {
     const { world, systems, modifiers } = loadScene(SCENE);
-    systems.register(new VisibilitySystem(requireModifierList(modifiers, VISION_MODIFIER_COMPONENT)));
+    systems.register(new VisibilitySystem(fowDeps(modifiers)));
     const sim: Simulation = { systems, worldSeed: 1, math: mathApi, modifiers };
     const state = initialState(world, 1);
 

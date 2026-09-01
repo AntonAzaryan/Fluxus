@@ -34,6 +34,7 @@ import {
   type WorldMode,
   type WorldState,
 } from '@fluxus/core';
+import { costSink } from './cost.js';
 import { FloorMirror } from './floorMirror.js';
 import {
   StatReader,
@@ -66,6 +67,24 @@ const MANEUVER_DURATION_FIELD: Readonly<Record<number, string>> = {
   [LOCOMOTION_ROLL]: 'rollTicks',
   [LOCOMOTION_AIRBORNE]: 'jumpTicks',
 };
+
+/**
+ * Колонок плоской формы НА СУЩНОСТЬ — множитель объёма, который экстракция
+ * отдаёт каналу за тик (`extractChannelValues`, PERF-2): `id`, `kind`, `x`,
+ * `y`, `level`, `flags`, `facingYaw`, `aimYaw`, `motion`, `motionPhase`,
+ * `flightPhase`, `timeScale`, `statCount`. Ровно эти колонки перекладывает
+ * кодек оболочки (`client-ts/src/codec.ts`, SHELL-3), поэтому число живёт здесь,
+ * рядом с их объявлением: новая колонка правит его на той же правке, которой
+ * заводится, — и подорожание доставки видно в диффе эталона стоимости.
+ *
+ * Экспортируется РАДИ СВЕРКИ: расхождение с раскладкой кодека стережёт тест на
+ * стороне оболочки, где эта раскладка и живёт («сущность стоит каналу ровно
+ * объявленных колонок», `client-ts/test/codec.test.ts`) — он берёт это число
+ * отсюда, а не повторяет его своим. Повторённое в трёх местах, оно разошлось бы
+ * молча: четыре колонки раскладки байтовые, и лишняя такая колонка прибавляет к
+ * кадру ровно байт.
+ */
+export const CHANNEL_COLUMNS = 13;
 
 /** Бит колонки `flags`: скорость выше порога — состояние `move` (REND-4). */
 export const ENTITY_MOVING = 1;
@@ -322,15 +341,17 @@ export class Extractor {
     const events = this.copyEvents(result);
     if (freshEvents) this.captureAim(state, result.tick, events);
 
-    this.copyEntities(state, result.tick);
+    const scanned = this.copyEntities(state, result.tick);
 
     // Зеркало пола: перечитываем только когда дельта тика тронула компонент
     // либо при разрыве непрерывности (rewind мог откатить пол без дельты).
     let floorDelta: readonly number[] = EMPTY_DELTA;
+    let floorCells = 0;
     if (this.mirror !== null) {
       const floorDirty = result.changes.changedEntities(FLOOR_COMPONENT).size > 0;
       if (floorDirty || snapAll || !this.hasTick) {
         const changed = this.mirror.sync(state);
+        floorCells = this.mirror.lastScanned;
         if (changed.length > 0) {
           const pairs: number[] = [];
           for (const cell of changed) pairs.push(cell, this.mirror.bits[cell]!);
@@ -347,13 +368,29 @@ export class Extractor {
     out.events = events;
     out.floorDelta = floorDelta;
 
+    // Счётчики стадии `extract` (PERF-2, PERF-3) — ОДИН раз на вызов, по уже
+    // посчитанным величинам: сток читается на границе операции, а не на
+    // сущности, и без стока экстракция не делает ни одного действия учёта.
+    const cost = costSink();
+    if (cost !== undefined) {
+      cost.extractCalls++;
+      cost.extractEntitiesScanned += scanned;
+      cost.extractEntitiesCopied += out.count;
+      cost.extractStatPairs += out.statPairs;
+      cost.extractEvents += events.length;
+      cost.extractFloorCellsScanned += floorCells;
+      cost.extractChannelValues +=
+        out.count * CHANNEL_COLUMNS + out.statPairs * 2 + floorDelta.length;
+    }
+
     this.prevTick = result.tick;
     this.prevMode = result.mode;
     this.hasTick = true;
     return out;
   }
 
-  private copyEntities(state: WorldState, tick: number): void {
+  /** Копирует сущности в колонки; возвращает, сколько живых просмотрел обход. */
+  private copyEntities(state: WorldState, tick: number): number {
     const out = this.out;
     const seen = this.seen;
     seen.clear();
@@ -380,6 +417,7 @@ export class Extractor {
         this.aim.delete(id);
       }
     }
+    return alive.length;
   }
 
   /** Одна сущность в колонки плоской формы под индексом `count`. */

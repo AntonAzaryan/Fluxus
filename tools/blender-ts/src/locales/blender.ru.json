@@ -12,5 +12,7 @@
   "validation.reason.blender.spatialLayerSync.sourceUnreadable": "Источник «{source}» лежит рядом со сценой, но среда его не прочитала: сверить слой не с чем: {reason}",
   "validation.reason.blender.spatialLayerSync.sourceRejected": "Источник «{source}» не проходит импорт: сверять слой не с чем, пока источник не исправлен: {reason} (BLND-6)",
   "validation.reason.blender.spatialLayerSync.sourceUnread": "Источник сцены «{scene}» не читан: слой не сверялся ни разу — обновите состояние источников (это делает сборка редактора до прогона валидации, BLND-2)",
+  "validation.reason.blender.spatialLayerSync.sourceUnexported": "Рядом со сценой «{scene}» лежит источник «{source}», но его экспорта нет: слой сцены производный, а сверить его не с чем — сделайте экспорт glTF из Blender и выполните импорт (BLND-2)",
+  "validation.reason.blender.spatialLayerSync.sourceUnchecked": "Среда не ответила, лежит ли рядом со сценой источник «{source}»: {reason} — сопряжённость сцены с конвейером неизвестна, и слой не сверялся (BLND-2)",
   "validation.reason.blender.spatialLayerSync.ruleFailed": "Правило валидации «{rule}» упало на этом документе: проверено не было ничего, и это дефект правила, а не документа."
 }

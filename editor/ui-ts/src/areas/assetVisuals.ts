@@ -47,13 +47,16 @@ import {
 } from '@fluxus/editor-core';
 import { validateManifest, type EntityVisual, type VisualManifest } from '@fluxus/assets';
 import { reasonOf } from '../reason.js';
-import { ASSET_ID, DOCUMENT, asDocument, asString } from './operationParams.js';
+import { ASSET_ID, DOCUMENT, asDocument, asNumber, asString } from './operationParams.js';
 
 /** Идентификаторы операций над записями манифеста. */
 export const VISUALS_OPERATIONS = {
   setModel: 'visuals.entry.setModel',
   setDefaultSkin: 'visuals.entry.setDefaultSkin',
   setSkinTexture: 'visuals.entry.setSkinTexture',
+  setAnimation: 'visuals.entry.setAnimation',
+  setSurfaceAlign: 'visuals.entry.setSurfaceAlign',
+  setCurvatureMap: 'visuals.terrain.setCurvatureMap',
 } as const;
 
 /** Где в манифесте лежат записи (ASSET-6) — доменное знание вклада, а не каркаса. */
@@ -62,10 +65,32 @@ const ENTRIES_KEY = 'entities';
 const MODEL_KEY = 'model';
 const DEFAULT_SKIN_KEY = 'defaultSkin';
 const SKINS_KEY = 'skins';
+/** Таблицы маппинга клипов записи (`rendering` REND-4). */
+const ANIMATIONS_KEY = 'animations';
+const ANIMATION_TABLES = ['states', 'events'] as const;
+export type AnimationTable = (typeof ANIMATION_TABLES)[number];
+/** Параметры наклона по поверхности (`rendering` REND-10). */
+const SURFACE_ALIGN_KEY = 'surfaceAlign';
+/** Presentation-данные террейна арены: карта кривизны (`assets` ASSET-7). */
+const TERRAIN_KEY = 'terrain';
+const CURVATURE_MAP_KEY = 'curvatureMap';
 
 const ENTRY: OperationParamSpec = { type: 'string', descriptionKey: 'ui.operation.param.entry' };
 const SKIN: OperationParamSpec = { type: 'string', descriptionKey: 'ui.operation.param.skin' };
 const SLOT: OperationParamSpec = { type: 'string', descriptionKey: 'ui.operation.param.slot' };
+const TABLE: OperationParamSpec = { type: 'string', descriptionKey: 'ui.operation.param.animationTable' };
+const STATE: OperationParamSpec = { type: 'string', descriptionKey: 'ui.operation.param.animationName' };
+const CLIP: OperationParamSpec = { type: 'string', descriptionKey: 'ui.operation.param.clip' };
+const FACTOR: OperationParamSpec = { type: 'number', descriptionKey: 'ui.operation.param.alignFactor' };
+const MAX_ANGLE: OperationParamSpec = {
+  type: 'number',
+  optional: true,
+  descriptionKey: 'ui.operation.param.alignMaxAngle',
+};
+const CURVATURE: OperationParamSpec = {
+  type: 'string',
+  descriptionKey: 'ui.operation.param.curvatureMap',
+};
 
 /** Путь записи манифеста внутри документа. */
 function entryPath(entry: string, ...rest: readonly string[]): JsonPath {
@@ -237,10 +262,130 @@ const setEntrySkinTextureOperation: AuthoringOperation = {
   },
 };
 
+/**
+ * Клип состояния или события записи (ED-14: «привязку сущностей к моделям,
+ * скинам и АНИМАЦИЯМ»; `rendering` REND-4). Значение — подстрока имени клипа, а
+ * не имя файла: какой клип модели ложится на состояние, решает манифест, а не
+ * код рендера.
+ *
+ * Пустой клип СНИМАЕТ привязку, а не пишет пустую строку: пустая строка —
+ * ошибка формата (ASSET-6), и завести её единственной операцией правки значило
+ * бы сделать снятие привязки недостижимым из редактора — то есть заставить
+ * автора править манифест руками, что ED-14 запрещает считать обязательным.
+ * Опустевшая таблица и опустевший блок `animations` уходят следом: пустой
+ * объект в документе — след правки, а не данные (ED-21).
+ */
+const setEntryAnimationOperation: AuthoringOperation = {
+  id: VISUALS_OPERATIONS.setAnimation,
+  descriptionKey: 'ui.operation.visuals.entry.setAnimation',
+  params: { document: DOCUMENT, entry: ENTRY, table: TABLE, name: STATE, clip: CLIP },
+  apply(ctx, params) {
+    const id = VISUALS_OPERATIONS.setAnimation;
+    const document = asDocument(params);
+    const entry = asString(params, 'entry');
+    requireEntry(id, ctx, document, entry);
+    const table = asString(params, 'table');
+    if (!(ANIMATION_TABLES as readonly string[]).includes(table)) {
+      throw new OperationError(
+        id,
+        `параметр "table": таблица маппинга — одна из ${ANIMATION_TABLES.join(', ')} (REND-4)`,
+        { param: 'table', received: table },
+      );
+    }
+    const name = asString(params, 'name');
+    if (name === '') {
+      throw new OperationError(id, 'параметр "name": имя состояния или события пусто', {
+        param: 'name',
+        received: name,
+      });
+    }
+    const clip = asString(params, 'clip');
+    const before = ctx.readAt(document, entryPath(entry));
+    const path = entryPath(entry, ANIMATIONS_KEY, table, name);
+    if (clip === '') {
+      if (ctx.readAt(document, path) === undefined) return undefined;
+      ctx.removeValue(document, path);
+      pruneEmpty(ctx, document, entryPath(entry, ANIMATIONS_KEY, table));
+      pruneEmpty(ctx, document, entryPath(entry, ANIMATIONS_KEY));
+      return undefined;
+    }
+    ctx.setValue(document, path, clip);
+    checkEntry(id, ctx, document, entry, before, { param: 'clip', received: clip });
+    return undefined;
+  },
+};
+
+/** Опустевшая карта уходит из документа: пустой объект — след правки, а не данные. */
+function pruneEmpty(ctx: OperationContext, document: DocumentId, path: JsonPath): void {
+  const value = ctx.readAt(document, path);
+  if (isJsonObject(value) && Object.keys(value).length === 0) ctx.removeValue(document, path);
+}
+
+/**
+ * Параметры наклона по поверхности записи (ED-14, `rendering` REND-10). Блок
+ * пишется ЦЕЛИКОМ, а не по полю: `factor` в нём обязателен (ASSET-6), и
+ * операция «записать только лимит угла» оставила бы в документе заведомо
+ * невалидный блок, который тут же отвергла бы проверка владельца.
+ *
+ * Отсутствующий лимит угла — снятие поля, а не ноль: ноль означает «всегда
+ * вертикален», а отсутствие — «лимита нет» (REND-10).
+ */
+const setEntrySurfaceAlignOperation: AuthoringOperation = {
+  id: VISUALS_OPERATIONS.setSurfaceAlign,
+  descriptionKey: 'ui.operation.visuals.entry.setSurfaceAlign',
+  params: { document: DOCUMENT, entry: ENTRY, factor: FACTOR, maxAngleDeg: MAX_ANGLE },
+  apply(ctx, params) {
+    const id = VISUALS_OPERATIONS.setSurfaceAlign;
+    const document = asDocument(params);
+    const entry = asString(params, 'entry');
+    requireEntry(id, ctx, document, entry);
+    const factor = asNumber(params, 'factor');
+    const maxAngleDeg = params.maxAngleDeg;
+    const before = ctx.readAt(document, entryPath(entry));
+    ctx.setValue(document, entryPath(entry, SURFACE_ALIGN_KEY), {
+      factor,
+      ...(typeof maxAngleDeg === 'number' ? { maxAngleDeg } : {}),
+    });
+    // Диапазоны — правила формата (ASSET-6, REND-10), и проверяет их владелец.
+    checkEntry(id, ctx, document, entry, before, { param: 'factor', received: factor });
+    return undefined;
+  },
+};
+
+/**
+ * Ссылка манифеста на карту кривизны арены (ED-14: «ссылки на ассеты арены»;
+ * `assets` ASSET-7). Живёт не в записи, а в секции террейна манифеста: карта
+ * принадлежит арене, а не виду.
+ *
+ * Пустой ID снимает ссылку — по тому же основанию, что и пустой клип: пустая
+ * строка тут ошибка формата, и без снятия автор чинил бы документ руками.
+ */
+const setCurvatureMapOperation: AuthoringOperation = {
+  id: VISUALS_OPERATIONS.setCurvatureMap,
+  descriptionKey: 'ui.operation.visuals.terrain.setCurvatureMap',
+  params: { document: DOCUMENT, asset: CURVATURE },
+  apply(ctx, params) {
+    const id = VISUALS_OPERATIONS.setCurvatureMap;
+    const document = asDocument(params);
+    const raw = asString(params, 'asset');
+    const path: JsonPath = [TERRAIN_KEY, CURVATURE_MAP_KEY];
+    if (raw === '') {
+      if (ctx.readAt(document, path) !== undefined) ctx.removeValue(document, path);
+      pruneEmpty(ctx, document, [TERRAIN_KEY]);
+      return undefined;
+    }
+    ctx.setValue(document, path, requireAssetId(id, 'asset', raw));
+    return undefined;
+  },
+};
+
 export const VISUALS_AUTHORING_OPERATIONS: readonly AuthoringOperation[] = Object.freeze([
   setEntryModelOperation,
   setEntryDefaultSkinOperation,
   setEntrySkinTextureOperation,
+  setEntryAnimationOperation,
+  setEntrySurfaceAlignOperation,
+  setCurvatureMapOperation,
 ]);
 
 /**

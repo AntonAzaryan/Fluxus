@@ -9,12 +9,19 @@
  * пространством, что и бандл, и бандл идёт первым слоем: ID-путь ассета
  * (`assets` ASSET-2) обязан работать так же, как в dev-сервере игры.
  *
+ * Раздаётся при этом ДЕРЕВО КОНТЕНТА ДИСТРИБУТИВА (SRV-8), а не его снимок:
+ * бандл, несущий в себе копию дерева, заслонил бы живые байты первым же слоем —
+ * сервер матча читал бы `content/`, а страница игрока месячной давности копию
+ * внутри бандла, и рукопожатие разошлось бы по хешу контент-пака (NTR-5). Такой
+ * бандл — не конфигурация, а собранный не тем конфигом артефакт, поэтому он
+ * НАЗЫВАЕТСЯ отказом на старте (`contentShadowedBy`), а не молча раздаётся.
+ *
  * Обычный HTTP, а не HTTPS, и это не упущение: игровой транспорт сегодня —
  * незашифрованный `ws` (граница доверия игрового порта названа в Non-Goals
  * дизайна), и https-страница не смогла бы к нему подключиться из-за mixed
  * content. Шифруется управляющий канал (SRV-3), а не страница игрока.
  */
-import { createReadStream, existsSync, statSync } from 'node:fs';
+import { createReadStream, existsSync, readdirSync, statSync, type Dirent } from 'node:fs';
 import { createServer, type Server } from 'node:http';
 import { join, normalize, resolve, sep } from 'node:path';
 
@@ -139,7 +146,47 @@ function layerFile(layers: readonly string[], pathname: string): string | undefi
   return undefined;
 }
 
+/**
+ * Имена верхнего уровня дерева контента, которые бандл ЗАСЛОНЯЕТ собой: он идёт
+ * первым слоем, и совпадение имён означает, что каждый такой запрос ассета
+ * получит снимок из бандла вместо живого дерева дистрибутива (SRV-8).
+ *
+ * Сравниваются КАТАЛОГИ верхнего уровня: копия дерева попадает в бандл целиком
+ * (`publicDir` сборки страницы), и её признак — каталоги `scenes`, `matches`,
+ * `visuals` рядом с `index.html`. Одинокий одноимённый ФАЙЛ признаком не
+ * является и заслонять вправе: ради этого слои и упорядочены. Каталог, которого
+ * нет, ничего не заслоняет, а нечитаемый — не повод падать вместо раздачи.
+ */
+export function contentShadowedBy(bundleDir: string, contentRoot: string): readonly string[] {
+  if (bundleDir === '') return [];
+  let entries: readonly Dirent[];
+  try {
+    entries = readdirSync(contentRoot, { withFileTypes: true });
+  } catch {
+    return [];
+  }
+  return entries
+    .filter(
+      (entry) =>
+        entry.isDirectory() &&
+        statSync(join(bundleDir, entry.name), { throwIfNoEntry: false })?.isDirectory() === true,
+    )
+    .map((entry) => entry.name);
+}
+
 export async function startHttpServe(options: HttpServeOptions): Promise<HttpServe> {
+  // Снимок дерева внутри бандла — отказ, а не молчаливая раздача копии:
+  // «Агент SHALL раздавать … дерево контента СВОЕГО ДИСТРИБУТИВА» (SRV-8), и
+  // подмена его запечённой копией расходится с этим тем сильнее, чем дольше
+  // живёт дистрибутив.
+  const shadowed = contentShadowedBy(options.bundleDir, options.contentRoot);
+  if (shadowed.length > 0) {
+    throw new Error(
+      `бандл раздачи "${options.bundleDir}" несёт в себе копию дерева контента ` +
+        `(${shadowed.join(', ')}): она заслонила бы живое дерево дистрибутива (SRV-8). ` +
+        'Соберите страницу без копии дерева — `npm run demo:build:desktop -w @fluxus/demo`',
+    );
+  }
   const layers = [options.bundleDir, options.contentRoot];
   const server: Server = createServer((request, response) => {
     // Раздача ТОЛЬКО на чтение (SRV-8): записи через агента не существует.

@@ -145,6 +145,89 @@ function fogConfig(enemyMask: number, flipTo?: number, overrides: Partial<MatchC
   });
 }
 
+/**
+ * Сцена каста, где событие называет ОБЕ стороны: кастующего (`entity`) и его
+ * противника (`target`, ссылка из компонента `Link`). Оба имени входят в
+ * закрытый набор полей-ссылок NET-13, поэтому событие видимо по обоим — и
+ * именно на такой паре расходятся `any-referenced` и `all-referenced`.
+ *
+ * Ссылка приходит расстановкой, а не догадкой системы: `Link.other` — обычное
+ * поле типа `entity` (ECS-6), и его значения проставляет конфиг матча, как
+ * проставляет маски и команды.
+ */
+function linkedCastScene(): SceneDef {
+  const scene = authoredMaskScene();
+  return {
+    ...scene,
+    components: [...scene.components, { name: 'Link', fields: { other: 'entity' } }],
+    prefabs: [
+      {
+        ...scene.prefabs![0]!,
+        components: { ...scene.prefabs![0]!.components, Link: { other: -1 } },
+      },
+    ],
+    systems: [
+      ...(scene.systems ?? []),
+      {
+        name: 'LinkedCast',
+        order: 20,
+        query: { all: ['Input', 'Player', 'Link'] },
+        as: 'e',
+        do: [
+          {
+            if: {
+              cond: {
+                and: [
+                  { bitTest: [{ getComponent: [{ var: 'e' }, 'Input', 'buttons'] }, 0] },
+                  { '!': [{ bitTest: [{ getComponent: [{ var: 'e' }, 'Input', 'prevButtons'] }, 0] }] },
+                ],
+              },
+              then: [
+                {
+                  emitEvent: {
+                    type: 'Cast',
+                    data: {
+                      entity: { var: 'e' },
+                      target: { getComponent: [{ var: 'e' }, 'Link', 'other'] },
+                      slot: { getComponent: [{ var: 'e' }, 'Player', 'slot'] },
+                    },
+                  },
+                },
+              ],
+            },
+          },
+        ],
+      },
+    ],
+  };
+}
+
+/**
+ * Матч на этой сцене: герои видимы только своей команде и ссылаются друг на
+ * друга. Идентификаторы сущностей известны расстановке — носителей у сцены нет
+ * (ни арены, ни карты пола, ни твинов), поэтому герои занимают слоты 0 и 1.
+ */
+function linkedCastConfig(overrides: Partial<MatchConfig> = {}): MatchConfig {
+  return duelConfig({
+    scene: linkedCastScene(),
+    snapshotRate: 60,
+    eventRepeat: 0,
+    initial: [
+      { prefab: 'Hero', overrides: { Visibility: { visibleTo: 1 }, Team: { id: 0 }, Link: { other: 1 } } },
+      {
+        prefab: 'Hero',
+        overrides: {
+          Player: { slot: 1 },
+          Visibility: { visibleTo: 2 },
+          Team: { id: 1 },
+          Link: { other: 0 },
+        },
+      },
+    ],
+    ...overrides,
+  });
+}
+
 // ------------------------------------------------------------------ хелперы
 
 function running(config: MatchConfig, observer = false): MatchServer {
@@ -722,17 +805,20 @@ describe('швы: снапшот и канонический лог', () => {
   });
 
   /**
-   * NET-13 «Действующий предикат» и NTR-9: предикат назван конфигом матча, и
-   * закрытие открытого геймплейного вопроса — смена ЭТОГО поля, а не правка ядра
-   * или сетевого слоя. Проверяется не сам предикат, а то, что названный конфигом
-   * действует и что действует он на ОБА канала одним вызовом: разойдись они,
-   * клиент увидел бы в состоянии факт, которого нет в потоке.
+   * NET-13 «Действующий предикат» и NTR-9: предикат назван конфигом матча ИМЕНЕМ
+   * из закрытого набора, и закрытие открытого геймплейного вопроса — смена
+   * ЭТОГО поля, а не правка ядра или сетевого слоя. Проверяется не семантика
+   * самих предикатов (она зона `filter.test.ts` ядра), а то, что названный
+   * конфигом действует и что действует он на ОБА канала одним вызовом:
+   * разойдись они, клиент увидел бы в состоянии факт, которого нет в потоке.
    *
-   * Предикат взят нарочно не про видимость — «уходит только каст слота 0», — чтобы
-   * его действие нельзя было спутать с действием нормированного: тот на сцене без
-   * тумана пропускает оба каста.
+   * Сцена нарочно такая, где два имени дают РАЗНЫЙ ответ: каждый каст называет
+   * обоих героев — кастующего (`entity`) и его противника (`target`), — а видим
+   * каждому клиенту ровно один из них. `any-referenced` пропускает оба каста,
+   * `all-referenced` — ни одного: это и есть открытый вопрос «видима цель,
+   * источник в тумане», решаемый теперь документом матча.
    */
-  it('предикат, названный конфигом матча, действует на кадр и на поток (NET-13, NTR-9)', () => {
+  it('имя предиката из конфига матча действует на кадр и на поток (NET-13, NTR-9)', () => {
     const casts = (config: MatchConfig): { frame: number[]; stream: number[] } => {
       const server = running(config);
       // Каст обоих слотов на тике 1, и тик 1 же — тик рассылки (`snapshotRate`
@@ -754,20 +840,28 @@ describe('швы: снапшот и канонический лог', () => {
       };
     };
 
-    const base = { scene: castScene(), snapshotRate: 60, eventRepeat: 0 } as const;
-    const chosen = casts(
-      duelConfig({ ...base, eventVisibility: (event) => event.data.slot === 0 }),
-    );
-    expect(chosen.frame).toEqual([0]);
-    expect(chosen.stream).toEqual([0]);
+    const chosen = casts(linkedCastConfig({ eventVisibility: 'all-referenced' }));
+    expect(chosen.frame).toEqual([]);
+    expect(chosen.stream).toEqual([]);
 
-    // Отсутствие поля даёт нормированный NET-13 предикат, а не «ничего»: на сцене
-    // без тумана видимы оба каста, и оба доезжают обоими каналами. Без этой
-    // половины проверка не отличила бы действующий предикат конфига от того, что
-    // поле просто игнорируется.
-    const normed = casts(duelConfig(base));
+    // Отсутствие поля даёт нормированный NET-13 предикат, а не «ничего»: видима
+    // хотя бы одна названная сущность — событие уходит. Без этой половины
+    // проверка не отличила бы действующий предикат конфига от того, что поле
+    // просто игнорируется.
+    const normed = casts(linkedCastConfig());
     expect(normed.frame).toEqual([0, 1]);
     expect(normed.stream).toEqual([0, 1]);
+  });
+
+  /**
+   * Имя вне закрытого набора — названный отказ на сборке матча, а не молчаливый
+   * возврат к норме (NET-13): «freeze» вместо «all-referenced» означал бы
+   * политику, которой в документе не написано.
+   */
+  it('незнакомое имя предиката роняет сборку матча (NET-13)', () => {
+    expect(() =>
+      harness(linkedCastConfig({ eventVisibility: 'freeze' as never })),
+    ).toThrow(/предикат видимости события "freeze" неизвестен/);
   });
 
   it('канонический inputs[] от потока событий не зависит (NTR-8)', () => {
