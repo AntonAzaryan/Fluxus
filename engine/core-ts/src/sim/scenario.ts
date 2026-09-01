@@ -120,6 +120,14 @@ export function runScenario(def: ScenarioDef, diagnostics?: DiagnosticsSink): Ru
 }
 
 /**
+ * Верхняя граница маски кнопок. Ширину `buttons` нормирует TICK-2 и она же —
+ * единственный источник этого числа: здесь оно повторяется, как повторяет его
+ * JSON-схема фрейма и проверка транспортной границы (`netcode-transport`
+ * NTR-7), а не задаётся заново.
+ */
+const BUTTONS_MAX = 65535;
+
+/**
  * Проверка документа сценария до сборки мира (CLI-2): опечатка обязана назвать
  * себя раньше, чем прогон дойдёт до первого тика.
  */
@@ -131,6 +139,27 @@ function checkScenario(def: ScenarioDef): void {
   }
   if (def.inputs !== undefined && def.players === undefined) {
     throw new Error(`сценарий "${def.name}": есть "inputs", но нет "players" — слоты не определены (TICK-5)`);
+  }
+  checkButtons(def);
+}
+
+/**
+ * Маска кнопок каждого фрейма — целое `0..65535` (TICK-2). Проверка живёт в
+ * загрузчике, а не в схеме: схема опубликована, но на загрузке не применяется —
+ * строгость документа несёт загрузчик (`ecs-foundation` ECS-5). Без неё бит
+ * выше 15 лёг бы в мир целиком (поле компонента ввода — `i32`, TICK-4) и
+ * `bitTest` по нему дал бы «нажато» — кнопку, которой не пережить круг через
+ * транспорт: там ту же границу держит NTR-7. Молча усечённой маски не бывает
+ * ни на одной из двух границ, и эта — вторая.
+ */
+function checkButtons(def: ScenarioDef): void {
+  for (const frame of def.inputs ?? []) {
+    const buttons = frame.buttons;
+    if (Number.isInteger(buttons) && buttons >= 0 && buttons <= BUTTONS_MAX) continue;
+    throw new Error(
+      `сценарий "${def.name}": "buttons" фрейма игрока "${frame.playerId}" на тике ${frame.tick} — ` +
+        `целое 0..${BUTTONS_MAX} (TICK-2), получено ${String(buttons)}`,
+    );
   }
 }
 

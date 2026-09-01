@@ -365,6 +365,10 @@ export class NetworkShell {
     if (before.length > 0) this.sender.pushEvents(before, !discontinuity);
 
     const state = this.config.state;
+    // Мир меняется вне тика — и это исключение 4 TICK-3, а не side-channel:
+    // тика в сетевом режиме нет вовсе (`tick()` не вызывается ни разу, SHELL-8),
+    // состояния этот мир не производит, а наполняет его тем, что прислал
+    // авторитетный сервер (NET-1, NET-18, NTR-10).
     restoreSnapshot(state, { ...latest, events: own.length > 0 ? own : NO_EVENTS });
     // Разрыв непрерывности мира (SHELL-7) едет в `isReplay`: для рендера
     // «состояние другой ветви истории» и «реплеевый тик» — один случай, разрыв

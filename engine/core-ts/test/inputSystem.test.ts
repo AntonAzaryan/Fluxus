@@ -208,6 +208,35 @@ describe('сценарий с вводом (CLI-2)', () => {
     expect(() => runScenario(def)).toThrow(/нет "players"/);
   });
 
+  it('buttons шире u16 — ошибка валидации на загрузке, а не усечённая маска (TICK-2)', () => {
+    const def: ScenarioDef = {
+      ...base,
+      players: ['p1'],
+      // Бит №16: через транспорт такая маска не проходит (NTR-7), и документ
+      // прогона обязан отказать по той же границе, а не положить её в мир.
+      inputs: [frame('p1', 1, { buttons: 70000 })],
+    };
+    expect(() => runScenario(def)).toThrow(/"buttons".*0\.\.65535 \(TICK-2\)/);
+  });
+
+  it('отрицательная и дробная маска отвергаются той же проверкой (TICK-2)', () => {
+    const negative: ScenarioDef = { ...base, players: ['p1'], inputs: [frame('p1', 1, { buttons: -1 })] };
+    expect(() => runScenario(negative)).toThrow(/"buttons"/);
+    const fractional: ScenarioDef = { ...base, players: ['p1'], inputs: [frame('p1', 1, { buttons: 1.5 })] };
+    expect(() => runScenario(fractional)).toThrow(/"buttons"/);
+  });
+
+  it('границы диапазона законны: 0 и 65535 грузятся и доезжают до мира (TICK-2)', () => {
+    const def: ScenarioDef = {
+      ...base,
+      players: ['p1'],
+      inputs: [frame('p1', 1, { buttons: 65535 })],
+    };
+
+    const out = runScenario(def);
+    expect(out.ticks[1]!.world.components.Input!.buttons![0]).toBe(65535);
+  });
+
   it('players регистрируют InputSystem, ввод виден в снапшоте', () => {
     const def: ScenarioDef = {
       ...base,
