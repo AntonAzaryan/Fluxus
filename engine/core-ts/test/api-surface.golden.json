@@ -149,6 +149,7 @@
   "defaultOutcome",
   "dispatch",
   "entityIndex",
+  "eventVisibilityByName",
   "expr",
   "filterSnapshot",
   "finishUtility",

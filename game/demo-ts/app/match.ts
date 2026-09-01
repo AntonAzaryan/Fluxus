@@ -52,6 +52,7 @@ export const DEMO_DOCUMENT_FIELDS: typeof MATCH_DOCUMENT_FIELDS = [
   'inputDelay',
   'inputWindow',
   'eventRepeat',
+  'eventVisibility',
   'rewind',
   'pause',
   'physics',

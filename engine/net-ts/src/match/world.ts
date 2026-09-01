@@ -21,7 +21,9 @@
  */
 import {
   buildSimulation,
+  query,
   world as coreWorld,
+  TEAM_COMPONENT,
   type ComponentSchema,
   type DiagnosticsSink,
   type LocomotionOptions,
@@ -127,6 +129,57 @@ export function buildMatchWorld(def: MatchWorldDef): MatchWorld {
       ...(def.diagnostics !== undefined ? { diagnostics: def.diagnostics } : {}),
     },
   );
+}
+
+/**
+ * Компонент и поле слота игрока в мире матча — те же, что ставит `InputSystem`
+ * умолчанием (`buildSimulation` регистрирует её без переопределения). Здесь, а
+ * не у сервера, потому что это свойство СБОРКИ мира матча, и обе стороны
+ * собирают его одинаково (NTR-14).
+ */
+const SLOT_COMPONENT = 'Player';
+const SLOT_FIELD = 'slot';
+
+/**
+ * Команды слотов ПО МИРУ матча (NET-12, NET-15): `Team.id` сущности, несущей
+ * номер слота. `undefined` — мир о команде этого слота ничего не утверждает:
+ * компонентов `Player`/`Team` в сцене нет вовсе либо сущности слота ещё нет.
+ *
+ * Существует затем, чтобы точка зрения слота не выводилась из его НОМЕРА.
+ * Номер слота и номер команды — разные величины (`fog-of-war` FOW-2), и
+ * совпадают они только в дуэли; в кооперативной сцене слот 1 в команде 0
+ * получил бы точкой зрения команду 1, то есть не увидел бы в собственном
+ * снапшоте даже своего героя (NET-15). Мнение о команде слота одно и живёт в
+ * мире, потому что маску видимости считают по нему же (FOW-3, FOW-5).
+ *
+ * Считается один раз, на сборке матча: точка зрения соединения — свойство
+ * матча, а не тика, и меняться от того, что сущность слота умерла и была
+ * удалена, она MUST NOT.
+ */
+export function slotTeams(world: WorldState, slots: number): readonly (number | undefined)[] {
+  const teams: (number | undefined)[] = Array.from({ length: slots }, () => undefined);
+  if (coreWorld.componentId(world, SLOT_COMPONENT) === undefined) return teams;
+  if (coreWorld.componentId(world, TEAM_COMPONENT) === undefined) return teams;
+  for (const entity of query(world, { all: [SLOT_COMPONENT, TEAM_COMPONENT] })) {
+    const slot = coreWorld.getField(world, entity, SLOT_COMPONENT, SLOT_FIELD);
+    // Номер вне ростера матча слотом не является: сущность-спутник вправе нести
+    // чужой `Player.slot` не больше, чем ввод вправе прийти на несуществующий
+    // слот (TICK-5).
+    if (!Number.isInteger(slot) || slot < 0 || slot >= slots) continue;
+    const team = coreWorld.getField(world, entity, TEAM_COMPONENT, 'id');
+    const known = teams[slot];
+    // Две сущности одного слота в разных командах — не «одна из них главная», а
+    // расстановка, о команде слота не договорившаяся: выбирать за неё значило бы
+    // отдать точку зрения игрока порядку спавна.
+    if (known !== undefined && known !== team) {
+      throw new Error(
+        `конфиг матча: сущности слота ${slot} названы разными командами (${known} и ${team}) — ` +
+          `точка зрения слота выводится из мира и обязана быть одна (NET-12, NET-15)`,
+      );
+    }
+    teams[slot] = team;
+  }
+  return teams;
 }
 
 /**

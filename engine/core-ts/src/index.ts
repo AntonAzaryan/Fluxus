@@ -334,8 +334,14 @@ export type {
   RewindController,
   RewindOptions,
 } from './sim/rewind.js';
-export { filterSnapshot, relevantEntityVisible, VIEWPOINT_ALL, EVENT_ENTITY_FIELDS } from './sim/filter.js';
-export type { EventVisibility } from './sim/filter.js';
+export {
+  filterSnapshot,
+  relevantEntityVisible,
+  eventVisibilityByName,
+  VIEWPOINT_ALL,
+  EVENT_ENTITY_FIELDS,
+} from './sim/filter.js';
+export type { EventVisibility, EventVisibilityName } from './sim/filter.js';
 export { loadScene } from './sim/scene.js';
 export type { Scene, SceneDef } from './sim/scene.js';
 /**
