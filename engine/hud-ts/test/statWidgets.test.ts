@@ -77,7 +77,7 @@ function bench(composition: HudComposition, hero: HudEntityView | null) {
   registry.registerAction('hero.cast', { target: 'world', action: 'cast' });
   registry.registerAction('hero.dodge', { target: 'world', action: 'dodge' });
 
-  const { runtime, host, facade } = makeRuntime(registry);
+  const { runtime, host, facade, dom } = makeRuntime(registry);
   const presses: string[] = [];
   facade.start((action) => presses.push(action));
   runtime.apply(composition);
@@ -87,8 +87,14 @@ function bench(composition: HudComposition, hero: HudEntityView | null) {
     );
   };
   if (hero !== null) deliver([hero]);
-  return { runtime, host, presses, deliver, facade };
+  return { runtime, host, presses, deliver, facade, dom };
 }
+
+/**
+ * Событие указателя, которым игрок и берёт кнопку: ОСНОВНАЯ кнопка ОСНОВНОГО
+ * указателя. Всё прочее — не «нажал эту кнопку» (HUD-2).
+ */
+const PRIMARY_POINTER = { button: 0, isPrimary: true };
 
 // ------------------------------------------------------------ полоса здоровья
 
@@ -326,7 +332,7 @@ describe('форма органа управления объявляется к
     const button = abilityButton(host, 'dodge');
     expect(button.getAttribute('data-form')).toBe('hold');
 
-    button.dispatch('pointerdown');
+    button.dispatch('pointerdown', PRIMARY_POINTER);
     // Фронт латчится ровно как у клавиши на `keydown` — иначе нажатие короче
     // тика отличалось бы от такого же нажатия клавиши.
     expect(presses).toEqual(['dodge']);
@@ -347,7 +353,7 @@ describe('форма органа управления объявляется к
     for (const event of ['pointerleave', 'pointercancel']) {
       const { host, facade } = bench(holdComposition, entityWith(1, {}));
       const button = abilityButton(host, 'dodge');
-      button.dispatch('pointerdown');
+      button.dispatch('pointerdown', PRIMARY_POINTER);
       expect([...facade.held()]).toEqual(['dodge']);
       button.dispatch(event);
       expect([...facade.held()]).toEqual([]);
@@ -356,17 +362,99 @@ describe('форма органа управления объявляется к
 
   it('снятие виджета отпускает то, что он держал (INP-5)', () => {
     const { host, runtime, facade } = bench(holdComposition, entityWith(1, {}));
-    abilityButton(host, 'dodge').dispatch('pointerdown');
+    abilityButton(host, 'dodge').dispatch('pointerdown', PRIMARY_POINTER);
     expect([...facade.held()]).toEqual(['dodge']);
     runtime.clear();
     expect([...facade.held()]).toEqual([]);
   });
 
+  it('не-основная кнопка и не-основной указатель удержания не начинают (HUD-2)', () => {
+    const { host, presses, facade } = bench(holdComposition, entityWith(1, {}));
+    const button = abilityButton(host, 'dodge');
+
+    // Правая и средняя кнопки — свои органы управления (в раскладке демо ПКМ
+    // занята живым мировым вводом, INP-4): удержание они не начинают.
+    for (const pointer of [{ button: 2, isPrimary: true }, { button: 1, isPrimary: true }]) {
+      button.dispatch('pointerdown', pointer);
+      expect([...facade.held()]).toEqual([]);
+      expect(presses).toEqual([]);
+    }
+    // Второй палец мультитача — тоже нет.
+    button.dispatch('pointerdown', { button: 0, isPrimary: false });
+    expect([...facade.held()]).toEqual([]);
+    expect(presses).toEqual([]);
+
+    // А основная кнопка основного указателя — да.
+    button.dispatch('pointerdown', PRIMARY_POINTER);
+    expect([...facade.held()]).toEqual(['dodge']);
+  });
+
+  it('клавиатурный путь: Space и Enter держат кнопку, автоповтор не в счёт (HUD-2)', () => {
+    for (const key of [' ', 'Enter']) {
+      const { host, presses, facade } = bench(holdComposition, entityWith(1, {}));
+      const button = abilityButton(host, 'dodge');
+      let prevented = 0;
+      const event = { key, repeat: false, preventDefault: () => { prevented += 1; } };
+
+      button.dispatch('keydown', event);
+      expect(presses).toEqual(['dodge']);
+      expect([...facade.held()]).toEqual(['dodge']);
+      // Прокрутка страницы пробелом гасится: кнопка занята удержанием.
+      expect(prevented).toBe(1);
+
+      // Автоповтор ОС — не новое нажатие (INP-2): ни второго фронта, ни
+      // повторного взятия.
+      button.dispatch('keydown', { ...event, repeat: true });
+      expect(presses).toEqual(['dodge']);
+      expect([...facade.held()]).toEqual(['dodge']);
+
+      button.dispatch('keyup', event);
+      expect([...facade.held()]).toEqual([]);
+    }
+  });
+
+  it('посторонняя клавиша кнопку не трогает', () => {
+    const { host, presses, facade } = bench(holdComposition, entityWith(1, {}));
+    const button = abilityButton(host, 'dodge');
+    button.dispatch('keydown', { key: 'Tab', repeat: false });
+    expect(presses).toEqual([]);
+    expect([...facade.held()]).toEqual([]);
+  });
+
+  it('уход фокуса окна и потеря фокуса кнопкой снимают удержание (INP-5)', () => {
+    // Alt-tab с зажатой кнопкой: ни `pointerup`, ни `keyup` не придут.
+    const alt = bench(holdComposition, entityWith(1, {}));
+    abilityButton(alt.host, 'dodge').dispatch('pointerdown', PRIMARY_POINTER);
+    expect([...alt.facade.held()]).toEqual(['dodge']);
+    alt.dom.view.dispatch('blur');
+    expect([...alt.facade.held()]).toEqual([]);
+
+    // Фокус уехал с самой кнопки, не покидая страницы.
+    const inner = bench(holdComposition, entityWith(1, {}));
+    const button = abilityButton(inner.host, 'dodge');
+    button.dispatch('keydown', { key: ' ', repeat: false });
+    expect([...inner.facade.held()]).toEqual(['dodge']);
+    button.dispatch('blur');
+    expect([...inner.facade.held()]).toEqual([]);
+  });
+
+  it('снятие виджета отписывает его от окна — слушателей не копится', () => {
+    const { runtime, dom } = bench(holdComposition, entityWith(1, {}));
+    expect(dom.view.count('blur')).toBe(1);
+    runtime.clear();
+    expect(dom.view.count('blur')).toBe(0);
+  });
+
+  it('панель без удерживаемых кнопок на окно не подписывается', () => {
+    const { dom } = bench(cooldownComposition, entityWith(1, {}));
+    expect(dom.view.count('blur')).toBe(0);
+  });
+
   it('повторный pointerdown без отпускания не удваивает фронт', () => {
     const { host, presses } = bench(holdComposition, entityWith(1, {}));
     const button = abilityButton(host, 'dodge');
-    button.dispatch('pointerdown');
-    button.dispatch('pointerdown');
+    button.dispatch('pointerdown', PRIMARY_POINTER);
+    button.dispatch('pointerdown', PRIMARY_POINTER);
     expect(presses).toEqual(['dodge']);
   });
 
@@ -388,7 +476,7 @@ describe('форма органа управления объявляется к
       ],
     });
     expect(() => {
-      abilityButton(host, 'cast').dispatch('pointerdown');
+      abilityButton(host, 'cast').dispatch('pointerdown', PRIMARY_POINTER);
     }).toThrow('удержание есть форма мирового действия-ввода');
   });
 

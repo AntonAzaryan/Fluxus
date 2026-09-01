@@ -27,7 +27,7 @@
  */
 import type { HudJsonValue, HudParams } from '../composition.js';
 import { entityStat, type HudEntityView } from '../delivery.js';
-import { el, type HudNode } from '../dom/node.js';
+import { el, type HudHandler, type HudNode } from '../dom/node.js';
 import { interactive } from '../host.js';
 import { assetIdParam, iconAssetId, type HudIcons, type HudIconTable } from '../icons.js';
 import { setAttr, setText } from '../dom/render.js';
@@ -42,6 +42,40 @@ export const COOLDOWNS_ABILITIES_PARAM = 'abilities';
 
 /** Длительность тика по умолчанию — 60 Гц; настоящая приезжает handshake'ом. */
 const DEFAULT_TICK_MS = 1000 / 60;
+
+/**
+ * Что виджет читает у события указателя — и ничего сверх этого (HUD-3: своего
+ * hit-testing и своей геометрии у него нет).
+ */
+interface PointerLikeEvent {
+  readonly button?: number;
+  readonly isPrimary?: boolean;
+}
+
+/** Что виджет читает у события клавиатуры. */
+interface KeyLikeEvent {
+  readonly key?: string;
+  readonly repeat?: boolean;
+  preventDefault?: () => void;
+}
+
+/**
+ * Минимум окна, нужный снятию удержания по уходу фокуса (INP-5). Тот же приём,
+ * что у клавиатурного источника ввода: `keyup`/`pointerup` за пределами окна не
+ * придут, и без сброса бит остался бы зажатым навсегда.
+ */
+interface WindowLike {
+  addEventListener(type: string, listener: () => void): void;
+  removeEventListener(type: string, listener: () => void): void;
+}
+
+/**
+ * Клавиши активации элемента — ровно те, которыми браузер сам порождает `click`
+ * на `<button>`. У формы «фронт» клавиатурный путь поэтому есть даром; форме
+ * «удержание» его надо завести, иначе её кнопка с клавиатуры недоступна (HUD-2).
+ * `'Spacebar'` — историческое имя пробела старых движков.
+ */
+const ACTIVATION_KEYS: ReadonlySet<string> = new Set([' ', 'Spacebar', 'Enter']);
 /** Сколько кнопок в ряду, если композиция не сказала иначе. */
 const DEFAULT_PER_ROW = 3;
 
@@ -170,6 +204,10 @@ class CooldownsWidget implements HudWidget {
   private iconSubs: (() => void)[] = [];
   /** Что кнопки держат прямо сейчас (HUD-2): снимается на `dispose` (INP-5). */
   private readonly held = new Set<string>();
+  /** Окно, на которое подписан сброс по уходу фокуса; null — панель без удержаний. */
+  private view: WindowLike | null = null;
+  /** Ссылка на слушатель — поле, а не стрелка на месте: её надо снять в `dispose`. */
+  private readonly onWindowBlur = (): void => { this.releaseAll(); };
 
   constructor(params: HudParams, icons: HudIcons) {
     const abilities = abilitiesFromParams(params);
@@ -206,6 +244,7 @@ class CooldownsWidget implements HudWidget {
       // коду виджета (HUD-4).
       style: { 'grid-template-columns': `repeat(${String(this.perRow)}, auto)` },
       children: this.nodes.map((button) => this.buttonNode(button)),
+      ref: (element) => { this.bindWindowBlur(element); },
     });
     // Подписки — ПОСЛЕ сборки описания: закэшированный ассет отдаёт состояние
     // синхронно из `subscribe` (ASSET-4), и элементы к тому моменту ещё не
@@ -231,36 +270,95 @@ class CooldownsWidget implements HudWidget {
     if (node.icon !== null && node.iconSrc !== null) setAttr(node.icon, 'src', node.iconSrc);
   }
 
+  /** Взятие слота: учёт ведётся ПОСЛЕ фасада — бросил, держать нечего (HUD-2). */
+  private holdSlot(slot: string): void {
+    if (this.held.has(slot)) return;
+    this.actions?.hold(slot);
+    this.held.add(slot);
+  }
+
+  /** Отпускание слота; повторное — no-op: отпустить дважды нечего. */
+  private releaseSlot(slot: string): void {
+    if (!this.held.delete(slot)) return;
+    this.actions?.release(slot);
+  }
+
+  /** Отпустить всё удерживаемое — уход фокуса окна и снятие виджета (INP-5). */
+  private releaseAll(): void {
+    for (const slot of [...this.held]) this.releaseSlot(slot);
+  }
+
   /**
    * Обработчики кнопки по её форме (HUD-2). Удерживаемая кнопка `click` не
    * слушает вовсе: `click` рождается на отпускании, и вместе с `pointerdown`
    * он дал бы два фронта на одно нажатие.
    */
-  private buttonHandlers(node: ButtonNodes): Readonly<Record<string, () => void>> {
+  private buttonHandlers(node: ButtonNodes): Readonly<Record<string, HudHandler>> {
     const slot = node.ability.action;
     if (!node.ability.hold) {
       // Слот действия = имя способности; куда он ведёт — знает композиция.
       return { click: () => { this.actions?.trigger(slot); } };
     }
-    const release = (): void => {
-      if (!this.held.delete(slot)) return;
-      this.actions?.release(slot);
-    };
+    const release = (): void => { this.releaseSlot(slot); };
     return {
-      pointerdown: () => {
-        if (this.held.has(slot)) return;
-        // Сначала фасад, потом учёт: если объявление действия не той формы и
-        // фасад бросил, держать виджету нечего (HUD-2).
-        this.actions?.hold(slot);
-        this.held.add(slot);
+      pointerdown: (event) => {
+        // Только ОСНОВНАЯ кнопка ОСНОВНОГО указателя. Правая и средняя — свои
+        // органы управления, и в раскладке демо правая занята живым мировым
+        // вводом (INP-4): начать ею удержание значило бы отдать симуляции бит,
+        // которого игрок этой кнопке не назначал. Неосновной указатель —
+        // второй палец мультитача, и удержание он не начинает по той же
+        // причине, по которой его не начинает второе касание стика.
+        const pointer = event as unknown as PointerLikeEvent;
+        if (pointer.button !== 0 || pointer.isPrimary !== true) return;
+        this.holdSlot(slot);
       },
-      // Отпускание ловится тремя способами: штатное, увод указателя с зажатой
-      // кнопки и отмена жеста системой. Без двух последних бит остался бы
-      // зажатым до конца матча (INP-5).
+      // Отпускание ловится всеми способами, какими игрок может ОТПУСТИТЬ, не
+      // отпуская: увод указателя с зажатой кнопки, отмена жеста системой, уход
+      // фокуса с элемента. Без них бит остался бы зажатым до конца матча (INP-5).
       pointerup: release,
       pointerleave: release,
       pointercancel: release,
+      blur: release,
+      // Клавиатурный путь той же кнопки (HUD-2): у формы «фронт» он есть даром
+      // — браузер сам порождает `click` по Space и Enter, — и форма «удержание»
+      // обязана быть доступна теми же клавишами, иначе кнопка есть, а сыграть
+      // её с клавиатуры нельзя.
+      keydown: (event) => {
+        const key = event as unknown as KeyLikeEvent;
+        if (key.key === undefined || !ACTIVATION_KEYS.has(key.key)) return;
+        // Автоповтор ОС — не новое нажатие (INP-2): ровно то же правило, что у
+        // клавиатурного источника ввода.
+        if (key.repeat === true) return;
+        // Пробел на кнопке иначе прокручивает страницу.
+        key.preventDefault?.();
+        this.holdSlot(slot);
+      },
+      keyup: (event) => {
+        const key = event as unknown as KeyLikeEvent;
+        if (key.key === undefined || !ACTIVATION_KEYS.has(key.key)) return;
+        release();
+      },
     };
+  }
+
+  /**
+   * Снятие удержаний по уходу фокуса ОКНА (INP-5): alt-tab с зажатой кнопкой не
+   * породит ни `pointerup`, ни `keyup`, и бит остался бы в маске навсегда.
+   * Зеркало `handleBlur` клавиатурного источника ввода.
+   *
+   * Слушатель заводится только у панели, где удерживаемая кнопка есть, и только
+   * один раз; окно берётся у материализованного элемента — своего доступа к
+   * глобальному объекту у виджета нет и быть не должно (его окружение —
+   * поддерево DOM, которое ему дал хост).
+   */
+  private bindWindowBlur(element: Element): void {
+    if (this.view !== null) return;
+    if (!this.buttons.some((button) => button.ability.hold)) return;
+    const view = (element.ownerDocument as unknown as { defaultView?: WindowLike | null })
+      .defaultView;
+    if (view == null || typeof view.addEventListener !== 'function') return;
+    this.view = view;
+    view.addEventListener('blur', this.onWindowBlur);
   }
 
   private buttonNode(node: ButtonNodes): HudNode {
@@ -340,8 +438,9 @@ class CooldownsWidget implements HudWidget {
    * иначе стоял бы в маске до конца сессии.
    */
   dispose(): void {
-    for (const slot of this.held) this.actions?.release(slot);
-    this.held.clear();
+    this.releaseAll();
+    this.view?.removeEventListener('blur', this.onWindowBlur);
+    this.view = null;
     for (const unsubscribe of this.iconSubs) unsubscribe();
     this.iconSubs = [];
     this.actions = null;

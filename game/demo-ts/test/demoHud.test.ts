@@ -24,6 +24,7 @@ import {
   createDemoSimulation,
   stateBit,
 } from '../app/sim.js';
+import { DEMO_REWIND } from '../app/match.js';
 import { dummyContext, syncPortPair } from './fixtures.js';
 import sceneJson from '../../../content/scenes/duel.scene.json';
 
@@ -261,13 +262,18 @@ describe('панель способностей не обещает нажати
     expect(cooldowns.actions!.rewind).toBeDefined();
   });
 
-  it('бит ульты — тот же, что у клавиши раскладки (INP-4)', () => {
-    // Второго словаря «действие → бит» сборка не заводит: кнопка и клавиша
-    // ссылаются на одно семантическое имя, а бит у него один.
-    const key = Object.keys(demoBindings.keyboardMouse.keys).find(
-      (code) => demoBindings.keyboardMouse.keys[code as keyof typeof demoBindings.keyboardMouse.keys] === 'rewind',
-    );
-    expect(key).toBeDefined();
-    expect(ACTION_BITS.rewind).toBe(7);
+  it('кнопка и клавиша ульты ссылаются на одно действие, а его бит — на бит матча', () => {
+    // Второго словаря «действие → бит» сборка не заводит: кнопка панели и
+    // клавиша раскладки называют одно семантическое имя (INP-4), а бит у имени
+    // один. Проверяется СВЯЗЬ, а не число: номер бита выводится из раскладки
+    // `ACTION_BITS`, и прибивать его константой значило бы ловить не расхождение,
+    // а любую перестановку списка.
+    const keys = demoBindings.keyboardMouse.keys as Readonly<Record<string, string>>;
+    expect(Object.values(keys)).toContain('rewind');
+    expect(abilityRecord('rewind').action).toBe('rewind');
+    // Орган ВЕДЕНИЯ скраба — тот же бит, и его номер называет документ матча
+    // (`rewind.holdButton`): разошлись бы — удержание кнопки кастовало ульту, а
+    // точку остановки не вело (NET-11, REW-13).
+    expect(ACTION_BITS.rewind).toBe(DEMO_REWIND?.holdButton);
   });
 });
