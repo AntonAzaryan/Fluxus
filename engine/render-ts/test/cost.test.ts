@@ -219,7 +219,9 @@ describe('PERF-3: сток счётчиков стоимости — инерт�
   it('у каждого счётчика объявлена стадия конвейера (PERF-2)', () => {
     expect(Object.keys(COST_COUNTER_STAGES).sort()).toEqual(Object.keys(createCostCounters()).sort());
     for (const stage of Object.values(COST_COUNTER_STAGES)) {
-      expect(['syncTick', 'frame']).toContain(stage);
+      // Три стадии конвейера, за которые отвечает рендер (PERF-2): экстракция
+      // вместе с каналом доставки, приём доставки и покадровое обновление.
+      expect(['extract', 'syncTick', 'frame']).toContain(stage);
     }
   });
 

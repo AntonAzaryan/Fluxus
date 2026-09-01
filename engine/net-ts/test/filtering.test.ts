@@ -151,12 +151,75 @@ describe('авторизация полного потока', () => {
     expect(() => harness(fogConfig({ teams: [0, 99] }))).toThrow(/вне диапазона/);
   });
 
-  it('явные команды слотов уважаются', () => {
-    // Оба игрока в команде 0 — видят друг друга.
-    const snapshots = snapshotsAfterTick(fogConfig({ teams: [0, 0] }));
-    const forSecond = snapshots.get(2)!;
-    expect(forSecond.snapshot.world.aliveCount).toBe(CARRIERS + 1);
-    // Слот 1 в команде 0 видит героя команды 0, а не себя: маска задана расстановкой.
-    expect(forSecond.snapshot.world.alive[CARRIERS]).toBe(1);
+  /**
+   * Точка зрения слота — команда его СУЩНОСТИ, а не номер слота (NET-12,
+   * NET-15). РЕГРЕССИЯ: прежде точка зрения выводилась из номера слота, и в
+   * кооперативной сцене — оба игрока в команде 0 — слот 1 получал точку зрения
+   * «команда 1», то есть не находил в собственном снапшоте даже своего героя.
+   * В дуэли дефект не стрелял только потому, что номер слота случайно совпадал
+   * с номером команды.
+   */
+  it('точка зрения слота берётся из команды его сущности, а не из номера слота (NET-12, NET-15)', () => {
+    const coop = fogConfig({
+      initial: [
+        { prefab: 'Hero', overrides: { Visibility: { visibleTo: 1 }, Team: { id: 0 } } },
+        {
+          prefab: 'Hero',
+          overrides: { Player: { slot: 1 }, Visibility: { visibleTo: 1 }, Team: { id: 0 } },
+        },
+      ],
+    });
+    const snapshots = snapshotsAfterTick(coop);
+
+    for (const message of snapshots.values()) {
+      // Оба героя в команде 0 и видимы ей: каждый союзник видит и себя, и второго.
+      expect(message.snapshot.world.aliveCount).toBe(CARRIERS + 2);
+      expect(message.snapshot.world.alive[CARRIERS]).toBe(1);
+      expect(message.snapshot.world.alive[CARRIERS + 1]).toBe(1);
+    }
+  });
+
+  it('объявленная команда слота, совпавшая с миром, действует', () => {
+    // Конфиг вправе назвать точку зрения сам — но только ту же самую: второго
+    // мнения о команде слота в матче не бывает.
+    const declared = fogConfig({
+      teams: [0, 0],
+      initial: [
+        { prefab: 'Hero', overrides: { Visibility: { visibleTo: 1 }, Team: { id: 0 } } },
+        {
+          prefab: 'Hero',
+          overrides: { Player: { slot: 1 }, Visibility: { visibleTo: 1 }, Team: { id: 0 } },
+        },
+      ],
+    });
+    const snapshots = snapshotsAfterTick(declared);
+    expect(snapshots.get(2)!.snapshot.world.aliveCount).toBe(CARRIERS + 2);
+  });
+
+  it('две сущности одного слота в разных командах роняют сборку матча', () => {
+    // Расстановка, не договорившаяся о команде слота, не имеет «главной»
+    // сущности: выбрать за неё значило бы отдать точку зрения игрока порядку
+    // спавна.
+    const ambiguous = fogConfig({
+      initial: [
+        { prefab: 'Hero', overrides: { Visibility: { visibleTo: 1 }, Team: { id: 0 } } },
+        {
+          prefab: 'Hero',
+          overrides: { Player: { slot: 1 }, Visibility: { visibleTo: 2 }, Team: { id: 1 } },
+        },
+        {
+          prefab: 'Hero',
+          overrides: { Player: { slot: 1 }, Visibility: { visibleTo: 1 }, Team: { id: 0 } },
+        },
+      ],
+    });
+    expect(() => harness(ambiguous)).toThrow(/сущности слота 1 названы разными командами/);
+  });
+
+  it('объявленная команда слота, разошедшаяся с миром, роняет сборку матча (NET-15)', () => {
+    // Герой слота 1 в мире — команды 1, а конфиг называет его командой 0. Отказ
+    // до первого тика, а не персональный снапшот по чужой команде: в нём у
+    // игрока не было бы даже собственной сущности.
+    expect(() => harness(fogConfig({ teams: [0, 0] }))).toThrow(/слот 1 объявлен командой 0/);
   });
 });

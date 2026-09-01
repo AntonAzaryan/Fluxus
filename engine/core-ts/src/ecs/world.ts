@@ -24,6 +24,7 @@
  * здесь — это разрешение имени плюс тот же вызов (SYS-10): два пути чтения не
  * могут разойтись семантикой, потому что после разрешения имён путь один.
  */
+import { DEBUG, assert } from '../debug.js';
 import type {
   ComponentHandle,
   ComponentSchema,
@@ -50,6 +51,7 @@ import {
   type FieldTable,
 } from './fieldTable.js';
 import {
+  aliveIndexOf,
   allocate,
   assertRoom,
   cloneEntityIndex,
@@ -715,6 +717,29 @@ export function getField(state: WorldState, entity: EntityId, component: string,
  * Запись поля. Значение, не представимое в типе поля, — жёсткая ошибка, а не
  * усечение (ECS-3): именно здесь идентификатор, положенный в поле `i32`,
  * перестаёт молча портиться на `generation ≥ 256`.
+ *
+ * Запись сущности, которая компонентом не владеет либо не жива, — пустая
+ * операция (ECS-8): ячейка не меняется, владения не возникает (состав задаёт
+ * только `addComponent`, CMD-4), dirty-tracking такую запись не отмечает.
+ * Основание — зеркало ECS-7: чтение такого поля тотально и даёт нейтральное
+ * значение, то есть записанное число не прочтёт никто, а в плоской форме мира
+ * оно осталось бы и сверялось побитово (SER-1, CLI-6). Ошибкой прогона запись
+ * тоже не бывает: владение — факт состояния мира на этот тик, и то же
+ * выражение, корректное тиком раньше, обрывало бы матч на тике, где компонент
+ * сняли.
+ *
+ * Порядок проверок тот же, что у чтения (`readByHandle`): представимость — до
+ * владения, потому что непредставимое значение остаётся дефектом ТЕКСТА системы
+ * (ECS-3, SYS-9) независимо от того, кому оно адресовано. Живость и маска —
+ * одной распаковкой id (`aliveIndexOf`), причём живость раньше маски: мусорный
+ * идентификатор несёт индекс за пределами `capacity`, а маску на таком индексе
+ * спрашивать нельзя.
+ *
+ * Громкость — в отдельном канале (FP-4): мягкий assert debug-сборки, не
+ * влияющий ни на состояние мира, ни на исход команды в трейсе. Словарь исходов
+ * (`diagnostics` DIAG-5) описывает решение БУФЕРА о команде, а не объём
+ * мутации: команда доходит до мутатора в свой черёд и там не делает ничего —
+ * ровно как `removeComponent` компонента, которым сущность не владеет.
  */
 export function setField(
   state: WorldState,
@@ -727,7 +752,18 @@ export function setField(
   const store = storeOf(internal, 'setField', component);
   const type = fieldTypeOf(store, 'setField', component, field);
   if (!representable(type, value)) throw valueError('setField', component, field, type, value);
-  store.fields[field]![rawIndexOf(entity)] = value;
+  const index = aliveIndexOf(internal.entities, entity);
+  if (index < 0 || !maskHas(internal.masks, index, store.id)) {
+    if (DEBUG) {
+      assert(
+        false,
+        `setField: сущность ${entity} не владеет компонентом "${component}" (ECS-8), поле "${field}"`,
+        'COMPONENT_WRITE_WITHOUT_OWNERSHIP',
+      );
+    }
+    return;
+  }
+  store.fields[field]![index] = value;
   markDirty(internal, store.id, entity);
 }
 

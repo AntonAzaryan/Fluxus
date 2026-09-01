@@ -284,8 +284,15 @@ function checkActionArg(key: string, value: unknown, ctx: ActionArgScope): void 
     case 'subStream':
       literal(value, at);
       break;
-    // Ключ вне конвенции не читает ни одно действие таблицы — содержимое
-    // такого аргумента исполнителю невидимо, и проверять в нём нечего.
+    // Ключ вне конвенции не читает ни одно действие таблицы (SYS-3), поэтому
+    // он отвергается, а не пропускается: молча пропущенный ключ — это и
+    // опечатка в имени необязательного аргумента («radiuss» вместо «radius»),
+    // дожившая до середины матча значением по умолчанию, и выражение внутри
+    // него, не проверенное на регистрации вовсе. Заодно правило держит саму
+    // конвенцию полной: действие с аргументом под новым именем не заработает,
+    // пока имя не внесено сюда и в SYS-3.
+    default:
+      fail(at, `аргумент "${key}" вне конвенции имён Action DSL (SYS-3)`);
   }
 }
 
@@ -325,8 +332,16 @@ function checkOverrides(
   }
 }
 
+/** Состав спецификации запроса закрыт `ecs-foundation` QUERY-1; ключ вне него исполнителю невидим. */
+const QUERY_KEYS: readonly string[] = ['all', 'any', 'not', 'withTag', 'withinRadius'];
+
 function checkQuery(node: unknown, world: WorldState, scope: Scope, path: string): void {
   const spec = asMap(node, path);
+  for (const key of Object.keys(spec)) {
+    // Тот же довод, что у ключа действия вне конвенции (SYS-3): «withinRadiuss»
+    // не сузил бы выборку вовсе, и узнать об этом было бы негде до матча.
+    if (!QUERY_KEYS.includes(key)) fail(`${path}.${key}`, `фильтр "${key}" не входит в состав запроса (QUERY-1)`);
+  }
   for (const key of ['all', 'any', 'not'] as const) {
     const names = spec[key];
     if (names === undefined) continue;

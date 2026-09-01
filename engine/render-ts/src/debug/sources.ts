@@ -269,9 +269,14 @@ export interface DebugCostProbe extends DebugProbe {
 export function costCountersDebugSource(): DebugSource<DebugCostProbe> {
   const own = createCostCounters();
   let holding = false;
-  const stages: Record<CostStage, Record<string, number>> = { syncTick: {}, frame: {} };
+  const stages: Record<CostStage, Record<string, number>> = { extract: {}, syncTick: {}, frame: {} };
   const probe = {
     sink: 'none' as 'own' | 'foreign' | 'none',
+    // Стадии — в порядке конвейера (PERF-2). Стадию `extract` считает
+    // ВОРКЕР-сторона (SHELL-2), и у слоя главного потока она обычно лежит
+    // нулями: показать её всё равно честнее, чем спрятать, — «здесь не
+    // считали» отладка не выдумывает, а показывает то, что в стоке (RDBG-8).
+    extract: stages.extract,
     syncTick: stages.syncTick,
     frame: stages.frame,
     noData: undefined as string | undefined,

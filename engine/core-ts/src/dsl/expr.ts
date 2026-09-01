@@ -72,11 +72,6 @@ export class ExprCell {
  */
 export type ExprVars = Readonly<Record<string, ExprValue | ExprCell>>;
 
-/** Точка подмены реализации (EXPR-4). */
-export interface ExpressionEvaluator {
-  evaluate(expr: Expression, world: ExprWorld, vars?: ExprVars): ExprValue;
-}
-
 const NO_VARS: ExprVars = {};
 
 /**
@@ -89,6 +84,18 @@ function isNode(value: unknown): value is Readonly<Record<string, unknown>> {
   return typeof value === 'object' && value !== null;
 }
 
+/**
+ * ЕДИНСТВЕННЫЙ вход вычисления выражения в ядре (EXPR-4). Им пользуются все
+ * трое: исполнитель действий (ACT-1), нативные системы, читающие выражения
+ * контента (платформа способностей, `ability-system` ABIL-2), и валидация на
+ * регистрации — та берёт отсюда же форму применения оператора (`signatureOf`,
+ * EXPR-8). Второго вычислителя в ядре нет, и замена этого — замена модуля.
+ *
+ * Внедряемого экземпляра за интерфейсом здесь нет намеренно (EXPR-4): держать
+ * его пришлось бы либо модульным синглтоном (DI-1: две симуляции в одном
+ * процессе разделили бы состояние), либо полем контракта границы (SYS-5) —
+ * правкой контракта ради подмены, которой в тике не делает никто.
+ */
 export function evaluate(expr: Expression, world: ExprWorld, vars: ExprVars = NO_VARS): ExprValue {
   if (typeof expr === 'number' || typeof expr === 'boolean') return expr;
   if (!isNode(expr)) {
@@ -119,9 +126,6 @@ export function evaluate(expr: Expression, world: ExprWorld, vars: ExprVars = NO
   countCostExpression();
   return def.fn(args, world, vars);
 }
-
-/** Реализация по умолчанию за абстракцией EXPR-4. */
-export const evaluator: ExpressionEvaluator = { evaluate };
 
 // --------------------------------------------------------------- сигнатуры
 
