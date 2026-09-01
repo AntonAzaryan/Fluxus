@@ -94,12 +94,10 @@ import {
 } from '@fluxus/core';
 import {
   modelDerivatives,
-  resolveEffectByKind,
   resolveLodThresholds,
-  resolveParticlesByKind,
   resolveSurfaceAlign,
   resolveVisual,
-  resolveVisualEmitter,
+  resolveVisualClaim,
   resolveVisualLight,
   type AssetState,
   type BakedDerivatives,
@@ -481,6 +479,21 @@ const MOTION_STATE: Readonly<Record<number, string>> = {
   [LOCOMOTION_ROLL]: 'roll',
   [LOCOMOTION_AIRBORNE]: 'jump',
 };
+
+/**
+ * Тот же закрытый словарь перечнем — для потребителя, которому его надо
+ * ПОКАЗАТЬ автору: таблицу «состояние → подстрока имени клипа» записи манифеста
+ * правит редактор (`editor` ED-14), а список состояний он обязан брать из кода
+ * рендера, а не набирать своим (ED-2 — тем же основанием, каким типы эффектов
+ * камеры приходят описанием CAM-9). Перечень ВЫВЕДЕН из таблицы манёвров, а не
+ * набран рядом с ней: два списка разошлись бы при первом же новом манёвре.
+ */
+export const ANIMATION_STATES: readonly string[] = Object.freeze([
+  STATE_IDLE,
+  STATE_MOVE,
+  ...Object.values(MOTION_STATE),
+  STATE_FALL,
+]);
 
 /**
  * Состояние анимации инстанса (REND-4): снижение при провале — состояние
@@ -2641,7 +2654,7 @@ export class ModelsSubsystem implements RenderSubsystem, InstanceProxySource {
   private syncClaim(ctx: RenderContext, record: InstanceRecord): void {
     const kind = record.kind;
     if (kind === null) return;
-    const claim = claimOf(this.manifest, kind);
+    const claim = resolveVisualClaim(this.manifest, kind);
     record.emitter = claim === 'particles';
     if (claim !== null) {
       // Содержимое держателя меняется — сперва конец эпизода угасания, тем же
@@ -3654,40 +3667,6 @@ function screenSize(radius: number, distance: number, screen: ScreenScale): numb
   return (2 * radius) / screen.orthoHeight;
 }
 
-/**
- * Кто рисует вид, у которого модельной записи нет: `'effect'` — подсистема
- * эффектов по записи `effects.byKind` (REND-23), `'particles'` — подсистема
- * частиц по эмиттерному decoration-виду (ASSET-14) либо по записи
- * `particles.byKind` (REND-24); null — не рисует никто, и пустой ответ
- * `resolveVisual` означает ровно то, чем выглядит: записи о виде нет (ASSET-6).
- *
- * Довод, ради которого вопрос вообще задаётся (REND-37): заглушка означает
- * «ассет ещё не доехал» (ASSET-4), и поставить её поверх чужого изображения
- * значило бы соврать дважды — назвать недоехавшим нарисованное и потребовать
- * от автора запись, которую он уже сделал. `resolveVisual` отдаёт по
- * эмиттерному ключу пусто НАМЕРЕННО, чтобы этот пул не брался рисовать то,
- * чего ему рисовать нечем, — принимать это молчание за отсутствие записи
- * нельзя.
- *
- * Спрашиваются ровно источники, ключуемые ВИЗУАЛЬНЫМ ТИПОМ. Таблицы `byState`
- * и `byEvent` обеих секций сюда не входят: они ключуются именем состояния и
- * типом события, вида не называют, и заглушка, зависящая от них, мигала бы
- * вместе с доставленным состоянием.
- *
- * Порядок вопросов наблюдаемый, и секция эмиттеров стоит РАНЬШЕ секции
- * эффектов намеренно (REND-37). Ключи секций пересекаться вправе — принадлежать
- * ровно одной секции REND-23 обязывает ЗАПИСЬ, а не ключ, — и в контенте это
- * пересечение живёт: у пятна огня демо пламя рисуют частицы, а плоская
- * оболочка эффекта под ними подсвечивает зону урона по земле. Ответь этот
- * резолвер про такой вид `'effect'` — вид остался бы без объёма-прокси
- * (`boundsOf`), то есть невыделяемым, ровно за добавленное свечение.
- */
-function claimOf(manifest: VisualManifest, kind: string): 'effect' | 'particles' | null {
-  if (resolveVisualEmitter(manifest, kind) !== undefined) return 'particles';
-  if (resolveParticlesByKind(manifest, kind) !== undefined) return 'particles';
-  if (resolveEffectByKind(manifest, kind) !== undefined) return 'effect';
-  return null;
-}
 
 /**
  * Габариты нарисованного инстанса в его собственных осях: модель (детальный

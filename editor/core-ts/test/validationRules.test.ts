@@ -902,6 +902,105 @@ describe('ED-19: рассинхронизация пары «prefab — запи
     const report = check({ [SCENE]: { kind: 'scene', value: SCENE_VALUE } });
     expect(report.issues.filter((found) => found.ruleId === VISUAL_FOR_PREFAB_RULE)).toHaveLength(0);
   });
+
+  it('половина «prefab без записи» — предупреждение, половина «запись без prefab’а» — ошибка (ED-19)', () => {
+    const report = check({
+      [SCENE]: {
+        kind: 'scene',
+        value: { ...SCENE_VALUE, prefabs: [...SCENE_VALUE.prefabs, { name: 'SlotHeal', components: {} }] },
+      },
+      [MANIFEST]: {
+        kind: 'manifest',
+        value: { entities: { ...MANIFEST_VALUE.entities, ghost: { model: 'm' } } },
+      },
+    });
+    const severityOf = (ruleId: string): string | undefined =>
+      report.issues.find((found) => found.ruleId === ruleId)?.severity;
+    expect(severityOf(VISUAL_FOR_PREFAB_RULE)).toBe('warning');
+    expect(severityOf(PREFAB_FOR_VISUAL_RULE)).toBe('error');
+  });
+
+  it('prefab, чей вид заявлен записью `effects.byKind`, находки не получает (REND-37)', () => {
+    const report = check({
+      [SCENE]: {
+        kind: 'scene',
+        value: { ...SCENE_VALUE, prefabs: [...SCENE_VALUE.prefabs, { name: 'Fireball', components: {} }] },
+      },
+      [MANIFEST]: {
+        kind: 'manifest',
+        value: {
+          ...MANIFEST_VALUE,
+          effects: { byKind: { Fireball: { primitive: 'sphere', color: '#ff8a3c', radius: 1 } } },
+        },
+      },
+    });
+    expect(report.issues.filter((found) => found.ruleId === VISUAL_FOR_PREFAB_RULE)).toHaveLength(0);
+  });
+
+  it('prefab, чей вид заявлен записью `particles.byKind`, находки не получает (REND-37)', () => {
+    const report = check({
+      [SCENE]: {
+        kind: 'scene',
+        value: { ...SCENE_VALUE, prefabs: [...SCENE_VALUE.prefabs, { name: 'Torchlight', components: {} }] },
+      },
+      [MANIFEST]: {
+        kind: 'manifest',
+        value: {
+          ...MANIFEST_VALUE,
+          particles: { byKind: { Torchlight: { effect: 'visuals/effects/torch.effect.json' } } },
+        },
+      },
+    });
+    expect(report.issues.filter((found) => found.ruleId === VISUAL_FOR_PREFAB_RULE)).toHaveLength(0);
+  });
+
+  it('заявка действует на тот ключ, которым сделана: опечатка заявкой не является (REND-37)', () => {
+    const report = check({
+      [SCENE]: {
+        kind: 'scene',
+        value: { ...SCENE_VALUE, prefabs: [...SCENE_VALUE.prefabs, { name: 'Fireball', components: {} }] },
+      },
+      [MANIFEST]: {
+        kind: 'manifest',
+        value: {
+          ...MANIFEST_VALUE,
+          effects: { byKind: { Firebal: { primitive: 'sphere', color: '#ff8a3c', radius: 1 } } },
+        },
+      },
+    });
+    expect(report.issues.filter((found) => found.ruleId === VISUAL_FOR_PREFAB_RULE)).toHaveLength(1);
+  });
+
+  it('таблица `byState` вида не заявляет: заглушка от доставленного состояния зависеть не должна (REND-37)', () => {
+    const report = check({
+      [SCENE]: {
+        kind: 'scene',
+        value: { ...SCENE_VALUE, prefabs: [...SCENE_VALUE.prefabs, { name: 'Shielded', components: {} }] },
+      },
+      [MANIFEST]: {
+        kind: 'manifest',
+        value: {
+          ...MANIFEST_VALUE,
+          effects: { byState: { Shielded: { primitive: 'sphere', color: '#08f', radius: 1 } } },
+        },
+      },
+    });
+    expect(report.issues.filter((found) => found.ruleId === VISUAL_FOR_PREFAB_RULE)).toHaveLength(1);
+  });
+
+  it('сломанный манифест заявок не даёт: правило не выключается вместе с ним (ED-19)', () => {
+    const report = check({
+      [SCENE]: {
+        kind: 'scene',
+        value: { ...SCENE_VALUE, prefabs: [...SCENE_VALUE.prefabs, { name: 'Fireball', components: {} }] },
+      },
+      [MANIFEST]: {
+        kind: 'manifest',
+        value: { entities: { grunt: { model: 'models/grunt.mdx' } }, effects: { byKind: { Fireball: 7 } } },
+      },
+    });
+    expect(report.issues.filter((found) => found.ruleId === VISUAL_FOR_PREFAB_RULE)).toHaveLength(1);
+  });
 });
 
 describe('ED-19: запись расстановки на несуществующий prefab', () => {

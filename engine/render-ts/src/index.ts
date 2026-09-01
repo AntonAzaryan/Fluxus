@@ -218,7 +218,7 @@ export type { CellRect, TerrainGeometryData } from './subsystems/terrainGeometry
 
 // Подсистема моделей (REND-3..6) и переподача манифеста визуалов (REND-17).
 // Наружу инстанс виден преобразованием и границами, а не узлом сцены (REND-3).
-export { ModelsSubsystem } from './subsystems/models.js';
+export { ANIMATION_STATES, ModelsSubsystem } from './subsystems/models.js';
 export type {
   InstancePose,
   ModelInstanceView,
