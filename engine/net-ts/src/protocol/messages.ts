@@ -494,6 +494,22 @@ function connectionRole(source: Record<string, unknown>): ConnectionRole {
   return value;
 }
 
+/**
+ * Признак наблюдателя с провода (NTR-9). Поле обязательное, как и роль рядом:
+ * оно названо в закрытом наборе (NTR-4), а «свободных полей на будущее,
+ * необязательных расширений и согласования возможностей в рантайме MUST NOT
+ * быть» — умолчание, подставленное разбором, и есть такое согласование.
+ * Отдельным полем от роли оно является потому, что роль — про право на СЛОТ, а
+ * у наблюдателя слота нет вовсе (NTR-18, NTR-9).
+ */
+function observerFlag(source: Record<string, unknown>): boolean {
+  const value = source.observer;
+  if (typeof value !== 'boolean') {
+    throw new ProtocolError('Hello: поле "observer" — булево (NTR-9)');
+  }
+  return value;
+}
+
 function version(value: unknown): GameVersion {
   const source = object(value, 'Hello.version');
   return {
@@ -561,7 +577,7 @@ export function parseClientMessage(value: unknown): ClientMessage {
         playerId: str(source, 'playerId', 'Hello'),
         version: version(source.version),
         role: connectionRole(source),
-        observer: source.observer === true,
+        observer: observerFlag(source),
       };
     case 'Input': {
       const frames = source.frames;

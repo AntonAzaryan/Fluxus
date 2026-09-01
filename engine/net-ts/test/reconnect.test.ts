@@ -117,18 +117,27 @@ function eventsTo(outgoing: readonly Outgoing[], to: number): EventsMessage[] {
 
 // -------------------------------------------------------------------- тесты
 
-describe('роль соединения в Hello (NTR-4, NTR-18)', () => {
-  const wire = (extra: Record<string, unknown>): unknown => ({
-    type: 'Hello',
-    playerId: 'p1',
-    version: { buildId: 'b', contentPackHash: 'c' },
-    ...extra,
-  });
+describe('обязательные поля Hello: роль и признак наблюдателя (NTR-4, NTR-18, NTR-9)', () => {
+  /** Полный `Hello`; `extra` перекрывает поля и (значением `undefined`) снимает их. */
+  const wire = (extra: Record<string, unknown>): unknown => {
+    const message: Record<string, unknown> = {
+      type: 'Hello',
+      playerId: 'p1',
+      version: { buildId: 'b', contentPackHash: 'c' },
+      role: 'owner',
+      observer: false,
+      ...extra,
+    };
+    for (const [key, value] of Object.entries(message)) {
+      if (value === undefined) delete message[key];
+    }
+    return message;
+  };
 
   it('поле обязательно: Hello без роли — protocol-error', () => {
     // Умолчания у разбора нет намеренно: молча подставленная роль владельца
     // дала бы заместителю право вытеснять чужое соединение (NTR-18).
-    expect(() => parseClientMessage(wire({}))).toThrow(ProtocolError);
+    expect(() => parseClientMessage(wire({ role: undefined }))).toThrow(ProtocolError);
   });
 
   it('незнакомая роль отвергается, а не приводится к владельцу', () => {
@@ -139,6 +148,29 @@ describe('роль соединения в Hello (NTR-4, NTR-18)', () => {
   it('обе роли закрытого набора разбираются', () => {
     expect(parseClientMessage(wire({ role: 'owner' }))).toMatchObject({ role: 'owner' });
     expect(parseClientMessage(wire({ role: 'substitute' }))).toMatchObject({ role: 'substitute' });
+  });
+
+  /**
+   * Признак наблюдателя (NTR-9) назван в закрытом наборе наравне с ролью, а
+   * «свободных полей на будущее, необязательных расширений и согласования
+   * возможностей в рантайме MUST NOT быть» (NTR-4). Умолчание, подставленное
+   * разбором, и есть такое согласование: отправитель, ничего не сказавший про
+   * наблюдателя, получал бы игровой слот — то есть разбор решал бы за него, кем
+   * он входит.
+   */
+  it('поле обязательно: Hello без признака наблюдателя — protocol-error (NTR-9)', () => {
+    expect(() => parseClientMessage(wire({ observer: undefined }))).toThrow(ProtocolError);
+  });
+
+  it('небулево значение признака наблюдателя отвергается, а не приводится к false', () => {
+    expect(() => parseClientMessage(wire({ observer: 'yes' }))).toThrow(ProtocolError);
+    expect(() => parseClientMessage(wire({ observer: 1 }))).toThrow(ProtocolError);
+    expect(() => parseClientMessage(wire({ observer: null }))).toThrow(ProtocolError);
+  });
+
+  it('оба значения признака разбираются', () => {
+    expect(parseClientMessage(wire({ observer: false }))).toMatchObject({ observer: false });
+    expect(parseClientMessage(wire({ observer: true }))).toMatchObject({ observer: true });
   });
 });
 
