@@ -379,6 +379,41 @@ describe('фильтрация событий (NET-13)', () => {
     }
   });
 
+  /**
+   * NET-13: значение поля-ссылки, равное коду «ссылки нет» (ECS-6), сущности НЕ
+   * называет. Проверяется на `all-referenced`, потому что цена ошибки видна
+   * именно там: сочти пустую ссылку названной — и урон от арены, у которого нет
+   * источника, погас бы у всех получателей разом, независимо от видимости цели.
+   */
+  it('пустая ссылка сущности не называет — ни при одном имени набора', () => {
+    const h = apart();
+    // Урон по своей видимой сущности без источника: поле есть, ссылки в нём нет.
+    h.state.events.emit('DamageDealt', { source: NO_ENTITY, target: h.watcher });
+
+    for (const name of ['any-referenced', 'all-referenced'] as const) {
+      const types = filterSnapshot(h.state, 0, eventVisibilityByName(name)).events.map((e) => e.type);
+      expect(types, name).toEqual(['DamageDealt']);
+    }
+
+    // И обратная половина: пустая ссылка не делает событие видимым — решает
+    // единственная НАЗВАННАЯ сущность, а она команде 0 не видна.
+    const h2 = apart();
+    h2.state.events.emit('DamageDealt', { source: NO_ENTITY, target: h2.enemy });
+    for (const name of ['any-referenced', 'all-referenced'] as const) {
+      expect(filterSnapshot(h2.state, 0, eventVisibilityByName(name)).events, name).toEqual([]);
+      expect(filterSnapshot(h2.state, 1, eventVisibilityByName(name)).events, name).toHaveLength(1);
+    }
+  });
+
+  it('событие, все ссылки которого пусты, общее: названо в нём никого', () => {
+    const h = apart();
+    h.state.events.emit('ArenaShrink', { source: NO_ENTITY, other: NO_ENTITY });
+    for (const name of ['any-referenced', 'all-referenced'] as const) {
+      const types = filterSnapshot(h.state, 0, eventVisibilityByName(name)).events.map((e) => e.type);
+      expect(types, name).toEqual(['ArenaShrink']);
+    }
+  });
+
   it('имя вне закрытого набора — названный отказ, а не молчаливый возврат к норме', () => {
     expect(() => eventVisibilityByName('freeze')).toThrow(/"freeze" неизвестен \(NET-13\)/);
   });

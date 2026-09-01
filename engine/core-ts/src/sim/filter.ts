@@ -38,6 +38,7 @@ import { query } from '../ecs/query.js';
 import { cloneWorld, destroy, getField, isAlive, scrubFields } from '../ecs/world.js';
 import { teamBit, VISIBILITY_COMPONENT } from '../systems/visibility.js';
 import { takeSnapshot } from './tick.js';
+import { NO_ENTITY } from '../types.js';
 import type { EntityId, GameEvent, ReadonlySimulationState, Snapshot } from '../types.js';
 
 /**
@@ -92,6 +93,23 @@ export type EventVisibilityName = 'all-referenced' | 'any-referenced';
 export const EVENT_ENTITY_FIELDS: readonly string[] = ['entity', 'other', 'source', 'target'];
 
 /**
+ * Сущность, НАЗВАННАЯ событием в поле `field`, либо `undefined` — поля нет либо
+ * в нём стоит код «ссылки нет» (ECS-6, `NO_ENTITY`).
+ *
+ * Пустая ссылка сущности не называет (NET-13): поле присутствует, а ссылки в нём
+ * нет. Считать её названной значило бы называть сущность, которой не существует,
+ * — `isVisible` на ней ложен всегда, и под `all-referenced` любое событие с
+ * незаполненной ссылкой (урон от арены без `source`) гасилось бы у ВСЕХ
+ * получателей независимо от видимости того, о ком событие. Правило одно на оба
+ * имени набора и живёт в одном месте: разойдись предикаты здесь, и «названная
+ * сущность» значило бы у них разное.
+ */
+function namedEntity(event: GameEvent, field: string): EntityId | undefined {
+  const value = event.data[field];
+  return value === undefined || value === NO_ENTITY ? undefined : value;
+}
+
+/**
  * Действующий предикат, нормированный NET-13: событие уходит клиенту, если
  * видима хотя бы одна названная в его данных сущность; событие, не называющее ни
  * одной сущности (сужение арены, конец раунда), считается общим и уходит всем.
@@ -104,10 +122,10 @@ export const EVENT_ENTITY_FIELDS: readonly string[] = ['entity', 'other', 'sourc
 export const relevantEntityVisible: EventVisibility = (event, isVisible) => {
   let referenced = false;
   for (const field of EVENT_ENTITY_FIELDS) {
-    const value = event.data[field];
-    if (value === undefined) continue;
+    const entity = namedEntity(event, field);
+    if (entity === undefined) continue;
     referenced = true;
-    if (isVisible(value)) return true;
+    if (isVisible(entity)) return true;
   }
   return !referenced;
 };
@@ -125,8 +143,8 @@ export const relevantEntityVisible: EventVisibility = (event, isVisible) => {
  */
 const allReferencedVisible: EventVisibility = (event, isVisible) => {
   for (const field of EVENT_ENTITY_FIELDS) {
-    const value = event.data[field];
-    if (value !== undefined && !isVisible(value)) return false;
+    const entity = namedEntity(event, field);
+    if (entity !== undefined && !isVisible(entity)) return false;
   }
   return true;
 };
