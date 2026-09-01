@@ -65,10 +65,11 @@ import {
   type DocumentKind,
   type EditorSession,
   type EnvironmentHost,
+  type JsonValue,
   type OperationParams,
 } from '@fluxus/editor-core';
 import type { CameraEffectsDescription, EntityVisual } from '@fluxus/assets';
-import { CAMERA_EFFECTS_DESCRIPTION } from '@fluxus/render';
+import { ANIMATION_STATES, CAMERA_EFFECTS_DESCRIPTION } from '@fluxus/render';
 import {
   children,
   documentValue,
@@ -117,6 +118,7 @@ import {
   entryNames,
   manifestOf,
   skinNames,
+  type AnimationTable,
 } from './assetVisuals.js';
 import {
   CAMERA_EFFECTS_OPERATIONS,
@@ -236,6 +238,12 @@ export interface AssetAreaState {
   /** Имя заводимой привязки и тип, который ей назначат: черновик, а не документ. */
   effectName: string;
   effectType: string;
+  /**
+   * Имя события, которому автор заводит клип (ED-14, REND-4): черновик, а не
+   * документ. Состояния перечисляет код рендера, а события — контент, и второй
+   * стороне таблицы нужно место, где имя набирается до записи.
+   */
+  animationEvent: string;
   /** Описание типов эффектов (CAM-9) — им и только им строятся обе таблицы. */
   readonly effects: CameraEffectsDescription;
   /** Вид документов сцены: из них собираются подсказки имён событий. */
@@ -368,7 +376,7 @@ function pick(state: AssetAreaState, session: EditorSession, node: AssetNode): v
 function assign(
   context: AreaContext<AssetAreaState>,
   operationId: string,
-  params: Readonly<Record<string, string>>,
+  params: OperationParams,
 ): void {
   const { state } = context;
   const id = state.visualsId;
@@ -978,6 +986,176 @@ function effectOperation(
   runOperation(context, operationId, { document: id, ...params });
 }
 
+/**
+ * Правка записи манифеста, названная ED-14 поимённо и до сих пор недоступная:
+ * маппинг анимаций (`rendering` REND-4), параметры наклона по поверхности
+ * (REND-10) и ссылка манифеста на ассет арены — карту кривизны (ASSET-7).
+ *
+ * «Ручная правка манифеста MUST NOT быть обязательной» (ED-14) читается
+ * буквально: чтобы сказать «клип бега у этого юнита называется Run», задать
+ * долю наклона или подключить сцене карту кривизны, автор до этой работы
+ * открывал `manifest.json` в текстовом редакторе.
+ *
+ * Перечень состояний рендера приходит ИЗ КОДА РЕНДЕРА (`ANIMATION_STATES`), а
+ * не набирается здесь: тот же довод, по которому типы эффектов камеры приходят
+ * описанием (ED-2, ED-14). Имена событий, наоборот, — контент: их подсказывает
+ * тот же сбор эмитируемых типов, что у таблицы эффектов, и закрытым списком он
+ * не является.
+ */
+function animationRows(
+  context: AreaContext<AssetAreaState>,
+  table: AnimationTable,
+): readonly FieldRowSpec[] {
+  const { state, resources, session } = context;
+  const record = safeRecord(state, session);
+  if (record === null) return [];
+  const off = context.mode === 'preview';
+  const mapping = record.animations?.[table] ?? {};
+  const names =
+    table === 'states'
+      ? ANIMATION_STATES
+      : [...new Set([...Object.keys(mapping), ...eventSuggestions(context)])].sort();
+  const row = (name: string): FieldRowSpec => ({
+    label: documentValue(name),
+    control: textField({
+      label: documentValue(name),
+      value: documentValue(mapping[name] ?? ''),
+      readOnly: off,
+      onCommit: (raw) => {
+        const clip = raw.trim();
+        if (clip === (mapping[name] ?? '')) return;
+        assign(context, VISUALS_OPERATIONS.setAnimation, { table, name, clip });
+      },
+    }),
+  });
+  const rows = names.map(row);
+  // Событие, которого нет ни в записи, ни среди эмитируемых сценой: имя
+  // набирается автором. Своего ряда у таблицы состояний нет — её имена
+  // перечисляет код рендера, и придумать шестое состояние автор не вправе.
+  if (table === 'events') {
+    rows.push({
+      label: resourceText(resources, 'ui.area.assets.animationEventName'),
+      control: textField({
+        label: resourceText(resources, 'ui.area.assets.animationEventName'),
+        value: documentValue(state.animationEvent),
+        readOnly: off,
+        onCommit: (raw) => {
+          state.animationEvent = raw.trim();
+          context.refresh();
+        },
+      }),
+    });
+    if (state.animationEvent !== '' && !names.includes(state.animationEvent)) {
+      rows.push(row(state.animationEvent));
+    }
+  }
+  return rows;
+}
+
+/**
+ * Параметры наклона записи по нормали визуальной поверхности (ED-14, REND-10).
+ * Пишутся одной операцией и блоком целиком: `factor` в блоке обязателен, и
+ * правка одного лимита угла оставила бы в документе невалидный блок.
+ *
+ * Показывается ЗНАЧЕНИЕ ЗАПИСИ, а не разрешённое (`resolveSurfaceAlign`): автор
+ * правит запись, и подставленное умолчание манифеста он принял бы за своё —
+ * а сняв его, увидел бы, что число вернулось.
+ */
+function surfaceAlignRows(context: AreaContext<AssetAreaState>): readonly FieldRowSpec[] {
+  const { state, resources, session } = context;
+  const record = safeRecord(state, session);
+  if (record === null) return [];
+  const off = context.mode === 'preview';
+  const align = record.surfaceAlign;
+  const write = (factor: number, maxAngleDeg: number | undefined): void => {
+    assign(context, VISUALS_OPERATIONS.setSurfaceAlign, {
+      factor,
+      ...(maxAngleDeg === undefined ? {} : { maxAngleDeg }),
+    });
+  };
+  const number = (raw: string): number | undefined => {
+    const parsed = Number(raw.trim());
+    return raw.trim() === '' || Number.isNaN(parsed) ? undefined : parsed;
+  };
+  return [
+    {
+      label: resourceText(resources, 'ui.area.assets.alignFactor'),
+      control: numberField({
+        label: resourceText(resources, 'ui.area.assets.alignFactor'),
+        value: documentValue(align === undefined ? '' : String(align.factor)),
+        readOnly: off,
+        onCommit: (raw) => {
+          const factor = number(raw);
+          if (factor !== undefined) write(factor, align?.maxAngleDeg);
+        },
+      }),
+    },
+    {
+      label: resourceText(resources, 'ui.area.assets.alignMaxAngle'),
+      control: numberField({
+        label: resourceText(resources, 'ui.area.assets.alignMaxAngle'),
+        value: documentValue(align?.maxAngleDeg === undefined ? '' : String(align.maxAngleDeg)),
+        readOnly: off,
+        // Пустое поле — снятие лимита, а не ноль: ноль означает вертикаль.
+        onCommit: (raw) => {
+          if (align !== undefined) write(align.factor, number(raw));
+        },
+      }),
+    },
+  ];
+}
+
+/**
+ * Ссылка манифеста на ассет арены (ED-14) — карта кривизны (ASSET-7). Строка
+ * принадлежит документу, а не выбранной записи: карта у арены одна.
+ */
+function terrainRows(context: AreaContext<AssetAreaState>): readonly FieldRowSpec[] {
+  const { state, resources, session } = context;
+  const id = state.visualsId;
+  if (id === null || !session.isOpen(id)) return [];
+  const current = manifestTerrainMap(session.documentValue(id));
+  const chosen = state.selected;
+  return [
+    {
+      label: resourceText(resources, 'ui.area.assets.curvatureMap'),
+      control: textField({
+        label: resourceText(resources, 'ui.area.assets.curvatureMap'),
+        value: documentValue(current),
+        readOnly: context.mode === 'preview',
+        onCommit: (raw) => {
+          const asset = raw.trim();
+          if (asset === current) return;
+          runOperation(context, VISUALS_OPERATIONS.setCurvatureMap, { document: id, asset });
+        },
+      }),
+    },
+    {
+      label: resourceText(resources, 'ui.area.assets.curvatureAssign'),
+      control: button({
+        label: resourceText(resources, 'ui.area.assets.curvatureAssign'),
+        variant: 'ghost',
+        // Выбранного в дереве нет — назначать нечего, и это показывается
+        // недоступной кнопкой, а не молчанием (ED-26).
+        disabled: context.mode === 'preview' || chosen === null || chosen === current,
+        onPress: () => {
+          if (chosen !== null) {
+            runOperation(context, VISUALS_OPERATIONS.setCurvatureMap, { document: id, asset: chosen });
+          }
+        },
+      }),
+    },
+  ];
+}
+
+/** Ссылка манифеста на карту кривизны без броска: сломанный документ уже назван. */
+function manifestTerrainMap(value: JsonValue | undefined): string {
+  try {
+    return manifestOf(value).terrain?.curvatureMap ?? '';
+  } catch {
+    return '';
+  }
+}
+
 /** Состояние ассета подписью: статус — ресурс, причина — текст модуля ассетов. */
 const STATUS_KEYS: Readonly<Record<OpenedAsset['status'], string>> = {
   loading: 'ui.area.assets.statusLoading',
@@ -985,23 +1163,18 @@ const STATUS_KEYS: Readonly<Record<OpenedAsset['status'], string>> = {
   failed: 'ui.area.assets.statusFailed',
 };
 
-function inspector(context: AreaContext<AssetAreaState>): UiNode {
+/** Поля выбранного в дереве ассета и записи манифеста — то, что показано как есть. */
+function assetFieldRows(context: AreaContext<AssetAreaState>): readonly FieldRowSpec[] {
   const { state, resources, session } = context;
-  const opened = state.selected === null ? undefined : state.probe.stateOf(state.selected);
-  const record = safeRecord(state, session);
-
-  const readOnly = (labelKey: string, value: string): FieldRowSpec => ({
+  const readOnly = (labelKey: string, value: UiText): FieldRowSpec => ({
     label: resourceText(resources, labelKey),
-    control: textField({
-      label: resourceText(resources, labelKey),
-      value: documentValue(value),
-      readOnly: true,
-    }),
+    control: textField({ label: resourceText(resources, labelKey), value, readOnly: true }),
   });
 
   const rows: FieldRowSpec[] = [];
   if (state.selected !== null) {
-    rows.push(readOnly('ui.area.assets.field.path', state.selected));
+    rows.push(readOnly('ui.area.assets.field.path', documentValue(state.selected)));
+    const opened = state.probe.stateOf(state.selected);
     if (opened !== undefined) {
       rows.push({
         label: resourceText(resources, 'ui.area.assets.field.status'),
@@ -1009,40 +1182,59 @@ function inspector(context: AreaContext<AssetAreaState>): UiNode {
           label: resourceText(resources, 'ui.area.assets.field.status'),
           value: resourceText(resources, STATUS_KEYS[opened.status]),
           readOnly: true,
+          // Отказ — состояние загрузки, а не свойство файла (ASSET-4): причина
+          // показывается строкой состояния, а не отдельным сообщением.
           ...(opened.status === 'failed'
-            ? {
-                validation: {
-                  severity: 'error' as const,
-                  reason: assetReason(context, opened),
-                },
-              }
+            ? { validation: { severity: 'error' as const, reason: assetReason(context, opened) } }
             : {}),
         }),
       });
     }
   }
+  const record = safeRecord(state, session);
   if (record !== null) {
-    rows.push(readOnly('ui.area.assets.field.model', record.model));
+    rows.push(readOnly('ui.area.assets.field.model', documentValue(record.model)));
     if (record.defaultSkin !== undefined) {
-      rows.push(readOnly('ui.area.assets.field.defaultSkin', record.defaultSkin));
+      rows.push(readOnly('ui.area.assets.field.defaultSkin', documentValue(record.defaultSkin)));
     }
   }
+  return rows;
+}
 
-  // Группы зоны инспектора (ED-24): поля выбранного ассета и две таблицы
-  // секции эффектов камеры. Таблицы показываются, пока открыт манифест, —
-  // секция принадлежит документу, а не выбранному в дереве файлу.
+/**
+ * Группы зоны инспектора (ED-24): поля выбранного ассета, правка записи
+ * манифеста (ED-14 — клипы REND-4 и наклон REND-10), ссылки на ассеты арены и
+ * две таблицы секции эффектов камеры. Последние показываются, пока открыт
+ * манифест: секция принадлежит документу, а не выбранному в дереве файлу.
+ */
+function inspectorGroups(context: AreaContext<AssetAreaState>): readonly FieldGroupSpec[] {
+  const { state, resources, session } = context;
   const groups: FieldGroupSpec[] = [];
+  const rows = assetFieldRows(context);
   if (rows.length > 0) {
     groups.push({ label: resourceText(resources, 'ui.inspector.fields'), rows });
   }
+  if (safeRecord(state, session) !== null) {
+    groups.push(
+      { label: resourceText(resources, 'ui.area.assets.animationStates'), rows: animationRows(context, 'states') },
+      { label: resourceText(resources, 'ui.area.assets.animationEvents'), rows: animationRows(context, 'events') },
+      { label: resourceText(resources, 'ui.area.assets.surfaceAlign'), rows: surfaceAlignRows(context) },
+    );
+  }
   if (state.visualsId !== null && session.isOpen(state.visualsId)) {
     groups.push(
+      { label: resourceText(resources, 'ui.area.assets.terrain'), rows: terrainRows(context) },
       { label: resourceText(resources, 'ui.area.assets.effectEvents'), rows: effectRows(context, EVENTS_TABLE) },
       { label: resourceText(resources, 'ui.area.assets.effectStates'), rows: effectRows(context, STATES_TABLE) },
       { label: resourceText(resources, 'ui.area.assets.effectNew'), rows: effectDraftRows(context) },
     );
   }
+  return groups;
+}
 
+function inspector(context: AreaContext<AssetAreaState>): UiNode {
+  const { state, resources } = context;
+  const groups = inspectorGroups(context);
   return el('div', {
     children: children(
       el('div', {
@@ -1062,7 +1254,7 @@ function inspector(context: AreaContext<AssetAreaState>): UiNode {
             classes: ['fx-row'],
             text: resourceText(resources, 'ui.inspector.empty'),
           })
-        : fieldTable({ label: resourceText(resources, 'ui.inspector.fields'), groups }),
+        : fieldTable({ label: resourceText(resources, 'ui.inspector.fields'), groups: [...groups] }),
     ),
   });
 }
@@ -1136,6 +1328,7 @@ export function createAssetArea(options: AssetAreaOptions = {}): WorkspaceArea<A
         effectBinding: '',
         effectName: '',
         effectType: '',
+        animationEvent: '',
         effects: options.cameraEffects ?? CAMERA_EFFECTS_DESCRIPTION,
         sceneKind: options.sceneKind ?? DEFAULT_SCENE_KIND,
         stage,

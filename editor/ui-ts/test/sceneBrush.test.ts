@@ -376,6 +376,56 @@ function withCells(fixture: LoadedFrameFixture): LoadedFrameFixture {
   return fixture;
 }
 
+/**
+ * ED-11: «Предела амплитуды у кисти MUST NOT быть сверх заданного форматом
+ * (ASSET-7): холм выше шага уровня — легальный рельеф», и сценарий «Холм выше
+ * шага уровня» требует, чтобы смещения росли дальше «без клампа и
+ * предупреждений».
+ *
+ * Проверяется именно БАР: предела нет ни у операции (её проверяет
+ * `sceneTerrain.test.ts`), ни у того, чем автор задаёт величину, — иначе самый
+ * высокий холм, который можно нарисовать, задавался бы списком ступеней.
+ */
+describe('ED-11: у величины кисти кривизны нет потолка в баре области', () => {
+  /** Контрол бара, чьё доступное имя пришло из ресурса с этим ключом. */
+  const inputByKey = (root: UiNode, key: string): UiNode | undefined =>
+    findAll(root, (node) => node.tag === 'input').find(
+      (node) => node.labels?.ariaLabel?.key === key,
+    );
+
+  it('введённая величина больше нескольких шагов высоты доходит до кисти', async () => {
+    const fixture = withCells(await buildLoadedFrame());
+    press(buttonByKey(view(fixture), 'ui.area.scene.toolTerrain'));
+    fixture.state.brush.setLayer('curvature');
+
+    const input = inputByKey(zoneOf(view(fixture), 'surface'), 'ui.area.scene.brushOffset');
+    expect(input).toBeDefined();
+    // Три шага высоты — 96 множителей решётки 1/32 (ASSET-7): величина, которой
+    // в прежнем закрытом списке не было и быть не могло.
+    input?.on?.change?.({ target: { value: '-96' } } as unknown as Event);
+    expect(fixture.state.brush.offset).toBe(-96);
+
+    // И мазок кладёт в документ ровно её: бар ничего не подрезал по дороге.
+    fixture.pointer(at('down', 1, 1));
+    fixture.pointer(at('up', 1, 1));
+    const rows = getAtPath(fixture.session.documentValue(FIXTURE_CURVATURE_ID), [
+      'rows',
+    ]) as readonly (readonly number[])[];
+    expect(rows[1]?.[1]).toBe(-96);
+  });
+
+  it('нечисловой ввод кисть не трогает: NaN в документе — не «без клампа»', async () => {
+    const fixture = withCells(await buildLoadedFrame());
+    press(buttonByKey(view(fixture), 'ui.area.scene.toolTerrain'));
+    fixture.state.brush.setLayer('curvature');
+    fixture.state.brush.setOffset(4);
+
+    const input = inputByKey(zoneOf(view(fixture), 'surface'), 'ui.area.scene.brushOffset');
+    input?.on?.change?.({ target: { value: 'высоко' } } as unknown as Event);
+    expect(fixture.state.brush.offset).toBe(4);
+  });
+});
+
 describe('ED-25: два инструмента делят один вьюпорт', () => {
   it('указатель уходит активному инструменту, а не обоим', async () => {
     const fixture = withCells(await buildLoadedFrame());

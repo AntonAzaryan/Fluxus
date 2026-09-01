@@ -81,7 +81,7 @@ import { matchesQuery, type SearchHit } from '../palette/palette.js';
 import { button } from '../widgets/button.js';
 import type { IconName } from '../widgets/icon.js';
 import { statusChip } from '../widgets/chip.js';
-import { select, toggle } from '../widgets/field.js';
+import { numberField, select, toggle } from '../widgets/field.js';
 import { sectionTitle, tree, type TreeItem } from '../widgets/rows.js';
 import { placementSubject, sceneDocumentSubject } from './sceneSchema.js';
 import { withValidation } from '../widgets/validation.js';
@@ -111,7 +111,6 @@ import {
   type BrushTool,
   type TerrainBrushMode,
 } from './sceneBrush.js';
-import { CURVATURE_OFFSETS } from './sceneTerrain.js';
 import { createScenePreview, type PreviewBackendFactory } from './scenePreview.js';
 import {
   DECORATION_LIST,
@@ -1131,8 +1130,25 @@ function brushBar(context: AreaContext<SceneAreaState>): readonly UiNode[] {
         ? numbers('ui.area.scene.brushLevel', brush.level, BRUSH_LEVELS, (next) => {
             brush.setLevel(next);
           })
-        : numbers('ui.area.scene.brushOffset', brush.offset, CURVATURE_OFFSETS, (next) => {
-            brush.setOffset(next);
+        : // Величина кисти кривизны — числовое поле, а не закрытый список:
+          // «Предела амплитуды у кисти MUST NOT быть сверх заданного форматом
+          // (ASSET-7): холм выше шага уровня — легальный рельеф» (ED-11).
+          // Список ступеней был бы таким пределом — самым высоким, что автор
+          // способен нарисовать, — и холм в три шага высоты пришлось бы
+          // набирать правкой рядов чисел руками, то есть ровно тем, что ED-11
+          // объявляет необязательным.
+          numberField({
+            label: resourceText(resources, 'ui.area.scene.brushOffset'),
+            value: documentValue(String(brush.offset)),
+            readOnly: off,
+            onCommit: (raw) => {
+              // Целость множителя решётки — правило формата (ASSET-7), и
+              // отвечает на него операция; здесь отбрасывается только то, что
+              // числом не является вовсе: подставить в кисть NaN значило бы
+              // положить его в документ следующим мазком.
+              const next = Number(raw);
+              if (Number.isSafeInteger(next)) brush.setOffset(next);
+            },
           }),
     numbers('ui.area.scene.brushSize', brush.size, BRUSH_SIZES, (next) => {
       brush.setSize(next);

@@ -21,6 +21,7 @@ import {
   buildEditorCatalog,
   catalogDescriptions,
   createEditorContributions,
+  createContentIndex,
   createEditorSession,
   createOperationRegistry,
   describeOperations,
@@ -29,6 +30,8 @@ import {
   registerBuiltinOperations,
   registerValidationRules,
   saveDocuments,
+  assetReferenceRule,
+  type ContentIndexCache,
   type ContentTreeHost,
   type DocumentId,
   type EditorSession,
@@ -227,6 +230,16 @@ export async function createEditorApp(options: EditorAppOptions): Promise<Editor
   const sources: SpatialLayerSourceCache = createSourceCache(host.content);
 
   /**
+   * Индекс путей дерева контента (ED-14): по нему правило `editor.assetReference`
+   * отвечает, разрешается ли ссылка манифеста в файл. Живёт здесь по той же
+   * причине, по которой здесь живёт кэш источников конвейера: перечисление
+   * дерева асинхронно (ED-12), а правила исполняются синхронно на каждую правку
+   * (ED-8). Обновляется теми же двумя поводами — открытием проекта и правкой
+   * дерева извне.
+   */
+  const contentIndex: ContentIndexCache = createContentIndex(host.content);
+
+  /**
    * Открытие документов проекта — ОДНО на весь редактор, и делает его сборка.
    *
    * Конфиг сцены правят три области (сцена, объекты, системы), а сессия
@@ -258,6 +271,10 @@ export async function createEditorApp(options: EditorAppOptions): Promise<Editor
       // приходит — кэш возвращает его состоянием, и показывает его та же
       // находка.
       await sources.refresh(current.config);
+      // Дерево перечисляется тем же поводом и по той же причине: правило
+      // существования ассета (ED-14) синхронно, ждать не умеет, а до первого
+      // перечисления молчит — «не спрашивали» и «файла нет» разные ответы.
+      await contentIndex.refresh();
       return current;
     })();
     return opening;
@@ -272,6 +289,7 @@ export async function createEditorApp(options: EditorAppOptions): Promise<Editor
     // отдать областям проект, которого больше нет. Запомненные источники — тоже:
     // они относились к прежним сценам.
     sources.forget();
+    contentIndex.forget();
     opening = null;
   };
 
@@ -295,6 +313,13 @@ export async function createEditorApp(options: EditorAppOptions): Promise<Editor
   // же, что у остальных правил, — иначе находка была бы видна не там, где
   // видны все прочие. Раскладку документов приносит сборка, как и соседям: и
   // расстановка (SER-8), и ассет террейна (TERR-2) лежат полями конфига сцены.
+  // Правило существования ассета, на который ссылается манифест (ED-14:
+  // «ссылка на отсутствующий ассет… подсвечивается сразу в редакторе — до
+  // диска»). Дерево ему подаёт сборка индексом — по тем же основаниям, по
+  // которым она подаёт кэш источников соседу: перечисление асинхронно (ED-12).
+  registerValidationRules(contributions.validationRules, [
+    assetReferenceRule({ index: contentIndex, manifest: SCENE_KINDS.visuals }),
+  ]);
   registerValidationRules(contributions.validationRules, [
     spatialLayerSyncRule({
       sources,
@@ -519,6 +544,20 @@ export async function createEditorApp(options: EditorAppOptions): Promise<Editor
     const before = sources.stateOf(scene);
     void sources.refresh(scene).then((after) => {
       if (after === before) return;
+      (frame.stateOf(SCENE_AREA_ID) as SceneAreaState).revalidate();
+    });
+  });
+
+  /**
+   * Третий потребитель того же канала — индекс дерева (ED-14). Состав дерева
+   * меняют появление и исчезновение файла, а не правка байтов уже известного,
+   * поэтому `modified` индекса не касается: перечисление вернуло бы тот же
+   * набор путей, и прогон правил был бы оплачен зря (ED-8).
+   */
+  host.content.watch((change) => {
+    if (change.kind === 'modified') return;
+    if (contentIndex.has(change.path) === (change.kind === 'created')) return;
+    void contentIndex.refresh().then(() => {
       (frame.stateOf(SCENE_AREA_ID) as SceneAreaState).revalidate();
     });
   });

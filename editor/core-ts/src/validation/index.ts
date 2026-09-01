@@ -51,5 +51,6 @@ export type { AdapterOptions, ErrorListResult } from './adapters.js';
 
 export { builtinValidationRules } from './builtin.js';
 
+export * from './assetRefs.js';
 export * from './engineRules.js';
 export * from './crossDocument.js';

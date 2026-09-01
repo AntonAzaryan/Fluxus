@@ -491,6 +491,8 @@ describe('ED-29: каждая операция записи манифеста �
     [VISUALS_OPERATIONS.setModel, { asset: ASSET_IDS.broken }],
     [VISUALS_OPERATIONS.setDefaultSkin, { skin: 'blue' }],
     [VISUALS_OPERATIONS.setSkinTexture, { skin: 'red', slot: '1', asset: ASSET_IDS.skin }],
+    [VISUALS_OPERATIONS.setAnimation, { table: 'states', name: 'move', clip: 'Run' }],
+    [VISUALS_OPERATIONS.setSurfaceAlign, { factor: 0.5, maxAngleDeg: 30 }],
   ])('«применить, отменить, сравнить» проходит для %s', (operationId, params) => {
     const result = runOperationRoundTrip(scratch(), operationId, {
       document: ASSET_IDS.visuals,
@@ -501,11 +503,23 @@ describe('ED-29: каждая операция записи манифеста �
     expect(result.recorded).toBe(true);
   });
 
-  it('в наборе ровно три операции — по одной на назначение ED-20', () => {
+  it('ссылка манифеста на ассет арены обратима тем же способом (ED-14)', () => {
+    const result = runOperationRoundTrip(scratch(), VISUALS_OPERATIONS.setCurvatureMap, {
+      document: ASSET_IDS.visuals,
+      asset: 'visuals/terrain/curvature.json',
+    });
+    expect(result.findings).toEqual([]);
+    expect(result.recorded).toBe(true);
+  });
+
+  it('в наборе шесть операций — три назначения ED-20 и три правки ED-14', () => {
     expect(VISUALS_AUTHORING_OPERATIONS.map((operation) => operation.id)).toEqual([
       VISUALS_OPERATIONS.setModel,
       VISUALS_OPERATIONS.setDefaultSkin,
       VISUALS_OPERATIONS.setSkinTexture,
+      VISUALS_OPERATIONS.setAnimation,
+      VISUALS_OPERATIONS.setSurfaceAlign,
+      VISUALS_OPERATIONS.setCurvatureMap,
     ]);
   });
 });
@@ -623,6 +637,156 @@ describe('ED-27: причину, которой у модуля ассетов �
     state.selected = ASSET_IDS.hero;
     const texts = collectTexts(fixture.frame.view()).map((text) => text.value);
     expect(texts).toContain(uiResources('ru').text('ui.area.assets.noAssets'));
+  });
+});
+
+/**
+ * ED-14: «Редактор SHALL позволять редактировать манифест визуалов (ASSET-6):
+ * привязку сущностей к моделям, скинам и АНИМАЦИЯМ, ПАРАМЕТРЫ НАКЛОНА по
+ * поверхности (`rendering` REND-10) и ССЫЛКИ НА АССЕТЫ АРЕНЫ. Ручная правка
+ * манифеста MUST NOT быть обязательной». Три названных требованием правки до
+ * этой работы делались только текстовым редактором.
+ */
+describe('ED-14: манифест правится весь, а не только модель и скин', () => {
+  const opened = (): EditorSession => {
+    const { session } = buildFrame([createAssetArea()]);
+    session.openDocument({ id: ASSET_IDS.visuals, kind: 'visuals', value: ASSET_VISUALS });
+    return session;
+  };
+
+  const entry = (session: EditorSession): Record<string, unknown> =>
+    (session.documentValue(ASSET_IDS.visuals) as { entities: Record<string, Record<string, unknown>> })
+      .entities.Hero ?? {};
+
+  const manifest = (session: EditorSession): Record<string, unknown> =>
+    session.documentValue(ASSET_IDS.visuals) as Record<string, unknown>;
+
+  it('клип состояния рендера пишется в таблицу маппинга (REND-4)', () => {
+    const session = opened();
+    session.applyOperation(VISUALS_OPERATIONS.setAnimation, {
+      document: ASSET_IDS.visuals,
+      entry: 'Hero',
+      table: 'states',
+      name: 'move',
+      clip: 'Walk',
+    });
+    expect(entry(session).animations).toEqual({ states: { idle: 'Stand', move: 'Walk' } });
+  });
+
+  it('пустой клип снимает привязку и уносит опустевшие таблицы (ED-21)', () => {
+    const session = opened();
+    session.applyOperation(VISUALS_OPERATIONS.setAnimation, {
+      document: ASSET_IDS.visuals,
+      entry: 'Hero',
+      table: 'states',
+      name: 'idle',
+      clip: '',
+    });
+    // Пустая строка — ошибка формата (ASSET-6), пустой объект — след правки:
+    // ни того, ни другого в документе не остаётся.
+    expect(entry(session).animations).toBeUndefined();
+  });
+
+  it('клип события — вторая таблица того же блока (REND-4)', () => {
+    const session = opened();
+    session.applyOperation(VISUALS_OPERATIONS.setAnimation, {
+      document: ASSET_IDS.visuals,
+      entry: 'Hero',
+      table: 'events',
+      name: 'AbilityCast',
+      clip: 'Attack',
+    });
+    expect(entry(session).animations).toEqual({
+      states: { idle: 'Stand' },
+      events: { AbilityCast: 'Attack' },
+    });
+  });
+
+  it('таблица вне закрытого набора отвергается операцией (REND-4)', () => {
+    const session = opened();
+    expect(() => {
+      session.applyOperation(VISUALS_OPERATIONS.setAnimation, {
+        document: ASSET_IDS.visuals,
+        entry: 'Hero',
+        table: 'moods',
+        name: 'idle',
+        clip: 'Stand',
+      });
+    }).toThrow(/REND-4/);
+  });
+
+  it('параметры наклона пишутся блоком целиком (REND-10)', () => {
+    const session = opened();
+    session.applyOperation(VISUALS_OPERATIONS.setSurfaceAlign, {
+      document: ASSET_IDS.visuals,
+      entry: 'Hero',
+      factor: 0.5,
+      maxAngleDeg: 30,
+    });
+    expect(entry(session).surfaceAlign).toEqual({ factor: 0.5, maxAngleDeg: 30 });
+
+    // Лимит угла снимается отсутствием параметра, а не нулём: ноль означает
+    // вертикаль, а отсутствие — «предела нет».
+    session.applyOperation(VISUALS_OPERATIONS.setSurfaceAlign, {
+      document: ASSET_IDS.visuals,
+      entry: 'Hero',
+      factor: 0.5,
+    });
+    expect(entry(session).surfaceAlign).toEqual({ factor: 0.5 });
+  });
+
+  it('диапазон доли наклона проверяет владелец формата, а не операция (ED-1)', () => {
+    const session = opened();
+    const before = JSON.stringify(manifest(session));
+    expect(() => {
+      session.applyOperation(VISUALS_OPERATIONS.setSurfaceAlign, {
+        document: ASSET_IDS.visuals,
+        entry: 'Hero',
+        factor: 2,
+      });
+    }).toThrow(/factor/);
+    expect(JSON.stringify(manifest(session))).toBe(before);
+  });
+
+  it('ссылка на карту кривизны арены пишется и снимается (ASSET-7)', () => {
+    const session = opened();
+    session.applyOperation(VISUALS_OPERATIONS.setCurvatureMap, {
+      document: ASSET_IDS.visuals,
+      asset: 'visuals/terrain/curvature.json',
+    });
+    expect(manifest(session).terrain).toEqual({ curvatureMap: 'visuals/terrain/curvature.json' });
+
+    session.applyOperation(VISUALS_OPERATIONS.setCurvatureMap, {
+      document: ASSET_IDS.visuals,
+      asset: '',
+    });
+    expect(manifest(session).terrain).toBeUndefined();
+  });
+
+  it('ID карты кривизны — путь от корня дерева, а не URL (ASSET-2)', () => {
+    const session = opened();
+    expect(() => {
+      session.applyOperation(VISUALS_OPERATIONS.setCurvatureMap, {
+        document: ASSET_IDS.visuals,
+        asset: 'https://example.test/curvature.json',
+      });
+    }).toThrow(/ASSET-2/);
+  });
+
+  it('инспектор показывает все три правки, а не отсылает автора в JSON', async () => {
+    const fixture = await buildAssetFrame();
+    fixture.state.entry = 'Hero';
+    const texts = collectTexts(fixture.frame.view())
+      .map((text) => text.key ?? '')
+      .filter((key) => key !== '');
+    for (const key of [
+      'ui.area.assets.animationStates',
+      'ui.area.assets.animationEvents',
+      'ui.area.assets.surfaceAlign',
+      'ui.area.assets.curvatureMap',
+    ]) {
+      expect(texts, key).toContain(key);
+    }
   });
 });
 

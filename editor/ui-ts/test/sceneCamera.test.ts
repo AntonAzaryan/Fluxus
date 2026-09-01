@@ -10,10 +10,19 @@
  */
 import { describe, expect, it } from 'vitest';
 import { createTerrainGrid } from '@fluxus/core';
-import { DEFAULT_CAMERA_CONFIG } from '@fluxus/render';
+import {
+  CameraRig,
+  DEFAULT_CAMERA_CONFIG,
+  cameraConfigFromManifest,
+  createCameraInput,
+  terrainGroundApi,
+} from '@fluxus/render';
 import { CAMERA_KEYS, EDITOR_CAMERA_CONFIG, createSceneCamera } from '../src/areas/sceneCamera.js';
 
 const HEIGHT_STEP = 0.6;
+
+/** Пустой сэмпл ввода: игровой кадр сравнения никто не двигает. */
+const EMPTY_INPUT = createCameraInput();
 
 /**
  * Арена теста — своя и большая: запас границ конвейера (CAM-3) больше
@@ -295,5 +304,75 @@ describe('ED-13, CAM-1: потолок зума кадра правки подн
     rig.zoom(4);
     hold(rig, [], 180);
     expect(reach(rig)).toBeGreaterThan(overview);
+  });
+});
+
+/**
+ * ED-13: «Превью игрового кадра SHALL идти с тем же конфигом камеры, что и
+ * игровой клиент: наклон, дистанция и FOV по умолчанию совпадают».
+ *
+ * Адрес этих чисел один — секция конфига камеры манифеста визуалов (ASSET-10),
+ * и игровой клиент читает её тем же `cameraConfigFromManifest`. Проверяется
+ * именно совпадение поз, а не совпадение чисел: сравнивать числа значило бы
+ * посчитать позу в редакторе второй раз (ED-13 это запрещает).
+ */
+describe('ED-13, ASSET-10: кадр правки идёт с конфигом камеры манифеста', () => {
+  const SECTION = { pitch: 1, distance: 20, fovDeg: 55 };
+
+  /** Поза первого кадра: то, что автор увидит, и то, что увидит игрок. */
+  const posed = (rig: ReturnType<typeof createSceneCamera>) => rig.frame(1 / 60);
+
+  it('наклон, дистанция и FOV совпадают с игровыми — теми же числами секции', () => {
+    const grid = createTerrainGrid(terrainDef(HALF_PLATEAU));
+    const ground = terrainGroundApi(grid, HEIGHT_STEP);
+    const game = new CameraRig({
+      config: cameraConfigFromManifest(SECTION),
+      groundHeightAt: ground.groundHeightAt,
+      bounds: ground.bounds,
+    });
+    const editor = createSceneCamera({
+      grid,
+      heightStep: HEIGHT_STEP,
+      manifest: cameraConfigFromManifest(SECTION),
+    });
+    // Точка наблюдения у кадра правки своя — центр арены (следить не за чем,
+    // CAM-7), поэтому сравнивается форма кадра, а не абсолютные координаты.
+    const gamePose = game.update(EMPTY_INPUT, 1 / 60, null);
+    const editorPose = posed(editor);
+    expect(editorPose.fovDeg).toBeCloseTo(gamePose.fovDeg, 6);
+    expect(editorPose.pitch).toBeCloseTo(gamePose.pitch, 6);
+    expect(Math.hypot(editorPose.posX - editor.focusX, editorPose.posY - editor.focusY)).toBeCloseTo(
+      Math.hypot(gamePose.posX - game.focusX, gamePose.posY - game.focusY),
+      6,
+    );
+    // Числа секции действительно другие: иначе проверка сравнивала бы умолчания
+    // кода сами с собой и прошла бы и без чтения манифеста.
+    expect(editorPose.fovDeg).not.toBeCloseTo(DEFAULT_CAMERA_CONFIG.fovDeg, 3);
+    expect(editorPose.pitch).not.toBeCloseTo(DEFAULT_CAMERA_CONFIG.pitch, 3);
+  });
+
+  it('секции нет — кадр прежний: отсутствие секции значит умолчание кода (ASSET-10)', () => {
+    const grid = createTerrainGrid(terrainDef(HALF_PLATEAU));
+    const withSection = createSceneCamera({
+      grid,
+      heightStep: HEIGHT_STEP,
+      manifest: cameraConfigFromManifest(undefined),
+    });
+    const without = createSceneCamera({ grid, heightStep: HEIGHT_STEP });
+    expect(posed(withSection)).toEqual(posed(without));
+  });
+
+  it('потолок зума вьюпорта манифест не отменяет: это отклонение редактора (CAM-1)', () => {
+    const grid = createTerrainGrid(terrainDef(HALF_PLATEAU));
+    const rig = createSceneCamera({
+      grid,
+      heightStep: HEIGHT_STEP,
+      // Игровой потолок в секции — законное значение манифеста; обзор арены в
+      // редакторе от него зависеть не должен (ED-13 потолка зума не называет).
+      manifest: cameraConfigFromManifest({ maxDistance: DEFAULT_CAMERA_CONFIG.maxDistance }),
+    });
+    rig.zoom(1000);
+    hold(rig, [], 600);
+    expect(reach(rig)).toBeGreaterThan(DEFAULT_CAMERA_CONFIG.maxDistance);
   });
 });

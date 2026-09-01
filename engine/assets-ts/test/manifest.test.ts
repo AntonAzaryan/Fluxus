@@ -17,6 +17,7 @@ import {
   resolveParticlesByKind,
   resolveParticlesByState,
   resolveVisual,
+  resolveVisualClaim,
   resolveVisualEmitter,
   resolveVisualLight,
   resolveVisualTier,
@@ -1066,5 +1067,60 @@ describe('validateManifest: блок света записи (ASSET-16)', () => 
       /entities\.a\.light\.type: обязательное поле — род источника/,
     );
     expect(errors.some((e) => e.includes('light.angle'))).toBe(false);
+  });
+});
+
+/**
+ * Заявка вида (`rendering` REND-37) — один ответ на репозиторий: по нему
+ * подсистема моделей решает, ставить ли заглушку, а правило пары редактора
+ * (`editor` ED-19) — называть ли prefab без записи рассинхронизацией.
+ */
+describe('resolveVisualClaim: кто рисует вид без модельной записи (REND-37)', () => {
+  const manifest = (extra: Record<string, unknown>): Parameters<typeof resolveVisualClaim>[0] => {
+    const result = validateManifest({ entities: { Hero: { model: 'visuals/hero.mdx' } }, ...extra });
+    if (!result.ok) throw new Error(result.errors.join('; '));
+    return result.manifest;
+  };
+
+  it('вид без заявки — null: пустой ответ значит «записи нет» (ASSET-6)', () => {
+    expect(resolveVisualClaim(manifest({}), 'Fireball')).toBeNull();
+    // Модельная запись заявкой не является: её рисует сама подсистема моделей.
+    expect(resolveVisualClaim(manifest({}), 'Hero')).toBeNull();
+  });
+
+  it('запись `effects.byKind` заявляет вид за подсистему эффектов (REND-23)', () => {
+    const value = manifest({
+      effects: { byKind: { Fireball: { primitive: 'sphere', color: '#f80', radius: 1 } } },
+    });
+    expect(resolveVisualClaim(value, 'Fireball')).toBe('effect');
+  });
+
+  it('запись `particles.byKind` заявляет вид за подсистему частиц (REND-24)', () => {
+    const value = manifest({
+      particles: { byKind: { Torchlight: { effect: 'visuals/effects/torch.effect.json' } } },
+    });
+    expect(resolveVisualClaim(value, 'Torchlight')).toBe('particles');
+  });
+
+  it('эмиттерный decoration-вид заявляет себя сам (ASSET-14)', () => {
+    const value = manifest({ decorations: { torch: { effect: 'visuals/effects/torch.effect.json' } } });
+    expect(resolveVisualClaim(value, 'torch')).toBe('particles');
+  });
+
+  it('вид с обеими заявками отдаётся частицам: объём-прокси положен нарисованному (REND-37)', () => {
+    const value = manifest({
+      effects: { byKind: { BossFire: { primitive: 'sphere', color: '#f40', radius: 2 } } },
+      particles: { byKind: { BossFire: { effect: 'visuals/effects/fire.effect.json' } } },
+    });
+    expect(resolveVisualClaim(value, 'BossFire')).toBe('particles');
+  });
+
+  it('таблицы `byState` и `byEvent` вида заявлять не вправе (REND-37)', () => {
+    const value = manifest({
+      effects: { byState: { Shielded: { primitive: 'sphere', color: '#08f', radius: 1 } } },
+      particles: { byEvent: { Exploded: { effect: 'visuals/effects/boom.effect.json' } } },
+    });
+    expect(resolveVisualClaim(value, 'Shielded')).toBeNull();
+    expect(resolveVisualClaim(value, 'Exploded')).toBeNull();
   });
 });

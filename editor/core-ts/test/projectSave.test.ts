@@ -38,6 +38,7 @@ import {
   registerValidationRules,
   ruleDescriptionKey,
   PLACEMENT_PREFAB_RULE,
+  PREFAB_FOR_VISUAL_RULE,
   VISUAL_FOR_PREFAB_RULE,
   type ValidationRule,
 } from '../src/validation/index.js';
@@ -547,12 +548,12 @@ describe('ED-21, ED-19: сохранение не оставляет на дис
     ]);
   });
 
-  it('новый prefab без записи манифеста — рассинхронизация пары, вносимая этим сохранением', async () => {
+  it('новый prefab без записи манифеста записи не отвергает: это предупреждение (ED-19, ED-21)', async () => {
     const { host, session } = await opened({ [SCENE_PATH]: SCENE, [MANIFEST_PATH]: MANIFEST });
     session.applyOperation('document.setValue', {
       document: SCENE_PATH,
       path: ['prefabs', 1],
-      value: { name: 'Fireball', components: { Position: { x: 0, y: 0 } } },
+      value: { name: 'SlotFireball', components: { Position: { x: 0, y: 0 } } },
     });
 
     const rules = editorRules();
@@ -563,20 +564,77 @@ describe('ED-21, ED-19: сохранение не оставляет на дис
       rules,
     });
 
-    expect(result.refused).toBe(true);
-    expect(result.blocking.map((issue) => issue.ruleId)).toEqual([VISUAL_FOR_PREFAB_RULE]);
-    expect(result.blocking[0]).toMatchObject({
+    // Носитель геймплейных данных — законный контент (ED-19), и отвергать за
+    // него запись значило бы не дать дизайнеру завести способность.
+    expect(result.refused).toBe(false);
+    expect(result.written).toEqual([SCENE_PATH]);
+    expect(result.blocking).toEqual([]);
+    // Молчанием это не становится: находка в отчёте есть, важностью ниже.
+    expect(result.report.issues.map((issue) => issue.ruleId)).toEqual([VISUAL_FOR_PREFAB_RULE]);
+    expect(result.report.issues[0]).toMatchObject({
+      severity: 'warning',
       documentId: SCENE_PATH,
       path: ['prefabs', 1, 'name'],
-      received: 'Fireball',
+      received: 'SlotFireball',
       reasonKey: reasonKey(VISUAL_FOR_PREFAB_RULE, 'missingVisual'),
-      reasonParams: { name: 'Fireball' },
+      reasonParams: { name: 'SlotFireball' },
     });
 
-    // Одно описание нарушения на редактор: то, чем сохранение отвергло запись,
+    // Одно описание нарушения на редактор: то, что показывает отчёт сохранения,
     // и то, чем валидация подсвечивает место при правке, — одно значение.
     const live = createValidator({ rules }).run(session);
-    expect(result.blocking).toEqual([...live.forDocument(SCENE_PATH)]);
+    expect(result.report.issues).toEqual([...live.forDocument(SCENE_PATH)]);
+  });
+
+  it('новая запись манифеста без prefab\'а на диск не доводится: это ошибка (ED-19, ED-21)', async () => {
+    const { host, session } = await opened({ [SCENE_PATH]: SCENE, [MANIFEST_PATH]: MANIFEST });
+    session.applyOperation('document.setValue', {
+      document: MANIFEST_PATH,
+      path: ['entities', 'Fireball'],
+      value: { model: 'visuals/models/fireball.mdx' },
+    });
+
+    const result = await saveDocuments({
+      session,
+      host: host.content,
+      groups: pairingGroups([PAIRING]),
+      rules: editorRules(),
+    });
+
+    // Висячая ссылка в единственном направлении, которым манифест вправе
+    // ссылаться на симуляцию (ASSET-6): сим-стороны за ней нет вовсе.
+    expect(result.refused).toBe(true);
+    expect(result.written).toEqual([]);
+    expect(result.blocking.map((issue) => issue.ruleId)).toEqual([PREFAB_FOR_VISUAL_RULE]);
+    expect(result.blocking[0]).toMatchObject({
+      severity: 'error',
+      documentId: MANIFEST_PATH,
+      path: ['entities', 'Fireball'],
+      reasonParams: { name: 'Fireball' },
+    });
+  });
+
+  it('prefab, чей вид заявлен секцией эффектов, парой не рассинхронизирован (ED-19, REND-37)', async () => {
+    const manifest = encodeDocument({
+      entities: { Hero: { model: 'visuals/models/hero.mdx' } },
+      effects: { byKind: { Fireball: { primitive: 'sphere', color: '#ff8a3c', radius: 1 } } },
+    });
+    const { host, session } = await opened({ [SCENE_PATH]: SCENE, [MANIFEST_PATH]: manifest });
+    session.applyOperation('document.setValue', {
+      document: SCENE_PATH,
+      path: ['prefabs', 1],
+      value: { name: 'Fireball', components: { Position: { x: 0, y: 0 } } },
+    });
+
+    const result = await saveDocuments({
+      session,
+      host: host.content,
+      groups: pairingGroups([PAIRING]),
+      rules: editorRules(),
+    });
+
+    expect(result.refused).toBe(false);
+    expect(result.report.issues).toEqual([]);
   });
 
   it('обе половины пары, заведённые одной правкой, сохраняются вместе', async () => {
@@ -633,7 +691,7 @@ describe('ED-21, ED-19: сохранение не оставляет на дис
     expect(result.blocking).toEqual([]);
     // Найдено оно при этом не молча: отчёт называет его наравне с остальным.
     expect(result.report.issues.map((issue) => issue.ruleId)).toEqual([VISUAL_FOR_PREFAB_RULE]);
-    expect(result.report.severityOf(SCENE_PATH)).toBe('error');
+    expect(result.report.severityOf(SCENE_PATH)).toBe('warning');
   });
 
   it('внесённое предупреждение записи не отвергает: отказ — свойство важности, а не факта правки', async () => {
@@ -856,5 +914,55 @@ describe('ED-21, ED-18: сохранение не гонится с паралл
     // Не записано ничего: отказ пришёл раньше, чем снимок провизорных значений.
     expect(host.writes).toEqual([]);
     stroke.cancel();
+  });
+});
+
+/**
+ * Страж на настоящем контенте репозитория (ED-19). Правило пары до этой работы
+ * ни разу не прогонялось по реальной сцене, и потому его находки на ней в гейте
+ * не были видны: шесть — на видах, изображение которых манифест отдал секции
+ * эффектов (REND-37 такие находки прямо запрещает), восемнадцать — на носителях
+ * геймплейных данных, которым изображения не полагается.
+ *
+ * Сцена читается из дерева контента законно: редактор — потребитель контента,
+ * а не пакет движка (CONT-4).
+ */
+describe('ED-19: правило пары на настоящей сцене репозитория', () => {
+  async function duel(): Promise<EditorSession> {
+    const host = createMemoryHost({
+      files: { [SCENE_PATH]: SCENE_ON_DISK, [MANIFEST_PATH]: MANIFEST_ON_DISK },
+    });
+    const session = newSession();
+    await openDocumentFromHost(session, host.content, { id: SCENE_PATH, kind: 'scene', lists: [['initial']] });
+    await openDocumentFromHost(session, host.content, { id: MANIFEST_PATH, kind: 'manifest' });
+    return session;
+  }
+
+  function report(session: EditorSession) {
+    const rules = new ContributionRegistry<ValidationRule>({ kind: 'rule' });
+    registerValidationRules(rules, crossDocumentRules());
+    return createValidator({ rules }).run(session);
+  }
+
+  it('ошибок на ней нет: сцена репозитория валидна, а не «красная навсегда»', async () => {
+    const found = report(await duel());
+    expect(found.issues.filter((issue) => issue.severity === 'error')).toEqual([]);
+    expect(found.ok).toBe(true);
+  });
+
+  it('виды, изображение которых заявила секция эффектов, в находки не попадают (REND-37)', async () => {
+    const named = report(await duel())
+      .issues.filter((issue) => issue.ruleId === VISUAL_FOR_PREFAB_RULE)
+      .map((issue) => issue.reasonParams.name);
+    // Снаряд, купол и три спутника способностей босса рисует запись
+    // `effects.byKind` манифеста — запись автор уже сделал.
+    for (const claimed of ['Fireball', 'HeavyFireball', 'SlowDome', 'BossWave', 'BossFire', 'BossField']) {
+      expect(named).not.toContain(claimed);
+    }
+    // Оставшееся — носители геймплейных данных: изображения им не полагается,
+    // и находка о них — предупреждение, а не ошибка (ED-19).
+    expect(named.every((name) => String(name).startsWith('Slot') || String(name).startsWith('Buff'))).toBe(
+      true,
+    );
   });
 });

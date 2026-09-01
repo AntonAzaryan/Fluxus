@@ -198,6 +198,101 @@ export function resolveParticlesByEvent(
 }
 
 /**
+ * Ссылка манифеста на ассет дерева контента: путь внутри документа и сам ID
+ * (ASSET-2). Путь — адрес находки валидации (`editor` ED-30), поэтому он
+ * поэлементный, а не строкой.
+ */
+export interface VisualAssetRef {
+  readonly path: readonly (string | number)[];
+  readonly asset: string;
+}
+
+/**
+ * Все ссылки манифеста на ассеты дерева контента — модели, текстуры скинов,
+ * эмиттерные документы (ASSET-14) и карта кривизны арены (ASSET-7).
+ *
+ * Живёт у владельца формата, а не у спрашивающего: где в записи лежит ID
+ * ассета, знает манифест (ASSET-6), и второй перечень этих мест разошёлся бы с
+ * форматом молча при первом же новом поле — ровно тем дефектом, который
+ * `editor` ED-1 запрещает заводить редактору. Спрашивающих двое: правило
+ * редактора, подсвечивающее ссылку в никуда до диска (ED-14), и проверка
+ * контента репозитория.
+ *
+ * Порядок обхода устойчив — разделы, затем секция эмиттеров, затем террейн, а
+ * внутри раздела порядок ключей документа: находки валидации сортируются по
+ * своему пути, но проверка, сверяющая список целиком, не должна зависеть от
+ * порядка перечисления объекта.
+ */
+export function manifestAssetRefs(
+  manifest: Pick<VisualManifest, 'entities' | 'decorations' | 'particles' | 'terrain'>,
+): readonly VisualAssetRef[] {
+  const refs: VisualAssetRef[] = [];
+  const entryRefs = (section: 'entities' | 'decorations', key: string, entry: DecorationVisual): void => {
+    if (isEmitterVisual(entry)) refs.push({ path: [section, key, 'effect'], asset: entry.effect });
+    else refs.push({ path: [section, key, 'model'], asset: entry.model });
+    for (const [skin, slots] of Object.entries(entry.skins ?? {})) {
+      for (const [slot, texture] of Object.entries(slots)) {
+        refs.push({ path: [section, key, 'skins', skin, slot], asset: texture });
+      }
+    }
+  };
+  for (const [key, entry] of Object.entries(manifest.entities)) entryRefs('entities', key, entry);
+  for (const [key, entry] of Object.entries(manifest.decorations ?? {})) {
+    entryRefs('decorations', key, entry);
+  }
+  for (const table of ['byKind', 'byState', 'byEvent'] as const) {
+    for (const [key, record] of Object.entries(manifest.particles?.[table] ?? {})) {
+      refs.push({ path: ['particles', table, key, 'effect'], asset: record.effect });
+    }
+  }
+  const curvature = manifest.terrain?.curvatureMap;
+  if (curvature !== undefined) refs.push({ path: ['terrain', 'curvatureMap'], asset: curvature });
+  return refs;
+}
+
+/**
+ * Кто рисует вид, у которого модельной записи нет (`rendering` REND-37):
+ * `'effect'` — подсистема эффектов по записи `effects.byKind` (REND-23),
+ * `'particles'` — подсистема частиц по эмиттерному decoration-виду (ASSET-14)
+ * либо по записи `particles.byKind` (REND-24); `null` — не рисует никто, и
+ * пустой ответ `resolveVisual` означает ровно то, чем выглядит: записи о виде
+ * нет (ASSET-6).
+ *
+ * Одно место на весь репозиторий, а не по списку у каждого спрашивающего.
+ * Спрашивающих двое, и вопрос у них один: подсистема моделей решает, ставить ли
+ * заглушку (REND-37 — «заглушка поверх чужого изображения врёт дважды»), а
+ * правило пары редактора (`editor` ED-19) решает, называть ли prefab без записи
+ * рассинхронизацией. Второй перечень секций разошёлся бы с этим молча первым же
+ * источником, который заведёт новая подсистема, — а REND-37 задаёт перечень
+ * ПРАВИЛОМ, и новый источник обязан войти в него сам.
+ *
+ * Спрашиваются ровно источники, ключуемые ВИЗУАЛЬНЫМ ТИПОМ. Таблицы `byState` и
+ * `byEvent` обеих секций сюда не входят: они ключуются именем состояния и типом
+ * события, вида не называют, и заглушка, зависящая от них, мигала бы вместе с
+ * доставленным состоянием (REND-37).
+ *
+ * Порядок вопросов наблюдаемый, и секция эмиттеров стоит РАНЬШЕ секции эффектов
+ * намеренно (REND-37). Ключи секций пересекаться вправе — принадлежать ровно
+ * одной секции REND-23 обязывает ЗАПИСЬ, а не ключ, — и в контенте это
+ * пересечение живёт: у пятна огня демо пламя рисуют частицы, а плоская оболочка
+ * эффекта под ними подсвечивает зону урона по земле. Ответь этот резолвер про
+ * такой вид `'effect'` — вид остался бы без объёма-прокси, то есть невыделяемым,
+ * ровно за добавленное свечение.
+ */
+export function resolveVisualClaim(
+  manifest: Pick<VisualManifest, 'entities' | 'decorations' | 'effects' | 'particles'>,
+  kind: string,
+): VisualClaim {
+  if (resolveVisualEmitter(manifest, kind) !== undefined) return 'particles';
+  if (resolveParticlesByKind(manifest, kind) !== undefined) return 'particles';
+  if (resolveEffectByKind(manifest, kind) !== undefined) return 'effect';
+  return null;
+}
+
+/** Подсистема, заявившая изображение вида (REND-37); `null` — не заявил никто. */
+export type VisualClaim = 'effect' | 'particles' | null;
+
+/**
  * Все визуальные ключи манифеста в одном пространстве (ASSET-9) — то, из чего
  * автор выбирает вид для размещения (`presentation-scene` PRES-2) и по чему
  * валидация редактора судит о разрешимости ссылки.

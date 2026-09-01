@@ -1178,6 +1178,14 @@
       "source": "d6076f16",
       "translated": "d1d792d0"
     },
+    "validation.reason.editor.assetReference.missingAsset": {
+      "source": "579e803c",
+      "translated": "7cbd7342"
+    },
+    "validation.reason.editor.assetReference.ruleFailed": {
+      "source": "d6076f16",
+      "translated": "d1d792d0"
+    },
     "validation.reason.editor.cameraEffectState.missingComponent": {
       "source": "d5e8234a",
       "translated": "c0470e3a"
@@ -1219,8 +1227,8 @@
       "translated": "d1d792d0"
     },
     "validation.reason.editor.visualForPrefab.missingVisual": {
-      "source": "d81b78e7",
-      "translated": "42a03644"
+      "source": "a887a152",
+      "translated": "19a28e5d"
     },
     "validation.reason.editor.visualForPrefab.ruleFailed": {
       "source": "d6076f16",
@@ -1258,6 +1266,10 @@
       "source": "07a2ee06",
       "translated": "c21195b6"
     },
+    "validation.rule.editor.assetReference": {
+      "source": "ef359fc1",
+      "translated": "b9430049"
+    },
     "validation.rule.editor.cameraEffectState": {
       "source": "19c288f6",
       "translated": "e62d628f"
@@ -1279,8 +1291,8 @@
       "translated": "0b8ce2ee"
     },
     "validation.rule.editor.visualForPrefab": {
-      "source": "d3af4126",
-      "translated": "4f74d22d"
+      "source": "3bfa6a6f",
+      "translated": "461856a8"
     },
     "validation.rule.save.group.writeTogether": {
       "source": "e1c5c8f8",

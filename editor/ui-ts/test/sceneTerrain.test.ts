@@ -28,7 +28,6 @@ import { describe, expect, it } from 'vitest';
 import { sceneDraft } from '../src/areas/sceneDocuments.js';
 import { TERRAIN_ASSET } from '../src/areas/sceneProject.js';
 import {
-  CURVATURE_OFFSETS,
   MAX_LEVEL,
   TERRAIN_AUTHORING_OPERATIONS,
   TERRAIN_OPERATIONS,
@@ -204,7 +203,9 @@ describe('TERR-5, ED-10: cliff-геометрия производна и нап
 describe('ED-11, ASSET-7: карта кривизны — отдельный слой данных', () => {
   it('смещения round-trip через решётку карты: их читает модуль ассетов', () => {
     const session = paintSession();
-    for (const offset of CURVATURE_OFFSETS) {
+    // Ступени — от четверти решётки до нескольких шагов высоты в обе стороны:
+    // предела амплитуды у кисти нет ни в операции, ни в баре области (ED-11).
+    for (const offset of [-96, -48, -32, -16, -4, -1, 0, 1, 4, 16, 32, 48, 96]) {
       setOffset(session, 2, 3, offset);
       const checked = validateCurvatureMap(session.documentValue(PAINT_IDS.curvature));
       expect(checked.ok).toBe(true);
