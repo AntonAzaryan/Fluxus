@@ -111,7 +111,7 @@ import {
   staticCollidersDebugSource,
 } from './debugSources.js';
 import { demoEdgePan } from './cameraInput.js';
-import { createDemoHud, demoHudComposition, markHoldOnlyAbilities } from './hud.js';
+import { createDemoHud, demoHudComposition } from './hud.js';
 import { prewarmPresentation } from './prewarm.js';
 import { DEMO_STAND_SERVICE, demoStandHost } from './desktopStand.js';
 import { demoMode, demoServerUrl, localModeUrl, serverModeUrl, type DemoMode } from './mode.js';
@@ -1545,12 +1545,6 @@ async function main(): Promise<void> {
       // состояния паузы, то есть до самого возобновления.
       if (remote!.lastPause !== undefined) hud.runtime.deliverPause(remote!.lastPause);
       hudRoot = hud.root;
-      // Ульта кастуется удержанием клавиши, а не кликом (см. `hero.rewind` в
-      // `hud.ts`): её кнопка в панели показывает кулдаун и помечена нерабочей —
-      // живая на вид кнопка, ведущая в никуда, обещает игроку действие, которое
-      // не произойдёт. Раскладка — та же, что у всего ввода (INP-4).
-      markHoldOnlyAbilities(hud.root, bindings.keyboardMouse.keys);
-
       // Пресет качества (QUAL-1, design D4) — ПОСЛЕ регистрации всех
       // подсистем: реестр ручек собирается из их деклараций (design D1), и
       // проверять состав документа раньше было бы не по чему. Путь сборки один

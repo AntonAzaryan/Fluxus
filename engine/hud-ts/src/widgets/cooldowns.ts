@@ -6,6 +6,17 @@
  * неотличима от клавиши», HUD-2). Сверх этого — оверлей кулдауна: доля
  * затемнения и число секунд.
  *
+ * Форма органа управления — запись композиции, а не догадка виджета (HUD-2):
+ * `hold: true` делает кнопку УДЕРЖИВАЕМОЙ (взятие по `pointerdown`, отпускание
+ * по `pointerup`, уводу указателя и отмене жеста), прочие кнопки остаются
+ * фронтом по `click`. Смысла способности виджет не знает — он знает форму, как
+ * знает иконку и имена статов.
+ *
+ * Иконка приезжает РАЗДЕЛЯЕМЫМ сервисом ассетов (HUD-4, `icons.ts`): asset ID
+ * из записи → байты → `src`. Асинхронно, поэтому состояние иконки видно
+ * атрибутом `data-icon` (`loading`/`ready`/`failed`): «файла нет» обязано быть
+ * заметно, а не выглядеть пустой кнопкой.
+ *
  * Обе величины ПРОИЗВОДНЫ от доставленного (HUD-8): оставшиеся тики и полная
  * длительность приезжают статами по именам из записи композиции, а секунды
  * считаются из тиков и длительности тика — той, что назвал handshake (SHELL-5)
@@ -18,7 +29,7 @@ import type { HudJsonValue, HudParams } from '../composition.js';
 import { entityStat, type HudEntityView } from '../delivery.js';
 import { el, type HudNode } from '../dom/node.js';
 import { interactive } from '../host.js';
-import { assetIdParam, resolveIcon, type HudIconSource, type HudIconTable } from '../icons.js';
+import { assetIdParam, iconAssetId, type HudIcons, type HudIconTable } from '../icons.js';
 import { setAttr, setText } from '../dom/render.js';
 import type { HudActionsPort, HudUpdate, HudWidget, HudWidgetKind } from '../widget.js';
 
@@ -46,6 +57,12 @@ interface AbilitySpec {
   readonly stat?: string;
   /** Имя стата с полной длительностью кулдауна; нет — доли затемнения нет. */
   readonly maxStat?: string;
+  /**
+   * Форма органа управления (HUD-2): `true` — кнопка удерживается, иначе фронт
+   * по клику. Умолчание — фронт: так работает большинство способностей, и
+   * запись без слова о форме описывает именно его.
+   */
+  readonly hold: boolean;
 }
 
 /** Модель оверлея одной кнопки — то, что и проверяет тест (не пиксели). */
@@ -81,9 +98,13 @@ function specOf(item: HudJsonValue, index: number): AbilitySpec {
   // Иконка — asset ID дерева контента, а не URL: проверка одна на все виджеты
   // с иконками (`icons.ts`, design Decision 7).
   const icon = assetIdParam(record.icon, `${where}, "icon"`);
+  if (record.hold !== undefined && typeof record.hold !== 'boolean') {
+    throw new Error(`${where}: "hold" — форма органа управления (HUD-2), булево значение`);
+  }
   return {
     action,
     icon,
+    hold: record.hold === true,
     ...(typeof record.stat === 'string' ? { stat: record.stat } : {}),
     ...(typeof record.maxStat === 'string' ? { maxStat: record.maxStat } : {}),
   };
@@ -114,44 +135,57 @@ export function cooldownModel(
   return { fraction, seconds: Math.ceil((remaining * tickMs) / 1000), unknown: false };
 }
 
-/** Способность панели вместе с её резолвнутой иконкой. */
+/** Способность панели вместе с asset ID её иконки (HUD-4). */
 interface AbilityButton {
   readonly ability: AbilitySpec;
-  readonly iconUrl: string;
+  readonly iconAsset: string;
 }
 
 /** Смонтированная кнопка: её элементы для точечных обновлений (HUD-5). */
 interface ButtonNodes extends AbilityButton {
   root: Element | null;
+  icon: Element | null;
   overlay: Element | null;
   seconds: Element | null;
+  /** Состояние иконки — `loading`/`ready`/`failed`, видно атрибутом `data-icon`. */
+  iconStatus: string;
+  /** `src` приехавшей иконки; null — ещё не приехала или не приедет. */
+  iconSrc: string | null;
 }
 
 class CooldownsWidget implements HudWidget {
   /**
-   * Способности панели вместе с иконками: ОДИН список, а не два параллельных
-   * массива, — иначе «иконка i-й способности» держалась бы совпадением длин.
+   * Способности панели вместе с asset ID иконок: ОДИН список, а не два
+   * параллельных массива, — иначе «иконка i-й способности» держалась бы
+   * совпадением длин.
    */
   private readonly buttons: readonly AbilityButton[];
   private readonly perRow: number;
   private readonly tickMs: number;
+  private readonly icons: HudIcons;
 
   private actions: HudActionsPort | null = null;
   private nodes: ButtonNodes[] = [];
+  /** Отписки от состояний иконок (ASSET-4) — снимаются на `dispose`. */
+  private iconSubs: (() => void)[] = [];
+  /** Что кнопки держат прямо сейчас (HUD-2): снимается на `dispose` (INP-5). */
+  private readonly held = new Set<string>();
 
-  constructor(params: HudParams, icons: HudIconSource) {
+  constructor(params: HudParams, icons: HudIcons) {
     const abilities = abilitiesFromParams(params);
-    // Иконки резолвятся при создании — до монтирования, как имена композиции:
-    // дырка в таблице валит `apply` и называет способность, а не молчит.
+    // Asset ID иконок резолвятся при создании — до монтирования, как имена
+    // композиции: дырка в таблице валит `apply` и называет способность, а не
+    // молчит. Сами байты приезжают сервисом ассетов уже после (HUD-4).
     const table: HudIconTable = Object.fromEntries(
       abilities.map((ability) => [ability.action, ability.icon]),
     );
     this.buttons = abilities.map((ability) => ({
       ability,
-      iconUrl: resolveIcon(table, icons, ability.action),
+      iconAsset: iconAssetId(table, ability.action),
     }));
     this.perRow = numberParam(params, 'perRow', DEFAULT_PER_ROW);
     this.tickMs = numberParam(params, 'tickMs', DEFAULT_TICK_MS);
+    this.icons = icons;
   }
 
   mount(actions: HudActionsPort): HudNode {
@@ -159,21 +193,77 @@ class CooldownsWidget implements HudWidget {
     this.nodes = this.buttons.map((button) => ({
       ...button,
       root: null,
+      icon: null,
       overlay: null,
       seconds: null,
+      iconStatus: 'loading',
+      iconSrc: null,
     }));
-    return el('div', {
+    const node = el('div', {
       // Сам контейнер указатель не перехватывает — интерактивны только кнопки (HUD-3).
       classes: ['hud-cooldowns'],
       // Число рядов — данные композиции: раскладка панели принадлежит ей, а не
       // коду виджета (HUD-4).
       style: { 'grid-template-columns': `repeat(${String(this.perRow)}, auto)` },
-      children: this.nodes.map((node) => this.buttonNode(node)),
+      children: this.nodes.map((button) => this.buttonNode(button)),
     });
+    // Подписки — ПОСЛЕ сборки описания: закэшированный ассет отдаёт состояние
+    // синхронно из `subscribe` (ASSET-4), и элементы к тому моменту ещё не
+    // материализованы. Поэтому состояние сначала пишется в запись кнопки, а на
+    // элементы попадает либо тут же (если они уже есть), либо из `ref`.
+    for (const button of this.nodes) this.subscribeIcon(button);
+    return node;
+  }
+
+  /** Состояние иконки → запись кнопки и, если элементы уже есть, в DOM. */
+  private subscribeIcon(node: ButtonNodes): void {
+    this.iconSubs.push(
+      this.icons.subscribe(node.iconAsset, (state) => {
+        node.iconStatus = state.status;
+        node.iconSrc = state.status === 'ready' ? state.data.src : null;
+        this.applyIcon(node);
+      }),
+    );
+  }
+
+  private applyIcon(node: ButtonNodes): void {
+    if (node.root !== null) setAttr(node.root, 'data-icon', node.iconStatus);
+    if (node.icon !== null && node.iconSrc !== null) setAttr(node.icon, 'src', node.iconSrc);
+  }
+
+  /**
+   * Обработчики кнопки по её форме (HUD-2). Удерживаемая кнопка `click` не
+   * слушает вовсе: `click` рождается на отпускании, и вместе с `pointerdown`
+   * он дал бы два фронта на одно нажатие.
+   */
+  private buttonHandlers(node: ButtonNodes): Readonly<Record<string, () => void>> {
+    const slot = node.ability.action;
+    if (!node.ability.hold) {
+      // Слот действия = имя способности; куда он ведёт — знает композиция.
+      return { click: () => { this.actions?.trigger(slot); } };
+    }
+    const release = (): void => {
+      if (!this.held.delete(slot)) return;
+      this.actions?.release(slot);
+    };
+    return {
+      pointerdown: () => {
+        if (this.held.has(slot)) return;
+        // Сначала фасад, потом учёт: если объявление действия не той формы и
+        // фасад бросил, держать виджету нечего (HUD-2).
+        this.actions?.hold(slot);
+        this.held.add(slot);
+      },
+      // Отпускание ловится тремя способами: штатное, увод указателя с зажатой
+      // кнопки и отмена жеста системой. Без двух последних бит остался бы
+      // зажатым до конца матча (INP-5).
+      pointerup: release,
+      pointerleave: release,
+      pointercancel: release,
+    };
   }
 
   private buttonNode(node: ButtonNodes): HudNode {
-    const iconUrl = node.iconUrl;
     return interactive(
       el('button', {
         classes: ['hud-cooldowns__button'],
@@ -182,20 +272,26 @@ class CooldownsWidget implements HudWidget {
           'data-ability': node.ability.action,
           title: node.ability.action,
           'data-cooldown': '',
+          // Форма кнопки видна в разметке: по ней стиль сборки вправе показать
+          // удерживаемую кнопку иначе, а тест — проверить форму без клика.
+          'data-form': node.ability.hold ? 'hold' : 'press',
+          'data-icon': node.iconStatus,
         },
-        on: {
-          click: () => {
-            // Слот действия = имя способности; куда он ведёт — знает композиция.
-            this.actions?.trigger(node.ability.action);
-          },
-        },
+        on: this.buttonHandlers(node),
         ref: (element) => {
           node.root = element;
+          this.applyIcon(node);
         },
         children: [
           el('img', {
             classes: ['hud-cooldowns__icon'],
-            attrs: { src: iconUrl, alt: node.ability.action, draggable: 'false' },
+            // `src` не ставится описанием: иконка приезжает сервисом ассетов и
+            // проставляется по готовности (HUD-4).
+            attrs: { alt: node.ability.action, draggable: 'false' },
+            ref: (element) => {
+              node.icon = element;
+              this.applyIcon(node);
+            },
           }),
           el('div', {
             classes: ['hud-cooldowns__overlay'],
@@ -238,17 +334,27 @@ class CooldownsWidget implements HudWidget {
     }
   }
 
+  /**
+   * Снятие виджета отпускает всё, что он держал (HUD-2, INP-5): удержания
+   * собираются опросом источника каждую выборку, и бит несмонтированной кнопки
+   * иначе стоял бы в маске до конца сессии.
+   */
   dispose(): void {
+    for (const slot of this.held) this.actions?.release(slot);
+    this.held.clear();
+    for (const unsubscribe of this.iconSubs) unsubscribe();
+    this.iconSubs = [];
     this.actions = null;
     this.nodes = [];
   }
 }
 
 /**
- * Вид панели с кулдаунами. Шов иконок — инъекция сборки клиента (HUD-4), как у
- * `ability-bar`: композиция остаётся JSON-значением.
+ * Вид панели с кулдаунами. Иконки — РАЗДЕЛЯЕМЫЙ сервис ассетов сборки (HUD-4,
+ * HUD-7): композиция остаётся JSON-значением с asset ID, а байты приходят тем
+ * же путём, что модели арены.
  */
-export function cooldownsKind(icons: HudIconSource): HudWidgetKind {
+export function cooldownsKind(icons: HudIcons): HudWidgetKind {
   return {
     name: COOLDOWNS_WIDGET,
     create: (params) => new CooldownsWidget(params, icons),

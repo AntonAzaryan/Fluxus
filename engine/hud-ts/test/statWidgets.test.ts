@@ -8,9 +8,10 @@
  * Главный сценарий HUD-8 повторяется в каждом: стата нет — пустое состояние, а
  * не выдуманный ноль.
  */
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
+import { AssetService } from '@fluxus/assets';
 import { HudRegistry, type HudComposition, type HudEntityView } from '../src/index.js';
-import type { HudIconSource } from '../src/icons.js';
+import { HudIcons } from '../src/icons.js';
 import {
   FrameRateMeter,
   HP_BAR_EMPTY_CLASS,
@@ -24,7 +25,24 @@ import {
 import { walkElements, type FakeElement } from './support/fakeDom.js';
 import { makeRuntime, makeView } from './support/hud.js';
 
-const icons: HudIconSource = { resolveIconUrl: (id) => `resolved://${id}` };
+/**
+ * Иконки — поверх НАСТОЯЩЕГО сервиса ассетов (HUD-4): второго кэша и второй
+ * адресации у HUD нет, поэтому и в тесте байты приезжают `AssetSource`'ом.
+ * Содержимое «файла» — сам его ID: так по `src` видно, какой ассет доехал.
+ */
+function iconService(): AssetService {
+  return new AssetService({
+    read: (id: string): Promise<ArrayBuffer> =>
+      Promise.resolve(new TextEncoder().encode(id).slice().buffer),
+  });
+}
+
+/** `src`, который получит кнопка иконки этого ID (data-URI загрузчика). */
+function iconSrc(id: string): string {
+  return `data:image/svg+xml;base64,${btoa(id)}`;
+}
+
+const icons = new HudIcons(iconService());
 
 /** Сущность с произвольным набором статов — то, что доезжает до HUD (HUD-8). */
 function entityWith(id: number, stats: Record<string, number>): HudEntityView {
@@ -69,7 +87,7 @@ function bench(composition: HudComposition, hero: HudEntityView | null) {
     );
   };
   if (hero !== null) deliver([hero]);
-  return { runtime, host, presses, deliver };
+  return { runtime, host, presses, deliver, facade };
 }
 
 // ------------------------------------------------------------ полоса здоровья
@@ -145,7 +163,7 @@ const cooldownComposition: HudComposition = {
 describe('панель кулдаунов (HUD-8, сценарий «Кулдаун способности»)', () => {
   it('модель оверлея: доля от полной длительности и секунды из тиков × tickMs', () => {
     const hero = entityWith(1, { 'cast.cd': 20, 'cast.cdMax': 40 });
-    const ability = { action: 'cast', icon: 'i', stat: 'cast.cd', maxStat: 'cast.cdMax' };
+    const ability = { action: 'cast', icon: 'i', stat: 'cast.cd', maxStat: 'cast.cdMax', hold: false };
     expect(cooldownModel(hero, ability, TICK_MS)).toEqual({
       fraction: 0.5,
       seconds: 1, // 20 тиков × 50 мс = 1 с
@@ -181,40 +199,76 @@ describe('панель кулдаунов (HUD-8, сценарий «Кулда�
   });
 
   it('кнопка шлёт то же семантическое действие, что клавиша (HUD-2)', () => {
-    const { host, presses } = bench(cooldownComposition, entityWith(1, {}));
+    const { host, presses, facade } = bench(cooldownComposition, entityWith(1, {}));
     const buttons = [...walkElements(host.zone('bottom') as unknown as FakeElement)].filter(
       (element) => element.getAttribute('data-ability') !== null,
     );
+    expect(buttons[1]!.getAttribute('data-form')).toBe('press');
     buttons[1]!.dispatch('click');
     expect(presses).toEqual(['dodge']);
+    // Кнопка формы «фронт» удержаний не заводит: бит живёт один тик (INP-2).
+    expect([...facade.held()]).toEqual([]);
   });
 
-  it('иконки — asset ID через шов сборки; URL в композиции отвергается (HUD-4)', () => {
-    const requested: string[] = [];
+  it('иконки едут тем же сервисом ассетов, что модели рендера (HUD-4)', async () => {
+    const reads: string[] = [];
+    const service = new AssetService({
+      read: (id: string): Promise<ArrayBuffer> => {
+        reads.push(id);
+        return Promise.resolve(new TextEncoder().encode(id).slice().buffer);
+      },
+    });
     const registry = new HudRegistry();
-    registry.registerWidget(
-      cooldownsKind({
-        resolveIconUrl: (assetId) => {
-          requested.push(assetId);
-          return `resolved://root/${assetId}`;
-        },
-      }),
-    );
+    registry.registerWidget(cooldownsKind(new HudIcons(service)));
     registry.registerSelector('hero', () => null);
     registry.registerAction('hero.cast', { target: 'world', action: 'cast' });
     registry.registerAction('hero.dodge', { target: 'world', action: 'dodge' });
     const { runtime, host } = makeRuntime(registry);
     runtime.apply(cooldownComposition);
 
-    // К шву ушли ровно asset ID записей — по одному на кнопку.
-    expect(requested).toEqual(['visuals/icons/cast.svg', 'visuals/icons/dodge.svg']);
-    expect(findByClass(host.zone('bottom'), 'hud-cooldowns__icon').getAttribute('src')).toBe(
-      'resolved://root/visuals/icons/cast.svg',
-    );
-    // Композиция — чистые asset ID: резолвленный URL в неё не просочился.
-    expect(JSON.stringify(cooldownComposition)).not.toContain('://');
+    // Сервису ушли ровно asset ID записей — по одному на кнопку; собственного
+    // корня и собственного адреса у HUD нет (HUD-4).
+    expect(reads).toEqual(['visuals/icons/cast.svg', 'visuals/icons/dodge.svg']);
+    const icon = findByClass(host.zone('bottom'), 'hud-cooldowns__icon');
+    const button = [...walkElements(host.zone('bottom') as unknown as FakeElement)].find(
+      (element) => element.getAttribute('data-ability') === 'cast',
+    )!;
+    // Пока байты не приехали — `src` пуст, и состояние иконки названо.
+    expect(icon.getAttribute('src')).toBeNull();
+    expect(button.getAttribute('data-icon')).toBe('loading');
 
-    // URL вместо asset ID валит `apply` до монтирования и называет запись.
+    await vi.waitFor(() => {
+      expect(button.getAttribute('data-icon')).toBe('ready');
+    });
+    expect(icon.getAttribute('src')).toBe(iconSrc('visuals/icons/cast.svg'));
+    // Композиция — чистые asset ID: резолвленный адрес в неё не просочился.
+    expect(JSON.stringify(cooldownComposition)).not.toContain('://');
+  });
+
+  it('битый файл иконки виден на кнопке, а не молчит (HUD-4, ASSET-4)', async () => {
+    const registry = new HudRegistry();
+    registry.registerWidget(
+      cooldownsKind(new HudIcons(new AssetService({ read: () => Promise.reject(new Error('нет файла')) }))),
+    );
+    registry.registerSelector('hero', () => null);
+    registry.registerAction('hero.cast', { target: 'world', action: 'cast' });
+    registry.registerAction('hero.dodge', { target: 'world', action: 'dodge' });
+    const { runtime, host } = makeRuntime(registry);
+    runtime.apply(cooldownComposition);
+    const button = [...walkElements(host.zone('bottom') as unknown as FakeElement)].find(
+      (element) => element.getAttribute('data-ability') === 'cast',
+    )!;
+    await vi.waitFor(() => {
+      expect(button.getAttribute('data-icon')).toBe('failed');
+    });
+  });
+
+  it('URL вместо asset ID валит apply до монтирования и называет запись (HUD-4)', () => {
+    const registry = new HudRegistry();
+    registry.registerWidget(cooldownsKind(new HudIcons(iconService())));
+    registry.registerSelector('hero', () => null);
+    registry.registerAction('hero.cast', { target: 'world', action: 'cast' });
+    const { runtime } = makeRuntime(registry);
     expect(() => {
       runtime.apply({
         entries: [
@@ -233,6 +287,125 @@ describe('панель кулдаунов (HUD-8, сценарий «Кулда�
     const { host } = bench(cooldownComposition, entityWith(1, {}));
     const panel = findByClass(host.zone('bottom'), 'hud-cooldowns');
     expect(panel.getAttribute('style')).toContain('repeat(2, auto)');
+  });
+});
+
+// ------------------------------------------------- кнопка формы «удержание»
+
+/** Панель, где вторая кнопка объявлена удерживаемой (HUD-2). */
+const holdComposition: HudComposition = {
+  entries: [
+    {
+      widget: 'cooldowns',
+      zone: 'bottom',
+      params: {
+        tickMs: TICK_MS,
+        abilities: [
+          { action: 'cast', icon: 'visuals/icons/cast.svg' },
+          { action: 'dodge', icon: 'visuals/icons/dodge.svg', hold: true },
+        ],
+      },
+      bindings: { entity: 'hero' },
+      actions: { cast: 'hero.cast', dodge: 'hero.dodge' },
+    },
+  ],
+};
+
+/** Кнопка панели по имени способности. */
+function abilityButton(host: { zone(name: 'bottom'): Element }, action: string): FakeElement {
+  const found = [...walkElements(host.zone('bottom') as unknown as FakeElement)].find(
+    (element) => element.getAttribute('data-ability') === action,
+  );
+  if (found === undefined) throw new Error(`кнопки "${action}" нет в панели`);
+  return found;
+}
+
+describe('форма органа управления объявляется композицией (HUD-2)', () => {
+  it('удержание кнопки даёт фронт и держит бит до отпускания', () => {
+    const { host, presses, facade } = bench(holdComposition, entityWith(1, {}));
+    const button = abilityButton(host, 'dodge');
+    expect(button.getAttribute('data-form')).toBe('hold');
+
+    button.dispatch('pointerdown');
+    // Фронт латчится ровно как у клавиши на `keydown` — иначе нажатие короче
+    // тика отличалось бы от такого же нажатия клавиши.
+    expect(presses).toEqual(['dodge']);
+    // И держится: сэмплер собирает удержания каждую выборку, поэтому бит стоит
+    // во всех кадрах подряд (INP-2).
+    expect([...facade.held()]).toEqual(['dodge']);
+    expect([...facade.held()]).toEqual(['dodge']);
+
+    button.dispatch('pointerup');
+    expect([...facade.held()]).toEqual([]);
+    // Отпускание второго фронта не порождает: `click` удерживаемая кнопка не
+    // слушает вовсе.
+    button.dispatch('click');
+    expect(presses).toEqual(['dodge']);
+  });
+
+  it('увод указателя и отмена жеста снимают удержание (INP-5)', () => {
+    for (const event of ['pointerleave', 'pointercancel']) {
+      const { host, facade } = bench(holdComposition, entityWith(1, {}));
+      const button = abilityButton(host, 'dodge');
+      button.dispatch('pointerdown');
+      expect([...facade.held()]).toEqual(['dodge']);
+      button.dispatch(event);
+      expect([...facade.held()]).toEqual([]);
+    }
+  });
+
+  it('снятие виджета отпускает то, что он держал (INP-5)', () => {
+    const { host, runtime, facade } = bench(holdComposition, entityWith(1, {}));
+    abilityButton(host, 'dodge').dispatch('pointerdown');
+    expect([...facade.held()]).toEqual(['dodge']);
+    runtime.clear();
+    expect([...facade.held()]).toEqual([]);
+  });
+
+  it('повторный pointerdown без отпускания не удваивает фронт', () => {
+    const { host, presses } = bench(holdComposition, entityWith(1, {}));
+    const button = abilityButton(host, 'dodge');
+    button.dispatch('pointerdown');
+    button.dispatch('pointerdown');
+    expect(presses).toEqual(['dodge']);
+  });
+
+  it('удержание не-мирового действия — названная ошибка сборки', () => {
+    const registry = new HudRegistry();
+    registry.registerWidget(cooldownsKind(new HudIcons(iconService())));
+    registry.registerSelector('hero', () => null);
+    registry.registerAction('hero.cast', { target: 'presentation', run: () => undefined });
+    const { runtime, host, facade } = makeRuntime(registry);
+    facade.start(() => undefined);
+    runtime.apply({
+      entries: [
+        {
+          widget: 'cooldowns',
+          zone: 'bottom',
+          params: { abilities: [{ action: 'cast', icon: 'visuals/icons/cast.svg', hold: true }] },
+          actions: { cast: 'hero.cast' },
+        },
+      ],
+    });
+    expect(() => {
+      abilityButton(host, 'cast').dispatch('pointerdown');
+    }).toThrow('удержание есть форма мирового действия-ввода');
+  });
+
+  it('не-булева форма в записи — ошибка композиции до монтирования', () => {
+    const { runtime } = bench(cooldownComposition, null);
+    expect(() => {
+      runtime.apply({
+        entries: [
+          {
+            widget: 'cooldowns',
+            zone: 'bottom',
+            params: { abilities: [{ action: 'cast', icon: 'visuals/icons/cast.svg', hold: 'yes' }] },
+            actions: { cast: 'hero.cast' },
+          },
+        ],
+      });
+    }).toThrow('булево значение');
   });
 });
 

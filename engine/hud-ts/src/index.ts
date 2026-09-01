@@ -67,9 +67,10 @@ export { HUD_ZONE_ATTR, HudOverlayHost, interactive, overlayNode } from './host.
 export { HudRuntime } from './runtime.js';
 export type { HudRuntimeOptions } from './runtime.js';
 
-// Иконки: asset ID контента, резолв через инъецируемый источник (HUD-4).
-export { assetIdParam, resolveIcon } from './icons.js';
-export type { HudIconSource, HudIconTable } from './icons.js';
+// Иконки: asset ID контента, резолв ТЕМ ЖЕ сервисом ассетов, что у рендера
+// (HUD-4, HUD-7, ASSET-2).
+export { HUD_ICON_ASSET_KIND, HudIcons, assetIdParam, hudIconLoader, iconAssetId } from './icons.js';
+export type { HudIconImage, HudIconTable } from './icons.js';
 
 // Первые виджеты: статус матча и панель способностей (HUD-2, HUD-4).
 export * from './widgets/index.js';

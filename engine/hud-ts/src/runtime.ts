@@ -197,18 +197,31 @@ export class HudRuntime {
     this.mounted = [];
   }
 
-  /** Порт действий записи: слот → имя действия из композиции → фасад (HUD-2). */
+  /**
+   * Порт действий записи: слот → имя действия из композиции → фасад (HUD-2).
+   * Резолв слота один на все три формы — фронт, взятие и отпускание: иначе
+   * «слот не объявлен» диагностировалось бы в трёх местах по-разному.
+   */
   private portFor(entry: ResolvedHudEntry): HudActionsPort {
     const names = new Map(entry.actions.map((action) => [action.slot, action.name]));
+    const nameOf = (slot: string): string => {
+      const name = names.get(slot);
+      if (name === undefined) {
+        throw new Error(
+          `виджет "${entry.source.widget}": слот действия "${slot}" не объявлен в композиции`,
+        );
+      }
+      return name;
+    };
     return {
       trigger: (slot, payload) => {
-        const name = names.get(slot);
-        if (name === undefined) {
-          throw new Error(
-            `виджет "${entry.source.widget}": слот действия "${slot}" не объявлен в композиции`,
-          );
-        }
-        this.options.actions.dispatch(name, payload);
+        this.options.actions.dispatch(nameOf(slot), payload);
+      },
+      hold: (slot) => {
+        this.options.actions.hold(nameOf(slot));
+      },
+      release: (slot) => {
+        this.options.actions.release(nameOf(slot));
       },
     };
   }
