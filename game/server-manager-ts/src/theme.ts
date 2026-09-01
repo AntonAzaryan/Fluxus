@@ -56,6 +56,13 @@ body { margin: 0; background: var(--mg-canvas); color: var(--mg-text);
 .mg-server__pick { background: none; border: none; color: var(--mg-text); cursor: pointer;
   font: inherit; text-align: left; min-width: 220px; }
 .mg-server__state, .mg-server__phase, .mg-server__slots { color: var(--mg-muted); min-width: 72px; }
+.mg-server__restarts { color: var(--mg-muted); min-width: 108px; }
+.mg-details__postmortem { color: var(--mg-accent-bright); font-family: ui-monospace, monospace; }
+.mg-details__limited { color: var(--mg-muted); }
+.mg-launch { display: flex; align-items: flex-end; flex-wrap: wrap; gap: var(--mg-space); }
+.mg-launch__title { flex-basis: 100%; }
+.mg-field { display: flex; flex-direction: column; gap: 2px; }
+.mg-field__label { color: var(--mg-faint); font-size: 11px; letter-spacing: 0.04em; }
 .mg-slot__name { min-width: 96px; }
 .mg-slot__status { min-width: 96px; color: var(--mg-muted); }
 .mg-slot--active .mg-slot__status { color: var(--mg-accent-bright); }
