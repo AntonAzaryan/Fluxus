@@ -11,9 +11,13 @@
  * И то и другое — предусловия, и отсутствие каждого он называет вслух, а не
  * изображает провал контейнера:
  *
- *   npm run build -w @fluxus/editor-ui        # бандл редактора
- *   npm run demo:build -w @fluxus/demo        # бандл демо игры
- *   npm install                               # с бинарём Electron
+ *   npm run build:desktop -w @fluxus/editor-ui       # бандл редактора
+ *   npm run demo:build:desktop -w @fluxus/demo       # бандл демо игры
+ *   npm run build:desktop -w @fluxus/server-manager  # бандл менеджера
+ *   npm install                                      # с бинарём Electron
+ *
+ * Именно `*:desktop`-сборки: профили контейнера смотрят в `dist-desktop`, где
+ * бандл лежит БЕЗ копии дерева контента — дерево раздаёт сам контейнер (DSK-4).
  *
  * Запуск: `npm run smoke -w @fluxus/desktop-shell` (или `-- editor`, `-- game`).
  */

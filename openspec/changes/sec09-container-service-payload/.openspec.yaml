@@ -1,0 +1,7 @@
+schema: spec-driven
+created: 2026-09-01
+
+# Стаб очереди: спеки этого change'а появятся при его разработке через
+# /opsx:update sec09-container-service-payload — тогда маркер снять.
+# Пока дельт нет намеренно: артефакты specs/design/tasks пусты, см. ## Notes в proposal.md.
+skip_specs: true

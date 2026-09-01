@@ -18,13 +18,16 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { startAgent, type Agent } from '@fluxus/server-agent';
 import { ControlClientError, type ControlSocketFactory } from '@fluxus/server-agent/client';
 import { nodeSocket } from '@fluxus/server-agent/client/node';
-import type { StartParams } from '@fluxus/server-agent/protocol';
+import type { ServerEntry, StartParams } from '@fluxus/server-agent/protocol';
 import {
   createManagerSession,
   managerView,
   memoryStorage,
+  startParamsOf,
   walk,
+  LAUNCH_FIELDS,
   type ManagerSession,
+  type ManagerState,
   type PageStorage,
   type UiNode,
 } from '../src/index.js';
@@ -311,6 +314,124 @@ describe('список серверов и запуск (MGR-2)', () => {
     expect(session.state.notice).toBe('');
     expect(remote.registry.list()).toHaveLength(1);
     expect(local.registry.list()).toEqual([]);
+  });
+});
+
+/**
+ * Строка ОБЩЕГО списка (MGR-2) перечислена в требовании поимённо: «состояние
+ * процесса, фаза матча, счётчик рестартов, занятость слотов, адрес». Проверяется
+ * она на собранном состоянии, а не на живом агенте, ровно по той причине, по
+ * которой представление вообще отделено от сессии: предмет здесь — ЧТО показано
+ * при данной записи реестра, и живой агент, у которого счётчик кругов равен
+ * нулю, этого утверждения не держит.
+ */
+describe('строка списка серверов (MGR-2)', () => {
+  const entry = (over: Partial<ServerEntry> = {}): ServerEntry => ({
+    id: 'srv-1',
+    state: 'listening',
+    address: 'ws://host:8080',
+    port: 8080,
+    match: 'matches/duel.match.json',
+    phase: 'running',
+    pause: 'running',
+    restarts: 2,
+    exitCode: null,
+    postmortem: null,
+    postmortemFailure: null,
+    joinUrl: 'http://host:8088/?server=ws%3A%2F%2Fhost%3A8080',
+    slots: [],
+    ...over,
+  });
+
+  const stateWith = (record: ServerEntry): ManagerState => ({
+    hosts: [],
+    servers: [{ host: 'h', hostLabel: 'этот компьютер', entry: record }],
+    details: undefined,
+    launchHost: '',
+    matches: [],
+    killOnExit: true,
+    notice: '',
+  });
+
+  it('несёт счётчик рестартов, а не прячет его в деталях', () => {
+    const row = nodesOf(managerView(stateWith(entry())), 'mg-server__restarts')[0];
+    // Круги матча видны В СПИСКЕ: сервер, отыгравший ночь подряд, отличается от
+    // только что поднятого без единого клика.
+    expect(row?.text).toBe('рестартов: 2');
+  });
+
+  it('перечисляет всё, что названо требованием: состояние, фазу, слоты, адрес', () => {
+    const view = managerView(stateWith(entry()));
+    expect(nodesOf(view, 'mg-server__state')[0]?.text).toBe('listening');
+    expect(nodesOf(view, 'mg-server__phase')[0]?.text).toBe('running');
+    expect(nodesOf(view, 'mg-server__slots')[0]?.text).toBe('0/0');
+    expect(nodesOf(view, 'mg-server__address')[0]?.text).toBe('ws://host:8080');
+  });
+});
+
+/**
+ * «Менеджер SHALL позволять запустить сервер с параметрами запуска (SRV-2)», а
+ * SRV-2 называет эти параметры поимённо: документ матча, порт, профиль бота,
+ * дедлайн бот-заполнителя, политика разрыва, авто-рестарт. Параметр, вместо
+ * которого форма подставляет константу, — это параметр, которого у админа нет.
+ */
+describe('форма запуска отдаёт все параметры запуска (MGR-2, SRV-2)', () => {
+  it('в форме есть поле на каждый параметр SRV-2', async () => {
+    const agent = await liveAgent();
+    const session = manager();
+    await session.addLocal(agent.controlUrl, agent.tokens.issueCode(Date.now()), '');
+    const fields = walk(managerView(session.state))
+      .filter((item) => item.tag === 'input' || item.tag === 'select')
+      .map((item) => item.action);
+    for (const name of Object.values(LAUNCH_FIELDS)) expect(fields).toContain(name);
+  });
+
+  it('поля переводятся в параметры запуска, а пустые — в умолчания стенда', () => {
+    // Пустая форма: документ — показанное умолчание, порт «авто», а остальное
+    // решает стенд. Ноль вместо `null` у дедлайна означал бы «заполнить ботами
+    // немедленно» — не то же самое, что «как решит стенд» (BOT-7).
+    expect(startParamsOf(new Map(), 'matches/duel.match.json')).toEqual({
+      match: 'matches/duel.match.json',
+      port: 0,
+      bot: '',
+      botFillMs: null,
+      onDisconnect: '',
+      autoRestart: true,
+    });
+
+    // Заполненная форма доезжает до параметров ЦЕЛИКОМ, включая выключенный
+    // авто-рестарт: «отыграть один матч и остановиться» — решение админа.
+    const filled = new Map([
+      [LAUNCH_FIELDS.match, 'matches/training.match.json'],
+      [LAUNCH_FIELDS.port, '8081'],
+      [LAUNCH_FIELDS.bot, 'bots/normal.json'],
+      [LAUNCH_FIELDS.botFill, '15000'],
+      [LAUNCH_FIELDS.onDisconnect, 'pause'],
+      [LAUNCH_FIELDS.autoRestart, 'no'],
+    ]);
+    expect(startParamsOf(filled, 'matches/duel.match.json')).toEqual({
+      match: 'matches/training.match.json',
+      port: 8081,
+      bot: 'bots/normal.json',
+      botFillMs: 15_000,
+      onDisconnect: 'pause',
+      autoRestart: false,
+    });
+  });
+
+  it('выключенный авто-рестарт доезжает до агента параметром запуска', async () => {
+    const agent = await liveAgent();
+    const session = manager();
+    await session.addLocal(agent.controlUrl, agent.tokens.issueCode(Date.now()), '');
+    const host = session.state.hosts[0]!.id;
+    const chosen = new Map([
+      [LAUNCH_FIELDS.match, 'matches/duel.match.json'],
+      [LAUNCH_FIELDS.autoRestart, 'no'],
+      [LAUNCH_FIELDS.onDisconnect, 'hold'],
+    ]);
+    await session.start(host, startParamsOf(chosen, ''));
+    expect(session.state.notice).toBe('');
+    expect(agent.registry.list()).toHaveLength(1);
   });
 });
 
@@ -629,5 +750,52 @@ describe('добавление хоста дважды (MGR-1)', () => {
     expect(session.state.notice).toContain('не запомнен');
     await session.start(session.state.hosts[0]!.id, params());
     expect(agent.registry.list()).toHaveLength(1);
+  });
+});
+
+/**
+ * Ночной краш (SRV-6): «утром реестр показывает `crashed` с кодом выхода и путём
+ * к сохранённым материалам; разбор начинается с чтения файлов». Значит, в
+ * упавший сервер надо УМЕТЬ кликнуть: подписка на его детали невозможна —
+ * собирать метрики негде, — но код выхода, каталог разбора и хвост лога обязаны
+ * открыться (MGR-3).
+ */
+describe('детали упавшего сервера открываются (MGR-3, SRV-6)', () => {
+  it('клик по `crashed` показывает код выхода, материалы разбора и хвост лога', async () => {
+    const agent = await liveAgent(['duel', 'crash']);
+    const session = manager();
+    await session.addLocal(agent.controlUrl, agent.tokens.issueCode(Date.now()), '');
+    const host = session.state.hosts[0]!.id;
+    await session.start(host, params('matches/crash.match.json'));
+    const server = session.state.servers[0]!.entry.id;
+
+    // Смена состояния приезжает СОБЫТИЕМ, без опроса (SRV-2).
+    expect(await until(() => session.state.servers[0]?.entry.state === 'crashed')).toBe(true);
+
+    await session.select(host, server);
+    // Отказа нет: подписка на мёртвый процесс невозможна, но детали открылись.
+    expect(session.state.notice).toBe('');
+    const details = session.state.details;
+    expect(details?.entry.state).toBe('crashed');
+    expect(details?.entry.exitCode).toBe(7);
+    expect(details?.entry.postmortem).not.toBeNull();
+    expect(details?.log.length).toBeGreaterThan(0);
+
+    const view = managerView(session.state);
+    const postmortem = nodesOf(view, 'mg-details__postmortem')[0]?.text ?? '';
+    // Человек читает код выхода и путь к каталогу разбора прямо в окне: искать
+    // его руками по диску — не то, чем начинается утро (SRV-6).
+    expect(postmortem).toContain('код выхода: 7');
+    expect(postmortem).toContain(details!.entry.postmortem!);
+    expect(nodesOf(view, 'mg-log__line').length).toBeGreaterThan(0);
+    // Причина неполноты деталей НАЗВАНА (SRV-2): подписки на процесс, которого
+    // нет, не бывает, и человек видит, почему в окне нет счётчиков.
+    expect(nodesOf(view, 'mg-details__limited')[0]?.text).toContain('not-running');
+    // Счётчики у мёртвого процесса не собираются (D9) и подменяться нулями не
+    // должны.
+    expect(nodesOf(view, 'mg-metrics')[0]?.text).toBe('счётчики: —');
+    // Админ-операции над ушедшим процессом недоступны кнопкой, а не отказом
+    // после нажатия (SRV-5).
+    expect(walk(view).find((item) => item.action === 'pause')?.disabled).toBe(true);
   });
 });

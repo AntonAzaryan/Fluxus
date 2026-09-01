@@ -63,6 +63,16 @@ export interface ServerDetails {
   readonly metrics: ServerMetricsView | null;
   /** Хвост лога процесса. */
   readonly log: readonly string[];
+  /**
+   * Названная причина, по которой детали НЕПОЛНЫ: подписка на живой процесс не
+   * удалась (упавший сервер, сервер, переживший прежнего агента), и счётчиков не
+   * будет. Пустая строка — детали полные.
+   *
+   * Причина сохраняется, а не теряется вместе с отказом: разбор упавшего сервера
+   * открывается (SRV-6), но человек обязан знать, почему в нём нет счётчиков, —
+   * отказ операции наблюдаем с названной причиной (SRV-2).
+   */
+  readonly limited: string;
 }
 
 export interface ManagerState {
@@ -196,6 +206,7 @@ export function createManagerSession(options: ManagerSessionOptions): ManagerSes
               entry: event.server,
               metrics: event.metrics ?? details.metrics,
               log: [...details.log, ...event.log].slice(-LOG_TAIL),
+              limited: details.limited,
             };
     }
     changed();
@@ -433,11 +444,27 @@ export function createManagerSession(options: ManagerSessionOptions): ManagerSes
             // Хост мог уйти вместе с сервером: отписываться уже не от чего.
           }
         }
-        const result = await client.subscribe(serverId);
-        const entry = result.servers[0];
+        let entry: ServerEntry | undefined;
+        let limited = '';
+        try {
+          entry = (await client.subscribe(serverId)).servers[0];
+        } catch (error) {
+          // Подписка требует ЖИВОГО процесса: сбор метрик включается в самом
+          // сервере матча (SRV-4), и у `crashed` включать его негде. Но именно в
+          // упавший сервер кликают утром — за кодом выхода, путём к материалам
+          // разбора и хвостом лога (SRV-6, сценарий «Ночной краш»). Поэтому
+          // названный отказ `not-running` ОТКРЫВАЕТ детали без метрик, а не
+          // закрывает их: чтение лога упавшего работает, и разбор начинается с
+          // него. Всякая другая причина отказа остаётся отказом (SRV-2).
+          if (!(error instanceof ControlClientError) || error.reason !== 'not-running') throw error;
+          limited = named(error);
+          const listed = (await client.list()).servers;
+          require(hostId).servers = listed;
+          entry = listed.find((row) => row.id === serverId);
+        }
         if (entry === undefined) throw new Error(`сервера "${serverId}" у хоста больше нет`);
         const log = (await client.log(serverId)).log;
-        details = { host: hostId, entry, metrics: null, log: [...log].slice(-LOG_TAIL) };
+        details = { host: hostId, entry, metrics: null, log: [...log].slice(-LOG_TAIL), limited };
       });
     },
     admin(hostId, serverId, op, slot = -1) {
