@@ -142,6 +142,7 @@ describe('Наложение инстанса (BUFF-1, BUFF-2)', () => {
   const slow: BuffDef = {
     id: 'slow',
     class: 'negative',
+    stacking: 'independent',
     durationTicks: 3,
     statMods: [{ component: 'TimeScaleModifiers', value: F(0.5) }],
   };
@@ -171,7 +172,7 @@ describe('Наложение инстанса (BUFF-1, BUFF-2)', () => {
   });
 
   it('постоянный бафф не истекает сам (BUFF-2, BUFF-6)', () => {
-    const passive: BuffDef = { id: 'passive', class: 'positive' };
+    const passive: BuffDef = { id: 'passive', class: 'positive', stacking: 'independent' };
     const h = harness(scene([passive]));
     const hero = h.place('Hero');
     const instance = h.give(hero);
@@ -182,7 +183,7 @@ describe('Наложение инстанса (BUFF-1, BUFF-2)', () => {
   });
 
   it('контент отбирает баффы обычным запросом по полям (BUFF-1)', () => {
-    const positive: BuffDef = { id: 'haste', class: 'positive' };
+    const positive: BuffDef = { id: 'haste', class: 'positive', stacking: 'independent' };
     const h = harness(scene([slow, positive]));
     const hero = h.place('Hero');
     h.give(hero, 0);
@@ -346,6 +347,7 @@ describe('Периодика и реакции на события (BUFF-5)', ()
   const dot: BuffDef = {
     id: 'dot',
     class: 'negative',
+    stacking: 'independent',
     durationTicks: 10,
     periodic: {
       everyTicks: 3,
@@ -369,6 +371,7 @@ describe('Периодика и реакции на события (BUFF-5)', ()
     const proc: BuffDef = {
       id: 'proc',
       class: 'positive',
+      stacking: 'independent',
       triggers: [
         {
           type: 'Collision',

@@ -178,7 +178,7 @@ export const buffDef: Json = {
   title: 'Определение баффа (BUFF-2)',
   type: 'object',
   additionalProperties: false,
-  required: ['id', 'class'],
+  required: ['id', 'class', 'stacking'],
   properties: {
     id: { $comment: 'Человеко-читаемое имя; в мире определение адресует индекс (BUFF-1).', type: 'string', minLength: 1 },
     class: { enum: ['negative', 'positive'] },
@@ -186,7 +186,10 @@ export const buffDef: Json = {
       $comment: 'Отсутствие поля либо неположительное значение — постоянный бафф (BUFF-2, BUFF-6).',
       $ref: '#/$defs/expression',
     },
-    stacking: { enum: ['independent', 'refresh', 'stack'] },
+    stacking: {
+      $comment: 'Политика стакинга обязательна: умолчания у неё нет (BUFF-3).',
+      enum: ['independent', 'refresh', 'stack'],
+    },
     maxStacks: { $comment: 'Потолок стаков; обязателен при политике stack (BUFF-3).', $ref: '#/$defs/expression' },
     statMods: { type: 'array', items: { $ref: '#/$defs/buffStatMod' } },
     periodic: {

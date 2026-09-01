@@ -503,7 +503,8 @@
       "additionalProperties": false,
       "required": [
         "id",
-        "class"
+        "class",
+        "stacking"
       ],
       "properties": {
         "id": {
@@ -522,6 +523,7 @@
           "$ref": "#/$defs/expression"
         },
         "stacking": {
+          "$comment": "Политика стакинга обязательна: умолчания у неё нет (BUFF-3).",
           "enum": [
             "independent",
             "refresh",

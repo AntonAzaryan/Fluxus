@@ -66,7 +66,7 @@ const ABILITY: SceneDef = withScene({
       effects: [{ emitEvent: { type: 'Bolt', data: { slot: { var: 'self' } } } }],
     },
   ],
-  buffs: [{ id: 'burn', class: 'negative', durationTicks: 60 }],
+  buffs: [{ id: 'burn', class: 'negative', durationTicks: 60, stacking: 'independent' }],
   abilityRuntime: { deadMarker: 'Dead', teamField: ['Player', 'slot'] },
 });
 

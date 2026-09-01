@@ -10,6 +10,9 @@
  * недоступно ни `CastPhaseSystem`, ни любой системе раньше него, а на следующем
  * тике его уже нет вовсе. Поэтому источник требует системы ПОСЛЕ систем сцены —
  * `CastInterruptSystem` на 830, последней среди читателей шины (DET-9).
+ *
+ * TimeScale (TIME-5): игнорирует — распознавание источников и применение исхода
+ * времени не считают; кулдаун, который исход взводит, ведёт `CooldownSystem`.
  */
 import { execute, systemError } from '../../dsl/actions.js';
 import { evaluate, typeError } from '../../dsl/expr.js';

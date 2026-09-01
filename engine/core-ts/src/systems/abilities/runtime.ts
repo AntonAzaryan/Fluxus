@@ -20,6 +20,7 @@ import {
   BUFF_INSTANCE_COMPONENT,
 } from './components.js';
 import { resolveSlotHandles, type BuffInstanceHandles, type SlotHandles } from './handles.js';
+import type { StepShapeGate } from './shape.js';
 import {
   INPUT_BUTTONS_FIELD,
   INPUT_PREV_BUTTONS_FIELD,
@@ -69,6 +70,16 @@ export function intOf(value: ExprValue, where: string, what = 'счётное з
   if (!Number.isInteger(value)) {
     throw new Error(`${where}: ${what} — сырое целое, получено ${value}`);
   }
+  return value;
+}
+
+/**
+ * Величина Q16.16 определения: строго число (EXPR-2). Отдельной проверки на
+ * целость тут нет — в отличие от счётчика тиков, дробное значение здесь
+ * штатное: это длина, радиус или доля оборота.
+ */
+export function fixedOf(value: ExprValue, where: string): Fixed {
+  if (typeof value !== 'number') throw typeError(where, 'number', value);
   return value;
 }
 
@@ -497,6 +508,7 @@ export class CandidatePicker {
     targetY: Fixed,
     range: Fixed | undefined,
     filter: Expression | undefined,
+    shape: StepShapeGate,
     vars: ExprVarsRecord,
   ): EntityId {
     let spec = this.unbounded;
@@ -510,12 +522,18 @@ export class CandidatePicker {
     let bestX = 0;
     let bestY = 0;
     for (const candidate of ctx.query(spec)) {
+      const candidateX = positionOf(ctx, candidate, 'x');
+      const candidateY = positionOf(ctx, candidate, 'y');
+      // Фигура шага — гейт платформы (ABIL-5), и стоит он ДО предиката
+      // контента: `filter` — политика, а фигура описывает, что заденет каст, и
+      // ровно её рисует превью (REND-28).
+      if (!shape.contains(ctx, candidateX, candidateY)) continue;
       if (filter !== undefined) {
         vars[CANDIDATE_NAME] = candidate;
         if (!predicate(filter, ctx, vars)) continue;
       }
-      const dx = ctx.math.sub(positionOf(ctx, candidate, 'x'), targetX);
-      const dy = ctx.math.sub(positionOf(ctx, candidate, 'y'), targetY);
+      const dx = ctx.math.sub(candidateX, targetX);
+      const dy = ctx.math.sub(candidateY, targetY);
       if (best === NO_ENTITY || distSqCompare(dx, dy, bestX, bestY) < 0) {
         best = candidate;
         bestX = dx;

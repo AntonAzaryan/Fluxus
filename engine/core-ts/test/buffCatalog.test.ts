@@ -119,10 +119,21 @@ describe('Предкомпиляция определений баффов (BUFF
     expect(poison.onExpire).toHaveLength(1);
   });
 
-  it('умолчание политики — самостоятельный инстанс, имени события — `event`', () => {
+  it('умолчания у политики нет: молчание документа — ошибка загрузки (BUFF-3)', () => {
+    // Политику называет определение: умолчание, выбранное платформой, было бы
+    // решением ядра о геймплее — «два наложения дают два инстанса» и «второе
+    // продлевает первый» суть разные способности.
+    const plain = { id: 'plain', class: 'positive' } as unknown as BuffDef;
+    expect(() => loadScene(scene({ buffs: [plain] }))).toThrow(
+      /бафф "plain"\.stacking: определение обязано называть политику стакинга/,
+    );
+  });
+
+  it('имя события реакции по умолчанию — `event` (BUFF-5)', () => {
     const plain: BuffDef = {
       id: 'plain',
       class: 'positive',
+      stacking: 'independent',
       triggers: [{ type: 'Hit', do: [] }],
     };
     const catalog = loadScene(scene({ buffs: [plain] })).abilities!;
@@ -137,7 +148,7 @@ describe('Предкомпиляция определений баффов (BUFF
   });
 
   it('отсутствие длительности — постоянный бафф, а не нулевая (BUFF-2)', () => {
-    const passive: BuffDef = { id: 'passive', class: 'positive' };
+    const passive: BuffDef = { id: 'passive', class: 'positive', stacking: 'independent' };
     const catalog = loadScene(scene({ buffs: [passive] })).abilities!;
     expect(catalog.buffs[0]!.durationTicks).toBeUndefined();
   });

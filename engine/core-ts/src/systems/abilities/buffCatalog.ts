@@ -74,10 +74,15 @@ function compileBuff(
   buffers: BuffBuffers,
 ): CompiledBuff {
   const path = `бафф "${id}"`;
-  const stacking =
-    def.stacking === undefined
-      ? STACKING_INDEPENDENT
-      : keyOf(STACKING_POLICIES, def.stacking, `${path}.stacking`);
+  // Политику стакинга называет ОПРЕДЕЛЕНИЕ, и умолчания у неё нет (BUFF-3):
+  // выбранное платформой умолчание было бы решением ядра о геймплее — «два
+  // наложения дают два инстанса» и «второе продлевает первый» суть разные
+  // способности, а не разные прочтения одной. Класс ошибки — тот же, что у
+  // прочих ошибок определения (ABIL-10).
+  if (def.stacking === undefined) {
+    fail(`${path}.stacking`, 'определение обязано называть политику стакинга: independent, refresh либо stack (BUFF-3)');
+  }
+  const stacking = keyOf(STACKING_POLICIES, def.stacking, `${path}.stacking`);
   // Потолок обязателен ровно там, где он что-то значит: без него `stack`
   // молча выродился бы в `refresh`. То же правило и тот же класс ошибки, что у
   // исхода прерывания `partial` без доли кулдауна (ABIL-6, ABIL-10).
