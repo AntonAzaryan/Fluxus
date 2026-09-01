@@ -49,6 +49,7 @@ import {
   type RenderContext,
 } from '@fluxus/render';
 import {
+  manifestAssetRefs,
   presentationPathOf,
   resolveVisual,
   resolveVisualEmitter,
@@ -603,15 +604,14 @@ describe('CONT-1: демонстрационный слой лежит в дер
     );
     expect(manifest.ok ? '' : manifest.errors.join('; ')).toBe('');
     if (!manifest.ok) return;
-    const { particles, decorations } = manifest.manifest;
-    const referenced = [
-      ...Object.values(particles?.byKind ?? {}).map((r) => r.effect),
-      ...Object.values(particles?.byState ?? {}).map((r) => r.effect),
-      ...Object.values(particles?.byEvent ?? {}).map((r) => r.effect),
-      ...Object.keys(decorations ?? {})
-        .map((key) => resolveVisualEmitter(manifest.manifest, key)?.effect)
-        .filter((id): id is string => id !== undefined),
-    ];
+    // Где в манифесте лежат ссылки на ассеты, знает сам манифест (ASSET-6):
+    // перечень мест спрашивается у него (`manifestAssetRefs`), а не набирается
+    // здесь заново — второй список разошёлся бы с форматом при первом же новом
+    // поле, и проверка молча перестала бы видеть часть ссылок. Отбирается вид,
+    // который эта проверка умеет разобрать: документ эффекта частиц (ASSET-3).
+    const referenced = manifestAssetRefs(manifest.manifest)
+      .filter((ref) => ref.kind === 'particle-effect')
+      .map((ref) => ref.asset);
     // Демо-контент частиц заведён (задача 3.2): пустой список означал бы, что
     // проверка сторожит несуществующее.
     expect(referenced.length).toBeGreaterThan(0);

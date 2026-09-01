@@ -11,6 +11,12 @@
  *   загрузчик манифеста не имеет конфига сцены, а `loadScene` не имеет
  *   манифеста. Пары не видит ни один из них, а ED-19 требует подсвечивать её
  *   рассинхронизацию — потому что для автора юнит один, хотя документа два.
+ *   Важность у половин разная и разная по требованию: «запись без prefab'а» —
+ *   ошибка (висячая ссылка), «prefab без записи» — предупреждение (заглушка с
+ *   предупреждением в рантайме, ASSET-6). Исключений из пары два, и оба —
+ *   чужие: decoration-виды (ASSET-9) выведены раскладкой разделов, а вид,
+ *   изображение которого заявила другая подсистема (`rendering` REND-37), —
+ *   вопросом к владельцу формата.
  * - «запись расстановки на несуществующий prefab». Ядро это отвергает
  *   (`applyPlacement` → `spawn`, SER-8), но отвергает на загрузке всей сцены,
  *   первым нарушением и без адреса записи; а расстановка по SER-8 — общий
@@ -48,6 +54,7 @@
  * кто собирает редактор (ED-25); правило знает только отношение.
  */
 import { ARENA_PREFAB, TERRAIN_PREFAB } from '@fluxus/core';
+import { resolveVisualClaim, validateManifest } from '@fluxus/assets';
 import {
   getAtPath,
   isJsonArray,
@@ -211,13 +218,51 @@ function collect(
   return { names, sorted: [...names].sort(compareIds), targets: Object.freeze(targets) };
 }
 
-/** ED-19: prefab, у которого нет записи манифеста, — половина пары. */
+/**
+ * Заявлен ли вид другой подсистемой рендера (`rendering` REND-37) хотя бы одним
+ * из открытых манифестов. Отвечает владелец формата (`resolveVisualClaim`), а
+ * не правило: перечень заявляющих источников REND-37 задаёт ПРАВИЛОМ, и второй
+ * его набор здесь разошёлся бы с рендером молча — источник, который заведёт
+ * новая подсистема, вышел бы из-под пары в рантайме и остался бы находкой в
+ * редакторе (ED-1, CORE-3).
+ *
+ * Манифест разбирается его же валидатором: документ, который владелец отверг,
+ * заявок не даёт вовсе. Это намеренно — сломанный манифест иначе молча снимал
+ * бы находки со всех префабов сразу, то есть выключал бы правило ровно тогда,
+ * когда автор о нём меньше всего думает.
+ */
+function claimedByOther(
+  manifests: readonly EditorDocument[],
+  run: ValidationRun,
+  name: string,
+): boolean {
+  for (const document of manifests) {
+    const parsed = run.derive(`manifest:${document.id}`, () => {
+      const checked = validateManifest(run.valueOf(document.id));
+      return checked.ok ? checked.manifest : null;
+    });
+    if (parsed !== null && resolveVisualClaim(parsed, name) !== null) return true;
+  }
+  return false;
+}
+
+/**
+ * ED-19: prefab, у которого нет записи манифеста, — половина пары.
+ *
+ * Важность — ПРЕДУПРЕЖДЕНИЕ, и это сказано требованием: в рантайме последствие
+ * находки — заглушка с одним предупреждением (ASSET-6), загрузка её переживает,
+ * а отличить забытую запись от префаба, которому изображения не полагается
+ * (слот способности, экземпляр бафа), редактор не может — документы об этом не
+ * говорят. Вторая половина пары (`prefabForVisualRule`) остаётся ошибкой:
+ * там висячая ссылка, а не законный контент.
+ */
 export function visualForPrefabRule(kinds: PairKinds = DEFAULT_PAIR_KINDS): ValidationRule {
   return {
     id: VISUAL_FOR_PREFAB_RULE,
     descriptionKey: ruleDescriptionKey(VISUAL_FOR_PREFAB_RULE),
     reasonCodes: [MISSING_VISUAL],
     appliesTo: [kinds.scene],
+    severity: 'warning',
     check(run) {
       const manifests = run.documentsOfKind(kinds.manifest);
       if (manifests.length === 0) return;
@@ -228,6 +273,10 @@ export function visualForPrefabRule(kinds: PairKinds = DEFAULT_PAIR_KINDS): Vali
         if (!isJsonObject(entry)) return;
         const name = entry.name;
         if (typeof name !== 'string' || known.names.has(name)) return;
+        // Вид, изображение которого манифест отдал другой подсистеме, парой не
+        // рассинхронизирован: запись автор уже сделал, и находка требовала бы
+        // второй (ED-19, REND-37).
+        if (claimedByOther(manifests, run, name)) return;
         run.report({
           path: [...PREFABS_PATH, index, 'name'],
           expected: { kind: 'reference', targets: known.targets, known: known.sorted },

@@ -12,6 +12,7 @@
  * рядом с бандлом, разошёлся бы с реальным набором молча — здесь он один, и
  * правило, добавленное в свой модуль, попадает в него само.
  */
+import { assetReferenceRule } from './assetRefs.js';
 import { crossDocumentRules } from './crossDocument.js';
 import { engineValidationRules } from './engineRules.js';
 import type { ValidationRule } from './types.js';
@@ -22,5 +23,5 @@ import type { ValidationRule } from './types.js';
  * и не коды его причин — а именно из них выводятся ключи ресурсов.
  */
 export function builtinValidationRules(): readonly ValidationRule[] {
-  return Object.freeze([...engineValidationRules(), ...crossDocumentRules()]);
+  return Object.freeze([...engineValidationRules(), ...crossDocumentRules(), assetReferenceRule()]);
 }

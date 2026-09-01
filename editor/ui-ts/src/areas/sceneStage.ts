@@ -158,6 +158,7 @@ import {
   VisualSurfaceSource,
   WaterSubsystem,
   applyCameraPose,
+  cameraConfigFromManifest,
   type CameraBounds,
   type CameraPose,
   type DecorationInstance,
@@ -678,8 +679,16 @@ export function createSceneStage(options: SceneStageOptions): SceneStage {
       });
     }
     // Конвейер камеры один и тот же (ED-13, CAM-1); арены без террейна у него
-    // просто нет — ни границ, ни поверхности под точкой наблюдения.
-    camera = createSceneCamera({ heightStep, ...(first === null ? {} : { grid: first }) });
+    // просто нет — ни границ, ни поверхности под точкой наблюдения. Числа
+    // конфига берутся оттуда же, откуда их берёт игровой клиент, — из секции
+    // манифеста визуалов (ASSET-10): ED-13 требует, чтобы наклон, дистанция и
+    // FOV кадра автора совпадали с игровыми, а второго набора умолчаний камеры
+    // в редакторе быть не должно.
+    camera = createSceneCamera({
+      heightStep,
+      manifest: cameraConfigFromManifest(visuals.cameraConfig),
+      ...(first === null ? {} : { grid: first }),
+    });
     // Первый кадр открытой сцены показывает арену целиком (ED-15): просьба
     // кадрировать мгновенно, чтобы перелёта к обзору автор не видел. Позу
     // считает конвейер (CAM-8) — своего расчёта стартовой позы у редактора не
@@ -939,6 +948,12 @@ export function createSceneStage(options: SceneStageOptions): SceneStage {
     applyVisuals(next) {
       // Запоминается и тогда, когда подсистемы ещё не подняты: сетка поднимет
       // их правленым манифестом, а не тем, с которым собирался вьюпорт.
+      //
+      // Секции конфига камеры (ASSET-10) это не касается: конвейер принимает
+      // конфиг при постройке (CAM-1), и правленые числа доедут до кадра со
+      // следующим открытием проекта. Пересобрать камеру здесь значило бы
+      // отобрать у автора позу, которую он выстроил, — а живой правкой этих
+      // чисел он занимается на порядок реже, чем правкой записей манифеста.
       visuals = next;
       models?.applyManifest(next);
       particles?.applyManifest(next);

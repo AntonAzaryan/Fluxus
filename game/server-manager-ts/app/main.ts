@@ -17,14 +17,15 @@ import {
   pageStorage,
   parseLocalAgentAddress,
   startLocalAgent,
+  startParamsOf,
   walk,
   AGENT_SERVICE,
+  LAUNCH_FIELDS,
   MANAGER_STYLES,
   type ManagerSession,
   type UiNode,
 } from '../src/index.js';
 import { browserSocket } from '@fluxus/server-agent/client';
-import type { StartParams } from '@fluxus/server-agent/protocol';
 
 function managerRoot(): HTMLElement {
   const element = document.getElementById('manager-root');
@@ -60,27 +61,29 @@ function apply(action: string, args: readonly string[]): void {
     case 'forget-host':
       void session.forget(first);
       return;
-    case 'launch-host':
+    case LAUNCH_FIELDS.host:
       // Смена цели запуска: список документов принадлежит хосту, поэтому выбор
       // хоста обновляет и его (MGR-2). Запомненный документ ПРЕЖНЕГО хоста при
       // этом снимается: на новом его может не быть вовсе, и запуск ушёл бы с
       // именем, которого принимающий агент не знает, — обещанный отказ.
-      fields.delete('launch-match');
-      session.setLaunchHost(fields.get('launch-host') ?? first);
+      fields.delete(LAUNCH_FIELDS.match);
+      session.setLaunchHost(fields.get(LAUNCH_FIELDS.host) ?? first);
       return;
     case 'start': {
       // Цель запуска — ВЫБРАННЫЙ хост, а не первый попавшийся (MGR-2).
       const target = session.state.launchHost;
       if (target === '') return;
-      const params: StartParams = {
-        match: fields.get('launch-match') ?? session.state.matches[0] ?? '',
-        port: Number(fields.get('launch-port') ?? '0') || 0,
-        bot: '',
-        botFillMs: null,
-        onDisconnect: '',
-        autoRestart: true,
-      };
-      void session.start(target, params);
+      // Все шесть параметров запуска (SRV-2) приезжают из ФОРМЫ: перевод полей
+      // в параметры живёт в `src/launch.ts` и проверяется тестом — здесь только
+      // передача, как и во всём этом файле.
+      const form = startParamsOf(fields, session.state.matches[0] ?? '');
+      // Форма, из которой параметров не собрать, — названный отказ, а не кнопка,
+      // молча ничего не делающая, и не подставленное за человека умолчание.
+      if (form.params === undefined) {
+        session.refuse(form.failure);
+        return;
+      }
+      void session.start(target, form.params);
       return;
     }
     case 'stop':
@@ -122,7 +125,7 @@ function build(node: UiNode): Node {
       fields.set(name, field.value);
       // Выбор целевого хоста — не просто хранимое поле: он меняет список
       // документов, поэтому обновляет состояние сессии и перерисовку (MGR-2).
-      if (name === 'launch-host') apply('launch-host', [field.value]);
+      if (name === LAUNCH_FIELDS.host) apply(LAUNCH_FIELDS.host, [field.value]);
     };
     field.addEventListener('input', onEdit);
     field.addEventListener('change', onEdit);
@@ -161,7 +164,7 @@ function build(node: UiNode): Node {
 const KNOWN_ACTIONS = new Set([
   'add-host',
   'forget-host',
-  'launch-host',
+  LAUNCH_FIELDS.host,
   'start',
   'stop',
   'select',

@@ -47,13 +47,11 @@ describe('дистрибутив хоста собирается одной ко
       [
         BUNDLE_SCRIPT,
         '--out', out,
+        // Сборка страницы пропущена: `vite build` в гейт не входит. Состояние
+        // чужих каталогов на предмет проверки при этом не влияет — страница
+        // либо собрана ЭТОЙ командой, либо её нет вовсе (SRV-7), и подобрать
+        // готовую сборке нечем.
         '--skip-client',
-        // Каталог страницы назван ЯВНО и заведомо пуст. Без этого предмет
-        // проверки — «отсутствие страницы игрока НАЗВАНО» — зависел бы от того,
-        // запускал ли кто-то в этом дереве `npm run demo:build` раньше: сборка
-        // подобрала бы готовый `game/demo-ts/app/dist` и честно сообщила о нём.
-        // Проверять надо утверждение, а не состояние чужого каталога.
-        '--client-dist', join(work, 'no-client'),
         '--quiet',
       ],
       {
@@ -86,33 +84,44 @@ describe('дистрибутив хоста собирается одной ко
     expect(distribution.buildId).not.toBe('');
     expect(distribution.contentPackHash).not.toBe('');
     // Отсутствие страницы игрока НАЗВАНО, а не подменено заглушкой, — и названо
-    // ВМЕСТЕ С ПРИЧИНОЙ: каталог назвали, а его нет. Голое «отсутствует» не
-    // отличило бы опечатку во флаге от осознанной сборки без страницы, а флаг
-    // ещё и отменяет `vite build`.
-    expect(distribution.client).toBe(
-      `отсутствует: каталог --client-dist "${join(work, 'no-client')}" не существует`,
-    );
+    // ВМЕСТЕ С ПРИЧИНОЙ: голое «отсутствует» не отличило бы осознанный пропуск
+    // сборки от сборки, не оставившей каталога.
+    expect(distribution.client).toBe('отсутствует: сборка страницы пропущена (--skip-client)');
+    // И каталога страницы в дистрибутиве нет: подобранная с диска чужая сборка
+    // — тоже страница неизвестного возраста (SRV-7).
+    expect(existsSync(join(out, 'client'))).toBe(false);
   });
 
-  it('происхождение страницы игрока названо честно: взята со стороны, а не собрана (SRV-7)', () => {
-    // `distribution.json` — запись о том, ЧТО в дистрибутиве лежит. Страница,
-    // приехавшая со стороны, обязана быть названа приехавшей: сказать о ней
-    // «собран vite build» значило бы приписать дистрибутиву сборку, которой не
-    // было, — и `--client-dist` поэтому сборку не запускает вовсе.
+  it('страницу со стороны взять нечем: дистрибутив из разных версий не собирается (SRV-7)', () => {
+    // Клиентский бандл несёт документы контента в себе (сцена и документ матча
+    // вкомпилированы в него), и версию — `buildId` плюс хеш контент-пака —
+    // клиент считает из НИХ, а предъявляет её в рукопожатии (NTR-5). Готовая
+    // страница со стороны поэтому и есть вторая версия внутри дистрибутива, а
+    // «собрать дистрибутив из разных версий MUST NOT быть возможно».
     const prebuilt = join(work, 'prebuilt-client');
     mkdirSync(prebuilt, { recursive: true });
     writeFileSync(join(prebuilt, 'index.html'), 'страница со стороны\n');
     const outside = join(work, 'outside-bundle');
-    // Флага `--skip-client` здесь НЕТ намеренно: проверяется именно то, что
-    // названный каталог сам по себе отменяет сборку.
-    execFileSync(
-      process.execPath,
-      [BUNDLE_SCRIPT, '--out', outside, '--client-dist', prebuilt, '--quiet'],
-      { cwd: REPO, env: { ...process.env, NODE_OPTIONS: '' }, timeout: 120_000 },
-    );
-    const record = JSON.parse(readFileSync(join(outside, 'distribution.json'), 'utf8')) as Distribution;
-    expect(record.client).toBe('взят готовым (--client-dist)');
-    expect(readFileSync(join(outside, 'client/index.html'), 'utf8')).toContain('страница со стороны');
+
+    let status = 0;
+    let output = '';
+    try {
+      execFileSync(
+        process.execPath,
+        [BUNDLE_SCRIPT, '--out', outside, '--client-dist', prebuilt, '--quiet'],
+        { cwd: REPO, env: { ...process.env, NODE_OPTIONS: '' }, timeout: 120_000, encoding: 'utf8' },
+      );
+    } catch (error) {
+      const failure = error as { status?: number; stderr?: string };
+      status = failure.status ?? 0;
+      output = failure.stderr ?? '';
+    }
+    // Отказ ГРОМКИЙ и названный, а не молчаливое игнорирование флага: скрипт, в
+    // котором он написан, обязан узнать, что поведение сменилось.
+    expect(status).toBe(2);
+    expect(output).toContain('--client-dist');
+    expect(output).toContain('SRV-7');
+    expect(existsSync(join(outside, 'distribution.json'))).toBe(false);
   }, 120_000);
 
   it('агент из дистрибутива поднимает сервер и раздаёт дерево, не заглядывая в репозиторий', async () => {

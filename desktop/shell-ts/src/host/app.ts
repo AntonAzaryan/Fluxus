@@ -12,8 +12,9 @@
  * Клея Electron тут нет: модуль — чистый Node, и именно он поднимается в
  * контрактном сьюте гейта (DSK-6).
  */
+import { readdirSync, statSync, type Dirent } from 'node:fs';
 import { readFile } from 'node:fs/promises';
-import { dirname, isAbsolute, resolve } from 'node:path';
+import { dirname, isAbsolute, join, resolve } from 'node:path';
 import { normalizeAppProfile, type AppProfile } from '../bridge/profile.js';
 import type { BridgeRootId } from '../bridge/types.js';
 import { createHostBridge, type HostBridgeHandle, type HostBridgeOptions } from './bridge.js';
@@ -88,10 +89,59 @@ export interface OpenedApp {
  * Поднимает приложение профиля. Корни открываются в объявленном порядке, бандл
  * идёт первым слоем раздачи (см. основание в `serve.ts`).
  */
+/**
+ * Имена верхнего уровня раздаваемого корня, которые БАНДЛ заслоняет собой: он
+ * идёт первым слоем раздачи, и совпадение имён означает, что запрос ассета
+ * получит копию из бандла вместо живого дерева (DSK-4).
+ *
+ * Копия эта заводится не по злому умыслу: обычная веб-сборка приложения кладёт
+ * дерево контента внутрь бандла (`publicDir`), потому что в вебе раздаёт его
+ * она сама. В контейнере дерево раздаёт контейнер — и раздаёт ЖИВОЕ, чтобы
+ * правка документа доезжала до кадра; заслонённое снимком, оно перестало бы
+ * меняться, а виноватым выглядел бы контейнер. Отсюда `*:desktop`-сборки
+ * приложений и эта сверка на старте.
+ *
+ * Сравниваются КАТАЛОГИ верхнего уровня, а не всякое совпадение имён: копия
+ * дерева приезжает целиком, каталогами (`scenes`, `matches`, `visuals`), а
+ * одинокий одноимённый ФАЙЛ — обычное дело и ровно то, ради чего слои
+ * упорядочены (`index.html` бандла закрывает собой одноимённый файл корня).
+ *
+ * Каталог, которого нет, ничего не заслоняет; нечитаемый — не повод падать
+ * вместо запуска (профиль проверяется дальше, и его отказ точнее).
+ */
+export function shadowedNames(bundleDir: string, rootDir: string): readonly string[] {
+  let entries: readonly Dirent[];
+  try {
+    entries = readdirSync(rootDir, { withFileTypes: true });
+  } catch {
+    return [];
+  }
+  return entries
+    .filter((entry) => entry.isDirectory() && statSync(join(bundleDir, entry.name), { throwIfNoEntry: false })?.isDirectory() === true)
+    .map((entry) => entry.name);
+}
+
 export function openApp(options: OpenAppOptions): OpenedApp {
   const { profile } = options;
   if (profile.roots.some((root) => root.id === BUNDLE_ROOT)) {
     throw new Error(`профиль "${profile.id}": имя корня "${BUNDLE_ROOT}" занято слоем бандла`);
+  }
+  // Бандл со снимком раздаваемого корня — НАЗВАННЫЙ отказ на старте, а не
+  // молчаливая раздача копии: «базовый адрес дерева контента сообщается
+  // приложению контейнером» (DSK-4), и приложение вправе считать, что по нему
+  // лежит то же, что на диске. Проверка ровно та же, что у раздачи агента хоста
+  // (`server-control` SRV-8), и повторена она здесь, а не заимствована: контейнер
+  // не зависит от пакетов репозитория (DSK-3).
+  for (const root of profile.roots) {
+    if (!root.serve) continue;
+    const shadowed = shadowedNames(profile.bundle, root.directory);
+    if (shadowed.length > 0) {
+      throw new Error(
+        `профиль "${profile.id}": бандл "${profile.bundle}" несёт в себе копию корня ` +
+          `"${root.id}" (${shadowed.join(', ')}) и заслонил бы живое дерево (DSK-4). ` +
+          'Соберите бандл без копии дерева — сборкой `*:desktop`',
+      );
+    }
   }
   const shared = {
     ...(options.observer === undefined ? {} : { observer: options.observer }),

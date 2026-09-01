@@ -39,6 +39,7 @@ import {
   type ModifierRegistry,
   type NavigationApi,
   type PhysicsApi,
+  type ReadonlySimulationState,
   type SimulationState,
   type Snapshot,
   type SystemContext,
@@ -249,8 +250,11 @@ function result(state: SimulationState, isReplay: boolean): TickResult {
 /**
  * Полная копия состояния для истории (SNAP-1). Снимается с интервалом, который
  * выбирает потребитель (SNAP-4), а не на каждом тике.
+ *
+ * Принимает read-only проекцию: снятие снапшота — чтение, и наблюдателю,
+ * ведущему историю из `onTick`, доступного ему отчёта (OBS-1) для этого хватает.
  */
-export function takeSnapshot(state: SimulationState): Snapshot {
+export function takeSnapshot(state: ReadonlySimulationState): Snapshot {
   return {
     tick: state.tick,
     world: cloneWorld(state.world),
