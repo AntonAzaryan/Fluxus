@@ -1001,6 +1001,14 @@ function effectOperation(
  * описанием (ED-2, ED-14). Имена событий, наоборот, — контент: их подсказывает
  * тот же сбор эмитируемых типов, что у таблицы эффектов, и закрытым списком он
  * не является.
+ *
+ * Показываются при этом ОБЕ таблицы одинаково: имена перечня плюс имена, уже
+ * лежащие в документе. Манифест ключей этих таблиц не нормирует
+ * (`validateManifest` принимает любые), и ключ вне словаря там оказывается по
+ * двум честным поводам — опечатка автора и состояние, выведенное из REND-4
+ * позже. Показывай мы один словарь, такая запись стала бы невидимой и
+ * несносимой из редактора, то есть чинилась бы только правкой JSON руками —
+ * ровно тем, что ED-14 запрещает считать обязательным.
  */
 function animationRows(
   context: AreaContext<AssetAreaState>,
@@ -1011,10 +1019,13 @@ function animationRows(
   if (record === null) return [];
   const off = context.mode === 'preview';
   const mapping = record.animations?.[table] ?? {};
-  const names =
-    table === 'states'
-      ? ANIMATION_STATES
-      : [...new Set([...Object.keys(mapping), ...eventSuggestions(context)])].sort();
+  // Порядок: сначала словарь (у состояний он смысловой — от покоя к падению,
+  // и алфавит его сломал бы), затем всё, что лежит в документе сверх него.
+  const known = table === 'states' ? ANIMATION_STATES : [...eventSuggestions(context)].sort();
+  const extra = Object.keys(mapping)
+    .filter((name) => !known.includes(name))
+    .sort();
+  const names = [...known, ...extra];
   const row = (name: string): FieldRowSpec => ({
     label: documentValue(name),
     control: textField({

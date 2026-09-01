@@ -512,6 +512,54 @@ describe('ED-29: каждая операция записи манифеста �
     expect(result.recorded).toBe(true);
   });
 
+  /**
+   * Пути СНЯТИЯ — отдельный случай той же обратимости (ED-18, ED-29): они
+   * удаляют места и подчищают опустевшие карты, а `document.removeValue` в
+   * обратную сторону отыгрывается иначе, чем `setValue`. Прогонять их той же
+   * оснасткой обязательно: правка, которую нечем отменить, из истории выпала.
+   */
+  it('снятие клипа обратимо вместе с подчисткой опустевших таблиц (ED-18)', () => {
+    const result = runOperationRoundTrip(scratch(), VISUALS_OPERATIONS.setAnimation, {
+      document: ASSET_IDS.visuals,
+      entry: 'Hero',
+      table: 'states',
+      // Единственный клип фикстуры: с ним уходит и таблица, и весь блок.
+      name: 'idle',
+      clip: '',
+    });
+    expect(result.findings).toEqual([]);
+    expect(result.recorded).toBe(true);
+  });
+
+  it('снятие ссылки на карту кривизны обратимо (ED-18)', () => {
+    const session = scratch();
+    session.applyOperation(VISUALS_OPERATIONS.setCurvatureMap, {
+      document: ASSET_IDS.visuals,
+      asset: 'visuals/terrain/curvature.json',
+    });
+    const result = runOperationRoundTrip(session, VISUALS_OPERATIONS.setCurvatureMap, {
+      document: ASSET_IDS.visuals,
+      asset: '',
+    });
+    expect(result.findings).toEqual([]);
+    expect(result.recorded).toBe(true);
+  });
+
+  it('снятие того, чего нет, в историю не попадает — и ничего не меняет (ED-29)', () => {
+    // Обе ветви сразу: операция, не записанная в историю, обязана быть
+    // операцией, не изменившей ни байта, — это и сверяет оснастка.
+    for (const params of [
+      { entry: 'Hero', table: 'states', name: 'jump', clip: '' },
+      { asset: '' },
+    ]) {
+      const id =
+        'asset' in params ? VISUALS_OPERATIONS.setCurvatureMap : VISUALS_OPERATIONS.setAnimation;
+      const result = runOperationRoundTrip(scratch(), id, { document: ASSET_IDS.visuals, ...params });
+      expect(result.findings, id).toEqual([]);
+      expect(result.recorded, id).toBe(false);
+    }
+  });
+
   it('в наборе шесть операций — три назначения ED-20 и три правки ED-14', () => {
     expect(VISUALS_AUTHORING_OPERATIONS.map((operation) => operation.id)).toEqual([
       VISUALS_OPERATIONS.setModel,
@@ -771,6 +819,34 @@ describe('ED-14: манифест правится весь, а не тольк�
         asset: 'https://example.test/curvature.json',
       });
     }).toThrow(/ASSET-2/);
+  });
+
+  it('ключ вне словаря состояний виден и сносим из редактора (ED-14)', async () => {
+    // Манифест ключей таблицы не нормирует: опечатка автора и состояние,
+    // выведенное из REND-4 позже, попадают в документ на равных. Показывай
+    // редактор один словарь — такая запись чинилась бы только правкой JSON.
+    const fixture = await buildAssetFrame();
+    fixture.state.entry = 'Hero';
+    fixture.session.applyOperation('document.setValue', {
+      document: ASSET_IDS.visuals,
+      path: ['entities', 'Hero', 'animations', 'states', 'idel'],
+      value: 'Stand',
+    });
+
+    const labelled = (name: string): UiNode | undefined =>
+      findAll(fixture.frame.view(), (node) => node.tag === 'input').find(
+        (node) => node.labels?.ariaLabel?.value === name,
+      );
+    const row = labelled('idel');
+    expect(row, 'строки опечатки в инспекторе нет').toBeDefined();
+    expect(row?.labels?.value?.value).toBe('Stand');
+
+    // И сносится она тем же способом, что любая другая: пустым значением.
+    row?.on?.change?.({ target: { value: '' } } as unknown as Event);
+    const entries = fixture.session.documentValue(ASSET_IDS.visuals) as {
+      entities: Record<string, { animations?: { states?: Record<string, string> } }>;
+    };
+    expect(entries.entities.Hero?.animations?.states?.idel).toBeUndefined();
   });
 
   it('инспектор показывает все три правки, а не отсылает автора в JSON', async () => {

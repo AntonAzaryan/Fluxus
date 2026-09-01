@@ -553,10 +553,19 @@ export async function createEditorApp(options: EditorAppOptions): Promise<Editor
    * меняют появление и исчезновение файла, а не правка байтов уже известного,
    * поэтому `modified` индекса не касается: перечисление вернуло бы тот же
    * набор путей, и прогон правил был бы оплачен зря (ED-8).
+   *
+   * Исчезновение перечисляется ВСЕГДА — в том числе по пути, которого индекс не
+   * знает. Среда вправе сообщить об удалении КАТАЛОГА одним событием на сам
+   * каталог (`desktop/shell-ts/src/host/root.ts`), и файла с таким путём в
+   * индексе нет ни одного, а исчезли все, что лежали под ним. Сверка «знаю ли я
+   * этот путь» приняла бы такое удаление за чужое, и индекс продолжил бы
+   * утверждать, что удалённые ассеты на месте, — то есть правило молчало бы о
+   * реальных находках до переоткрытия проекта (ED-12).
    */
   host.content.watch((change) => {
     if (change.kind === 'modified') return;
-    if (contentIndex.has(change.path) === (change.kind === 'created')) return;
+    // Появление того, что индекс уже знает, состава не меняет.
+    if (change.kind === 'created' && contentIndex.has(change.path)) return;
     void contentIndex.refresh().then(() => {
       (frame.stateOf(SCENE_AREA_ID) as SceneAreaState).revalidate();
     });

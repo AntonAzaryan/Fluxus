@@ -414,14 +414,20 @@ describe('ED-11: у величины кисти кривизны нет пото
     expect(rows[1]?.[1]).toBe(-96);
   });
 
-  it('нечисловой ввод кисть не трогает: NaN в документе — не «без клампа»', async () => {
+  it.each([
+    ['высоко', 'нечисловой ввод'],
+    ['', 'очищенное поле'],
+    ['1.5', 'нецелый множитель решётки'],
+  ])('%s кисть не трогает: прежняя величина остаётся видимой (ED-11, ASSET-7)', async (typed) => {
     const fixture = withCells(await buildLoadedFrame());
     press(buttonByKey(view(fixture), 'ui.area.scene.toolTerrain'));
     fixture.state.brush.setLayer('curvature');
     fixture.state.brush.setOffset(4);
 
     const input = inputByKey(zoneOf(view(fixture), 'surface'), 'ui.area.scene.brushOffset');
-    input?.on?.change?.({ target: { value: 'высоко' } } as unknown as Event);
+    input?.on?.change?.({ target: { value: typed } } as unknown as Event);
+    // Очищенное поле — не ноль: `Number('')` равен нулю, и кисть, поехавшая от
+    // очистки в выравнивание, стирала бы рельеф по одному узлу за мазок.
     expect(fixture.state.brush.offset).toBe(4);
   });
 });

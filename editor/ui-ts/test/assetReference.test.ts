@@ -8,7 +8,15 @@
  * первого прогона и что правка дерева извне доезжает до находок (ED-12) — тем
  * же каналом, которым едет hot-reload импорта.
  */
-import { createMemoryHost, ASSET_REFERENCE_RULE, type MemoryHost } from '@fluxus/editor-core';
+import {
+  createMemoryHost,
+  ASSET_REFERENCE_RULE,
+  type ContentChange,
+  type ContentTreeHost,
+  type ContentWatcher,
+  type EnvironmentHost,
+  type MemoryHost,
+} from '@fluxus/editor-core';
 import { describe, expect, it } from 'vitest';
 import { createEditorApp } from '../app/assembly.js';
 import { SCENE_AREA_ID, type SceneAreaState } from '../src/areas/scene.js';
@@ -47,6 +55,32 @@ async function opened(files: Readonly<Record<string, string>> = {}): Promise<{
   return { host, state };
 }
 
+/**
+ * Хост, чей канал изменений держит тест. Нужен затем, чтобы воспроизвести
+ * событие, которого хост в памяти сам не порождает: удаление КАТАЛОГА одним
+ * событием на сам каталог — так о нём сообщает десктопный мост
+ * (`desktop/shell-ts/src/host/root.ts`), и файла с таким путём в индексе нет.
+ */
+function watchable(host: MemoryHost): {
+  readonly host: EnvironmentHost;
+  emit: (change: ContentChange) => void;
+} {
+  const watchers = new Set<ContentWatcher>();
+  const content: ContentTreeHost = {
+    ...host.content,
+    watch(listener) {
+      watchers.add(listener);
+      return () => watchers.delete(listener);
+    },
+  };
+  return {
+    host: { ...host, content },
+    emit: (change) => {
+      for (const watcher of [...watchers]) watcher(change);
+    },
+  };
+}
+
 const assetIssues = (state: SceneAreaState) =>
   (state.report?.issues ?? []).filter((issue) => issue.ruleId === ASSET_REFERENCE_RULE);
 
@@ -68,6 +102,24 @@ describe('ED-14: ссылка манифеста в никуда подсвеч�
     expect(assetIssues(state)).toEqual([]);
     // Молчание — не «правило не сработало»: отчёт собран, и правило в нём есть.
     expect(state.report).not.toBeNull();
+  });
+
+  it('удаление каталога одним событием доходит до индекса (ED-12)', async () => {
+    const memory = projectHost({ [HERO_MODEL]: 'модель-фикстура' });
+    const { host, emit } = watchable(memory);
+    const app = await createEditorApp({ host });
+    const state = app.frame.stateOf(SCENE_AREA_ID) as SceneAreaState;
+    await settle();
+    expect(assetIssues(state)).toEqual([]);
+
+    // Каталог с моделью исчез: файлов под ним больше нет, а событие пришло одно
+    // — на сам каталог, пути которого индекс не знает.
+    memory.remove(HERO_MODEL);
+    emit({ path: 'art/models', kind: 'removed' });
+    await settle();
+
+    expect(assetIssues(state)).toHaveLength(1);
+    expect(assetIssues(state)[0]!.reasonParams.asset).toBe(HERO_MODEL);
   });
 
   it('появившийся в дереве файл снимает находку тем же каналом, что hot-reload (ED-12)', async () => {

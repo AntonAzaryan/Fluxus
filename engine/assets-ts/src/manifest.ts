@@ -22,6 +22,7 @@
  */
 import { resolveLightBlock, type ResolvedVisualLight, type VisualLight } from './visualLight.js';
 import type { CameraConfigSection, CameraEffectsSection } from './cameraEffects.js';
+import type { AssetKind } from './types.js';
 
 /** Ключ — sim-идентификатор (имя prefab'а/архетипа). */
 export interface VisualManifest {
@@ -198,13 +199,18 @@ export function resolveParticlesByEvent(
 }
 
 /**
- * Ссылка манифеста на ассет дерева контента: путь внутри документа и сам ID
- * (ASSET-2). Путь — адрес находки валидации (`editor` ED-30), поэтому он
- * поэлементный, а не строкой.
+ * Ссылка манифеста на ассет дерева контента: путь внутри документа, сам ID
+ * (ASSET-2) и вид ассета, которым ID грузится (ASSET-3). Путь — адрес находки
+ * валидации (`editor` ED-30), поэтому он поэлементный, а не строкой.
+ *
+ * Вид назван тем же словарём, что у реестра загрузчиков (`AssetKind`), а не
+ * своим перечислением: спрашивающему, который ссылку РАЗБИРАЕТ, нужен именно
+ * загрузчик, и второе имя одного и того же вида разошлось бы с реестром молча.
  */
 export interface VisualAssetRef {
   readonly path: readonly (string | number)[];
   readonly asset: string;
+  readonly kind: AssetKind;
 }
 
 /**
@@ -214,9 +220,10 @@ export interface VisualAssetRef {
  * Живёт у владельца формата, а не у спрашивающего: где в записи лежит ID
  * ассета, знает манифест (ASSET-6), и второй перечень этих мест разошёлся бы с
  * форматом молча при первом же новом поле — ровно тем дефектом, который
- * `editor` ED-1 запрещает заводить редактору. Спрашивающих двое: правило
- * редактора, подсвечивающее ссылку в никуда до диска (ED-14), и проверка
- * контента репозитория.
+ * `editor` ED-1 запрещает заводить редактору. Спрашивающих двое, и оба зовут
+ * именно это: правило редактора, подсвечивающее ссылку в никуда до диска
+ * (ED-14), и проверка контента репозитория (`integration-ts`), которая
+ * отбирает ссылки нужного ей вида и разбирает документы за ними.
  *
  * Порядок обхода устойчив — разделы, затем секция эмиттеров, затем террейн, а
  * внутри раздела порядок ключей документа: находки валидации сортируются по
@@ -228,11 +235,14 @@ export function manifestAssetRefs(
 ): readonly VisualAssetRef[] {
   const refs: VisualAssetRef[] = [];
   const entryRefs = (section: 'entities' | 'decorations', key: string, entry: DecorationVisual): void => {
-    if (isEmitterVisual(entry)) refs.push({ path: [section, key, 'effect'], asset: entry.effect });
-    else refs.push({ path: [section, key, 'model'], asset: entry.model });
+    if (isEmitterVisual(entry)) {
+      refs.push({ path: [section, key, 'effect'], asset: entry.effect, kind: 'particle-effect' });
+    } else {
+      refs.push({ path: [section, key, 'model'], asset: entry.model, kind: 'model' });
+    }
     for (const [skin, slots] of Object.entries(entry.skins ?? {})) {
       for (const [slot, texture] of Object.entries(slots)) {
-        refs.push({ path: [section, key, 'skins', skin, slot], asset: texture });
+        refs.push({ path: [section, key, 'skins', skin, slot], asset: texture, kind: 'texture' });
       }
     }
   };
@@ -242,11 +252,17 @@ export function manifestAssetRefs(
   }
   for (const table of ['byKind', 'byState', 'byEvent'] as const) {
     for (const [key, record] of Object.entries(manifest.particles?.[table] ?? {})) {
-      refs.push({ path: ['particles', table, key, 'effect'], asset: record.effect });
+      refs.push({
+        path: ['particles', table, key, 'effect'],
+        asset: record.effect,
+        kind: 'particle-effect',
+      });
     }
   }
   const curvature = manifest.terrain?.curvatureMap;
-  if (curvature !== undefined) refs.push({ path: ['terrain', 'curvatureMap'], asset: curvature });
+  if (curvature !== undefined) {
+    refs.push({ path: ['terrain', 'curvatureMap'], asset: curvature, kind: 'terrain-curvature' });
+  }
   return refs;
 }
 

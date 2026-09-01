@@ -17,6 +17,7 @@ import {
   resolveParticlesByKind,
   resolveParticlesByState,
   resolveVisual,
+  manifestAssetRefs,
   resolveVisualClaim,
   resolveVisualEmitter,
   resolveVisualLight,
@@ -1067,6 +1068,71 @@ describe('validateManifest: блок света записи (ASSET-16)', () => 
       /entities\.a\.light\.type: обязательное поле — род источника/,
     );
     expect(errors.some((e) => e.includes('light.angle'))).toBe(false);
+  });
+});
+
+/**
+ * Перечень ссылок манифеста на ассеты — тоже один на репозиторий: по нему
+ * правило редактора подсвечивает ссылку в никуда (`editor` ED-14), а проверка
+ * контента (`integration-ts`) отбирает документы эффектов и разбирает их
+ * (ASSET-14). Вид ссылки назван словарём реестра загрузчиков (ASSET-3), потому
+ * что спрашивающему, который ссылку РАЗБИРАЕТ, нужен именно загрузчик.
+ */
+describe('manifestAssetRefs: где в манифесте лежат ID ассетов (ASSET-6)', () => {
+  const parsed = (value: unknown) => {
+    const result = validateManifest(value);
+    if (!result.ok) throw new Error(result.errors.join('; '));
+    return result.manifest;
+  };
+
+  it('перечисляет модели, текстуры скинов, эмиттеры обеих секций и карту кривизны', () => {
+    const refs = manifestAssetRefs(
+      parsed({
+        entities: {
+          Hero: { model: 'visuals/hero.mdx', skins: { red: { '0': 'visuals/hero-red.png' } } },
+        },
+        decorations: { torch: { effect: 'visuals/effects/torch.effect.json' } },
+        particles: { byKind: { Fireball: { effect: 'visuals/effects/trail.effect.json' } } },
+        terrain: { curvatureMap: 'visuals/terrain/curvature.json' },
+      }),
+    );
+    expect(refs).toEqual([
+      { path: ['entities', 'Hero', 'model'], asset: 'visuals/hero.mdx', kind: 'model' },
+      {
+        path: ['entities', 'Hero', 'skins', 'red', '0'],
+        asset: 'visuals/hero-red.png',
+        kind: 'texture',
+      },
+      {
+        path: ['decorations', 'torch', 'effect'],
+        asset: 'visuals/effects/torch.effect.json',
+        kind: 'particle-effect',
+      },
+      {
+        path: ['particles', 'byKind', 'Fireball', 'effect'],
+        asset: 'visuals/effects/trail.effect.json',
+        kind: 'particle-effect',
+      },
+      {
+        path: ['terrain', 'curvatureMap'],
+        asset: 'visuals/terrain/curvature.json',
+        kind: 'terrain-curvature',
+      },
+    ]);
+  });
+
+  it('манифест без ссылок отдаёт пустой перечень, а не бросает', () => {
+    expect(manifestAssetRefs(parsed({ entities: {} }))).toEqual([]);
+  });
+
+  it('секция эффектов ссылок на ассеты не несёт: её примитивы рисует рендер (REND-23)', () => {
+    const refs = manifestAssetRefs(
+      parsed({
+        entities: {},
+        effects: { byKind: { Fireball: { primitive: 'sphere', color: '#f80', radius: 1 } } },
+      }),
+    );
+    expect(refs).toEqual([]);
   });
 });
 
