@@ -350,7 +350,7 @@
       }
     },
     "abilityShape": {
-      "$comment": "Словарь фигур общий со словарём форм коллайдера (PHYS-2); круг с полууглом — конус (ABIL-5).",
+      "$comment": "Словарь фигур общий со словарём форм коллайдера (PHYS-2); круг с полууглом — конус (ABIL-5). Размеры — ЛИТЕРАЛЫ, а не выражения: фигуру читает и превью, которому мира не дано (REND-28).",
       "type": "object",
       "additionalProperties": false,
       "required": [
@@ -364,16 +364,17 @@
           ]
         },
         "radius": {
-          "$ref": "#/$defs/expression"
+          "type": "number"
         },
         "halfX": {
-          "$ref": "#/$defs/expression"
+          "type": "number"
         },
         "halfY": {
-          "$ref": "#/$defs/expression"
+          "type": "number"
         },
         "halfAngle": {
-          "$ref": "#/$defs/expression"
+          "$comment": "Полуугол — доля оборота в Q16.16 (FP-7).",
+          "type": "number"
         }
       }
     },

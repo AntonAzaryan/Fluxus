@@ -16,7 +16,12 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 
-const SYSTEMS = join(dirname(fileURLToPath(import.meta.url)), '..', 'src', 'systems');
+/**
+ * Обход идёт по ВСЕМУ `src`, а не по одному `systems/`: система за контрактом
+ * `System` живёт и в `dsl/` (исполнитель систем-данных), и правило «каждая
+ * система» иначе накрывало бы не каждую.
+ */
+const SRC = join(dirname(fileURLToPath(import.meta.url)), '..', 'src');
 
 /** Строка стенда: `TimeScale (TIME-5): учитывает|игнорирует — почему`. */
 const STANCE = /TimeScale \(TIME-5\): (?:учитывает|игнорирует)/u;
@@ -35,7 +40,7 @@ function sources(dir: string): readonly string[] {
 }
 
 describe('TIME-5: отношение системы к TimeScale документировано', () => {
-  const systemFiles = sources(SYSTEMS).filter((path) =>
+  const systemFiles = sources(SRC).filter((path) =>
     DECLARES_SYSTEM.test(readFileSync(path, 'utf8')),
   );
 
@@ -43,10 +48,10 @@ describe('TIME-5: отношение системы к TimeScale докумен�
     expect(systemFiles.length).toBeGreaterThan(10);
   });
 
-  it.each(systemFiles.map((path) => path.slice(SYSTEMS.length + 1)))(
+  it.each(systemFiles.map((path) => path.slice(SRC.length + 1)))(
     '%s называет своё решение',
     (relative) => {
-      expect(readFileSync(join(SYSTEMS, relative), 'utf8')).toMatch(STANCE);
+      expect(readFileSync(join(SRC, relative), 'utf8')).toMatch(STANCE);
     },
   );
 });

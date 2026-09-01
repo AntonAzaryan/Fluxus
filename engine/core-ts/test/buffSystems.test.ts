@@ -198,7 +198,9 @@ describe('Наложение инстанса (BUFF-1, BUFF-2)', () => {
 // ---------------------------------------------------------------- стакинг
 
 describe('Политики стакинга (BUFF-3)', () => {
-  const base: BuffDef = { id: 'x', class: 'negative', durationTicks: 5 };
+  // Политика у базы названа явно (BUFF-3), а каждый тест перекрывает её своей:
+  // умолчания у поля нет, и «база без политики» документом невыразима.
+  const base: BuffDef = { id: 'x', class: 'negative', durationTicks: 5, stacking: 'independent' };
 
   it('`refresh`: повторное наложение продлевает действующий, второй сущности не появляется', () => {
     const h = harness(scene([{ ...base, stacking: 'refresh' }]));

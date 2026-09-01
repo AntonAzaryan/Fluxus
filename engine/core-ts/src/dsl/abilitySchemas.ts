@@ -43,16 +43,17 @@ export const abilityTrigger: Json = {
 };
 
 export const abilityShape: Json = {
-  $comment: 'Словарь фигур общий со словарём форм коллайдера (PHYS-2); круг с полууглом — конус (ABIL-5).',
+  $comment:
+    'Словарь фигур общий со словарём форм коллайдера (PHYS-2); круг с полууглом — конус (ABIL-5). Размеры — ЛИТЕРАЛЫ, а не выражения: фигуру читает и превью, которому мира не дано (REND-28).',
   type: 'object',
   additionalProperties: false,
   required: ['kind'],
   properties: {
     kind: { enum: ['aabb', 'circle'] },
-    radius: { $ref: '#/$defs/expression' },
-    halfX: { $ref: '#/$defs/expression' },
-    halfY: { $ref: '#/$defs/expression' },
-    halfAngle: { $ref: '#/$defs/expression' },
+    radius: { type: 'number' },
+    halfX: { type: 'number' },
+    halfY: { type: 'number' },
+    halfAngle: { $comment: 'Полуугол — доля оборота в Q16.16 (FP-7).', type: 'number' },
   },
 };
 

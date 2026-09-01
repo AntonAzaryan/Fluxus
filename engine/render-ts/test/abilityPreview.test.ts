@@ -27,6 +27,7 @@ import {
   loadScene,
   type AbilityCatalog,
   type EntityId,
+  type Expression,
   type SceneDef,
 } from '@fluxus/core';
 import {
@@ -84,8 +85,11 @@ const SCENE: SceneDef = {
     {
       id: 'scaled',
       trigger: { input: { bit: 3 } },
+      // Радиус здесь литеральный: вычисляемый размер документом невыразим —
+      // загрузчик его отвергает (ABIL-5). Каталог этой способности подменяется
+      // после загрузки (`catalog`), потому что защита превью — про КАТАЛОГ.
       targeting: {
-        steps: [{ kind: 'point', shape: { kind: 'circle', radius: { var: 'level' } } }],
+        steps: [{ kind: 'point', shape: { kind: 'circle', radius: F(1) } }],
       },
       effects: [],
     },
@@ -139,10 +143,22 @@ function withSlot(entity: EntityId, state: SlotState, partial: Partial<EntityVie
   return makeEntityView(entity, { kind: null, stats, ...partial });
 }
 
+/**
+ * Каталог сцены плюс ОДНА подмена: у способности `scaled` размер фигуры —
+ * выражение. Документом такое невыразимо (ABIL-5: размеры фигуры — литералы, и
+ * загрузчик отвергает вычисляемый), но входом превью служит КАТАЛОГ, а не
+ * документ, и собственная защита подсистемы — «вычислить нечем, значит не
+ * рисуем» (REND-28) — остаётся её нормой: превью, показавшее выдуманный радиус,
+ * врало бы игроку.
+ */
 function catalog(): AbilityCatalog {
   const abilities = loadScene(SCENE).abilities;
   if (abilities === undefined) throw new Error('сцена обязана дать каталог определений');
-  return abilities;
+  const steps = [...abilities.steps];
+  const scaled = abilities.abilities[SCALED]!.stepStart;
+  const computed: Expression = { var: 'level' };
+  steps[scaled] = { ...steps[scaled]!, shapeA: computed };
+  return { ...abilities, steps };
 }
 
 const HERO = 1 as EntityId;
@@ -413,8 +429,16 @@ describe('Превью каста: цепочка шагов (REND-28)', () => {
     expect(drawn[0]!.position.x).toBeCloseTo(4, 6);
     expect(drawn[0]!.position.y).toBeCloseTo(0, 6);
     expect(drawn[0]!.scale.x).toBeCloseTo(0.5, 6);
-    // Текущий шаг — вектор от кастера на точку локального сэмпла.
-    expect(drawn[1]!.rotation.z).toBeCloseTo(Math.PI / 2, 6);
+    // Текущий шаг — вектор от НАЧАЛА ШАГА на точку локального сэмпла, а начало
+    // второго шага — сущность первого (ABIL-5, `stepOriginX/Y` ядра), а не
+    // владелец: якорь у превью и у проверки один. Герой в (1,0), цель в (4,0),
+    // прицел в (1,8) — направление считается от (4,0), то есть atan2(8, −3).
+    const yaw = Math.atan2(8, -3);
+    expect(drawn[1]!.rotation.z).toBeCloseTo(yaw, 6);
+    // Прямоугольник шага-вектора вытянут вдоль направления ближней гранью у
+    // начала шага: его центр отстоит от цели первого шага на полуось.
+    expect(drawn[1]!.position.x).toBeCloseTo(4 + Math.cos(yaw) * 3, 6);
+    expect(drawn[1]!.position.y).toBeCloseTo(0 + Math.sin(yaw) * 3, 6);
     expect(drawn[1]!.scale.x).toBeCloseTo(3, 6);
     expect(drawn[1]!.scale.y).toBeCloseTo(0.5, 6);
   });

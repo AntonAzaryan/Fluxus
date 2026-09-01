@@ -9,11 +9,33 @@
  */
 import { distSqLe } from '../../math/fixed.js';
 import { lengthOf } from '../../math/vector.js';
-import { evaluate } from '../../dsl/expr.js';
+import { evaluate, type Expression } from '../../dsl/expr.js';
 import { SHAPE_CIRCLE } from '../physics.js';
 import { fixedOf, type ExprVarsRecord } from './runtime.js';
 import type { CompiledAbility, CompiledStep } from './model.js';
 import type { Fixed, SystemContext } from '../../types.js';
+
+/**
+ * Размер фигуры: число Q16.16 определения. Текст места собирается ТОЛЬКО на пути
+ * броска (ABIL-10, аллокационная дисциплина ядра) — связывание гейта случается у
+ * каждого подтверждающего слота каждый тик, и шаблонная строка на нём была бы
+ * аллокацией, пропорциональной числу слотов.
+ *
+ * Размеры фигуры — литералы определения (ABIL-5, проверка на загрузке), поэтому
+ * вычисление здесь тривиально и бросок недостижим для валидного каталога; путь
+ * оставлен ради общего правила «значение не того типа — ошибка вычисления»
+ * (SYS-9) и на случай, если словарь фигур когда-нибудь получит вычисляемое поле.
+ */
+function size(
+  ctx: SystemContext,
+  ability: CompiledAbility,
+  expr: Expression,
+  vars: ExprVarsRecord,
+): Fixed {
+  const value = evaluate(expr, ctx, vars);
+  if (typeof value !== 'number') return fixedOf(value, `способность "${ability.id}": фигура шага`);
+  return value;
+}
 
 /**
  * Фигура шага как ГЕЙТ выбора (ABIL-5): «фигура — источник правды и для отбора
@@ -70,12 +92,11 @@ export class StepShapeGate {
   ): void {
     this.directed = false;
     if (step.shapeKind !== SHAPE_CIRCLE || step.halfAngle === undefined) return;
-    const where = `способность "${ability.id}": фигура шага`;
     // Круг без радиуса пределом расстояния не является — им остаётся `range`.
     const radius = step.shapeA;
     this.bounded = radius !== undefined;
-    this.radius = radius === undefined ? 0 : fixedOf(evaluate(radius, ctx, vars), where);
-    this.cosHalfAngle = ctx.math.cos(fixedOf(evaluate(step.halfAngle, ctx, vars), where));
+    this.radius = radius === undefined ? 0 : size(ctx, ability, radius, vars);
+    this.cosHalfAngle = ctx.math.cos(size(ctx, ability, step.halfAngle, vars));
     this.originX = originX;
     this.originY = originY;
     const dx = ctx.math.sub(aimPointX, originX);

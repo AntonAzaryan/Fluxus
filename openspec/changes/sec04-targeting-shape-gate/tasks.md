@@ -28,15 +28,31 @@
       сущности шагом `unit`.
 - [x] 2.4 `engine/core-ts/test/abilitySystems.test.ts`: блок «Фигура шага сужает выбор сущности (ABIL-5)» —
       цель внутри конуса, вне раствора, за спиной, дальше радиуса фигуры и фигура без полуугла.
+- [x] 2.5 `engine/core-ts/src/systems/abilities/catalog.ts`: размеры фигуры (`radius`, `halfX`, `halfY`,
+      `halfAngle`) обязаны быть литералами определения — иначе ошибка загрузки, называющая способность, шаг и
+      поле (ABIL-10): вычисляемый размер симуляция бы применила, а превью не нарисовало (REND-28).
+- [x] 2.6 `engine/core-ts/src/systems/abilities/shape.ts`: текст места ошибки строится только на пути броска
+      (ABIL-10), а не на каждом связывании гейта.
 
-## 3. Контент (игровые данные)
+## 3. Рендер: тот же якорь у превью (D1)
 
-- [x] 3.1 `content/scenes/duel.scene.json`: у способности `capture` из `filter` убран рукописный конус
+- [x] 3.1 `engine/render-ts/src/subsystems/abilityPreview.ts`: `drawChain` ведёт начало шага по цепочке —
+      сущность предыдущего шага, иначе его записанная точка, — вместо владельца для всех шагов; правило
+      совпадает со `stepOriginX/Y` ядра.
+- [x] 3.2 `engine/render-ts/test/abilityPreview.test.ts`: тест цепочки пинит новый якорь — поворот и позиция
+      текущего шага считаются от сущности первого.
+
+## 4. Контент (игровые данные)
+
+- [x] 4.1 `content/scenes/duel.scene.json`: у способности `capture` из `filter` убран рукописный конус
       (скалярное произведение против `cos(5461)`); предикат остался о компонентах, раствор и радиус живут в
       `shape`.
+- [x] 4.2 `game/demo-ts/test/demoAbilities.test.ts`: следствие принятого сужения закреплено тестом
+      «накопленный шаг переживает отвод прицела» — путь «подтвердил кнопкой, отвёл прицел, отпустил»
+      (геймпад и тач-оверлей) теперь заканчивается захватом, а не `targetLost`.
 
-## 4. Гейт
+## 5. Гейт
 
-- [x] 4.1 Тесты `engine/core-ts`, `engine/integration-ts`, `game/demo-ts`; `npm run typecheck`,
+- [x] 5.1 Тесты `engine/core-ts`, `engine/integration-ts`, `game/demo-ts`; `npm run typecheck`,
       `npm run lint`, `npm run lint:dead`, `npm run spec-graph -- check`,
       `npx openspec validate --specs --strict` и `--changes --strict`.
