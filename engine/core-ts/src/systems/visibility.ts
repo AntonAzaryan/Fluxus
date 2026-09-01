@@ -1,5 +1,6 @@
 /**
- * Fog of War (FOW-1..6): компоненты видимости и нативная система пересчёта.
+ * Fog of War (FOW-1..6, FOW-12): компоненты видимости и нативная система
+ * пересчёта.
  *
  * FoW живёт в симуляции, а не в рендере: клиент под контролем игрока, и «скрыть
  * только визуально» — это wallhack. Здесь считается битмаска `Visibility`,
@@ -8,6 +9,15 @@
  * Система нативна (FOW-4) ради перфа raycast-LoS каждый тик, но контракт
  * `System` не обходит: читает через `SystemContext`, пишет только через
  * `ctx.commands` (TICK-3, CMD-4).
+ *
+ * Стелс — канальный (FOW-3): вид невидимости — бит `i32`-маски, у цели
+ * свёртка источников `StealthSources`, у наблюдателя — `DetectionSources`;
+ * скрытость — пер-наблюдательное сравнение масок, причём битмаску `Visibility`
+ * гасят только жёсткие каналы сцены (FOW-12), мягкие — дело доставки состояния
+ * и подачи (FOW-13). Свёртки публикуются производными компонентами
+ * `StealthState`/`DetectionState` — их пишет этот же пересчёт и только при
+ * изменении (правило FOW-6); потребители раньше якоря 900 в тике читают
+ * значение прошлого пересчёта — та же свежесть, что у самой `Visibility`.
  *
  * Опциональные зависимости (DI-3): без `ctx.physics` укрытия не отсекают, без
  * `ctx.terrain` не отсекает высота — сцена без них тикает штатно.
@@ -35,8 +45,9 @@ import {
 
 export const VISION_COMPONENT = 'Vision';
 export const VISIBILITY_COMPONENT = 'Visibility';
-export const STEALTH_COMPONENT = 'Stealth';
 export const TEAM_COMPONENT = 'Team';
+export const STEALTH_STATE_COMPONENT = 'StealthState';
+export const DETECTION_STATE_COMPONENT = 'DetectionState';
 
 /** FOW-1: радиус обзора наблюдателя. */
 export const VISION_SCHEMA: ComponentSchema = {
@@ -50,17 +61,36 @@ export const VISIBILITY_SCHEMA: ComponentSchema = {
   fields: { visibleTo: 'i32' },
 };
 
-/** FOW-3: `active != 0` гасит биты чужих команд. Bool-полей в ECS нет (ECS-3). */
-export const STEALTH_SCHEMA: ComponentSchema = {
-  name: STEALTH_COMPONENT,
-  fields: { active: 'i32' },
-};
-
 /** Принадлежность команде: и бит наблюдателя, и «своя» команда цели (FOW-2, NET-15). */
 export const TEAM_SCHEMA: ComponentSchema = {
   name: TEAM_COMPONENT,
   fields: { id: 'i32' },
 };
+
+/**
+ * FOW-3: эффективная стелс-маска сущности — OR занятых слотов `StealthSources`.
+ * Производный компонент: пишет его пересчёт видимости, и только при изменении;
+ * потребители (условия таргетинга, доставка, подача) читают его, а не слоты —
+ * свёртка в каждом потребителе была бы вторым определением эффективной маски.
+ */
+export const STEALTH_STATE_SCHEMA: ComponentSchema = {
+  name: STEALTH_STATE_COMPONENT,
+  fields: { mask: 'i32' },
+};
+
+/** FOW-3: эффективная маска детекции наблюдателя — OR занятых слотов `DetectionSources`. */
+export const DETECTION_STATE_SCHEMA: ComponentSchema = {
+  name: DETECTION_STATE_COMPONENT,
+  fields: { mask: 'i32' },
+};
+
+/**
+ * FOW-3: слотовые списки источников стелса и детекции — та же раскладка
+ * TIME-7, что у `VisionModifier`, но значение слота — маска каналов `i32`
+ * с нейтралью `0` и свёрткой OR (`systems/modifiers.ts`, values: 'mask').
+ */
+export const STEALTH_SOURCES_COMPONENT = 'StealthSources';
+export const DETECTION_SOURCES_COMPONENT = 'DetectionSources';
 
 /**
  * FOW-3: тот же паттерн списка источников, что у `TimeScaleModifiers` (TIME-7).
@@ -70,13 +100,34 @@ export const TEAM_SCHEMA: ComponentSchema = {
  */
 export const VISION_MODIFIER_COMPONENT = 'VisionModifier';
 
+/** Списки источников группы тумана войны — их создаёт сцена (SER-7, DI-1). */
+export interface FowLists {
+  /** `VisionModifier` — множители радиуса обзора (values: 'scale'). */
+  readonly vision: ModifierList;
+  /** `StealthSources` — маски стелс-каналов цели (values: 'mask'). */
+  readonly stealth: ModifierList;
+  /** `DetectionSources` — маски детекции наблюдателя (values: 'mask'). */
+  readonly detection: ModifierList;
+}
+
 /**
  * Все схемы FoW разом — сцене подключать их одним спредом. Порядок задаёт
- * битовые id (SER-7), поэтому список источников обязан остаться последним.
- * Функция, а не константа: его схема — функция от числа слотов сцены.
+ * битовые id и нормирован FOW-3: `Vision`, `Visibility`, `Team`,
+ * `StealthState`, `DetectionState`, `StealthSources`, `DetectionSources`,
+ * `VisionModifier`. Функция, а не константа: схемы списков — функция от числа
+ * слотов сцены.
  */
-export function fowComponents(modifiers: ModifierList): readonly ComponentSchema[] {
-  return [VISION_SCHEMA, VISIBILITY_SCHEMA, STEALTH_SCHEMA, TEAM_SCHEMA, modifiers.schema];
+export function fowComponents(lists: FowLists): readonly ComponentSchema[] {
+  return [
+    VISION_SCHEMA,
+    VISIBILITY_SCHEMA,
+    TEAM_SCHEMA,
+    STEALTH_STATE_SCHEMA,
+    DETECTION_STATE_SCHEMA,
+    lists.stealth.schema,
+    lists.detection.schema,
+    lists.vision.schema,
+  ];
 }
 
 /** Клампы стакинга модификаторов обзора (FOW-3): сырой Q16.16 — от слепоты до 4.0. */
@@ -91,6 +142,9 @@ export const VISION_SCALE_MAX: Fixed = fixed.fromInt(4);
  * именно оно кладётся в Int32Array — специального случая не нужно, но и
  * трактовать маску как беззнаковую нельзя. Больше 32 команд потребует второго
  * поля (или `u64` в Rust-порте), а не молчаливого переполнения.
+ *
+ * Та же ширина и по тем же основаниям у каналов стелса (FOW-3): бит маски
+ * `StealthSources`/`DetectionSources` — вид невидимости, `[0, 31]`.
  */
 export const MAX_TEAMS = 32;
 
@@ -117,13 +171,18 @@ const ANCHOR_ORDER = 900;
  */
 interface VisibilityHandles {
   /**
-   * Сторона и стелс — компоненты, наличие которых система СПРАШИВАЕТ, а не
-   * требует: сущность без них видна по-настоящему и стелса не имеет.
-   * `undefined` — компонента нет и в схемах сцены, и ответ тот же `false`, что
-   * у строкового пути (`systems/optionalHandle.ts`).
+   * Сторона и производные состояния — компоненты, наличие которых система
+   * СПРАШИВАЕТ, а не требует: сущность без них видна по-настоящему, а
+   * публиковать свёртку некуда. `undefined` — компонента нет и в схемах сцены,
+   * и ответ тот же `false`, что у строкового пути (`systems/optionalHandle.ts`).
    */
   readonly team: { readonly component: ComponentHandle; readonly id: FieldHandle } | undefined;
-  readonly stealth: { readonly component: ComponentHandle; readonly active: FieldHandle } | undefined;
+  readonly stealthState:
+    | { readonly component: ComponentHandle; readonly mask: FieldHandle }
+    | undefined;
+  readonly detectionState:
+    | { readonly component: ComponentHandle; readonly mask: FieldHandle }
+    | undefined;
   readonly posX: FieldHandle;
   readonly posY: FieldHandle;
   readonly visibleTo: FieldHandle;
@@ -132,13 +191,18 @@ interface VisibilityHandles {
 
 function resolveHandles(ctx: SystemContext): VisibilityHandles {
   const team = optionalComponentHandle(ctx, TEAM_COMPONENT);
-  const stealth = optionalComponentHandle(ctx, STEALTH_COMPONENT);
+  const stealthState = optionalComponentHandle(ctx, STEALTH_STATE_COMPONENT);
+  const detectionState = optionalComponentHandle(ctx, DETECTION_STATE_COMPONENT);
   return {
     team: team === undefined ? undefined : { component: team, id: ctx.resolveField(TEAM_COMPONENT, 'id') },
-    stealth:
-      stealth === undefined
+    stealthState:
+      stealthState === undefined
         ? undefined
-        : { component: stealth, active: ctx.resolveField(STEALTH_COMPONENT, 'active') },
+        : { component: stealthState, mask: ctx.resolveField(STEALTH_STATE_COMPONENT, 'mask') },
+    detectionState:
+      detectionState === undefined
+        ? undefined
+        : { component: detectionState, mask: ctx.resolveField(DETECTION_STATE_COMPONENT, 'mask') },
     posX: ctx.resolveField(POSITION_COMPONENT, 'x'),
     posY: ctx.resolveField(POSITION_COMPONENT, 'y'),
     visibleTo: ctx.resolveField(VISIBILITY_COMPONENT, 'visibleTo'),
@@ -153,16 +217,29 @@ function resolveHandles(ctx: SystemContext): VisibilityHandles {
  */
 export type VisibilityOptions = Record<string, never>;
 
+/** Зависимости сборки пересчёта: списки источников сцены и таблица каналов (FOW-12). */
+export interface VisibilityDeps {
+  readonly lists: FowLists;
+  /**
+   * Маска жёстких каналов сцены (FOW-12): взведённый бит — канал жёсткий.
+   * Порождена конфигом (`softStealthChannels`, SER-7), иммутабельна на матч и
+   * в снапшот не входит; умолчание — все каналы жёсткие (`~0`).
+   */
+  readonly hardStealthMask: number;
+}
+
 /**
  * FOW-5: за тик по каждому наблюдателю — кандидаты через `withinRadius`,
- * отсечение перекрытых укрытиями, отсечение уровней выше наблюдателя, учёт
- * `Stealth`. Результат — новая маска `Visibility.visibleTo`.
+ * отсечение перекрытых укрытиями, отсечение уровней выше наблюдателя,
+ * пер-наблюдательное отсечение скрытых по маскам жёстких каналов (FOW-3,
+ * FOW-12). Результат — новая маска `Visibility.visibleTo` плюс публикация
+ * свёрток `StealthState`/`DetectionState`.
  *
  * ponytail: кандидаты берутся отдельным запросом на наблюдателя, то есть до
- * O(наблюдатели × сущности). При «до 10 сущностей с обзором» (FOW-4) это
- * дешевле любого индекса, который пришлось бы инвалидировать после каждой
- * записи в `Position`. Пространственный индекс — когда наблюдателей станут
- * сотни.
+ * O(наблюдатели × сущности), а накопители масок — Map на прогон. При «до 10
+ * сущностей с обзором» (FOW-4) это дешевле любого индекса, который пришлось бы
+ * инвалидировать после каждой записи в `Position`. Пространственный индекс —
+ * когда наблюдателей станут сотни.
  */
 export class VisibilitySystem implements System {
   readonly name = 'Visibility';
@@ -172,13 +249,13 @@ export class VisibilitySystem implements System {
   // parameter properties, потому что те порождают код, а не только удаляют типы.
   // Через этот файл проходит `bin/sim.mjs` (CLI-1), так что сахар здесь стоил бы
   // CLI флага `--experimental-transform-types` и его предупреждения в выводе.
-  private readonly modifiers: ModifierList;
+  private readonly deps: VisibilityDeps;
   /** Разрешаются на первом входе, ПОСЛЕ раннего выхода (SYS-10). */
   private handles: VisibilityHandles | undefined;
 
-  /** Список источников обзора приходит извне (DI-1): своего модульного у системы нет. */
-  constructor(modifiers: ModifierList) {
-    this.modifiers = modifiers;
+  /** Списки источников и таблица каналов приходят извне (DI-1, FOW-12). */
+  constructor(deps: VisibilityDeps) {
+    this.deps = deps;
   }
 
   run(ctx: SystemContext): void {
@@ -187,13 +264,18 @@ export class VisibilitySystem implements System {
     const h = (this.handles ??= resolveHandles(ctx));
 
     // Собственная команда видит свою сущность всегда, в том числе под стелсом
-    // (FOW-3, NET-15) — с этого маска и начинается, а не с нуля.
+    // (FOW-3, NET-15) — с этого маска и начинается, а не с нуля. Свёртка стелса
+    // считается здесь же, один раз на цель, а не на пару (FOW-5).
     const next = new Map<EntityId, number>();
-    for (const target of targets) next.set(target, ownTeamBit(ctx, h, target));
+    const stealthOf = new Map<EntityId, number>();
+    for (const target of targets) {
+      next.set(target, ownTeamBit(ctx, h, target));
+      stealthOf.set(target, this.deps.lists.stealth.union(ctx, target));
+    }
 
     const observers = ctx.query({ all: [VISION_COMPONENT, TEAM_COMPONENT, POSITION_COMPONENT] });
     for (const observer of observers) {
-      markSeenBy(ctx, h, observer, this.modifiers, next);
+      markSeenBy(ctx, h, observer, this.deps, stealthOf, next);
     }
 
     // FOW-6: команда эмитится только при фактическом изменении битов — иначе
@@ -202,6 +284,37 @@ export class VisibilitySystem implements System {
       const mask = next.get(target)!;
       if (mask === ctx.getByHandle(target, h.visibleTo)) continue;
       ctx.commands.setField(target, VISIBILITY_COMPONENT, 'visibleTo', mask);
+    }
+
+    publishStates(ctx, h, this.deps, stealthOf);
+  }
+}
+
+/**
+ * FOW-3: свёртки публикуются производными компонентами `StealthState`/
+ * `DetectionState` — по правилу FOW-6, только при изменении, иначе состояние
+ * dirty каждый тик и сетевая дельта теряет смысл. Носитель состояния — любой,
+ * кто объявил компонент: цель без `Visibility` и вард без `Vision` публикуются
+ * наравне с остальными.
+ */
+function publishStates(
+  ctx: SystemContext,
+  h: VisibilityHandles,
+  deps: VisibilityDeps,
+  stealthOf: ReadonlyMap<EntityId, number>,
+): void {
+  if (h.stealthState !== undefined) {
+    for (const entity of ctx.query({ all: [STEALTH_STATE_COMPONENT] })) {
+      const mask = stealthOf.get(entity) ?? deps.lists.stealth.union(ctx, entity);
+      if (mask === ctx.getByHandle(entity, h.stealthState.mask)) continue;
+      ctx.commands.setField(entity, STEALTH_STATE_COMPONENT, 'mask', mask);
+    }
+  }
+  if (h.detectionState !== undefined) {
+    for (const entity of ctx.query({ all: [DETECTION_STATE_COMPONENT] })) {
+      const mask = deps.lists.detection.union(ctx, entity);
+      if (mask === ctx.getByHandle(entity, h.detectionState.mask)) continue;
+      ctx.commands.setField(entity, DETECTION_STATE_COMPONENT, 'mask', mask);
     }
   }
 }
@@ -215,24 +328,29 @@ function markSeenBy(
   ctx: SystemContext,
   h: VisibilityHandles,
   observer: EntityId,
-  modifiers: ModifierList,
+  deps: VisibilityDeps,
+  stealthOf: ReadonlyMap<EntityId, number>,
   next: Map<EntityId, number>,
 ): void {
   // Наблюдатель отобран запросом по `Team`: сторона у него есть заведомо.
   const bit = teamBit(ctx.getByHandle(observer, h.team!.id));
   const from = positionOf(ctx, h, observer);
   const level = ctx.terrain?.levelOf(observer);
+  // FOW-3: детекция — свойство наблюдателя, свёртка одна на его проход.
+  const detection = deps.lists.detection.union(ctx, observer);
 
   const candidates = ctx.query({
     all: [VISIBILITY_COMPONENT, POSITION_COMPONENT],
-    withinRadius: { center: from, radius: effectiveRadius(ctx, h, observer, modifiers) },
+    withinRadius: { center: from, radius: effectiveRadius(ctx, h, observer, deps.lists.vision) },
   });
   for (const candidate of candidates) {
     const mask = next.get(candidate);
     // Бит уже взведён другим наблюдателем той же команды (или это сама
     // сущность наблюдателя) — второй раз считать нечего.
     if (mask === undefined || (mask & bit) !== 0) continue;
-    if (isHidden(ctx, h, candidate)) continue;
+    // FOW-5: скрыт, если хотя бы один ЖЁСТКИЙ канал стелса не вскрыт детекцией
+    // этого наблюдателя (FOW-12); мягкие каналы битмаску не гасят (FOW-13).
+    if ((stealthOf.get(candidate)! & deps.hardStealthMask & ~detection) !== 0) continue;
     // FOW-5: строго выше — не видно; обратное направление не ограничено.
     if (level !== undefined && ctx.terrain!.levelOf(candidate) > level) continue;
     if (!hasLineOfSight(ctx, h, observer, from, candidate, level)) continue;
@@ -252,12 +370,6 @@ function positionOf(ctx: SystemContext, h: VisibilityHandles, entity: EntityId):
     x: ctx.getByHandle(entity, h.posX),
     y: ctx.getByHandle(entity, h.posY),
   };
-}
-
-/** FOW-3: активный стелс исключает сущность из чужих масок. */
-function isHidden(ctx: SystemContext, h: VisibilityHandles, entity: EntityId): boolean {
-  const stealth = h.stealth;
-  return stealth !== undefined && ctx.hasByHandle(entity, stealth.component) && ctx.getByHandle(entity, stealth.active) !== 0;
 }
 
 /** FOW-3: `Vision.radius`, домноженный на произведение источников `VisionModifier`. */

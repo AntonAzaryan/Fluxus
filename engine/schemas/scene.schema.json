@@ -59,6 +59,16 @@
       "type": "integer",
       "minimum": 1
     },
+    "softStealthChannels": {
+      "$comment": "Номера мягких стелс-каналов (FOW-12, SER-7): не перечисленные — жёсткие, без поля жёсткие все. Требует fog; повторы отвергает загрузчик.",
+      "type": "array",
+      "items": {
+        "type": "integer",
+        "minimum": 0,
+        "maximum": 31
+      },
+      "uniqueItems": true
+    },
     "abilities": {
       "$comment": "Таблица определений способностей (ABIL-2): наличие подключает компоненты платформы и её системы.",
       "type": "array",
@@ -687,6 +697,7 @@
               "hasFloorAt",
               "if",
               "isAlive",
+              "maskCovered",
               "max",
               "min",
               "or",

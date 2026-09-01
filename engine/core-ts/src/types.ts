@@ -303,9 +303,16 @@ export interface ModifierList {
   readonly schema: ComponentSchema;
   /**
    * Произведение значений занятых слотов, клампленное в `[lo, hi]`. У
-   * сущности без компонента источников — `FIXED_ONE`.
+   * сущности без компонента источников — `FIXED_ONE`. Осмысленно только для
+   * списка множителей (`values: 'scale'`).
    */
   product(ctx: SystemContext, entity: EntityId, lo: Fixed, hi: Fixed): Fixed;
+  /**
+   * Побитовое OR значений занятых слотов — свёртка масочного списка
+   * (`values: 'mask'`, FOW-3). У сущности без компонента источников — `0`:
+   * нейтраль масочного слота — пустая маска, а не `FIXED_ONE`.
+   */
+  union(ctx: SystemContext, entity: EntityId): number;
   /** Добавляет или обновляет источник по `id`. Бросает, если свободных слотов нет. */
   add(ctx: SystemContext, entity: EntityId, id: number, value: Fixed): void;
   /** Снимает источник по `id`; отсутствующий id — не ошибка (TIME-8). */

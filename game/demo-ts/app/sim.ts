@@ -15,6 +15,8 @@ import {
   LocomotionSystem,
   PhysicsSystem,
   PhysicsWorld,
+  DETECTION_SOURCES_COMPONENT,
+  STEALTH_SOURCES_COMPONENT,
   VISION_MODIFIER_COMPONENT,
   VisibilitySystem,
   buildNavigation,
@@ -283,6 +285,16 @@ export const STATS = {
    */
   charge: 'charge',
   aim: 'aim',
+  /**
+   * Свёртки стелса и детекции (`StealthState.mask`/`DetectionState.mask`,
+   * `fog-of-war` FOW-3) — входы подачи стелса главного потока
+   * (`stealthTint.ts`, FOW-13): свой невидимка — полупрозрачность, чужой
+   * невскрытый мягкий — силуэт. Обычные доставляемые статы (HUD-8): жёсткий
+   * невскрытый стелс сюда не доедет — его вырезал фильтр снапшота (NET-12),
+   * и границу видимости статы не двигают.
+   */
+  stealthMask: 'stealth',
+  detectionMask: 'detection',
   /** Оставшиеся тики кулдауна способности и его полная длительность. */
   cooldown: (ability: string): string => `${ability}.cd`,
   cooldownMax: (ability: string): string => `${ability}.cdMax`,
@@ -410,7 +422,15 @@ export function createDemoSimulation(def: SceneDef): DemoSimulation {
   // конфига матча): одиночная симуляция обязана тикать те же системы (SHELL-8).
   if (def.fog === true) {
     scene.systems.register(
-      new VisibilitySystem(requireModifierList(scene.modifiers, VISION_MODIFIER_COMPONENT)),
+      new VisibilitySystem({
+        lists: {
+          vision: requireModifierList(scene.modifiers, VISION_MODIFIER_COMPONENT),
+          stealth: requireModifierList(scene.modifiers, STEALTH_SOURCES_COMPONENT),
+          detection: requireModifierList(scene.modifiers, DETECTION_SOURCES_COMPONENT),
+        },
+        // Таблица каналов — данные сцены (FOW-12); умолчание — все жёсткие.
+        hardStealthMask: scene.stealthHardMask ?? ~0,
+      }),
     );
   }
 

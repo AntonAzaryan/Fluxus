@@ -1,8 +1,9 @@
 /**
  * Списки источников-модификаторов (TIME-7, FOW-3): `{ sources: [{id, value}] }`
- * как core-контракт стакинга. Reducer — произведение; композиционная политика
- * («сильнейший», аддитив, стак) живёт вне ядра и выражается тем, что именно
- * система-владелец кладёт в список (TIME-8).
+ * как core-контракт стакинга. Редьюсеров два — произведение для множителей и
+ * OR для масок каналов (FOW-3); композиционная политика («сильнейший»,
+ * аддитив, стак) живёт вне ядра и выражается тем, что именно система-владелец
+ * кладёт в список (TIME-8).
  *
  * Поля компонента скалярные (ECS-3), массивов в ECS нет — поэтому список
  * разворачивается в фиксированное число слотов `id0/value0 … idN/valueN`, тем
@@ -36,9 +37,21 @@ function slotName(prefix: string, index: number, total: number): string {
   return `${prefix}${String(index).padStart(String(total - 1).length, '0')}`;
 }
 
-export function modifierList(component: string, slots: number = DEFAULT_MODIFIER_SLOTS): ModifierList {
+/**
+ * Вид значения слота (FOW-3): `scale` — множитель Q16.16 с нейтралью `65536`,
+ * `mask` — маска каналов `i32` с нейтралью `0`. Раскладка слотов, занятость и
+ * имена от вида не зависят — третьего формата TIME-7 запрещает.
+ */
+export type ModifierValueKind = 'scale' | 'mask';
+
+export function modifierList(
+  component: string,
+  slots: number = DEFAULT_MODIFIER_SLOTS,
+  valueKind: ModifierValueKind = 'scale',
+): ModifierList {
   if (!Number.isInteger(slots) || slots < 1) throw new Error(`${component}: слотов должно быть ≥ 1`);
 
+  const neutral = valueKind === 'mask' ? 0 : FIXED_ONE;
   const ids: string[] = [];
   const values: string[] = [];
   const fields: Record<string, 'i32' | 'fixed'> = {};
@@ -49,8 +62,8 @@ export function modifierList(component: string, slots: number = DEFAULT_MODIFIER
     ids.push(id);
     values.push(value);
     fields[id] = 'i32';
-    fields[value] = 'fixed';
-    defaults[value] = FIXED_ONE;
+    fields[value] = valueKind === 'mask' ? 'i32' : 'fixed';
+    defaults[value] = neutral;
   }
 
   /**
@@ -85,6 +98,16 @@ export function modifierList(component: string, slots: number = DEFAULT_MODIFIER
       return ctx.math.clamp(acc, lo, hi);
     },
 
+    union(ctx, entity) {
+      if (!ctx.has(entity, component)) return 0;
+      let acc = 0;
+      for (let i = 0; i < slots; i++) {
+        if (ctx.get(entity, component, ids[i]!) === 0) continue;
+        acc |= ctx.get(entity, component, values[i]!);
+      }
+      return acc;
+    },
+
     add(ctx, entity, id, value) {
       if (id === 0) throw new Error(`${component}: id источника не может быть нулём`);
       const existing = findSlot(ctx, entity, id);
@@ -98,7 +121,7 @@ export function modifierList(component: string, slots: number = DEFAULT_MODIFIER
       const slot = findSlot(ctx, entity, id);
       if (slot < 0) return;
       ctx.commands.setField(entity, component, ids[slot]!, 0);
-      ctx.commands.setField(entity, component, values[slot]!, FIXED_ONE);
+      ctx.commands.setField(entity, component, values[slot]!, neutral);
     },
   };
 }

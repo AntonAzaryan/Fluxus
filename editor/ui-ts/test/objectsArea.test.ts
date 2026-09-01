@@ -329,7 +329,7 @@ describe('ED-6: синтезированные загрузчиком схемы
     // флагу сцены — в документе записи под них нет (ECS-5).
     expect(derived.names).toContain('Vision');
     expect(derived.names).toContain('Visibility');
-    expect(derived.names).toContain('Stealth');
+    expect(derived.names).toContain('StealthSources');
     expect(componentsOf(session)).toEqual(['Position', 'Health']);
 
     const navigator = zoneOf(frame.view(), 'navigator');

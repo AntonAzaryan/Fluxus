@@ -94,6 +94,7 @@ import {
   STATS,
 } from './sim.js';
 import { createChargeBalls, type ChargeBalls } from './chargeBalls.js';
+import { createStealthTint, type StealthTint } from './stealthTint.js';
 import { attachBenchProbe, benchRequested, type BenchProbe, type BenchProbeHost } from './benchProbe.js';
 import {
   attachDebugGlobal,
@@ -596,6 +597,13 @@ function groundUnder(instance: { pose: { x: number; y: number; z: number } }): {
 let chargeBalls: ChargeBalls | null = null;
 
 /**
+ * Подача стелс-состояний (FOW-13): свой невидимка — полупрозрачность, чужой
+ * невскрытый мягкий — силуэт-плейсхолдер (`stealthTint.ts`). Числа — из секции
+ * `stealth` парного документа.
+ */
+let stealthTint: StealthTint | null = null;
+
+/**
  * Имена статов слотов, доставляемых превью (HUD-8). Список тот же, по которому
  * `extractor.ts` объявляет источники: разойдись они — превью читало бы имена,
  * которых в кадре нет, и молча не рисовало бы ничего.
@@ -903,6 +911,7 @@ function cameraFrame(dtSec: number): void {
 function presentFrame(now: number): void {
   remote?.frame(now);
   chargeBalls?.update();
+  stealthTint?.update();
   // Отладочный слой ведёт себя сам: доставленное состояние и кадровые величины
   // он получает своей точкой у сцены (REND-27) — сразу после подсистем, то есть
   // по позам ЭТОГО кадра. Приложению остаётся текстовая часть панели (RDBG-3), и
@@ -1285,6 +1294,14 @@ async function main(): Promise<void> {
     heroId: () => heroId,
     lastAim: () => lastAim,
     groundUnder,
+  });
+  // Подача стелса (FOW-13) — тем же входом, что шары заряда: доставка и
+  // инстансы ЭТОГО кадра; секция `stealth` парного документа — числа картинки.
+  stealthTint = createStealthTint({
+    entities: () => remote?.view?.entities,
+    instanceFor: (entity) => models?.instanceFor(entity) ?? null,
+    heroId: () => heroId,
+    ...(presentation?.stealth === undefined ? {} : { stealth: presentation.stealth }),
   });
   // Каталог определений сцены — первый шов превью (REND-28, design Decision 11):
   // клиент резолвит сцену локально, и таблица строится ТОЙ ЖЕ

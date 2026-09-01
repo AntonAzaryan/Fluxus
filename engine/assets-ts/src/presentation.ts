@@ -105,15 +105,31 @@ export interface PresentationFog {
 }
 
 /**
+ * Секция `stealth` — подача стелс-состояний (PRES-2, `fog-of-war` FOW-13):
+ * непрозрачность своего юнита под стелсом и чужого под невскрытым мягким
+ * каналом (силуэт-плейсхолдер до шейдера преломления). Все поля необязательны:
+ * умолчания живут у потребителя подачи, а не здесь — как у секции `fog`.
+ * На симуляцию секция не влияет ни байтом (PRES-4): вскрытость и доставку
+ * решают маски симуляции, картинка их только показывает.
+ */
+export interface PresentationStealth {
+  /** Непрозрачность своего юнита под активным стелсом, доля [0, 1] (FOW-13). */
+  readonly allyOpacity?: number;
+  /** Непрозрачность чужого невскрытого мягкого стелса, доля [0, 1] (FOW-13). */
+  readonly enemyOpacity?: number;
+}
+
+/**
  * Документ целиком (PRES-2): упорядоченный список записей `decorations` —
  * отсутствующий и пустой неразличимы, и то и другое означает слой без
- * декораций — плюс необязательные секции `fog` (FOW-10), `lighting` (REND-29),
- * `postprocess` (REND-34) и `water` (REND-35); их отсутствие — значения по
- * умолчанию, а отсутствие `water` — сцена без воды.
+ * декораций — плюс необязательные секции `fog` (FOW-10), `stealth` (FOW-13),
+ * `lighting` (REND-29), `postprocess` (REND-34) и `water` (REND-35); их
+ * отсутствие — значения по умолчанию, а отсутствие `water` — сцена без воды.
  */
 export interface PresentationScene {
   readonly decorations: readonly DecorationRecord[];
   readonly fog?: PresentationFog;
+  readonly stealth?: PresentationStealth;
   readonly lighting?: PresentationLighting;
   readonly postprocess?: PresentationPostprocess;
   readonly water?: PresentationWater;
@@ -207,6 +223,7 @@ export function isPresentationPath(path: string): boolean {
 const DOCUMENT_KEYS: readonly string[] = [
   'decorations',
   'fog',
+  'stealth',
   'lighting',
   'postprocess',
   'water',
@@ -268,6 +285,12 @@ const FOG_NUMBERS: readonly {
   },
 ];
 
+/** Числовые поля секции `stealth` (FOW-13): обе величины — доли непрозрачности. */
+const STEALTH_NUMBERS: typeof FOG_NUMBERS = [
+  { key: 'allyOpacity', expected: 'ожидалась доля непрозрачности из [0, 1] (FOW-13)', min: 0, max: 1 },
+  { key: 'enemyOpacity', expected: 'ожидалась доля непрозрачности из [0, 1] (FOW-13)', min: 0, max: 1 },
+];
+
 /** Значение вне объявленных границы и формы — то, о чём говорит находка поля. */
 function fogNumberBad(value: unknown, spec: (typeof FOG_NUMBERS)[number]): boolean {
   if (typeof value !== 'number' || !Number.isFinite(value)) return true;
@@ -297,6 +320,26 @@ function validateFog(section: unknown, errors: string[]): void {
   }
   if ('color' in section && (typeof section.color !== 'string' || !HEX_COLOR_RE.test(section.color))) {
     errors.push(`fog.color: ожидался цвет формы "#rrggbb", получено ${typeName(section.color)}`);
+  }
+}
+
+/**
+ * Валидация секции `stealth` (PRES-2, `fog-of-war` FOW-13): тем же порядком,
+ * что `fog`, — состав закрыт, неизвестный ключ и значение не той формы
+ * отвергаются адресно.
+ */
+function validateStealth(section: unknown, errors: string[]): void {
+  if (!isRecord(section)) {
+    errors.push(`stealth: ожидался объект секции подачи стелса (FOW-13), получено ${typeName(section)}`);
+    return;
+  }
+  closedKeys(section, 'stealth', STEALTH_NUMBERS.map((spec) => spec.key), errors);
+  for (const spec of STEALTH_NUMBERS) {
+    if (!(spec.key in section)) continue;
+    const value = section[spec.key];
+    if (fogNumberBad(value, spec)) {
+      errors.push(`stealth.${spec.key}: ${spec.expected}, получено ${typeName(value)}`);
+    }
   }
 }
 
@@ -422,6 +465,8 @@ function validateSections(
   errors: string[],
 ): void {
   if (doc.fog !== undefined) validateFog(doc.fog, errors);
+  // Секция `stealth` (FOW-13) — тем же порядком: её умолчания держит потребитель подачи.
+  if (doc.stealth !== undefined) validateStealth(doc.stealth, errors);
   // Секция `lighting` — тем же порядком и по тому же основанию: её умолчания
   // держит подсистема освещения рендера.
   if (doc.lighting !== undefined) validateLighting(doc.lighting, errors);
@@ -447,6 +492,7 @@ function sceneOf(doc: Record<string, unknown>, list: unknown): PresentationScene
   return {
     decorations: Array.isArray(list) ? (list as DecorationRecord[]) : [],
     ...(doc.fog === undefined ? {} : { fog: doc.fog as PresentationFog }),
+    ...(doc.stealth === undefined ? {} : { stealth: doc.stealth as PresentationStealth }),
     ...(doc.lighting === undefined ? {} : { lighting: doc.lighting as PresentationLighting }),
     ...(doc.postprocess === undefined
       ? {}

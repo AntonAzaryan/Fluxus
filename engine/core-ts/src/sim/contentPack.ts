@@ -70,6 +70,11 @@ export function contentPackForm(def: SceneDef): Record<string, unknown> {
           })),
     timeScale: def.timeScale === true,
     fog: def.fog === true,
+    // Таблица каналов — правила поведения (FOW-12): жёсткость меняет пересчёт
+    // видимости при том же worldInit. Порядок перечисления загрузчик не
+    // различает (это множество, повторы отвергнуты) — не различает и хеш;
+    // отсутствие поля неотличимо от пустого списка, как у загрузчика.
+    softStealthChannels: [...(def.softStealthChannels ?? [])].sort((a, b) => a - b),
     modifierSlots: def.modifierSlots ?? DEFAULT_MODIFIER_SLOTS,
     // Таблицы определений способностей и баффов входят ЦЕЛИКОМ и в объявленном
     // порядке (NET-17): индекс в таблице есть адрес определения в мире (ABIL-1,

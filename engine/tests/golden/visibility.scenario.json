@@ -68,9 +68,7 @@
           "Visibility": {
             "visibleTo": 0
           },
-          "Stealth": {
-            "active": 0
-          }
+          "StealthSources": {}
         }
       },
       {

@@ -39,6 +39,7 @@ import { NpcPerception } from './perception.js';
 import type { NpcRoutes } from './routes.js';
 import {
   healthFraction,
+  hiddenFrom,
   isDead,
   posX,
   posY,
@@ -158,6 +159,9 @@ export class NpcDecider {
     for (let slot = 0; slot < NPC_THREAT_SLOTS; slot++) {
       const source = threatSourceAt(ctx, handles, this.entity, slot);
       if (source === NO_ENTITY || !ctx.isAlive(source) || isDead(ctx, handles, source)) continue;
+      // NPC-10: угроза от скрытого источника копится (политика документа решает,
+      // что с ней делать), но целью он не становится, пока скрыт.
+      if (hiddenFrom(ctx, handles, this.entity, source)) continue;
       const value = threatValueAt(ctx, handles, this.entity, slot);
       if (value <= leaderValue) continue;
       leaderValue = value;

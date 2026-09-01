@@ -14,6 +14,11 @@ import {
   isVisibleTo,
   teamBit,
   VisibilitySystem,
+  DETECTION_SOURCES_COMPONENT,
+  DETECTION_STATE_COMPONENT,
+  STEALTH_SOURCES_COMPONENT,
+  STEALTH_STATE_COMPONENT,
+  VISION_COMPONENT,
   VISION_MODIFIER_COMPONENT,
   MAX_TEAMS,
   VISIBILITY_COMPONENT,
@@ -56,6 +61,8 @@ const SCENE: SceneDef = {
         Visibility: { visibleTo: 0 },
         Team: { id: 0 },
         VisionModifier: {},
+        DetectionSources: {},
+        DetectionState: { mask: 0 },
       },
     },
     {
@@ -64,7 +71,8 @@ const SCENE: SceneDef = {
         Position: { x: 0, y: 0 },
         Visibility: { visibleTo: 0 },
         Team: { id: 1 },
-        Stealth: { active: 0 },
+        StealthSources: {},
+        StealthState: { mask: 0 },
       },
     },
     /** Нейтральная цель без команды: своей её не считает никто. */
@@ -81,11 +89,29 @@ const SCENE: SceneDef = {
   terrain: TERRAIN,
 };
 
-function harness(terrainDef: typeof TERRAIN = TERRAIN) {
-  const { world, terrain, systems, modifiers } = loadScene({ ...SCENE, terrain: terrainDef });
+function harness(
+  terrainDef: typeof TERRAIN = TERRAIN,
+  softStealthChannels?: readonly number[],
+  extra: Partial<SceneDef> = {},
+) {
+  const { world, terrain, systems, modifiers, stealthHardMask } = loadScene({
+    ...SCENE,
+    terrain: terrainDef,
+    ...(softStealthChannels === undefined ? {} : { softStealthChannels }),
+    ...extra,
+  });
   const physicsWorld = new PhysicsWorld(staticsFromTerrain(terrain!.grid), terrain!.grid.tileSize);
   const visionModifiers = requireModifierList(modifiers, VISION_MODIFIER_COMPONENT);
-  systems.register(new VisibilitySystem(visionModifiers));
+  systems.register(
+    new VisibilitySystem({
+      lists: {
+        vision: visionModifiers,
+        stealth: requireModifierList(modifiers, STEALTH_SOURCES_COMPONENT),
+        detection: requireModifierList(modifiers, DETECTION_SOURCES_COMPONENT),
+      },
+      hardStealthMask: stealthHardMask ?? ~0,
+    }),
+  );
   const sim: Simulation = {
     systems,
     worldSeed: 1,
@@ -101,6 +127,7 @@ function harness(terrainDef: typeof TERRAIN = TERRAIN) {
 
   return {
     world,
+    systems,
     visionModifiers,
     place: (prefab: string, overrides?: FieldOverrides) => spawn(world, prefab, overrides),
     step: (): TickResult => tick(sim, state),
@@ -311,8 +338,17 @@ describe('полоса укрытия в луче обзора (FOW-5, PHYS-14)'
   });
 });
 
-describe('стелс (FOW-3)', () => {
-  it('гасит биты чужих команд, свою команду не трогает', () => {
+describe('стелс-каналы и детекция (FOW-3, FOW-12)', () => {
+  const CH_WEAK = 1 << 0;
+  const CH_STRONG = 1 << 1;
+
+  /** Источник стелса/детекции руками, в обход команд: тестовое удобство. */
+  const addSource = (h: ReturnType<typeof harness>, entity: EntityId, component: string, slot: number, id: number, mask: number): void => {
+    setField(h.world, entity, component, `id${slot}`, id);
+    setField(h.world, entity, component, `value${slot}`, mask);
+  };
+
+  it('жёсткий канал гасит биты чужих команд, свою команду не трогает', () => {
     const h = harness();
     h.place('Watcher', { Position: { x: F(1), y: F(1) } });
     const enemy = h.place('Enemy', { Position: { x: F(1), y: F(3) } });
@@ -320,9 +356,193 @@ describe('стелс (FOW-3)', () => {
     h.step();
     expect(h.mask(enemy)).toBe(teamBit(0) | teamBit(1));
 
-    setField(h.world, enemy, 'Stealth', 'active', 1);
+    addSource(h, enemy, STEALTH_SOURCES_COMPONENT, 0, 7, CH_WEAK);
     h.step();
     expect(h.mask(enemy)).toBe(teamBit(1));
+  });
+
+  it('лестница: детектор слабого канала не вскрывает сильный, детектор обоих видит всех (FOW-3)', () => {
+    const h = harness();
+    const watcher = h.place('Watcher', { Position: { x: F(1), y: F(1) } });
+    const enemy = h.place('Enemy', { Position: { x: F(1), y: F(3) } });
+    addSource(h, enemy, STEALTH_SOURCES_COMPONENT, 0, 7, CH_STRONG);
+
+    // Детекция только слабого: сильный канал не вскрыт — скрыт.
+    addSource(h, watcher, DETECTION_SOURCES_COMPONENT, 0, 3, CH_WEAK);
+    h.step();
+    expect(h.mask(enemy)).toBe(teamBit(1));
+
+    // Детектор сильного несёт и бит слабого — лестница собрана контентной
+    // конвенцией битов, ядро про уровни не знает.
+    addSource(h, watcher, DETECTION_SOURCES_COMPONENT, 0, 3, CH_WEAK | CH_STRONG);
+    h.step();
+    expect(h.mask(enemy)).toBe(teamBit(0) | teamBit(1));
+  });
+
+  it('детекция одного наблюдателя взводит бит всей команды (FOW-5, гранулярность FOW-2)', () => {
+    const h = harness();
+    const blind = h.place('Watcher', { Position: { x: F(1), y: F(1) } });
+    const seer = h.place('Watcher', { Position: { x: F(3), y: F(1) } });
+    const enemy = h.place('Enemy', { Position: { x: F(2), y: F(3) } });
+    addSource(h, enemy, STEALTH_SOURCES_COMPONENT, 0, 7, CH_WEAK);
+    addSource(h, seer, DETECTION_SOURCES_COMPONENT, 0, 3, CH_WEAK);
+    h.step();
+
+    expect(h.mask(enemy)).toBe(teamBit(0) | teamBit(1));
+    // Оба наблюдателя видимы только своей команде — стелса у них нет.
+    expect(h.mask(blind)).toBe(teamBit(0));
+  });
+
+  it('два источника в разных каналах: снятие одного не открывает второй (FOW-3)', () => {
+    const h = harness();
+    const watcher = h.place('Watcher', { Position: { x: F(1), y: F(1) } });
+    const enemy = h.place('Enemy', { Position: { x: F(1), y: F(3) } });
+    addSource(h, watcher, DETECTION_SOURCES_COMPONENT, 0, 3, CH_WEAK);
+    addSource(h, enemy, STEALTH_SOURCES_COMPONENT, 0, 7, CH_WEAK);
+    addSource(h, enemy, STEALTH_SOURCES_COMPONENT, 1, 8, CH_STRONG);
+    h.step();
+    // Сильный канал не вскрыт — скрыт, хотя слабый детекция покрывает.
+    expect(h.mask(enemy)).toBe(teamBit(1));
+
+    // Снятие сильного источника: остался слабый, а его детекция вскрывает.
+    addSource(h, enemy, STEALTH_SOURCES_COMPONENT, 1, 0, 0);
+    h.step();
+    expect(h.mask(enemy)).toBe(teamBit(0) | teamBit(1));
+  });
+
+  it('мягкий канал битмаску Visibility не гасит (FOW-12, FOW-13)', () => {
+    const h = harness(TERRAIN, [0]); // канал 0 объявлен мягким
+    h.place('Watcher', { Position: { x: F(1), y: F(1) } });
+    const enemy = h.place('Enemy', { Position: { x: F(1), y: F(3) } });
+    addSource(h, enemy, STEALTH_SOURCES_COMPONENT, 0, 7, CH_WEAK);
+    h.step();
+
+    // Доставка не режется — мягкое состояние едет в снапшоте (StealthState).
+    expect(h.mask(enemy)).toBe(teamBit(0) | teamBit(1));
+    expect(getField(h.world, enemy, STEALTH_STATE_COMPONENT, 'mask')).toBe(CH_WEAK);
+
+    // Тот же источник в жёстком канале 1 — режет: мягкость пришла из таблицы
+    // сцены, а не из источника.
+    addSource(h, enemy, STEALTH_SOURCES_COMPONENT, 0, 7, CH_STRONG);
+    h.step();
+    expect(h.mask(enemy)).toBe(teamBit(1));
+  });
+});
+
+describe('политика таргетинга сквозь стелс — JSON-система (FOW-13, EXPR-2)', () => {
+  const CH = 1 << 2;
+
+  /**
+   * Политика способности как контент: цель берётся, только когда её свёртка
+   * стелса покрыта детекцией кастера — один `maskCovered`, без перебора каналов.
+   * `order` 500 — раньше якоря 900: система читает свёртки прошлого пересчёта.
+   */
+  const TARGET_POLICY: NonNullable<SceneDef['systems']> = [
+    {
+      name: 'TargetPolicy',
+      order: 500,
+      query: { all: [VISION_COMPONENT, 'Team', 'Position'] },
+      as: 'caster',
+      do: [
+        {
+          forEach: {
+            query: { all: [STEALTH_SOURCES_COMPONENT] },
+            as: 'candidate',
+            do: [
+              {
+                if: {
+                  cond: {
+                    maskCovered: [
+                      { getComponent: [{ var: 'candidate' }, STEALTH_STATE_COMPONENT, 'mask'] },
+                      { getComponent: [{ var: 'caster' }, DETECTION_STATE_COMPONENT, 'mask'] },
+                    ],
+                  },
+                  then: [
+                    {
+                      emitEvent: {
+                        type: 'TargetAcquired',
+                        data: { entity: { var: 'candidate' }, source: { var: 'caster' } },
+                      },
+                    },
+                  ],
+                },
+              },
+            ],
+          },
+        },
+      ],
+    },
+  ];
+
+  it('невскрытая цель не берётся, детекция возвращает право таргета', () => {
+    const h = harness(TERRAIN, undefined, { systems: TARGET_POLICY });
+    const watcher = h.place('Watcher', { Position: { x: F(1), y: F(1) } });
+    const enemy = h.place('Enemy', { Position: { x: F(1), y: F(3) } });
+    const acquired = (): boolean =>
+      [...h.step().events].some((event) => event.type === 'TargetAcquired');
+
+    // Без стелса свёртка 0 покрыта любой детекцией — цель берётся.
+    expect(acquired()).toBe(true);
+
+    setField(h.world, enemy, STEALTH_SOURCES_COMPONENT, 'id0', 7);
+    setField(h.world, enemy, STEALTH_SOURCES_COMPONENT, 'value0', CH);
+    // Первый тик политика ещё видит прошлую свёртку (order 500 < 900)…
+    expect(acquired()).toBe(true);
+    // …со следующего — канал не вскрыт, таргет запрещён контентным условием.
+    expect(acquired()).toBe(false);
+
+    setField(h.world, watcher, DETECTION_SOURCES_COMPONENT, 'id0', 3);
+    setField(h.world, watcher, DETECTION_SOURCES_COMPONENT, 'value0', CH);
+    h.step();
+    expect(acquired()).toBe(true);
+  });
+});
+
+describe('публикация свёрток StealthState/DetectionState (FOW-3)', () => {
+  const CH = 1 << 4;
+
+  it('свёртка — OR занятых слотов, эмит только при изменении', () => {
+    const h = harness();
+    const watcher = h.place('Watcher', { Position: { x: F(1), y: F(1) } });
+    const enemy = h.place('Enemy', { Position: { x: F(1), y: F(3) } });
+    h.step();
+    expect(getField(h.world, enemy, STEALTH_STATE_COMPONENT, 'mask')).toBe(0);
+
+    setField(h.world, enemy, STEALTH_SOURCES_COMPONENT, 'id0', 7);
+    setField(h.world, enemy, STEALTH_SOURCES_COMPONENT, 'value0', CH);
+    setField(h.world, watcher, DETECTION_SOURCES_COMPONENT, 'id0', 3);
+    setField(h.world, watcher, DETECTION_SOURCES_COMPONENT, 'value0', CH);
+    const changed = h.step();
+    expect(getField(h.world, enemy, STEALTH_STATE_COMPONENT, 'mask')).toBe(CH);
+    expect(getField(h.world, watcher, DETECTION_STATE_COMPONENT, 'mask')).toBe(CH);
+    expect([...changed.changes.changedEntities(STEALTH_STATE_COMPONENT)]).toEqual([enemy]);
+    expect([...changed.changes.changedEntities(DETECTION_STATE_COMPONENT)]).toEqual([watcher]);
+
+    // Источники не менялись — состояние не dirty, сетевая дельта не растёт.
+    const idle = h.step();
+    expect(idle.changes.changedEntities(STEALTH_STATE_COMPONENT).size).toBe(0);
+    expect(idle.changes.changedEntities(DETECTION_STATE_COMPONENT).size).toBe(0);
+  });
+
+  it('система раньше якоря 900 читает свёртку прошлого пересчёта', () => {
+    const h = harness();
+    const enemy = h.place('Enemy', { Position: { x: F(1), y: F(3) } });
+    const seen: number[] = [];
+    h.systems.register({
+      name: 'Probe',
+      order: 100,
+      run: (ctx) => {
+        seen.push(ctx.get(enemy, STEALTH_STATE_COMPONENT, 'mask'));
+      },
+    });
+
+    setField(h.world, enemy, STEALTH_SOURCES_COMPONENT, 'id0', 7);
+    setField(h.world, enemy, STEALTH_SOURCES_COMPONENT, 'value0', CH);
+    h.step();
+    h.step();
+    // Первый тик: источник уже стоит, но свёртка публикуется якорем 900 —
+    // проба видит прошлое значение; со второго тика — свежее (FOW-3).
+    expect(seen).toEqual([0, CH]);
   });
 });
 
@@ -372,6 +592,26 @@ describe('туман войны без террейна отвергается �
   it('сцена с обоими полями поднимается, компоненты тумана дописаны', () => {
     const { world } = loadScene(SCENE);
     expect(componentNames(world)).toContain(VISIBILITY_COMPONENT);
+  });
+
+  it('softStealthChannels без fog отвергается адресно (SER-7, FOW-12)', () => {
+    const { fog: _fog, ...noFog } = SCENE;
+    expect(() => loadScene({ ...noFog, prefabs: [], softStealthChannels: [1] })).toThrow(/SER-7/);
+    expect(() => loadScene({ ...noFog, prefabs: [], softStealthChannels: [1] })).toThrow(/fog/);
+  });
+
+  it('номер канала вне [0, 31] и повтор отвергаются, называя причину (SER-7)', () => {
+    expect(() => loadScene({ ...SCENE, softStealthChannels: [32] })).toThrow(/\[0, 31\]/);
+    expect(() => loadScene({ ...SCENE, softStealthChannels: [-1] })).toThrow(/\[0, 31\]/);
+    expect(() => loadScene({ ...SCENE, softStealthChannels: [3, 3] })).toThrow(/дважды/);
+  });
+
+  it('без перечисления все каналы жёсткие, с перечислением мягкие биты сняты (FOW-12)', () => {
+    expect(loadScene(SCENE).stealthHardMask).toBe(~0);
+    expect(loadScene({ ...SCENE, softStealthChannels: [0, 4] })).toHaveProperty(
+      'stealthHardMask',
+      ~((1 << 0) | (1 << 4)),
+    );
   });
 
   it('террейн без тумана — штатная сцена, ограничение односторонне', () => {
