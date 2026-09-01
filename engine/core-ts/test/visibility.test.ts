@@ -24,6 +24,7 @@ import {
   VISIBILITY_COMPONENT,
 } from '../src/systems/visibility.js';
 import { requireModifierList } from '../src/systems/modifiers.js';
+import { buildSimulation } from '../src/sim/build.js';
 import { loadScene, type SceneDef } from '../src/sim/scene.js';
 import { initialState, tick, type Simulation } from '../src/sim/tick.js';
 import { LEVEL_OVERRIDE_COMPONENT, type EntityId, type FieldOverrides, type TickResult } from '../src/types.js';
@@ -710,5 +711,73 @@ describe('туман войны без террейна отвергается �
       terrain: TERRAIN,
     });
     expect(componentNames(world)).not.toContain(VISIBILITY_COMPONENT);
+  });
+});
+
+/**
+ * Вторая дверь того же запрета (FOW-5). Первую — сцену с `fog` без `terrain` —
+ * закрывает загрузчик (SER-7, describe выше), но пересчёт видимости включает не
+ * поле сцены, а флаг документа прогона (FOW-4, CLI-2), и компоненты видимости
+ * сцена вправе объявить руками. Именно на такой сцене молчаливый фолбэк «уровня
+ * нет» и жил: FoW считалась бы, а фильтр по высоте был бы выключен.
+ */
+describe('пересчёт видимости документа прогона без террейна (FOW-5)', () => {
+  /** Компоненты тумана объявлены руками, флага `fog` нет — SER-7 тут молчит. */
+  const HANDMADE: SceneDef = {
+    components: [
+      { name: 'Position', fields: { x: 'fixed', y: 'fixed' } },
+      { name: 'Vision', fields: { radius: 'fixed' } },
+      { name: VISIBILITY_COMPONENT, fields: { visibleTo: 'i32' } },
+      { name: 'Team', fields: { id: 'i32' } },
+    ],
+  };
+
+  it('сборка отвергает прогон до первого тика, называя недостающий террейн', () => {
+    const build = (): unknown =>
+      buildSimulation({ scene: HANDMADE, seed: 1, visibility: {} }, { where: 'тест' });
+    expect(build).toThrow(/FOW-5/);
+    expect(build).toThrow(/terrain/);
+  });
+
+  it('та же сцена с террейном собирается штатно', () => {
+    expect(() =>
+      buildSimulation(
+        { scene: { ...HANDMADE, terrain: TERRAIN }, seed: 1, visibility: {} },
+        { where: 'тест' },
+      ),
+    ).not.toThrow();
+  });
+
+  it('сцена без компонентов видимости прогону не мешает: считать в ней нечего', () => {
+    // Так собраны записанные матчи (CLI-10): пересчёт объявлен наравне с
+    // физикой, а компонентов тумана в сцене нет — фолбэка никто не наблюдает.
+    expect(() =>
+      buildSimulation(
+        { scene: { components: [{ name: 'Position', fields: { x: 'fixed', y: 'fixed' } }] }, seed: 1, visibility: {} },
+        { where: 'тест' },
+      ),
+    ).not.toThrow();
+  });
+
+  it('система, собранная мимо сборки, обрывает тик, а не считает без высоты', () => {
+    const { world, systems, modifiers, stealthHardMask } = loadScene(SCENE);
+    systems.register(
+      new VisibilitySystem({
+        lists: {
+          vision: requireModifierList(modifiers, VISION_MODIFIER_COMPONENT),
+          stealth: requireModifierList(modifiers, STEALTH_SOURCES_COMPONENT),
+          detection: requireModifierList(modifiers, DETECTION_SOURCES_COMPONENT),
+        },
+        hardStealthMask: stealthHardMask ?? ~0,
+      }),
+    );
+    // Тот же мир, но террейн сборке не отдан: раньше здесь молча выключался
+    // фильтр по высоте, теперь тик обрывается.
+    const sim: Simulation = { systems, worldSeed: 1, math: mathApi, modifiers };
+    const state = initialState(world, 1);
+    spawn(world, 'Watcher', { Position: { x: F(1), y: F(1) } });
+    spawn(world, 'Enemy', { Position: { x: F(1), y: F(2) } });
+
+    expect(() => tick(sim, state)).toThrow(/FOW-5/);
   });
 });

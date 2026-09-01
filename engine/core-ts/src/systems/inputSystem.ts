@@ -6,6 +6,9 @@
  *
  * Имена компонентов — параметры, а не конвенция ядра: о вводе ядро не знает.
  * Имена полей компонента ввода фиксированы, их пишет эта система.
+ *
+ * TimeScale (TIME-5): игнорирует — фрейм приходит на пару «игрок, тик» (TICK-2),
+ * и раскладка его в компоненты времени не считает вовсе.
  */
 import { componentSchema } from '../ecs/world.js';
 import type { EntityId, InputFrame, System, SystemContext, WorldState } from '../types.js';

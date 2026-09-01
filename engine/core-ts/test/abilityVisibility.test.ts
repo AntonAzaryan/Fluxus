@@ -66,7 +66,7 @@ const SCENE: SceneDef = {
   // Способность инертна намеренно: предмет проверки — маска слота, а не каст.
   // Компонента ввода в сцене нет, поэтому фронт бита не наступает никогда.
   abilities: [{ id: 'idle', trigger: { input: { bit: 0 } }, effects: [] }],
-  buffs: [{ id: 'mark', class: 'positive' }],
+  buffs: [{ id: 'mark', class: 'positive', stacking: 'independent' }],
   abilityRuntime: { teamField: ['Player', 'slot'] },
   capacity: 32,
 };

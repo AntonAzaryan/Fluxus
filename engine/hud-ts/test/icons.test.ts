@@ -1,31 +1,55 @@
 /**
- * Резолв изображений по asset ID (задача 4.1, HUD-4, design Decision 7):
- * композиция несёт только asset ID дерева контента (ASSET-2), URL появляется
- * лишь из шва `HudIconSource`, который реализует сборка клиента; таблица
- * «идентификатор из симуляции → asset ID» — JSON-данные в params.
+ * Изображения HUD по asset ID (HUD-4, design Decision 7): композиция несёт
+ * только asset ID дерева контента (ASSET-2), а байты за ним приезжают ТЕМ ЖЕ
+ * сервисом ассетов, что модели рендера и стенд портрета (HUD-7, ASSET-2..4).
+ * Таблица «идентификатор из симуляции → asset ID» — JSON-данные в params.
  */
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
+import { AssetService, type AssetSource, type AssetState } from '@fluxus/assets';
 import type { HudComposition } from '../src/index.js';
-import { assetIdParam, resolveIcon, type HudIconSource } from '../src/icons.js';
+import {
+  HUD_ICON_ASSET_KIND,
+  HudIcons,
+  assetIdParam,
+  iconAssetId,
+  type HudIconImage,
+} from '../src/icons.js';
 
-/** Шов сборки клиента: записывает запрошенные asset ID — как демо, от корня. */
-function spySource(): { source: HudIconSource; requested: string[] } {
-  const requested: string[] = [];
+const table = {
+  cast: 'visuals/icons/cast.png',
+  jump: 'visuals/icons/jump.svg',
+};
+
+/** Байты «файла» дерева контента — как их отдал бы любой источник сборки. */
+const FILES: Readonly<Record<string, Uint8Array>> = {
+  'visuals/icons/cast.png': new Uint8Array([1, 2, 3]),
+  'visuals/icons/jump.svg': new TextEncoder().encode('<svg/>'),
+};
+
+/** Источник байтов, считающий чтения: по нему видно, что кэш ОДИН (ASSET-2). */
+function countingSource(): { source: AssetSource; reads: string[] } {
+  const reads: string[] = [];
   return {
-    requested,
+    reads,
     source: {
-      resolveIconUrl: (assetId) => {
-        requested.push(assetId);
-        return `/${assetId}`;
+      read: (id: string): Promise<ArrayBuffer> => {
+        reads.push(id);
+        const bytes = FILES[id];
+        if (bytes === undefined) return Promise.reject(new Error(`нет файла "${id}"`));
+        return Promise.resolve(bytes.slice().buffer);
       },
     },
   };
 }
 
-const table = {
-  cast: 'visuals/icons/cast.png',
-  jump: 'visuals/icons/jump.png',
-};
+/** Последнее состояние подписки: тесты смотрят на него, а не на пиксели. */
+function watch(icons: HudIcons, assetId: string): AssetState<HudIconImage>[] {
+  const states: AssetState<HudIconImage>[] = [];
+  icons.subscribe(assetId, (state) => {
+    states.push(state);
+  });
+  return states;
+}
 
 describe('asset ID в params — данные контента (HUD-4)', () => {
   it('значение принимается как есть и переживает JSON round-trip', () => {
@@ -59,18 +83,66 @@ describe('asset ID в params — данные контента (HUD-4)', () => {
     expect(() => assetIdParam(undefined, 'параметр "icon"')).toThrow('обязан быть строкой');
     expect(() => assetIdParam('', 'параметр "icon"')).toThrow('пустой asset ID');
   });
-});
-
-describe('резолв — только через шов сборки (HUD-4)', () => {
-  it('идентификатор из симуляции даёт URL через инжектированный источник', () => {
-    const { source, requested } = spySource();
-    expect(resolveIcon(table, source, 'cast')).toBe('/visuals/icons/cast.png');
-    // К шву ушёл ровно asset ID из таблицы — никакого собственного корня у HUD.
-    expect(requested).toEqual(['visuals/icons/cast.png']);
-  });
 
   it('идентификатор без записи в таблице — ошибка с именем идентификатора', () => {
-    const { source } = spySource();
-    expect(() => resolveIcon(table, source, 'dodge')).toThrow('"dodge"');
+    expect(() => iconAssetId(table, 'dodge')).toThrow('"dodge"');
+    expect(iconAssetId(table, 'cast')).toBe('visuals/icons/cast.png');
+  });
+});
+
+describe('иконка резолвится тем же asset-слоем, что у рендера (HUD-4, HUD-7)', () => {
+  it('байты приезжают источником сборки и становятся src с MIME формата', async () => {
+    const { source, reads } = countingSource();
+    const states = watch(new HudIcons(new AssetService(source)), table.jump);
+
+    // Первое состояние — «грузится» (ASSET-4): собственного корня и адреса у
+    // HUD нет, файл читает источник сборки.
+    expect(states[0]).toEqual({ status: 'loading' });
+    await vi.waitFor(() => {
+      expect(states.at(-1)?.status).toBe('ready');
+    });
+    const ready = states.at(-1);
+    expect(ready?.status === 'ready' && ready.data.src).toBe(
+      `data:image/svg+xml;base64,${btoa('<svg/>')}`,
+    );
+    expect(reads).toEqual([table.jump]);
+  });
+
+  it('второй запрос того же ID не читает файл заново — кэш один (ASSET-2)', async () => {
+    const { source, reads } = countingSource();
+    const service = new AssetService(source);
+    watch(new HudIcons(service), table.cast);
+    await vi.waitFor(() => {
+      expect(reads).toEqual([table.cast]);
+    });
+
+    // Вторая панель поверх ТОГО ЖЕ сервиса — второй загрузки нет.
+    const states = watch(new HudIcons(service), table.cast);
+    await vi.waitFor(() => {
+      expect(states.at(-1)?.status).toBe('ready');
+    });
+    expect(reads).toEqual([table.cast]);
+  });
+
+  it('отсутствующий файл — failed с причиной, а не исключение (ASSET-4)', async () => {
+    const { source } = countingSource();
+    const states = watch(new HudIcons(new AssetService(source)), 'visuals/icons/missing.png');
+    await vi.waitFor(() => {
+      expect(states.at(-1)?.status).toBe('failed');
+    });
+    const failed = states.at(-1);
+    expect(failed?.status === 'failed' && failed.reason).toContain('missing.png');
+  });
+
+  it('формат без загрузчика вида иконки — failed, а не угаданный MIME (ASSET-3)', async () => {
+    const service = new AssetService({
+      read: () => Promise.resolve(new Uint8Array([0]).buffer),
+    });
+    const states = watch(new HudIcons(service), 'visuals/icons/cast.mdx');
+    await vi.waitFor(() => {
+      expect(states.at(-1)?.status).toBe('failed');
+    });
+    const failed = states.at(-1);
+    expect(failed?.status === 'failed' && failed.reason).toContain(HUD_ICON_ASSET_KIND);
   });
 });

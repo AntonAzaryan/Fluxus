@@ -90,7 +90,40 @@ export class FakeElement {
   }
 }
 
+/**
+ * Окно документа: ровно те три метода, которыми виджет снимает удержание по
+ * уходу фокуса (HUD-2, INP-5). Ни размеров, ни таймеров здесь нет — они виджету
+ * не нужны, а стенд обязан давать не больше, чем нужно.
+ */
+class FakeWindow {
+  private readonly listeners = new Map<string, (() => void)[]>();
+
+  addEventListener(type: string, listener: () => void): void {
+    const list = this.listeners.get(type) ?? [];
+    list.push(listener);
+    this.listeners.set(type, list);
+  }
+
+  removeEventListener(type: string, listener: () => void): void {
+    const list = this.listeners.get(type);
+    if (list === undefined) return;
+    const index = list.indexOf(listener);
+    if (index !== -1) list.splice(index, 1);
+  }
+
+  /** Сколько слушателей типа живо — по нему видно, что `dispose` отписался. */
+  count(type: string): number {
+    return this.listeners.get(type)?.length ?? 0;
+  }
+
+  dispatch(type: string): void {
+    for (const listener of [...(this.listeners.get(type) ?? [])]) listener();
+  }
+}
+
 class FakeDocument {
+  readonly defaultView = new FakeWindow();
+
   createElement(tag: string): FakeElement {
     const element = new FakeElement(tag);
     element.ownerDocument = this as unknown as Document;
@@ -102,12 +135,14 @@ export interface FakeDom {
   readonly doc: Document;
   /** Контейнер вьюпорта, поверх которого встаёт оверлей. */
   readonly container: FakeElement;
+  /** Окно документа — на нём тест гасит фокус (alt-tab). */
+  readonly view: FakeWindow;
 }
 
 export function fakeDom(): FakeDom {
   const doc = new FakeDocument();
   const container = doc.createElement('div');
-  return { doc: doc as unknown as Document, container };
+  return { doc: doc as unknown as Document, container, view: doc.defaultView };
 }
 
 /** Обход материализованного поддерева — аналог `walk` для фейковых элементов. */

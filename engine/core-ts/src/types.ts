@@ -82,8 +82,10 @@ export interface RaycastHit {
 
 /**
  * Поиск пути (NAV-1). Опциональная зависимость (DI-4): в отличие от физики,
- * необязательна и для этой игры — крипов и NPC в ней нет. Реализации в ядре
- * пока нет: зафиксирован только шов, через который она войдёт.
+ * необязательна — без неё движение NPC деградирует до прямого seek
+ * (`npc-behavior` NPC-6). Реализация за этим швом в ядре есть и живёт в
+ * `systems/nav/`: сетка террейна с 4-связностью, A* и спрямление маршрута
+ * (NAV-7..NAV-10).
  */
 export interface NavigationApi {
   readonly findPath: (from: Vec2, to: Vec2, options?: PathRequestOptions) => PathResult;

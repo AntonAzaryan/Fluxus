@@ -214,7 +214,8 @@ export interface BuffDef {
   readonly class: 'positive' | 'negative';
   /** Отсутствие поля либо неположительное значение — постоянный бафф (BUFF-2, BUFF-6). */
   readonly durationTicks?: Expression;
-  readonly stacking?: 'refresh' | 'stack' | 'independent';
+  /** Политика стакинга обязательна: умолчания у неё нет (BUFF-3). */
+  readonly stacking: 'refresh' | 'stack' | 'independent';
   /** Потолок стаков; обязателен при политике `stack` (BUFF-3). */
   readonly maxStacks?: Expression;
   readonly statMods?: readonly BuffStatModDef[];

@@ -309,6 +309,51 @@ describe('Проверки загрузки определений (ABIL-10)', (
   });
 
   /**
+   * Размер фигуры читают ДВОЕ — симуляция и превью (ABIL-5, REND-28), — и
+   * второй получает каталог без мира. Вычисляемый размер симуляция применила бы,
+   * а превью не нарисовало бы фигуру вовсе: игрок увидел бы пустой кадр над
+   * работающим гейтом. Поэтому отказ на загрузке, а не молчание (ABIL-10).
+   */
+  it('вычисляемый размер фигуры — ошибка загрузки, называющая способность и поле (ABIL-5)', () => {
+    expect(
+      failing({
+        targeting: {
+          steps: [{ kind: 'unit', shape: { kind: 'circle', radius: { var: 'level' } } }],
+        },
+      }),
+    ).toThrow(/targeting\.steps\[0\]\.shape\.radius: размер фигуры шага — литеральное число/);
+    expect(
+      failing({
+        targeting: {
+          steps: [{ kind: 'unit', shape: { kind: 'circle', radius: 1, halfAngle: { var: 'level' } } }],
+        },
+      }),
+    ).toThrow(/shape\.halfAngle: размер фигуры шага — литеральное число/);
+  });
+
+  it('литеральные размеры фигуры принимаются: конус и прямоугольник', () => {
+    const scene: SceneDef = {
+      components: BASE,
+      abilities: [
+        {
+          ...SIMPLE,
+          targeting: {
+            steps: [
+              { kind: 'unit', shape: { kind: 'circle', radius: 65536, halfAngle: 5461 } },
+              { kind: 'vector', shape: { kind: 'aabb', halfX: 65536, halfY: 6553 } },
+            ],
+          },
+        },
+      ],
+    };
+    const catalog = loadScene(scene).abilities!;
+    expect(catalog.steps[0]!.shapeA).toBe(65536);
+    expect(catalog.steps[0]!.halfAngle).toBe(5461);
+    expect(catalog.steps[1]!.shapeA).toBe(65536);
+    expect(catalog.steps[1]!.shapeB).toBe(6553);
+  });
+
+  /**
    * Ширина маски кнопок — u16 (TICK-2), и «любой потребитель маски SHALL
    * исходить из той же ширины». Бит выше пятнадцатого до провода не доедет,
    * поэтому способность на нём — ошибка ЗАГРУЗКИ, а не «кнопка почему-то не
