@@ -217,6 +217,15 @@ describe('ED-1: слоты блока — те аргументы, которы�
     value: { value: { nope: [] } },
     nearestTo: { nearestTo: { nope: [] } },
     limit: { limit: { nope: [] } },
+    at: { at: { nope: [] } },
+    radius: { radius: { nope: [] } },
+    def: { def: { nope: [] } },
+    from: { from: { nope: [] } },
+    to: { to: { nope: [] } },
+    duration: { duration: { nope: [] } },
+    easing: { easing: { nope: [] } },
+    ignoreTimeScale: { ignoreTimeScale: { nope: [] } },
+    id: { id: { nope: [] } },
     name: { name: 42 },
     query: { query: { all: ['Nope'] } },
     overrides: { prefab: 'grunt', overrides: { Nope: {} } },
@@ -241,10 +250,11 @@ describe('ED-1: слоты блока — те аргументы, которы�
     });
   }
 
-  it('аргумент вне конвенции ядро содержимым не проверяет — и модель его не знает', () => {
-    // Предел, зафиксированный в SYS-3. Именно поэтому таблицы «действие → его
-    // аргументы» в редакторе нет: проверять по ней было бы строже ядра.
-    expect(accepted(systemOf({ let: { do: [], nope: { alsoNope: [] } } }))).toBe(true);
+  it('аргумент вне конвенции ядро отвергает на регистрации — и модель его не знает', () => {
+    // Перечень конвенции закрыт (SYS-3): имя вне него — отказ ядра, а не
+    // непроверенное содержимое. Таблицы «действие → его аргументы» в редакторе
+    // при этом по-прежнему нет: вердикт выносит ядро, а не вторая модель.
+    expect(rejection(systemOf({ let: { do: [], nope: { alsoNope: [] } } }))).toContain('.nope');
     expect(conventionSlot('nope')).toBeUndefined();
     expect(conventionSlot('cond')).toEqual({ name: 'cond', kind: 'expression' });
   });
@@ -346,9 +356,12 @@ describe('ED-5: незаполненный слот в документ не у�
     expect(JSON.stringify(other)).toBe(JSON.stringify(filled));
   });
 
-  it('аргумент вне конвенции пишется следом и не теряется', () => {
-    const node = buildAction({ name: 'addTween', slots: { duration: 60, entity: 0, def: 0 } });
-    expect(Object.keys(node.addTween as JsonObject)).toEqual(['entity', 'duration', 'def']);
+  it('имя вне конвенции пишется следом и не теряется — вердикт остаётся за ядром', () => {
+    // Узел с таким именем ядро отвергнет на регистрации (SYS-3), но сборщик его
+    // не теряет и не судит: вторая проверка того же самого в редакторе — ровно
+    // то, что запрещает ED-1. Имена конвенции при этом идут её порядком.
+    const node = buildAction({ name: 'addTween', slots: { duration: 60, entity: 0, def: 0, nope: 1 } });
+    expect(Object.keys(node.addTween as JsonObject)).toEqual(['entity', 'def', 'duration', 'nope']);
   });
 
   it('аргументы выражения пишутся списком всегда, а читаются в обеих формах', () => {
