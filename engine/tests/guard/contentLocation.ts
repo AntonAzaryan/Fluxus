@@ -54,6 +54,12 @@ const CONTENT_SUFFIXES = new Map<string, string>([
   ['.blend', 'авторский источник level-дизайна (game-content CONT-6)'],
   ['.png', 'текстура'],
   ['.blp', 'текстура'],
+  // Эмиттерный ассет (assets ASSET-14) — presentation-документ дерева визуалов,
+  // как и модель: его правит дизайнер эффектов, а грузит модуль ассетов.
+  ['.effect.json', 'эмиттерный ассет (assets ASSET-14)'],
+  // Иконка интерфейса адресуется из данных HUD asset ID дерева контента
+  // (match-hud HUD-4, assets ASSET-2) — художественный ассет наравне с текстурой.
+  ['.svg', 'иконка интерфейса (match-hud HUD-4, assets ASSET-2)'],
 ]);
 
 /** Документы контента, опознаваемые по полному имени. */
@@ -63,11 +69,19 @@ const CONTENT_NAMES = new Map<string, string>([
 
 /**
  * Документы контента, опознаваемые по директории: имя файла ничего о виде не
- * говорит, а место — говорит. Профиль бота (`bot-player` BOT-6) назван уровнем
- * сложности (`easy.json`), и по суффиксу его не отличить от любого JSON.
+ * говорит, а место — говорит (CONT-1). Профиль бота (`bot-player` BOT-6) назван
+ * уровнем сложности (`easy.json`), карта кривизны (`assets` ASSET-7) — своим
+ * назначением (`arena-curvature.json`), и по суффиксу их не отличить от любого
+ * JSON.
+ *
+ * Имя директории ищется на ЛЮБОМ уровне пути, а не только у непосредственного
+ * родителя: документы поведения ботов лежат в `bots/behaviors/`, и проверка
+ * только родителя оставляла бы их за границей — ровно тот вид, ради которого
+ * правило по месту и заведено.
  */
 const CONTENT_DIRS = new Map<string, string>([
-  ['bots', 'профиль поведения бота (bot-player BOT-6)'],
+  ['bots', 'документ ботов — профиль или поведение (bot-player BOT-6, BOT-8)'],
+  ['visuals', 'presentation-документ дерева визуалов (assets ASSET-2, game-content CONT-2)'],
 ]);
 
 /** Не обходятся никогда: сборочный мусор и чужие пакеты — не исходники репозитория. */
@@ -80,16 +94,32 @@ const SKIP_DIRS = new Set(['node_modules', 'dist', '.vite']);
  */
 export const ENGINE_FIXTURE_EXCLUSIONS: readonly ContentExclusion[] = [
   { dir: 'tests/golden', reason: 'golden-эталоны движка (cli-testing CLI-2, CLI-6)' },
-  { dir: 'assets-ts/test/fixtures', reason: 'фикстуры парсеров модуля ассетов' },
+  {
+    dir: 'assets-ts/test/fixtures',
+    reason: 'эталонные фикстуры парсеров ассетов (game-content CONT-4)',
+  },
+  {
+    dir: 'render-ts/test/fixtures',
+    reason: 'эталонные фикстуры потребителя эмиттерных ассетов (game-content CONT-4)',
+  },
 ];
 
-function classify(name: string, dir: string): string | undefined {
+/**
+ * Вид документа по имени и по месту. `dirs` — сегменты пути от корня скана до
+ * файла: имя директории ищется на любом уровне (см. `CONTENT_DIRS`), поэтому
+ * передаётся весь путь, а не один родитель.
+ */
+function classify(name: string, dirs: readonly string[]): string | undefined {
   const byName = CONTENT_NAMES.get(name);
   if (byName !== undefined) return byName;
   for (const [suffix, kind] of CONTENT_SUFFIXES) {
     if (name.endsWith(suffix)) return kind;
   }
-  if (name.endsWith('.json')) return CONTENT_DIRS.get(dir);
+  if (!name.endsWith('.json')) return undefined;
+  for (const dir of dirs) {
+    const byDir = CONTENT_DIRS.get(dir);
+    if (byDir !== undefined) return byDir;
+  }
   return undefined;
 }
 
@@ -103,7 +133,10 @@ function walk(dir: string, rootDir: string, excluded: ReadonlySet<string>, out: 
       walk(full, rootDir, excluded, out);
       continue;
     }
-    const kind = classify(entry, dir.split(sep).pop() ?? '');
+    // Сегменты пути ОТ КОРНЯ СКАНА: имя контентной директории ищется на любом
+    // уровне (`bots/behaviors/classic.json` — документ ботов), а директории над
+    // корнем к делу не относятся вовсе.
+    const kind = classify(entry, relative(rootDir, dir).split(sep));
     if (kind === undefined) continue;
     out.push({
       file: rel,

@@ -170,7 +170,7 @@ export type { PhysicsDeps, PhysicsOptions, StaticCollider } from './systems/phys
  * стендам и замерам (PERF-5).
  */
 export { buildNavigation } from './systems/nav/navigation.js';
-export type { NavigationOptions } from './systems/nav/navigation.js';
+export type { NavigationOptions, NavigationBuildOptions } from './systems/nav/navigation.js';
 export {
   createArenaApi,
   arenaPrefab,

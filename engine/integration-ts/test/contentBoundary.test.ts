@@ -35,12 +35,23 @@ describe('guard: сканер границы контента ловит каж�
   beforeAll(() => {
     root = mkdtempSync(join(tmpdir(), 'content-guard-'));
     mkdirSync(join(root, 'pkg-ts/src'), { recursive: true });
-    mkdirSync(join(root, 'pkg-ts/src/bots'), { recursive: true });
+    mkdirSync(join(root, 'pkg-ts/src/bots/behaviors'), { recursive: true });
+    mkdirSync(join(root, 'pkg-ts/src/visuals'), { recursive: true });
     mkdirSync(join(root, 'pkg-ts/node_modules/dep'), { recursive: true });
     mkdirSync(join(root, 'tests/golden'), { recursive: true });
     // Профиль бота (bot-player BOT-6) опознаётся директорией: имя файла —
-    // уровень сложности, по суффиксу от любого JSON его не отличить.
+    // уровень сложности, по суффиксу от любого JSON его не отличить. Документ
+    // поведения (BOT-8) лежит уровнем глубже — в `bots/behaviors/`, — поэтому
+    // имя контентной директории ищется на любом уровне пути, а не у родителя.
     writeFileSync(join(root, 'pkg-ts/src/bots/easy.json'), '{}');
+    writeFileSync(join(root, 'pkg-ts/src/bots/behaviors/classic.json'), '{}');
+    // Карта кривизны (assets ASSET-7) названа назначением, а не видом: опознаёт
+    // её дерево визуалов, в котором она лежит.
+    writeFileSync(join(root, 'pkg-ts/src/visuals/arena-curvature.json'), '{}');
+    // Эмиттерный ассет (ASSET-14) и иконка интерфейса (match-hud HUD-4) —
+    // presentation-документы дерева контента наравне с моделью и текстурой.
+    writeFileSync(join(root, 'pkg-ts/src/torch.effect.json'), '{}');
+    writeFileSync(join(root, 'pkg-ts/src/cast.svg'), '');
     writeFileSync(join(root, 'pkg-ts/src/duel.scene.json'), '{}');
     writeFileSync(join(root, 'pkg-ts/src/duel.presentation.json'), '{}');
     writeFileSync(join(root, 'pkg-ts/src/duel.bots.json'), '{}');
@@ -67,10 +78,12 @@ describe('guard: сканер границы контента ловит каж�
     rmSync(root, { recursive: true, force: true });
   });
 
-  it('сцена, парные слои, матч, манифест, модель, текстура и профиль бота краснят', () => {
+  it('сцена, парные слои, матч, манифест, модель, текстура, эффект, иконка и документы ботов краснят', () => {
     const files = scanContentLocation({ rootDir: root }).map((v) => v.file);
     expect(files).toEqual([
+      'pkg-ts/src/bots/behaviors/classic.json',
       'pkg-ts/src/bots/easy.json',
+      'pkg-ts/src/cast.svg',
       'pkg-ts/src/duel.blend',
       'pkg-ts/src/duel.bots.json',
       'pkg-ts/src/duel.match.json',
@@ -81,7 +94,23 @@ describe('guard: сканер границы контента ловит каж�
       'pkg-ts/src/hero.mdx',
       'pkg-ts/src/manifest.json',
       'pkg-ts/src/skin.png',
+      'pkg-ts/src/torch.effect.json',
+      'pkg-ts/src/visuals/arena-curvature.json',
     ]);
+  });
+
+  it('виды, которых словарь прежде не знал, ловятся наравне с прочими (CONT-1)', () => {
+    // Дыра, которую закрывает этот набор: в дереве контента лежат иконки
+    // интерфейса, документы эффектов, карта кривизны и документы поведения
+    // ботов, а словарь проверки знал только сцену, парные слои, матч, манифест,
+    // модель, текстуру и профиль бота. Копия любого из четырёх видов внутри
+    // пакета движка проезжала границу молча — ровно тот случай, ради которого
+    // проверка заведена.
+    const kinds = new Map(scanContentLocation({ rootDir: root }).map((v) => [v.file, v.message]));
+    expect(kinds.get('pkg-ts/src/cast.svg')).toContain('HUD-4');
+    expect(kinds.get('pkg-ts/src/torch.effect.json')).toContain('ASSET-14');
+    expect(kinds.get('pkg-ts/src/visuals/arena-curvature.json')).toContain('ASSET-2');
+    expect(kinds.get('pkg-ts/src/bots/behaviors/classic.json')).toContain('BOT-8');
   });
 
   it('модель в РАБОЧЕМ формате контента граница ловит наравне с историческим', () => {

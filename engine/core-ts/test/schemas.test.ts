@@ -12,6 +12,7 @@ import {
   TERRAIN_LEVEL_MAX,
 } from '../src/systems/terrain.js';
 import type { LocomotionOptions } from '../src/systems/locomotion.js';
+import type { NavigationOptions } from '../src/systems/nav/navigation.js';
 import type { PhysicsOptions } from '../src/systems/physics.js';
 import type { VisibilityOptions } from '../src/systems/visibility.js';
 
@@ -107,6 +108,27 @@ describe('engine/schemas (SER-5)', () => {
 
     expect(Object.keys(doc.properties.physics.properties).sort()).toEqual(Object.keys(physics).sort());
     expect(Object.keys(doc.properties.visibility.properties).sort()).toEqual(Object.keys(visibility).sort());
+  });
+
+  /**
+   * SER-5, обратная сторона того же правила: закрытый блок объявляет состав
+   * документа исчерпывающим, поэтому поле, которое документ поддерживает, а
+   * блок не называет, — тот же дефект, что и поле, отвергнутое схемой при живом
+   * ядре. У `navigation` поверхность документа (`NavigationOptions` — CLI-2,
+   * NTR-14) и параметры сборки (`NavigationBuildOptions`: учёт работы в
+   * счётчиках стоимости, PERF-3) разведены типами, и сверяется здесь первая:
+   * прежде блок был четвёртым закрытым и единственным несверяемым — ровно из-за
+   * этого поле `cost` доезжало до сборки мимо опубликованной схемы.
+   */
+  it('схема сценария описывает ровно поверхность документа для навигации (NAV-1, NAV-5)', () => {
+    const options: Required<NavigationOptions> = { budget: 4096, maxAgentRadius: 32768 };
+    const doc = schemaFiles['scenario.schema.json'] as {
+      properties: { navigation: { properties: Record<string, unknown> } };
+    };
+
+    expect(Object.keys(doc.properties.navigation.properties).sort()).toEqual(
+      Object.keys(options).sort(),
+    );
   });
 
   /**
