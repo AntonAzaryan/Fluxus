@@ -31,7 +31,9 @@ import type {
 import {
   ClientHost,
   MatchClient,
+  startPaced,
   type ClientStep,
+  type PacedTimer,
   type ConnectionRole,
   type ContentPack,
   type GameVersion,
@@ -224,7 +226,7 @@ export class BotSeat {
  */
 export class BotHost {
   private readonly seatList: BotSeat[] = [];
-  private timer: ReturnType<typeof setInterval> | undefined;
+  private timer: PacedTimer | undefined;
   private timerRate: number | undefined;
 
   get seats(): readonly BotSeat[] {
@@ -281,7 +283,7 @@ export class BotHost {
 
   stop(): void {
     if (this.timer === undefined) return;
-    clearInterval(this.timer);
+    this.timer.stop();
     this.timer = undefined;
     this.timerRate = undefined;
   }
@@ -292,11 +294,17 @@ export class BotHost {
     this.seatList.length = 0;
   }
 
+  /**
+   * Темп ботов — то же расписание без дрейфа, что у клиентского и серверного
+   * хостов (`@fluxus/net`, `startPaced`): бот, отстающий от сервера на процент
+   * из-за округления периода, перешагивал бы номера тиков и жил бы на повторе —
+   * выглядя лагающим на канале с нулевой задержкой.
+   */
   private ensureTimer(rate: number): void {
     if (this.timer !== undefined && this.timerRate === rate) return;
-    if (this.timer !== undefined) clearInterval(this.timer);
+    this.timer?.stop();
     this.timerRate = rate;
-    this.timer = setInterval(() => {
+    this.timer = startPaced(1000 / rate, () => {
       const actual = this.matchRate;
       if (actual !== undefined && actual !== this.timerRate) this.ensureTimer(actual);
       this.step();
@@ -305,6 +313,6 @@ export class BotHost {
       // остановиться обязан тот, кто тикает. Без этого воркер доигравшего матча
       // крутил бы таймер на 60 Гц до конца процесса.
       if (this.finished) this.stop();
-    }, 1000 / rate);
+    });
   }
 }

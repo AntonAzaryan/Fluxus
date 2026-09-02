@@ -123,6 +123,8 @@ export type {
 } from './client/matchClient.js';
 export type { DeliveredPause } from './client/pause.js';
 export { ClientHost } from './client/host.js';
+export { startPaced } from './schedule.js';
+export type { PacedTimer } from './schedule.js';
 export type { ClientHostOptions, ClientStep, InputSource } from './client/host.js';
 export { InputRing, DEFAULT_RING_TICKS } from './client/inputRing.js';
 export type { SentInput } from './client/inputRing.js';

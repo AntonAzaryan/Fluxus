@@ -33,9 +33,8 @@ import {
 
 /**
  * Темп синтетических проверок: шаг подъёма 2 тика (период рассылки), окно
- * стабильности 100 отправок (пять секунд), пол 2, допуск серии повторов 3,
- * потолок 8 (окно приёма 12 минус запас оценки: период рассылки плюс
- * `inputDelay`). Все величины выведены из ЭТИХ полей, а не зашиты в контроллер,
+ * стабильности 100 отправок (пять секунд), пол 2, потолок 8 (окно приёма 12
+ * минус запас оценки: период рассылки плюс `inputDelay`). Все величины выведены из ЭТИХ полей, а не зашиты в контроллер,
  * — поэтому мелкий темп делает проверку короткой, не делая её ненастоящей.
  */
 const PACING: Pacing = {
@@ -48,8 +47,6 @@ const PACING: Pacing = {
 
 const STEP_TICKS = PACING.tickRate / PACING.snapshotRate;
 const SETTLE_WINDOW = 5 * PACING.tickRate;
-/** Допуск серии повторов: длиннее неё — сигнал (`lead.ts`). */
-const TOLERANCE = STEP_TICKS + 1;
 /** Срок эха сверх запаса: рассылка, запас оценки тика и допуск на часы. */
 const SLACK = STEP_TICKS + (STEP_TICKS + PACING.inputDelay) + STEP_TICKS;
 /** Потолок: окно приёма за вычетом запаса оценки тика. */
@@ -183,18 +180,36 @@ describe('детектор опоздания и контроллер запас
     expect(control.lead).toBe(PACING.inputDelay + STEP_TICKS);
   });
 
-  it('серия повторов длиннее допуска поднимает запас, а внутри допуска — нет', () => {
-    const patient = new LeadController(PACING);
-    feed(patient, 1, { sends: 10 * SETTLE_WINDOW, behind: TOLERANCE });
-    // Серия внутри допуска подъёма не даёт — но и спуска: значение, при котором
-    // сервер подставляет повтор, «с запасом» не работает.
-    expect(patient.lead).toBe(PACING.inputDelay);
+  it('размеченный тик, прожитый сервером на повторе, поднимает запас — допуска на серию нет', () => {
+    // Опоздавший кадр отброшен вместе с нажатиями, которые нёс (NTR-7), и
+    // разность видна только на тиках рассылки: допуск в несколько тиков делал
+    // бы контроллер слепым к каналу, где опаздывает каждый двадцатый кадр, — он
+    // сходился бы к значению, при котором ввод теряется постоянно.
+    const control = new LeadController(PACING);
+    const seq = feed(control, 1, { sends: PROVEN, behind: 0 });
+    expect(control.lead).toBe(PACING.inputDelay);
 
-    const alarmed = new LeadController(PACING);
-    const seq = feed(alarmed, 1, { sends: PROVEN, behind: 0 });
-    expect(alarmed.lead).toBe(PACING.inputDelay);
-    feed(alarmed, seq, { sends: 1, behind: TOLERANCE + 1 });
-    expect(alarmed.lead).toBe(PACING.inputDelay + STEP_TICKS);
+    feed(control, seq, { sends: 1, behind: 1 });
+    expect(control.lead).toBe(PACING.inputDelay + STEP_TICKS);
+  });
+
+  it('снапшот без своего кадра — наблюдение: сервер прошёл барьер без нас, подъём раньше срока', () => {
+    // На старте длинного канала эха нет вовсе: сервер ни одного кадра слота не
+    // применял и повторяет нулевой (TICK-2). Но тик снапшота — серверная
+    // величина, и снапшот, тик которого уже за первым размеченным, говорит,
+    // что кадры к своим тикам не доехали, — ждать срока эха незачем.
+    const control = new LeadController(PACING);
+    const first = 100;
+    control.snapshotApplied();
+    control.sent(1, first);
+    // Снапшот ещё до барьера: сервер размеченных тиков не проходил — молчание.
+    control.noEcho(first - 1);
+    control.sent(2, first + 1);
+    expect(control.lead).toBe(PACING.inputDelay);
+    // Сервер прошёл первый размеченный тик, а нашего кадра в нём нет.
+    control.noEcho(first);
+    control.sent(3, first + 2);
+    expect(control.lead).toBe(PACING.inputDelay + STEP_TICKS);
   });
 
   it('молчание игрока запас не двигает ни вверх, ни вниз', () => {
@@ -346,10 +361,11 @@ describe('детектор опоздания и контроллер запас
     const raised = control.lead;
     expect(raised).toBe(PACING.inputDelay + 2 * STEP_TICKS);
 
-    // Чистое окно — спуск на тик; канал этого тика не выдерживает.
+    // Чистое окно — спуск на тик; канал этого тика не выдерживает: первый же
+    // размеченный тик на повторе — сигнал.
     seq = feed(control, seq, { sends: STABLE, behind: 0 });
     expect(control.lead).toBe(raised - 1);
-    seq = feed(control, seq, { sends: PROVEN, behind: TOLERANCE + 1 });
+    seq = feed(control, seq, { sends: PROVEN, behind: 1 });
     // Возврат ровно туда, откуда спустились: то значение доставку доказало.
     expect(control.lead).toBe(raised);
 
@@ -545,8 +561,10 @@ describe('разметка ввода адаптивным запасом (NTR-7
     const frozen = match.clients[1]!.client.metrics.inputLead!;
     const snapshots = match.clients[1]!.client.metrics.snapshotsApplied;
     const pacing = match.server.pacing;
-    // Не больше одного подъёма — того, чей барьер ещё застал живые снапшоты.
-    expect(frozen).toBeLessThanOrEqual(pacing.inputDelay + pacing.tickRate / pacing.snapshotRate);
+    // Подъёмы — только те, что успели застать живые снапшоты (единицы), а не
+    // разгон в потолок: без снапшотов ни срок эха, ни разность не работают.
+    const ceiling = pacing.inputWindow - pacing.tickRate / pacing.snapshotRate - pacing.inputDelay;
+    expect(frozen).toBeLessThan(ceiling / 2);
 
     match.run(20 * SETTLE_WINDOW);
 
@@ -576,13 +594,20 @@ describe('разметка ввода адаптивным запасом (NTR-7
     });
     match.run(200);
     const client = match.clients[1]!.client;
-    const adapted = client.metrics.inputLead!;
-    expect(adapted).toBeGreaterThan(2);
+    const raised = client.metrics.inputLead!;
+    expect(raised).toBeGreaterThan(2);
 
-    // Канал выправился, и чистое окно почти набрано: спуск случится через
-    // считаные шаги — то есть решение принимается ровно на границе перемотки.
+    // Канал выправился: дождаться очередного спуска — от него отсчитывается
+    // новое окно стабильности, — и подойти к его концу вплотную: спуск
+    // случился бы через считаные шаги, то есть решение принимается ровно на
+    // границе перемотки. Отсчёт от наблюдаемого спуска, а не от числа шагов:
+    // темп подъёма — величина контроллера, и тест его не приколачивает.
     match.channels[1]!.retune(LAN);
-    match.run(55);
+    let guard = 0;
+    while (client.metrics.inputLead === raised && guard++ < 10 * SETTLE_WINDOW) match.step();
+    const adapted = client.metrics.inputLead!;
+    expect(adapted).toBe(raised - 1);
+    match.run(SETTLE_WINDOW - 10);
     expect(client.metrics.inputLead).toBe(adapted);
 
     const epoch = match.server.epoch;
@@ -789,6 +814,55 @@ describe('разметка ввода адаптивным запасом (NTR-7
     const before = slotOf(patient, 1);
     patient.run(600);
     expect(slotOf(patient, 1).applied - before.applied).toBeGreaterThan(540);
+  });
+
+  it('канал с разбросом: в установившемся режиме кадры не теряются, а проба стоит единицы тиков', () => {
+    // Профиль в духе edge-туннеля при темпе демо-арены: круг ~230–300 мс с
+    // разбросом в два тика на направление. Опоздавший кадр отброшен вместе с
+    // нажатиями (NTR-7), поэтому мерой служит серверный счётчик опозданий, а
+    // не только «применено против предсказано». Допуск на серию повторов
+    // оставлял бы здесь ~5 % кадров опаздывающими постоянно: контроллер
+    // сходился к наименьшему значению, при котором серии редко длиннее допуска.
+    const match = channelMatch({
+      config: duelConfig({ tickRate: 60, snapshotRate: 30, inputDelay: 2, inputWindow: 30 }),
+      profiles: [LAN, { name: 'edge-jitter', delaySteps: 7, jitterSteps: 2, lossPerMille: 0 }],
+      input: () => WALK,
+    });
+    match.run(600);
+    const client = match.clients[1]!.client;
+    const settled = client.metrics.inputLead!;
+    expect(settled).toBeGreaterThan(match.server.pacing.inputDelay);
+
+    const late = match.server.metrics.slots[1]!.late;
+    let lead = settled;
+    let lowers = 0;
+    let lastLower = -1;
+    const probeCosts: number[] = [];
+    let lateAtLower = late;
+    for (let i = 0; i < 7200; i++) {
+      match.step();
+      const now = client.metrics.inputLead!;
+      if (now < lead) {
+        lowers++;
+        lastLower = i;
+        lateAtLower = match.server.metrics.slots[1]!.late;
+      } else if (now > lead && lastLower >= 0) {
+        probeCosts.push(match.server.metrics.slots[1]!.late - lateAtLower);
+        lastLower = -1;
+      }
+      lead = now;
+    }
+    const dropped = match.server.metrics.slots[1]!.late - late;
+
+    // Две минуты: потерянных кадров — доли процента, и все они — цена проб
+    // спуска, а не постоянный фон.
+    expect(dropped).toBeLessThan(0.01 * 7200);
+    expect(lowers).toBeGreaterThan(0);
+    // Неудачная проба обнаруживается первым же опозданием, а не сроком эха:
+    // единицы тиков потерянного ввода, не десятки.
+    for (const cost of probeCosts) expect(cost).toBeLessThanOrEqual(12);
+    // Запас держится в полосе шириной в тик: значение и проба на тик ниже.
+    expect(Math.abs(lead - settled)).toBeLessThanOrEqual(1);
   });
 
   it('запас публикуется в счётчиках клиента рядом с откликом (NTR-11)', () => {

@@ -198,6 +198,38 @@ describe('сверка данных матча (DET-1)', () => {
     expect(client.slot).toBe(0);
     expect(client.worldInitHash).toMatch(/^[0-9a-f]{8}$/);
   });
+
+  it('Start, обогнавший Welcome на неупорядоченном канале, не возвращает клиента в лобби (NTR-2)', () => {
+    // Последнему вошедшему `Welcome` и `Start` уходят одной рассылкой, а
+    // порядок доставки канал не гарантирует (NTR-2). Клиент, увидевший `Start`
+    // первым, уже в игре — приветствие вслед не должно возвращать его в лобби,
+    // где он до конца матча молча применял бы снапшоты и не слал ввод.
+    const config = duelConfig();
+    const { server } = harness(config);
+    server.connect(1);
+    server.receive(1, hello('p1', config.version));
+    server.connect(2);
+    server.receive(2, hello('p2', config.version));
+    const toSecond = server.drain().filter((out) => out.to === 2).map((out) => out.message);
+    expect(toSecond.map((message) => message.type)).toEqual(['Welcome', 'Start']);
+
+    const scene = duelScene();
+    const pack = contentPack({ duel: scene });
+    const client = new MatchClient({
+      playerId: 'p2',
+      version: { buildId: BUILD_ID, contentPackHash: pack.hash },
+      content: pack,
+    });
+    client.start();
+    client.receive(toSecond[1]!, 0);
+    client.receive(toSecond[0]!, 0);
+
+    expect(client.phase).toBe('playing');
+    expect(client.slot).toBe(1);
+    // Запас разметки заведён приветствием, и ввод уходит.
+    client.pushInput({ move: { x: 0, y: 0 }, aimDir: 0, buttons: 0 }, 0);
+    expect(client.drain().some((message) => message.type === 'Input')).toBe(true);
+  });
 });
 
 describe('наблюдатель (NTR-9)', () => {

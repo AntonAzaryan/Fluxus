@@ -24,6 +24,7 @@ import {
   type TransportRtt,
   type TransportServer,
 } from '../transport/transport.js';
+import { startPaced, type PacedTimer } from '../schedule.js';
 import { DurationRing, summarize, type DurationSummary } from './hostMetrics.js';
 import type { MatchServer, Outgoing } from './matchServer.js';
 
@@ -107,7 +108,7 @@ export class MatchHost {
   private readonly codec: Codec<ServerMessage, ClientMessage>;
   private readonly attached = new Map<ConnectionId, Transport>();
   private nextId: ConnectionId = 1;
-  private timer: ReturnType<typeof setInterval> | undefined;
+  private timer: PacedTimer | undefined;
 
   private readonly now: () => number;
   private readonly tickRing = new DurationRing();
@@ -338,15 +339,21 @@ export class MatchHost {
     };
   }
 
+  /**
+   * Фиксированное расписание `tickRate` (NTR-7) — без дрейфа: шаги отсчитываются
+   * от точки старта, а не от предыдущего срабатывания (`schedule.ts`). Голый
+   * `setInterval(1000 / 60)` давал 61–62 Гц: период округляется до целых
+   * миллисекунд, и матч шёл быстрее собственного темпа.
+   */
   start(): void {
     if (this.timer !== undefined) return;
     const periodMs = 1000 / this.server.pacing.tickRate;
-    this.timer = setInterval(() => { this.step(); }, periodMs);
+    this.timer = startPaced(periodMs, () => { this.step(); });
   }
 
   async stop(): Promise<void> {
     if (this.timer !== undefined) {
-      clearInterval(this.timer);
+      this.timer.stop();
       this.timer = undefined;
     }
     this.server.stop();
