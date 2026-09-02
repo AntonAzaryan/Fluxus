@@ -39,6 +39,7 @@ import * as fixed from '../math/fixed.js';
 import { componentSchema } from '../ecs/world.js';
 import { BLOCKS_VISION } from './physics.js';
 import { optionalComponentHandle } from './optionalHandle.js';
+import { QueryBuffer } from './queryBuffer.js';
 import {
   POSITION_COMPONENT,
   type ComponentHandle,
@@ -47,6 +48,7 @@ import {
   type FieldHandle,
   type Fixed,
   type ModifierList,
+  type QuerySpec,
   type System,
   type SystemContext,
   type TerrainApi,
@@ -188,6 +190,19 @@ export function isVisibleTo(mask: number, team: number): boolean {
 const ANCHOR_ORDER = 900;
 
 /**
+ * Спецификации выборок пересчёта — константы модуля, а не литералы на тик:
+ * состав их известен заранее, а объект на прогон был бы аллокацией на ровном
+ * месте. Спецификация КАНДИДАТОВ константой быть не может — её радиус и центр
+ * принадлежат наблюдателю (FOW-5), и строится она на каждого.
+ */
+const TARGET_SPEC: QuerySpec = { all: [VISIBILITY_COMPONENT, POSITION_COMPONENT] };
+const OBSERVER_SPEC: QuerySpec = { all: [VISION_COMPONENT, TEAM_COMPONENT, POSITION_COMPONENT] };
+const STEALTH_SOURCES_SPEC: QuerySpec = { all: [STEALTH_SOURCES_COMPONENT] };
+const DETECTION_SOURCES_SPEC: QuerySpec = { all: [DETECTION_SOURCES_COMPONENT] };
+const STEALTH_STATE_SPEC: QuerySpec = { all: [STEALTH_STATE_COMPONENT] };
+const DETECTION_STATE_SPEC: QuerySpec = { all: [DETECTION_STATE_COMPONENT] };
+
+/**
  * Handle полей FoW (`data-driven-systems` SYS-10): пересчёт видимости читает
  * позицию, команду и стелс на КАЖДОГО кандидата КАЖДОГО наблюдателя, то есть
  * произведением, а не суммой. Имена разрешаются один раз, на первом входе.
@@ -273,6 +288,19 @@ export class VisibilitySystem implements System {
   // Через этот файл проходит `bin/sim.mjs` (CLI-1), так что сахар здесь стоил бы
   // CLI флага `--experimental-transform-types` и его предупреждения в выводе.
   private readonly deps: VisibilityDeps;
+  /**
+   * Буферы выборок: свой на каждую (QUERY-3), все переживают тики — пересчёт
+   * снимает их каждый прогон, и контейнер на вызов был бы аллокацией размером
+   * в мир (SYS-10). Кандидаты наблюдателя — отдельный буфер: он вложен в обход
+   * `observers`, и общим с ним быть не может.
+   */
+  private readonly targets = new QueryBuffer();
+  private readonly observers = new QueryBuffer();
+  private readonly candidates = new QueryBuffer();
+  private readonly stealthSources = new QueryBuffer();
+  private readonly detectionSources = new QueryBuffer();
+  private readonly stealthOrphans = new QueryBuffer();
+  private readonly detectionOrphans = new QueryBuffer();
   /** Разрешаются на первом входе, ПОСЛЕ раннего выхода (SYS-10). */
   private handles: VisibilityHandles | undefined;
 
@@ -282,13 +310,13 @@ export class VisibilitySystem implements System {
   }
 
   run(ctx: SystemContext): void {
-    const targets = ctx.query({ all: [VISIBILITY_COMPONENT, POSITION_COMPONENT] });
-    const stealthSources = ctx.query({ all: [STEALTH_SOURCES_COMPONENT] });
-    const detectionSources = ctx.query({ all: [DETECTION_SOURCES_COMPONENT] });
+    const targets = this.targets.run(ctx, TARGET_SPEC);
+    const stealth = this.stealthSources.run(ctx, STEALTH_SOURCES_SPEC);
+    const detection = this.detectionSources.run(ctx, DETECTION_SOURCES_SPEC);
     // Ранний выход только когда системе не о ком говорить ВООБЩЕ: публикация
     // свёрток (FOW-3) обязана идти и на тике без единой пары Visibility+Position
     // — иначе носитель источников без позиции хранил бы чёрствую маску (FOW-5).
-    if (targets.length === 0 && stealthSources.length === 0 && detectionSources.length === 0) return;
+    if (targets === 0 && stealth === 0 && detection === 0) return;
     const h = (this.handles ??= resolveHandles(ctx));
     // FOW-5: фолбэка «уровней нет» у фильтра по высоте не существует, поэтому
     // считать без террейна система не вправе. Сюда доходит только сборка,
@@ -307,32 +335,46 @@ export class VisibilitySystem implements System {
     // считается здесь же, один раз на цель, а не на пару (FOW-5).
     const next = new Map<EntityId, number>();
     const stealthOf = new Map<EntityId, number>();
-    for (const target of targets) {
+    for (let slot = 0; slot < targets; slot++) {
+      const target = this.targets.ids[slot]!;
       next.set(target, ownTeamBit(ctx, h, target));
       stealthOf.set(target, this.deps.lists.stealth.union(ctx, target));
     }
 
-    const observers =
-      targets.length === 0
-        ? []
-        : ctx.query({ all: [VISION_COMPONENT, TEAM_COMPONENT, POSITION_COMPONENT] });
-    for (const observer of observers) {
-      markSeenBy(ctx, h, terrain, observer, this.deps, stealthOf, next);
+    const observers = targets === 0 ? 0 : this.observers.run(ctx, OBSERVER_SPEC);
+    for (let slot = 0; slot < observers; slot++) {
+      markSeenBy(ctx, h, terrain, this.observers.ids[slot]!, this.deps, stealthOf, next, this.candidates);
     }
 
     // FOW-6: команда эмитится только при фактическом изменении битов — иначе
-    // `Visibility` всегда dirty и сетевая дельта теряет смысл.
-    for (const target of targets) {
+    // `Visibility` всегда dirty и сетевая дельта теряет смысл. Маска читается
+    // по индексу слота: `Visibility` перечислен в `all` выборки (SYS-10).
+    for (let slot = 0; slot < targets; slot++) {
+      const target = this.targets.ids[slot]!;
       const mask = next.get(target)!;
-      if (mask === ctx.getByHandle(target, h.visibleTo)) continue;
-      ctx.commands.setField(target, VISIBILITY_COMPONENT, 'visibleTo', mask);
+      if (mask === ctx.getByIndex(this.targets.indices[slot]!, h.visibleTo)) continue;
+      ctx.commands.setFieldByHandle(target, h.visibleTo, mask);
     }
 
-    publishState(ctx, h.stealthState, STEALTH_STATE_COMPONENT, STEALTH_SOURCES_COMPONENT, stealthSources, (entity) =>
-      stealthOf.get(entity) ?? this.deps.lists.stealth.union(ctx, entity),
+    publishState(
+      ctx,
+      h.stealthState,
+      STEALTH_STATE_COMPONENT,
+      STEALTH_SOURCES_COMPONENT,
+      this.stealthSources,
+      this.stealthOrphans,
+      STEALTH_STATE_SPEC,
+      (entity) => stealthOf.get(entity) ?? this.deps.lists.stealth.union(ctx, entity),
     );
-    publishState(ctx, h.detectionState, DETECTION_STATE_COMPONENT, DETECTION_SOURCES_COMPONENT, detectionSources, (entity) =>
-      this.deps.lists.detection.union(ctx, entity),
+    publishState(
+      ctx,
+      h.detectionState,
+      DETECTION_STATE_COMPONENT,
+      DETECTION_SOURCES_COMPONENT,
+      this.detectionSources,
+      this.detectionOrphans,
+      DETECTION_STATE_SPEC,
+      (entity) => this.deps.lists.detection.union(ctx, entity),
     );
   }
 }
@@ -353,17 +395,20 @@ function publishState(
   handle: { readonly component: ComponentHandle; readonly mask: FieldHandle } | undefined,
   component: string,
   sourcesComponent: string,
-  sources: Iterable<EntityId>,
+  sources: QueryBuffer,
+  orphans: QueryBuffer,
+  orphanSpec: QuerySpec,
   foldOf: (entity: EntityId) => number,
 ): void {
   // Компонента состояния нет в схемах сцены — публиковать некуда; в группе
   // тумана (FOW-3) он есть всегда, случай этот — рукотворные миры тестов.
   if (handle === undefined) return;
-  for (const entity of sources) {
+  for (let slot = 0; slot < sources.count; slot++) {
+    const entity = sources.ids[slot]!;
     const mask = foldOf(entity);
     if (ctx.hasByHandle(entity, handle.component)) {
       if (mask !== ctx.getByHandle(entity, handle.mask)) {
-        ctx.commands.setField(entity, component, 'mask', mask);
+        ctx.commands.setFieldByHandle(entity, handle.mask, mask);
       }
     } else if (mask !== 0) {
       ctx.commands.addComponent(entity, component, { mask });
@@ -372,10 +417,14 @@ function publishState(
   // Носитель состояния БЕЗ списка источников: свёртка нулевая по определению —
   // осиротевшее состояние гаснет, а не черствеет. Носители со списком уже
   // обработаны выше, второй команды им не ставится.
-  for (const entity of ctx.query({ all: [component] })) {
+  const found = orphans.run(ctx, orphanSpec);
+  for (let slot = 0; slot < found; slot++) {
+    const entity = orphans.ids[slot]!;
     if (ctx.has(entity, sourcesComponent)) continue;
-    if (ctx.getByHandle(entity, handle.mask) === 0) continue;
-    ctx.commands.setField(entity, component, 'mask', 0);
+    // Компонент состояния перечислен в `all` этой выборки — маска читается по
+    // индексу слота (SYS-10).
+    if (ctx.getByIndex(orphans.indices[slot]!, handle.mask) === 0) continue;
+    ctx.commands.setFieldByHandle(entity, handle.mask, 0);
   }
 }
 
@@ -392,6 +441,7 @@ function markSeenBy(
   deps: VisibilityDeps,
   stealthOf: ReadonlyMap<EntityId, number>,
   next: Map<EntityId, number>,
+  candidates: QueryBuffer,
 ): void {
   // Наблюдатель отобран запросом по `Team`: сторона у него есть заведомо.
   const bit = teamBit(ctx.getByHandle(observer, h.team!.id));
@@ -402,11 +452,12 @@ function markSeenBy(
   // FOW-3: детекция — свойство наблюдателя, свёртка одна на его проход.
   const detection = deps.lists.detection.union(ctx, observer);
 
-  const candidates = ctx.query({
+  const found = candidates.run(ctx, {
     all: [VISIBILITY_COMPONENT, POSITION_COMPONENT],
     withinRadius: { center: from, radius: effectiveRadius(ctx, h, observer, deps.lists.vision) },
   });
-  for (const candidate of candidates) {
+  for (let slot = 0; slot < found; slot++) {
+    const candidate = candidates.ids[slot]!;
     const mask = next.get(candidate);
     // Бит уже взведён другим наблюдателем той же команды (или это сама
     // сущность наблюдателя) — второй раз считать нечего.

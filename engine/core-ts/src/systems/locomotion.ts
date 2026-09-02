@@ -22,6 +22,7 @@
 import { abs, add, clamp, mul, sub } from '../math/fixed.js';
 import * as vec from '../math/vector.js';
 import { optionalComponentHandle } from './optionalHandle.js';
+import { QueryBuffer } from './queryBuffer.js';
 import {
   LEVEL_OVERRIDE_COMPONENT,
   type ComponentHandle,
@@ -176,6 +177,8 @@ export class LocomotionSystem implements System {
   private readonly lock: string | undefined;
   private readonly maneuverLockMask: number;
   private readonly querySpec: QuerySpec;
+  /** Буфер выборки — свой у системы (QUERY-3), переживает тики (SYS-10). */
+  private readonly subjects = new QueryBuffer();
   /** Разрешаются на первом входе, ПОСЛЕ раннего выхода (SYS-10). */
   private handles: LocomotionHandles | undefined;
 
@@ -206,11 +209,12 @@ export class LocomotionSystem implements System {
   }
 
   run(ctx: SystemContext): void {
-    const entities = ctx.query(this.querySpec);
-    if (entities.length === 0) return;
+    const found = this.subjects.run(ctx, this.querySpec);
+    if (found === 0) return;
     const h = (this.handles ??= this.resolveHandles(ctx));
-    for (const entity of entities) {
-      const state = ctx.getByHandle(entity, h.state);
+    for (let slot = 0; slot < found; slot++) {
+      const entity = this.subjects.ids[slot]!;
+      const state = ctx.getByIndex(this.subjects.indices[slot]!, h.state);
       if (
         state === LOCOMOTION_DODGE ||
         state === LOCOMOTION_ROLL ||
@@ -288,9 +292,9 @@ export class LocomotionSystem implements System {
 
     if (state === LOCOMOTION_WINDOW) {
       const ticksLeft = ctx.getByHandle(entity, h.ticksLeft) - 1;
-      ctx.commands.setField(entity, this.state, 'ticksLeft', ticksLeft);
+      ctx.commands.setFieldByHandle(entity, h.ticksLeft, ticksLeft);
       if (ticksLeft <= 0) {
-        ctx.commands.setField(entity, this.state, 'state', LOCOMOTION_NORMAL);
+        ctx.commands.setFieldByHandle(entity, h.state, LOCOMOTION_NORMAL);
       }
     }
   }
@@ -323,21 +327,21 @@ export class LocomotionSystem implements System {
     const speed = ctx.get(entity, this.config, speedField);
     const dirX = ctx.getByHandle(entity, h.dirX);
     const dirY = ctx.getByHandle(entity, h.dirY);
-    this.setVelocity(ctx, entity, mul(dirX, speed), mul(dirY, speed));
+    this.setVelocity(ctx, h, entity, mul(dirX, speed), mul(dirY, speed));
 
     const ticksLeft = ctx.getByHandle(entity, h.ticksLeft) - 1;
-    ctx.commands.setField(entity, this.state, 'ticksLeft', ticksLeft);
+    ctx.commands.setFieldByHandle(entity, h.ticksLeft, ticksLeft);
     if (ticksLeft > 0) return;
 
     if (state === LOCOMOTION_DODGE) {
       // Окно даблтапа (LOC-4); dirX/dirY сохраняются — fallback направления
       // переката при нулевом векторе движения на момент повторного нажатия.
-      ctx.commands.setField(entity, this.state, 'state', LOCOMOTION_WINDOW);
-      ctx.commands.setField(entity, this.state, 'ticksLeft', ctx.get(entity, this.config, 'windowTicks'));
+      ctx.commands.setFieldByHandle(entity, h.state, LOCOMOTION_WINDOW);
+      ctx.commands.setFieldByHandle(entity, h.ticksLeft, ctx.get(entity, this.config, 'windowTicks'));
       return;
     }
 
-    ctx.commands.setField(entity, this.state, 'state', LOCOMOTION_NORMAL);
+    ctx.commands.setFieldByHandle(entity, h.state, LOCOMOTION_NORMAL);
     if (state === LOCOMOTION_AIRBORNE) {
       // Тик приземления (LOC-5): override снимается ДО проверки пола арены
       // (якоря 0 и 110, DET-9) — приземление в дыру даёт провал штатно.
@@ -365,8 +369,8 @@ export class LocomotionSystem implements System {
     const vy = ctx.getByHandle(entity, h.velocityY);
     const nx = approach(vx, mul(moveX, maxSpeed), accel, decel);
     const ny = approach(vy, mul(moveY, maxSpeed), accel, decel);
-    if (nx !== vx) ctx.commands.setField(entity, this.velocity, 'x', nx);
-    if (ny !== vy) ctx.commands.setField(entity, this.velocity, 'y', ny);
+    if (nx !== vx) ctx.commands.setFieldByHandle(entity, h.velocityX, nx);
+    if (ny !== vy) ctx.commands.setFieldByHandle(entity, h.velocityY, ny);
   }
 
   /** Направление фиксируется на момент нажатия (LOC-3) — нормированный вектор движения. */
@@ -378,7 +382,7 @@ export class LocomotionSystem implements System {
     moveY: Fixed,
   ): void {
     const dir = vec.normalize({ x: moveX, y: moveY });
-    this.start(ctx, entity, LOCOMOTION_DODGE, 'dodgeTicks', dir.x, dir.y, 'dodgeSpeed');
+    this.start(ctx, h, entity, LOCOMOTION_DODGE, 'dodgeTicks', dir.x, dir.y, 'dodgeSpeed');
   }
 
   /** Нулевой вектор на повторном нажатии — направление предыдущего уклона (LOC-4). */
@@ -399,7 +403,7 @@ export class LocomotionSystem implements System {
       dirX = ctx.getByHandle(entity, h.dirX);
       dirY = ctx.getByHandle(entity, h.dirY);
     }
-    this.start(ctx, entity, LOCOMOTION_ROLL, 'rollTicks', dirX, dirY, 'rollSpeed');
+    this.start(ctx, h, entity, LOCOMOTION_ROLL, 'rollTicks', dirX, dirY, 'rollSpeed');
   }
 
   /**
@@ -415,7 +419,7 @@ export class LocomotionSystem implements System {
     moveY: Fixed,
   ): void {
     const dir = vec.normalize({ x: moveX, y: moveY });
-    this.start(ctx, entity, LOCOMOTION_AIRBORNE, 'jumpTicks', dir.x, dir.y, 'jumpSpeed');
+    this.start(ctx, h, entity, LOCOMOTION_AIRBORNE, 'jumpTicks', dir.x, dir.y, 'jumpSpeed');
     // Сцена без террейна тикает штатно (DI-3): без уровней override не нужен.
     if (ctx.terrain !== undefined) {
       ctx.commands.addComponent(entity, LEVEL_OVERRIDE_COMPONENT, {
@@ -429,6 +433,7 @@ export class LocomotionSystem implements System {
 
   private start(
     ctx: SystemContext,
+    h: LocomotionHandles,
     entity: EntityId,
     state: number,
     ticksField: string,
@@ -436,16 +441,22 @@ export class LocomotionSystem implements System {
     dirY: Fixed,
     speedField: string,
   ): void {
-    ctx.commands.setField(entity, this.state, 'state', state);
-    ctx.commands.setField(entity, this.state, 'ticksLeft', ctx.get(entity, this.config, ticksField));
-    ctx.commands.setField(entity, this.state, 'dirX', dirX);
-    ctx.commands.setField(entity, this.state, 'dirY', dirY);
+    ctx.commands.setFieldByHandle(entity, h.state, state);
+    ctx.commands.setFieldByHandle(entity, h.ticksLeft, ctx.get(entity, this.config, ticksField));
+    ctx.commands.setFieldByHandle(entity, h.dirX, dirX);
+    ctx.commands.setFieldByHandle(entity, h.dirY, dirY);
     const speed = ctx.get(entity, this.config, speedField);
-    this.setVelocity(ctx, entity, mul(dirX, speed), mul(dirY, speed));
+    this.setVelocity(ctx, h, entity, mul(dirX, speed), mul(dirY, speed));
   }
 
-  private setVelocity(ctx: SystemContext, entity: EntityId, x: Fixed, y: Fixed): void {
-    ctx.commands.setField(entity, this.velocity, 'x', x);
-    ctx.commands.setField(entity, this.velocity, 'y', y);
+  private setVelocity(
+    ctx: SystemContext,
+    h: LocomotionHandles,
+    entity: EntityId,
+    x: Fixed,
+    y: Fixed,
+  ): void {
+    ctx.commands.setFieldByHandle(entity, h.velocityX, x);
+    ctx.commands.setFieldByHandle(entity, h.velocityY, y);
   }
 }

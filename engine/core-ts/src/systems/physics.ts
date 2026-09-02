@@ -47,6 +47,7 @@ import {
   type PhysicsHandles,
   type PhysicsOptions,
 } from './colliderRead.js';
+import { QueryBuffer } from './queryBuffer.js';
 import { PhysicsWorld } from './broadPhase.js';
 import { countCostBroadPhase } from '../debug.js';
 import { componentSchema } from '../ecs/world.js';
@@ -54,6 +55,7 @@ import {
   FIXED_ONE,
   POSITION_COMPONENT,
   type EntityId,
+  type QuerySpec,
   type System,
   type SystemContext,
   type TerrainGrid,
@@ -232,6 +234,15 @@ export class PhysicsSystem implements System {
   private obstacleX = new Int32Array(0);
   private obstacleY = new Int32Array(0);
   /**
+   * Выборки тика: движущиеся и препятствия. Буферы СВОИ у системы (QUERY-3) и
+   * переживают тики — обе выборки снимаются каждый прогон, и контейнер на
+   * вызов был бы аллокацией размером в мир (SYS-10). Ими же адресуются чтения
+   * по индексу слота: `Position` и компонент коллайдера перечислены в `all`
+   * обеих спецификаций, поэтому владение доказано отбором.
+   */
+  private readonly movers = new QueryBuffer();
+  private readonly obstacles = new QueryBuffer();
+  /**
    * Буферы шага оси: две огибающие, их объединение и сам `Move` жили объектами
    * на каждый шаг каждого движущегося — восемь аллокаций на движущегося за тик
    * (снятый ponytail, тот же профиль). Живут полями, как буферы кандидата;
@@ -279,34 +290,45 @@ export class PhysicsSystem implements System {
     radius: 0,
   };
 
+  /**
+   * Спецификации выборок — константы экземпляра, а не литералы на тик: имена
+   * компонентов известны сборке, и объект на каждый прогон был бы аллокацией
+   * на ровном месте.
+   */
+  private readonly moverSpec: QuerySpec;
+  private readonly obstacleSpec: QuerySpec;
+
   constructor(physicsWorld: PhysicsWorld, options: PhysicsOptions = {}, deps: PhysicsDeps = {}) {
     this.physicsWorld = physicsWorld;
     this.colliderComponent = options.collider ?? DEFAULT_COLLIDER_COMPONENT;
     this.velocityComponent = options.velocity ?? DEFAULT_VELOCITY_COMPONENT;
     this.heightGate = deps.height === true;
+    this.moverSpec = {
+      all: [POSITION_COMPONENT, this.colliderComponent, this.velocityComponent],
+    };
+    this.obstacleSpec = { all: [POSITION_COMPONENT, this.colliderComponent] };
   }
 
   run(ctx: SystemContext): void {
-    const movers = ctx.query({
-      all: [POSITION_COMPONENT, this.colliderComponent, this.velocityComponent],
-    });
-    if (movers.length === 0) return;
+    const moving = this.movers.run(ctx, this.moverSpec);
+    if (moving === 0) return;
     const h = (this.handles ??= resolvePhysicsHandles(ctx, this.colliderComponent, this.velocityComponent, this.heightGate));
 
     // Препятствия — все носители коллайдера: участие в блокировке и в сенсорах
     // решают маски на narrow-phase (PHYS-2), а не тег на запросе.
-    const obstacles = ctx.query({ all: [POSITION_COMPONENT, this.colliderComponent] });
-    this.cacheObstaclePositions(ctx, h, obstacles);
-    this.cacheLevels(ctx, obstacles);
+    this.obstacles.run(ctx, this.obstacleSpec);
+    this.cacheObstaclePositions(ctx, h);
+    this.cacheLevels(ctx);
 
     // Движущиеся — подпоследовательность препятствий в том же порядке: оба
     // запроса обходят слоты по возрастанию raw-индекса (QUERY-2), а маска
     // движущихся строже на компонент скорости. Поэтому ячейка движущегося в
     // скретчах находится монотонным указателем, без поиска и без карты.
     let moverAt = 0;
-    for (const mover of movers) {
-      while (obstacles[moverAt] !== mover) moverAt++;
-      this.resolveMover(ctx, h, mover, moverAt, obstacles);
+    for (let i = 0; i < moving; i++) {
+      const mover = this.movers.ids[i]!;
+      while (this.obstacles.ids[moverAt] !== mover) moverAt++;
+      this.resolveMover(ctx, h, mover, this.movers.indices[i]!, moverAt);
       moverAt++;
     }
   }
@@ -318,15 +340,16 @@ export class PhysicsSystem implements System {
    * чтению; уже разрешённые движущиеся обновляют свою ячейку на месте — сосед
    * обязан видеть, куда его предшественник уже встал.
    */
-  private cacheObstaclePositions(ctx: SystemContext, h: PhysicsHandles, obstacles: Float64Array): void {
-    if (this.obstacleX.length < obstacles.length) {
-      this.obstacleX = new Int32Array(obstacles.length);
-      this.obstacleY = new Int32Array(obstacles.length);
+  private cacheObstaclePositions(ctx: SystemContext, h: PhysicsHandles): void {
+    const count = this.obstacles.count;
+    if (this.obstacleX.length < count) {
+      this.obstacleX = new Int32Array(count);
+      this.obstacleY = new Int32Array(count);
     }
-    for (let index = 0; index < obstacles.length; index++) {
-      const other = obstacles[index]!;
-      this.obstacleX[index] = ctx.getByHandle(other, h.posX);
-      this.obstacleY[index] = ctx.getByHandle(other, h.posY);
+    for (let index = 0; index < count; index++) {
+      const at = this.obstacles.indices[index]!;
+      this.obstacleX[index] = ctx.getByIndex(at, h.posX);
+      this.obstacleY[index] = ctx.getByIndex(at, h.posY);
     }
   }
 
@@ -335,14 +358,16 @@ export class PhysicsSystem implements System {
     ctx: SystemContext,
     h: PhysicsHandles,
     mover: EntityId,
+    at: number,
     moverAt: number,
-    obstacles: Float64Array,
   ): void {
     const collider = this.moverCollider;
     colliderByHandle(ctx, mover, h, collider);
-    const blockMask = ctx.getByHandle(mover, h.blockMask);
-    const hitMask = ctx.getByHandle(mover, h.hitMask);
-    const cliffRise = ctx.getByHandle(mover, h.cliffRise);
+    // Поля коллайдера и скорости читаются по индексу слота движущегося: оба
+    // компонента перечислены в `all` его выборки (SYS-10).
+    const blockMask = ctx.getByIndex(at, h.blockMask);
+    const hitMask = ctx.getByIndex(at, h.hitMask);
+    const cliffRise = ctx.getByIndex(at, h.cliffRise);
     // Множитель шага — один на сущность и тик (TIME-3): обе оси одного хода
     // обязаны замедляться одинаково.
     const scale = ctx.getEffectiveDelta(mover, FIXED_ONE);
@@ -358,13 +383,13 @@ export class PhysicsSystem implements System {
     // проверка всё равно считает заново — по разрешённому состоянию. Сквозной
     // снаряд (`blockMask = 0`, `hitMask ≠ 0`) — ровно тот случай, ради
     // которого писался гейт, и мёртвого `levelAt` на тик он платить не должен.
-    this.moverHeight = h.height === undefined ? 0 : ctx.getByHandle(mover, h.height);
+    this.moverHeight = h.height === undefined ? 0 : ctx.getByIndex(at, h.height);
     this.moverLevel =
       this.moverHeight > 0 && blockMask !== 0
         ? effectiveLevel(ctx, this.probe, mover, fromX, fromY)
         : 0;
 
-    this.resolveAxes(ctx, h, mover, collider, obstacles, blockMask, cliffRise, scale, fromX, fromY);
+    this.resolveAxes(ctx, h, mover, at, collider, blockMask, cliffRise, scale, fromX, fromY);
     const x = this.resolvedX;
     const y = this.resolvedY;
 
@@ -374,14 +399,14 @@ export class PhysicsSystem implements System {
     // каждого препятствия здесь единственный. Объём хода собирается в тех же
     // буферах, что шаг оси, — к этому моменту они свободны.
     if (hitMask !== 0) {
-      this.emitOverlaps(ctx, h, mover, collider, obstacles, hitMask, fromX, fromY, x, y);
+      this.emitOverlaps(ctx, h, mover, collider, hitMask, fromX, fromY, x, y);
     }
 
     if (x !== fromX || y !== fromY) {
       this.obstacleX[moverAt] = x;
       this.obstacleY[moverAt] = y;
-      ctx.commands.setField(mover, POSITION_COMPONENT, 'x', x);
-      ctx.commands.setField(mover, POSITION_COMPONENT, 'y', y);
+      ctx.commands.setFieldByHandle(mover, h.posX, x);
+      ctx.commands.setFieldByHandle(mover, h.posY, y);
     }
   }
 
@@ -397,8 +422,8 @@ export class PhysicsSystem implements System {
     ctx: SystemContext,
     h: PhysicsHandles,
     mover: EntityId,
+    at: number,
     collider: MutableCollider,
-    obstacles: Float64Array,
     blockMask: number,
     cliffRise: number,
     scale: number,
@@ -407,12 +432,12 @@ export class PhysicsSystem implements System {
   ): void {
     let x = fromX;
     let y = fromY;
-    const stepX = fixed.mul(ctx.getByHandle(mover, h.velocityX), scale);
-    if (stepX !== 0 && !this.axisBlocked(ctx, h, mover, collider, obstacles, blockMask, cliffRise, 'x', stepX, x, y)) {
+    const stepX = fixed.mul(ctx.getByIndex(at, h.velocityX), scale);
+    if (stepX !== 0 && !this.axisBlocked(ctx, h, mover, collider, blockMask, cliffRise, 'x', stepX, x, y)) {
       x = fixed.add(x, stepX);
     }
-    const stepY = fixed.mul(ctx.getByHandle(mover, h.velocityY), scale);
-    if (stepY !== 0 && !this.axisBlocked(ctx, h, mover, collider, obstacles, blockMask, cliffRise, 'y', stepY, x, y)) {
+    const stepY = fixed.mul(ctx.getByIndex(at, h.velocityY), scale);
+    if (stepY !== 0 && !this.axisBlocked(ctx, h, mover, collider, blockMask, cliffRise, 'y', stepY, x, y)) {
       y = fixed.add(y, stepY);
     }
     this.resolvedX = x;
@@ -433,7 +458,6 @@ export class PhysicsSystem implements System {
     h: PhysicsHandles,
     mover: EntityId,
     collider: MutableCollider,
-    obstacles: Float64Array,
     blockMask: number,
     cliffRise: number,
     axis: 'x' | 'y',
@@ -450,7 +474,7 @@ export class PhysicsSystem implements System {
     move.step = step;
     move.centerX = x;
     move.centerY = y;
-    if (!this.nearestBlocker(ctx, h, move, mover, obstacles, blockMask, cliffRise)) return false;
+    if (!this.nearestBlocker(ctx, h, move, mover, blockMask, cliffRise)) return false;
     // Нормаль поверхности в точке контакта (PHYS-9); осевая против движения —
     // её фолбэк и полный ответ для пары прямоугольников. Политике (отскок,
     // кнокбэк, урон о стену) нужна сторона удара, а не факт остановки.
@@ -470,7 +494,6 @@ export class PhysicsSystem implements System {
     h: PhysicsHandles,
     mover: EntityId,
     collider: MutableCollider,
-    obstacles: Float64Array,
     hitMask: number,
     fromX: number,
     fromY: number,
@@ -503,11 +526,11 @@ export class PhysicsSystem implements System {
     // в цикле — ровно одно целочисленное сложение. Кандидат, отсеянный
     // маской, тоже кандидат: работа по его осмотру уже сделана.
     let pairs = 0;
-    for (let index = 0; index < obstacles.length; index++) {
-      const other = obstacles[index]!;
+    for (let index = 0; index < this.obstacles.count; index++) {
+      const other = this.obstacles.ids[index]!;
       if (other === mover) continue;
       pairs++;
-      if (!this.candidatePasses(ctx, h, other, index, hitMask)) continue;
+      if (!this.candidatePasses(ctx, h, index, hitMask)) continue;
       if (overlaps(executed, this.candidateBounds)) {
         ctx.events.emit(OVERLAP_EVENT, { entity: mover, other });
       }
@@ -527,13 +550,16 @@ export class PhysicsSystem implements System {
   private candidatePasses(
     ctx: SystemContext,
     h: PhysicsHandles,
-    other: EntityId,
     index: number,
     mask: number,
   ): boolean {
-    if ((ctx.getByHandle(other, h.layer) & mask) === 0) return false;
-    if (!this.bandsMeetWithMover(ctx, h, other, index)) return false;
-    colliderByHandle(ctx, other, h, this.candidateCollider);
+    // Слой и высота кандидата читаются по индексу его слота: компонент
+    // коллайдера перечислен в `all` выборки препятствий (SYS-10), а спрашивают
+    // их у КАЖДОГО кандидата КАЖДОГО шага оси.
+    const at = this.obstacles.indices[index]!;
+    if ((ctx.getByIndex(at, h.layer) & mask) === 0) return false;
+    if (!this.bandsMeetWithMover(ctx, h, at, index)) return false;
+    colliderByHandle(ctx, this.obstacles.ids[index]!, h, this.candidateCollider);
     boundsInto(this.candidateBounds, this.obstacleX[index]!, this.obstacleY[index]!, this.candidateCollider);
     return true;
   }
@@ -555,7 +581,6 @@ export class PhysicsSystem implements System {
     h: PhysicsHandles,
     move: Move,
     mover: EntityId,
-    obstacles: Float64Array,
     blockMask: number,
     cliffRise: number,
   ): boolean {
@@ -566,8 +591,8 @@ export class PhysicsSystem implements System {
     // в локальную переменную, наружу уходит одной суммой на шаг оси. Кандидат,
     // отсеянный маской, из счёта не выпадает — его осмотр уже состоялся.
     let pairs = 0;
-    for (let index = 0; index < obstacles.length; index++) {
-      const other = obstacles[index]!;
+    for (let index = 0; index < this.obstacles.count; index++) {
+      const other = this.obstacles.ids[index]!;
       if (other === mover) continue;
       pairs++;
       // Маска и колоночный гейт (PHYS-2, PHYS-14) — там же, где у сенсоров, и
@@ -575,7 +600,7 @@ export class PhysicsSystem implements System {
       // препятствий: уже разрешённый сосед лежит там обновлённым (Command
       // Buffer вливается только в конце системы), остальные — снимком входа,
       // равным живому полю мира.
-      if (!this.candidatePasses(ctx, h, other, index, blockMask)) continue;
+      if (!this.candidatePasses(ctx, h, index, blockMask)) continue;
       if (!blocks(move, this.candidateBounds)) continue;
       const distanceSq = closestDistanceSq(this.candidateBounds, move.centerX, move.centerY);
       if (found && distanceSq >= bestDistanceSq) continue;
@@ -625,15 +650,16 @@ export class PhysicsSystem implements System {
    * Гейт выключен (поля высоты в схеме нет) — цикла нет вовсе: сцена, не
    * знающая о высотах, не платит за колоночную модель ничем.
    */
-  private cacheLevels(ctx: SystemContext, obstacles: Float64Array): void {
+  private cacheLevels(ctx: SystemContext): void {
     if (!this.heightGate) return;
+    const obstacles = this.obstacles;
     // Скретч растёт вместе со сценой и переживает тики: перевыделение — только
     // при росте, а не на каждом тике (дисциплина аллокаций). Позиции — из
     // скретчей препятствий, заполненных к этому моменту состоянием ДО
     // разрешения: обход движущихся ещё не начался.
-    if (this.levels.length < obstacles.length) this.levels = new Int32Array(obstacles.length);
-    for (let index = 0; index < obstacles.length; index++) {
-      this.levels[index] = effectiveLevel(ctx, this.probe, obstacles[index]!, this.obstacleX[index]!, this.obstacleY[index]!);
+    if (this.levels.length < obstacles.count) this.levels = new Int32Array(obstacles.count);
+    for (let index = 0; index < obstacles.count; index++) {
+      this.levels[index] = effectiveLevel(ctx, this.probe, obstacles.ids[index]!, this.obstacleX[index]!, this.obstacleY[index]!);
     }
   }
 
@@ -645,11 +671,11 @@ export class PhysicsSystem implements System {
   private bandsMeetWithMover(
     ctx: SystemContext,
     h: PhysicsHandles,
-    other: EntityId,
+    at: number,
     index: number,
   ): boolean {
     if (this.moverHeight <= 0 || h.height === undefined) return true;
-    const height = ctx.getByHandle(other, h.height);
+    const height = ctx.getByIndex(at, h.height);
     return bandsMeet(this.moverLevel, this.moverHeight, this.levels[index]!, height);
   }
 }
