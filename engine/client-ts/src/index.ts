@@ -1,4 +1,4 @@
-// Клиентская оболочка веб-игры (client-shell SHELL-1..8): ядро в dedicated
+// Клиентская оболочка веб-игры (capability client-shell): ядро в dedicated
 // Worker, рендер в главном потоке, канал — transferable ping-pong. Режимов ровно
 // два (SHELL-8): локальный — симуляция в воркере (`WorkerShell`), сетевой —
 // клиент матча и применение персональных снапшотов (`NetworkShell`).

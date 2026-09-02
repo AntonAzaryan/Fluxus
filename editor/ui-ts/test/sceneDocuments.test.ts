@@ -273,7 +273,7 @@ describe('ED-15: настоящая сцена дерева контента, а
   });
 });
 
-describe('ED-22, REND-34: секции парного документа доезжают до вьюпорта', () => {
+describe('ED-1, REND-34: секции парного документа доезжают до вьюпорта', () => {
   const config = contentFile('scenes/duel.scene.json');
   const presentation = contentFile('scenes/duel.presentation.json');
 
@@ -281,7 +281,7 @@ describe('ED-22, REND-34: секции парного документа дое�
     const draft = sceneDraft({ config, visuals, presentation });
 
     // Своей копии чисел у редактора нет: он отдаёт подсистемам ту же секцию,
-    // которую читает игровой клиент, — отсюда тождество кадров (ED-22).
+    // которую читает игровой клиент, — отсюда тождество кадров (`editor` ED-1).
     expect(draft.postprocess).toEqual(
       (presentation as { postprocess: unknown }).postprocess,
     );

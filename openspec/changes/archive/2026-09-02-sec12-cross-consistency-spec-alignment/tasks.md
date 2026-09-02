@@ -26,7 +26,7 @@
 
 ## 4. Синхронизация и гейт
 
-- [x] 4.1 Перенести дельты в `openspec/specs/{rendering,determinism-core,editor,desktop-shell}/spec.md` побайтово по требованию. Изменение при этом НЕ архивируется: оно остаётся в очереди как запись о принятом решении.
+- [x] 4.1 Перенести дельты в `openspec/specs/{rendering,determinism-core,editor,desktop-shell}/spec.md` побайтово по требованию, после чего заархивировать изменение (`openspec archive sec12-cross-consistency-spec-alignment --yes --skip-specs`): дельты совпадают с главными спеками байт-в-байт, незакрытых задач нет, а очередь обязана оставаться очередью — ровно та находка, ради которой это изменение и заведено.
 - [x] 4.2 Из корня: `npx openspec validate --specs --strict`, `npx openspec validate --changes --strict`, `npm run spec-graph -- check`.
 - [x] 4.3 Из корня: `npm run typecheck`, `npm run lint`, `npm run lint:dead`. Целевые прогоны тестов — в разделе 5: правка в коде комментарная, но файлы затронуты.
 
@@ -36,5 +36,8 @@
 
 - [x] 5.1 `engine/render-ts`: `src/index.ts` (экспорт подсистемы освещения), `src/subsystems/lighting.ts` (шапка), `src/subsystems/postprocess.ts` (заголовок раздела и комментарий `render`), `src/subsystems/models.ts` и `src/types.ts` (порт `LightingSink`) — ED-22 → `editor` ED-1.
 - [x] 5.2 `engine/integration-ts/test/sceneLighting.test.ts`: шапка, имя `describe` и комментарий о порте — ED-22 → `editor` ED-1.
-- [x] 5.3 НЕ тронуты ссылки на ED-22, ведущие по делу: `src/subsystems/overlays.ts` и `test/overlays.test.ts` (наложения не красят кадр — норма ED-22), `editor/core-ts` (состояния валидации), `engine/hud-ts/src/dom/node.ts` (инлайн-стиль у редактора).
-- [x] 5.4 Целевые прогоны: `npx vitest run --exclude '**/bench.test.ts'` в `engine/render-ts` (43 файла, 965 тестов) и `npx vitest run test/sceneLighting.test.ts` в `engine/integration-ts` — зелено.
+- [x] 5.3 Оба ПОТРЕБИТЕЛЯ рендера, чьё тождество кадров норма и утверждает: `editor/ui-ts/src/areas/sceneStage.ts` (секции `postprocess` и `water`, порядок подсистем, точка взгляда отбора, теневые карты, свет вьюпорта, кадр через пост-обработку), `editor/ui-ts/src/areas/assetModule.ts` (загрузчик LUT), `editor/ui-ts/test/sceneQuality.test.ts`, `editor/ui-ts/test/sceneDocuments.test.ts` (имя `describe` и комментарий), `game/demo-ts/app/main.ts` (свет сборки и стадия `draw`) — тринадцать мест, ED-22 → `editor` ED-1.
+- [x] 5.4 Три комментария о тай-брейке отбора локальных источников (`render-ts/src/lighting/localLights.ts`, `src/subsystems/models.ts`, `src/types.ts`) цитировали ED-22 неверно с самого начала (D7): `(ED-22)` снято, норма воспроизводимости — REND-33 (в `localLights.ts` он назван вместо снятого ED-22, в двух других уже стоял в том же абзаце).
+- [x] 5.5 НЕ тронуты ссылки на ED-22, ведущие по делу: `render-ts/src/subsystems/overlays.ts` и `test/overlays.test.ts` (наложения не красят кадр), палитра и структурные проверки интерфейса `editor/ui-ts` (токены, таблица стилей, виджеты, состояния валидации), `editor/core-ts`, `engine/hud-ts/src/dom/node.ts` (инлайн-стиль у редактора).
+- [x] 5.6 Протухшие диапазоны «capability целиком» вне спек, по правилу D5: `engine/client-ts/src/index.ts`, `engine/hud-ts/src/index.ts`, `engine/bot-ts/src/index.ts`, `engine/render-ts/src/index.ts` (пресеты и камера), `engine/net-ts/README.md`, `game/demo-ts/app/README.md`, `game/demo-ts/app/main.ts`, `desktop/shell-ts/README.md`, а также цитата ED-9 в `editor/ui-ts/src/areas/scenePreview.ts` — приведена к новому тексту требования. Заголовки модулей, называющие ПОДМНОЖЕСТВО, которое файл реализует, не трогались: они не утверждают объём capability.
+- [x] 5.7 Целевые прогоны: `npx vitest run --exclude '**/bench.test.ts'` в `engine/render-ts`, `npx vitest run test/sceneLighting.test.ts` в `engine/integration-ts`, `npx vitest run test/sceneQuality.test.ts test/sceneDocuments.test.ts` в `editor/ui-ts`.
