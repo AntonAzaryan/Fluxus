@@ -30,4 +30,4 @@ bash .claude/skills/determinism-review/scripts/check.sh
 
 ## Финал
 
-Гейт репозитория — `npm run check` из корня (typecheck, eslint, knip, jscpd, depcruise с барьером `engine-no-content`, `spec-graph check`, тесты всех пакетов); `npm test` + `npm run typecheck` — быстрый промежуточный прогон, не замена. Если поведение менялось намеренно — эталоны через скил `golden-update` (поведение — `npm run golden`, стоимость — отдельно `npm run golden:cost`), диф эталонов в коммит.
+Гейт репозитория — `npm run check` из корня (typecheck, eslint, knip, jscpd, depcruise с барьером `engine-no-content`, `spec-graph check`, тесты всех пакетов); `npm run check:impact` — выборочный прогон по карте влияния диффа (CLI-14; `-- --dry-run --explain` печатает план) для внутреннего цикла, не замена: гейт `main` — только полный `npm run check`. Если поведение менялось намеренно — эталоны через скил `golden-update` (поведение — `npm run golden`, стоимость — отдельно `npm run golden:cost`), диф эталонов в коммит.
