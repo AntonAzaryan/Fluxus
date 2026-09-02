@@ -21,8 +21,8 @@
     "desktop/shell-ts"
   ],
   "scripts": {
-    "test": "npm run test --workspaces",
-    "typecheck": "npm run typecheck --workspaces",
+    "test": "vitest run --config vitest.gate.config.ts",
+    "typecheck": "node scripts/typecheck.mjs",
     "coverage": "vitest run --config vitest.coverage.config.ts --coverage",
     "import": "node tools/blender-ts/bin/import.mjs",
     "sim": "node engine/core-ts/bin/sim.mjs",
@@ -45,6 +45,8 @@
     "lint:arch": "depcruise engine editor game tools desktop scripts",
     "lint:all": "npm run typecheck && npm run lint && npm run lint:dead && npm run lint:dup && npm run lint:arch",
     "check": "npm run lint:all && npm run spec-graph -- check && npm test",
+    "check:impact": "node scripts/impact.mjs",
+    "check:timings": "node scripts/impact.mjs --full --timings",
     "golden": "npm run record -w @fluxus/integration && npm run golden -w @fluxus/core",
     "golden:cost": "npm run golden:cost -w @fluxus/integration",
     "spec-graph": "node scripts/spec-graph.mjs"

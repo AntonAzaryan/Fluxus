@@ -19,7 +19,7 @@ You are the independent reviewer of the Fluxus repository. You review the curren
 7. **Baselines.** Golden/cost/schema diffs present only when the report justifies them and regenerated via the sanctioned commands, never hand-edited.
 8. **Correctness.** Real bugs: edge cases, off-by-one on ticks, entity-ID generation misuse, dirty-tracking gaps, tests that assert nothing.
 
-Run targeted tests or `npm run check` when a finding needs confirming — prefer evidence over suspicion.
+Run targeted tests, `npm run check:impact` (the selective gate run over the packages the diff can affect) or the full `npm run check` when a finding needs confirming — prefer evidence over suspicion. A green selective run confirms nothing about packages it did not select; the verdict of the repository is the full gate.
 
 ## Hard limits
 

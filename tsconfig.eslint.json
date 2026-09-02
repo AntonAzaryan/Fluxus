@@ -1,5 +1,5 @@
 {
-  "//": "Не сборочный tsconfig, а defaultProject для typescript-eslint projectService: компилерные опции файлов из allowDefaultProject (vitest.coverage.config.ts). Имя неканоническое намеренно — tsc и vitest его не подхватывают.",
+  "//": "Не сборочный tsconfig, а defaultProject для typescript-eslint projectService: компилерные опции файлов из allowDefaultProject (корневые vitest.*.ts). Имя неканоническое намеренно — tsc и vitest его не подхватывают.",
   "compilerOptions": {
     "target": "ES2022",
     "module": "ES2022",
@@ -13,8 +13,17 @@
     "skipLibCheck": true,
     "forceConsistentCasingInFileNames": true,
     "noEmit": true,
-    "lib": ["ES2022"],
-    "types": ["node"]
+    "lib": [
+      "ES2022"
+    ],
+    "types": [
+      "node"
+    ],
+    "allowImportingTsExtensions": true
   },
-  "include": ["vitest.coverage.config.ts"]
+  "include": [
+    "vitest.coverage.config.ts",
+    "vitest.gate.config.ts",
+    "vitest.projects.ts"
+  ]
 }

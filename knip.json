@@ -12,6 +12,10 @@
     // baseline: рукописные типы к scripts/spec-graph.mjs — импортируются только
     // редакторными LSP, из кода не референсятся.
     "scripts/spec-graph.d.mts",
+    // Тот же случай у типов к раннерам гейта: тесты карты влияния импортируют
+    // `.mjs`, а объявления рядом подхватывает резолв — импортом они не являются.
+    "scripts/impact.d.mts",
+    "scripts/workspaces.d.mts",
     // Типы к бинам запускалок: подтягиваются резолвом `../bin/trace.mjs` и
     // `../bin/matchFile.mjs` из тестов слоя запускалок, то есть графом модулей
     // knip не видны — файл объявлений импортом не является. Тот же случай, что
@@ -21,7 +25,16 @@
   ],
   "workspaces": {
     ".": {
-      "entry": [".claude/hooks/*.mjs", "engine/tests/guard/*.ts", "engine/tests/bench/*.ts"],
+      "entry": [
+        ".claude/hooks/*.mjs",
+        "engine/tests/guard/*.ts",
+        "engine/tests/bench/*.ts",
+        // Раннеры гейта: зовутся из скриптов корневого манифеста, а не
+        // импортируются. Корневые конфиги прогонов (`vitest.*.config.ts` и
+        // общий список проектов) knip находит сам по флагу `--config` — их
+        // перечисление он же и назвал бы избыточным.
+        "scripts/*.mjs"
+      ],
       "project": ["scripts/**", "engine/tests/guard/**", "engine/tests/bench/**", "*.ts", "*.js"]
     },
     "engine/core-ts": {
