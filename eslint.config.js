@@ -74,12 +74,16 @@ export default defineConfig([
     plugins: { sonarjs },
     languageOptions: {
       parserOptions: {
-        // `vitest.coverage.config.ts` — единственный `.ts` в корне, вне всех
-        // пакетных tsconfig: сводный прогон покрытия задаётся флагом, а не
-        // членством в workspace. `allowDefaultProject` даёт ему типизированный
-        // разбор без отдельного tsconfig ради одного файла.
+        // Корневые `.ts` вне всех пакетных tsconfig: конфиги сводного покрытия
+        // и тестовой стадии гейта с общим списком проектов — они задаются
+        // флагом, а не членством в workspace. `allowDefaultProject` даёт им
+        // типизированный разбор без отдельного tsconfig ради трёх файлов.
         projectService: {
-          allowDefaultProject: ['vitest.coverage.config.ts'],
+          allowDefaultProject: [
+            'vitest.coverage.config.ts',
+            'vitest.gate.config.ts',
+            'vitest.projects.ts',
+          ],
           // Строгие type-aware правила требуют strictNullChecks и для
           // default-project файлов — опции берутся из этого tsconfig.
           defaultProject: 'tsconfig.eslint.json',

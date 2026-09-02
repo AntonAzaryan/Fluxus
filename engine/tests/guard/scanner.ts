@@ -246,16 +246,26 @@ export function scanImportsInSource(fileName: string, text: string): GuardViolat
   return out;
 }
 
-function* walkTsFiles(dir: string, rel = ''): Generator<string> {
+/**
+ * Обход исходников каталога. Расширения — параметр, потому что сканируемое
+ * разное: инварианты пакетов живут в `.ts`, а бины запускалок — в `.mjs`, и
+ * второй обход дерева ради этого был бы вторым местом, где решают, что считать
+ * исходником. Объявления (`.d.ts`, `.d.mts`) не исходники — кода в них нет.
+ */
+function* walkSourceFiles(dir: string, exts: readonly string[], rel = ''): Generator<string> {
   for (const name of readdirSync(dir).sort()) {
     const abs = join(dir, name);
     const relPath = rel === '' ? name : `${rel}/${name}`;
     if (statSync(abs).isDirectory()) {
-      yield* walkTsFiles(abs, relPath);
-    } else if (name.endsWith('.ts') && !name.endsWith('.d.ts')) {
+      yield* walkSourceFiles(abs, exts, relPath);
+    } else if (exts.some((ext) => name.endsWith(ext)) && !/\.d\.[cm]?ts$/.test(name)) {
       yield relPath;
     }
   }
+}
+
+function* walkTsFiles(dir: string, rel = ''): Generator<string> {
+  yield* walkSourceFiles(dir, ['.ts'], rel);
 }
 
 function applyConfig(
@@ -294,4 +304,58 @@ export function scanDom(config: Omit<ScanConfig, 'mode'>): GuardViolation[] {
 /** Пустая строка ⇔ нарушений нет; иначе по строке на нарушение — для expect(...).toBe(''). */
 export function formatViolations(violations: readonly GuardViolation[]): string {
   return violations.map((v) => `${v.file}:${v.line} [${v.rule}] ${v.message}`).join('\n');
+}
+
+/** Строковый литерал исходника: текст, файл и строка — материал для правил поверх. */
+export interface SourceLiteral {
+  readonly file: string;
+  readonly line: number;
+  readonly text: string;
+}
+
+/**
+ * Строковые литералы одного исходника — без комментариев и без вычисляемых
+ * шаблонов.
+ *
+ * Собираются `StringLiteral` и `NoSubstitutionTemplateLiteral`: у них есть
+ * готовый текст. Шаблон с подстановкой — не строка, а выражение, и склеивать
+ * его куски значило бы выдумывать литерал, которого в коде нет. Комментарии в
+ * AST не узлы — по построению, и это ровно то, зачем правила поверх этого
+ * сканера пишут не grep'ом: путь, названный в комментарии, ссылкой не является.
+ */
+export function collectStringLiterals(fileName: string, text: string): SourceLiteral[] {
+  const sf = ts.createSourceFile(fileName, text, ts.ScriptTarget.Latest, true);
+  const out: SourceLiteral[] = [];
+  const visit = (node: ts.Node): void => {
+    if (ts.isStringLiteral(node) || ts.isNoSubstitutionTemplateLiteral(node)) {
+      const { line } = sf.getLineAndCharacterOfPosition(node.getStart(sf));
+      out.push({ file: fileName, line: line + 1, text: node.text });
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(sf);
+  return out;
+}
+
+/** Расширения, которые скан литералов берёт по умолчанию: код тестов и бинов запускалок. */
+export const LITERAL_SOURCE_EXTS = ['.ts', '.mts', '.cts', '.js', '.mjs', '.cjs'] as const;
+
+/**
+ * Строковые литералы всех исходников каталога, включая `.mjs`/`.cjs`: правила
+ * про пути одинаково касаются тестов и бинов запускалок.
+ * `file` — путь относительно `rootDir`, как у остальных сканеров.
+ *
+ * Расширения — параметр: `.json` компилятор разбирает тем же парсером
+ * (`ScriptKind.JSON`), и документ-конфиг с путями внутри — такой же материал для
+ * правил, что и код, но брать его всюду значило бы сканировать ещё и фикстуры.
+ */
+export function collectStringLiteralsInDir(
+  rootDir: string,
+  exts: readonly string[] = LITERAL_SOURCE_EXTS,
+): SourceLiteral[] {
+  const out: SourceLiteral[] = [];
+  for (const relPath of walkSourceFiles(rootDir, exts)) {
+    out.push(...collectStringLiterals(relPath, readFileSync(join(rootDir, relPath), 'utf8')));
+  }
+  return out;
 }

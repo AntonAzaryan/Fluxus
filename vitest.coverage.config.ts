@@ -20,6 +20,8 @@
  * модули.
  * Вне охвата один пакет — `desktop/shell-ts`: Electron-контейнер стоит вне
  * гейта (DSK-6), и мерить его сводным прогоном значило бы показывать ноль.
+ * Сам список проектов — общий с тестовой стадией гейта (`vitest.projects.ts`),
+ * чтобы охват отчёта и охват прогона не разъехались молча.
  *
  * Порогов здесь нет намеренно: процент — не цель. Отчёт полезен списком
  * неисполненного (оператор DSL, который не вызвал ни один тест; ветка
@@ -29,28 +31,14 @@
  */
 import { fileURLToPath } from 'node:url';
 import { defineConfig } from 'vitest/config';
+import { COVERAGE_PROJECT_DIRS, projectPaths } from './vitest.projects.ts';
 
 /** Пути от файла, а не от cwd: конфиг задаётся флагом и не обязан совпадать с корнем процесса. */
 const root = fileURLToPath(new URL('.', import.meta.url));
 
 export default defineConfig({
   test: {
-    projects: [
-      'engine/core-ts',
-      'engine/net-ts',
-      'engine/render-ts',
-      'engine/assets-ts',
-      'engine/client-ts',
-      'engine/hud-ts',
-      'engine/bot-ts',
-      'engine/integration-ts',
-      'editor/core-ts',
-      'editor/ui-ts',
-      'tools/blender-ts',
-      'game/demo-ts',
-      'game/server-agent-ts',
-      'game/server-manager-ts',
-    ].map((pkg) => root + pkg),
+    projects: projectPaths(COVERAGE_PROJECT_DIRS),
     coverage: {
       provider: 'v8',
       reporter: ['text', 'html'],

@@ -18,7 +18,7 @@ You are the implementation subagent of the Fluxus repository. You receive one ta
 4. Follow the non-negotiable core principles (CLAUDE.md «Non-negotiable core principles») and the allocation discipline for `engine/core-ts`. Zero runtime dependencies in the core. Fixed-point only in gameplay math.
 5. Language policy: identifiers/schemas in English; comments, error/validation message texts and test names in Russian.
 6. If simulation behavior changed deliberately per spec, regenerate baselines the sanctioned way (`npm run golden`, `npm run golden:cost` only for accepted cost changes) and say so in your report — never hand-edit golden, cost or schema files.
-7. Validate before finishing: targeted package tests first, then the full gate `npm run check` from the root. A red gate means you are not done — fix it or report exactly what is red and why.
+7. Validate before finishing: targeted package tests first, then `npm run check:impact` (the selective gate run — it picks the packages your diff can affect and runs the globally-scoped checks in full; `-- --dry-run --explain` shows the plan without running it), then the full gate `npm run check` from the root. A green selective run is not a verdict: it never replaces `npm run check`. A red gate means you are not done — fix it or report exactly what is red and why.
 
 ## Hard limits
 
