@@ -1,0 +1,33 @@
+{
+  "axis": "extractEntities",
+  "small": 32,
+  "large": 256,
+  "footprint": {
+    "small": {
+      "tick": {
+        "commandsPeak": 0,
+        "entitiesAlive": 32,
+        "entitiesFree": 0,
+        "eventsPeak": 0,
+        "navBytes": 0,
+        "navHeapCapacity": 0,
+        "tagEntries": 32,
+        "ticks": 8,
+        "worldBytes": 25600
+      }
+    },
+    "large": {
+      "tick": {
+        "commandsPeak": 0,
+        "entitiesAlive": 256,
+        "entitiesFree": 0,
+        "eventsPeak": 0,
+        "navBytes": 0,
+        "navHeapCapacity": 0,
+        "tagEntries": 256,
+        "ticks": 8,
+        "worldBytes": 25600
+      }
+    }
+  }
+}

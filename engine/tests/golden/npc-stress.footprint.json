@@ -1,0 +1,33 @@
+{
+  "axis": "npcAgents",
+  "small": 98,
+  "large": 196,
+  "footprint": {
+    "small": {
+      "tick": {
+        "commandsPeak": 438,
+        "entitiesAlive": 121,
+        "entitiesFree": 0,
+        "eventsPeak": 0,
+        "navBytes": 0,
+        "navHeapCapacity": 0,
+        "tagEntries": 0,
+        "ticks": 24,
+        "worldBytes": 201728
+      }
+    },
+    "large": {
+      "tick": {
+        "commandsPeak": 732,
+        "entitiesAlive": 219,
+        "entitiesFree": 0,
+        "eventsPeak": 0,
+        "navBytes": 0,
+        "navHeapCapacity": 0,
+        "tagEntries": 0,
+        "ticks": 24,
+        "worldBytes": 201728
+      }
+    }
+  }
+}

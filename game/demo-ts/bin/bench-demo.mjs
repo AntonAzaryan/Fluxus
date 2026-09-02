@@ -22,8 +22,14 @@
  * границах окна (`render.programs`, «было → стало»): компиляция программы не
  * растит ни одного счётчика стоимости (PERF-3), и другого печатного следа у неё
  * нет. Это размер живого кэша, а не счётчик компиляций, и отчёт печатает границу
- * метода рядом с числом. Всё это ДИАГНОСТИКА: вердикт «сходится / не сходится» и
- * код возврата от хвоста не зависят (PERF-7).
+ * метода рядом с числом. Там же печатается ЗАНЯТАЯ ПАМЯТЬ на границах окна:
+ * куча страницы после принудительной сборки мусора (CDP `HeapProfiler.collectGarbage`
+ * плюс `Runtime.getHeapUsage`) и число живых геометрий и текстур рендерера
+ * (`render.memory`, тем же наблюдением готового состояния, каким приезжает число
+ * программ). Сборка и чтение идут ВНЕ окна замера — до обнуления probe и после
+ * отчёта, — чтобы пауза сборщика не попала в перцентили кадра, ради которых
+ * замер и затевался. Всё это ДИАГНОСТИКА: вердикт «сходится / не сходится» и
+ * код возврата от хвоста и от памяти не зависят (PERF-7).
  *
  * В ГЕЙТ НЕ ВХОДИТ и входить не может (PERF-7): нужен браузер, а числа шумят от
  * машины к машине. Это диагностика по запросу, как `npm run coverage`; от
@@ -526,6 +532,18 @@ const CAMERA_SOURCE_ID = 'camera.pose';
 const PROGRAMS_SOURCE_ID = 'render.programs';
 
 /**
+ * Источник числа ЖИВЫХ геометрий и текстур рендерера (`render.memory`,
+ * RDBG-1). Читается теми же двумя пробами и в тех же точках, что число
+ * программ, — до окна и после, вне замера (RDBG-4, PERF-7).
+ *
+ * Величина — размер живого набора, а не счётчик созданий: создание,
+ * уравновешенное освобождением внутри окна, даёт нулевую разность. Отчёт
+ * печатает границы окна вместе с оговоркой метода, а не одно приращение,
+ * выданное за число созданий.
+ */
+const MEMORY_SOURCE_ID = 'render.memory';
+
+/**
  * Плоское расписание макроса на всё окно замера: события в миллисекундах ОТ
  * НАЧАЛА окна. Собирается заранее и целиком — так число нажатий в отчёте взято
  * из того же расписания, по которому шло вождение, а не выведено из времени.
@@ -539,6 +557,11 @@ function driveSchedule(script, windowMs) {
     }
   }
   return schedule.sort((a, b) => a.at - b.at);
+}
+
+/** Байты мегабайтами — печать, а не проверка: читать их и есть смысл строки. */
+function mib(bytes) {
+  return `${(bytes / (1024 * 1024)).toFixed(1)} МиБ`;
 }
 
 /** Секция дампа по `id`; null — источника нет либо ручка промолчала. */
@@ -588,6 +611,41 @@ function programsProbeOf(sections) {
     };
   }
   return { count: section.liveProgramCount, reason: null };
+}
+
+/**
+ * Живые геометрии и текстуры в пробе — вместе с ПРИЧИНОЙ, если чисел нет.
+ * Причины те же четыре и по тому же основанию, что у числа программ: молчание
+ * ручки, отсутствие источника в реестре, собственное `noData` источника
+ * (рендерер набора не ведёт) и разошедшийся формат секции.
+ */
+function memoryProbeOf(sections) {
+  if (sections === null || sections === undefined) {
+    return {
+      geometries: null,
+      textures: null,
+      reason: `ручка отладки страницы ${DEBUG_GLOBAL_KEY} не отвечает: спросить живой набор негде`,
+    };
+  }
+  const section = sectionOf(sections, MEMORY_SOURCE_ID);
+  if (section === null) {
+    return {
+      geometries: null,
+      textures: null,
+      reason: `отладочный источник "${MEMORY_SOURCE_ID}" на странице не зарегистрирован`,
+    };
+  }
+  if (typeof section.noData === 'string') {
+    return { geometries: null, textures: null, reason: section.noData };
+  }
+  if (typeof section.liveGeometries !== 'number' || typeof section.liveTextures !== 'number') {
+    return {
+      geometries: null,
+      textures: null,
+      reason: `проба "${MEMORY_SOURCE_ID}" не назвала живого набора: формат дампа разошёлся с бенчем`,
+    };
+  }
+  return { geometries: section.liveGeometries, textures: section.liveTextures, reason: null };
 }
 
 /**
@@ -841,6 +899,42 @@ function printReport(summary, pageUrl, drive) {
           '  ручным приёмом разового разбора',
       );
     }
+    // Занятая память на границах окна (PERF-7): куча страницы после
+    // принудительной сборки и живой набор ресурсов рендерера. Печатаются ОБЕ
+    // границы и приращение — как у программ и по той же причине.
+    if (drive.heapBefore === null || drive.heapAfter === null) {
+      out.push(
+        `  куча страницы (после сборки мусора): не измерено — ${drive.heapReason}\n` +
+          '  (замеру это не отказ: величина — подсказка к чтению, а не проверка)',
+      );
+    } else {
+      const delta = drive.heapAfter - drive.heapBefore;
+      out.push(
+        `  куча страницы (после сборки мусора): было ${mib(drive.heapBefore)} → ` +
+          `стало ${mib(drive.heapAfter)} (Δ${delta >= 0 ? '+' : '−'}${mib(Math.abs(delta))} за окно)`,
+      );
+    }
+    if (drive.memoryBefore === null || drive.memoryAfter === null) {
+      out.push(`  живые геометрии и текстуры рендерера: не измерено — ${drive.memoryReason}`);
+    } else {
+      const geometries = drive.memoryAfter.geometries - drive.memoryBefore.geometries;
+      const textures = drive.memoryAfter.textures - drive.memoryBefore.textures;
+      out.push(
+        `  живых геометрий рендерера: было ${drive.memoryBefore.geometries} → ` +
+          `стало ${drive.memoryAfter.geometries} (Δ${geometries >= 0 ? '+' : ''}${geometries}); ` +
+          `текстур: было ${drive.memoryBefore.textures} → стало ${drive.memoryAfter.textures} ` +
+          `(Δ${textures >= 0 ? '+' : ''}${textures})`,
+      );
+    }
+    // Оговорка метода — ВСЕГДА, как и у программ: ровно нулевая дельта и есть
+    // то прочтение, от которого она страхует.
+    out.push(
+      '  это размеры ЖИВЫХ наборов на границах окна, а не число созданий за окно: создание,\n' +
+        '  уравновешенное освобождением внутри окна, даёт Δ0 — нулевая дельта НЕ доказывает,\n' +
+        '  что ресурсы не заводились. Сборка мусора и чтение идут ВНЕ окна замера (до обнуления\n' +
+        '  probe и после отчёта), поэтому в перцентили кадра их пауза не попадает. Точный учёт\n' +
+        '  живых ресурсов движка и рост кучи в гейте держат PERF-8..10, а не этот замер',
+    );
     out.push('');
   }
   // Что именно измерено — частью отчёта, а не знанием читателя: стадии PERF-2
@@ -958,11 +1052,33 @@ try {
    * при этом не рисуется — чтение не удорожает замер (RDBG-4), — а источник,
    * включённый человеком, остаётся включённым.
    */
+  /**
+   * Куча страницы после ПРИНУДИТЕЛЬНОЙ полной сборки мусора (PERF-7).
+   * Собирается и читается ВНЕ окна замера: пауза сборщика внутри него попала бы
+   * в перцентили кадра, ради которых замер и затевался.
+   *
+   * Отказ CDP замеру не отказ (как и у числа программ): не всякая сборка
+   * Chromium даёт эти домены, и отчёт печатает ПРИЧИНУ вместо числа — «мы не
+   * смотрели» и «не изменилось» разные утверждения.
+   */
+  const readPageHeap = async () => {
+    try {
+      await cdp.send('HeapProfiler.collectGarbage', {}, sessionId);
+      const usage = await cdp.send('Runtime.getHeapUsage', {}, sessionId);
+      if (typeof usage.usedSize !== 'number') {
+        return { bytes: null, reason: 'Runtime.getHeapUsage не назвал размера кучи' };
+      }
+      return { bytes: usage.usedSize, reason: null };
+    } catch (error) {
+      return { bytes: null, reason: `сборка мусора и чтение кучи недоступны: ${error.message}` };
+    }
+  };
+
   const readDebugSections = () =>
     evaluate(`(() => {
       const debug = globalThis[${JSON.stringify(DEBUG_GLOBAL_KEY)}];
       if (debug === undefined) return null;
-      const ids = ${JSON.stringify([FOG_SOURCE_ID, CAMERA_SOURCE_ID, PROGRAMS_SOURCE_ID])};
+      const ids = ${JSON.stringify([FOG_SOURCE_ID, CAMERA_SOURCE_ID, PROGRAMS_SOURCE_ID, MEMORY_SOURCE_ID])};
       const restore = [];
       for (const id of ids) {
         const known = debug.sources().find((source) => source.id === id);
@@ -1072,12 +1188,14 @@ try {
   // дамп стоит главному потоку страницы работы, и внутри окна она попала бы в
   // перцентили кадра, ради которых замер и затевался.
   const before = driveScript === null ? null : await readDebugSections();
+  const heapBefore = driveScript === null ? null : await readPageHeap();
   await evaluate(`globalThis[${JSON.stringify(BENCH_GLOBAL_KEY)}].reset()`);
   const driven = driveScript === null ? null : await driveWindow(driveScript, seconds * 1000);
   if (driveScript === null) await sleep(seconds * 1000);
   const summary = await evaluate(`globalThis[${JSON.stringify(BENCH_GLOBAL_KEY)}].report()`);
   if (summary.frames < 2) throw new Error('probe собрал меньше двух кадров — мерить нечего');
   const after = driveScript === null ? null : await readDebugSections();
+  const heapAfter = driveScript === null ? null : await readPageHeap();
 
   let drive = null;
   if (driveScript !== null) {
@@ -1085,6 +1203,8 @@ try {
     const rebuilds = rebuildsBetween(before, after);
     const programsBefore = programsProbeOf(before);
     const programsAfter = programsProbeOf(after);
+    const memoryBefore = memoryProbeOf(before);
+    const memoryAfter = memoryProbeOf(after);
     drive = {
       script: driveName,
       title: driveScript.title,
@@ -1100,6 +1220,15 @@ try {
       // Причина — у той пробы, которая числа не назвала: молчать они могли по
       // разным поводам, и в отчёт едет слово источника, а не догадка бенча.
       programsReason: programsAfter.reason ?? programsBefore.reason,
+      // Занятая память на границах окна (PERF-7): куча страницы после
+      // принудительной сборки и живой набор ресурсов рендерера. Обе величины —
+      // диагностика: вердикт бюджета и код возврата от них не зависят.
+      heapBefore: heapBefore.bytes,
+      heapAfter: heapAfter.bytes,
+      heapReason: heapAfter.reason ?? heapBefore.reason,
+      memoryBefore: memoryBefore.geometries === null ? null : memoryBefore,
+      memoryAfter: memoryAfter.geometries === null ? null : memoryAfter,
+      memoryReason: memoryAfter.reason ?? memoryBefore.reason,
     };
     // Отчёт печатается ДО отказа: причина «замер не состоялся» читается вместе с
     // числами, на которых её увидели, а не вместо них.

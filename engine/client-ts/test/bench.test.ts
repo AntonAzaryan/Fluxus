@@ -16,9 +16,10 @@ import { beforeAll, describe, expect, it } from 'vitest';
 import { ViewBuffer, type ExtractedTick } from '@fluxus/render';
 import { readTick, requiredBytes, shellPort, writeTick, type TickEnvelope } from '../src/index.js';
 import { benchUnits, calibrationLine } from '../../tests/bench/calibration.js';
+import { growthOf, mib, sampleMemory } from '../../tests/bench/memory.js';
 
 /** Синтетический тик на N сущностей — целевая сцена больше реальной. */
-function syntheticTick(count: number): ExtractedTick {
+function syntheticTick(count: number, base = 0): ExtractedTick {
   const ext: ExtractedTick = {
     tick: 1,
     mode: 'Running',
@@ -48,7 +49,9 @@ function syntheticTick(count: number): ExtractedTick {
     kindTable: ['Hero'],
   };
   for (let i = 0; i < count; i++) {
-    ext.id[i] = i * 16777216 + i;
+    // Идентификатор поколенческий (ID-1); `base` сдвигает НАБОР целиком — так
+    // сторож оборота (PERF-10) гоняет доставки со сменяющимся составом.
+    ext.id[i] = (base + i) * 16777216 + i;
     ext.kind[i] = 0;
     ext.x[i] = (i % 24) + 0.5;
     ext.y[i] = ((i / 24) | 0) + 0.5;
@@ -147,5 +150,58 @@ describe('замеры канала (информативно)', () => {
     // устойчив и под нагрузкой (проверено — те же 0.016 мс), а p99 меряет
     // планировщик машины и порогом быть не может ни в каком выражении (PERF-5).
     expect(p50Units).toBeLessThan(0.15);
+  });
+});
+
+/**
+ * Сторож кучи на обороте приёма доставки (`performance-budget` PERF-10). Точные
+ * величины состояния приёмника стережёт инвариант PERF-9 (`turnover.test.ts`);
+ * здесь меряется то, чего он не видит по построению: удержание замыканиями и
+ * слушателями, объекты кодека, внутренности среды.
+ *
+ * Конвенции те же, что у замеров выше и у сторожей ядра: прогрев до первой
+ * точки, минимум из нескольких проб с полной сборкой перед каждой, печать при
+ * КАЖДОМ прогоне, ассерт только о РОСТЕ между точками, отнесённом к занятому в
+ * первой. Уровень кучи не ассертится ни в каком виде: он функция версии среды,
+ * а не кода (PERF-10).
+ */
+describe('PERF-10: оборот доставки не растит кучу', () => {
+  /** Сущностей в доставке и доставок в каждой половине окна. */
+  const TURNOVER_ENTITIES = 500;
+  const TURNOVER_ROUNDS = 300;
+  /**
+   * Запас порога: наблюдаемое — доли процента (оборот кучу не растит вовсе, весь
+   * рост — дрожание сборщика и прогрев JIT). Порог на порядок выше наблюдаемого
+   * и много ниже «роста порядка занятого объёма», который PERF-10 обязан ловить.
+   */
+  const MAX_GROWTH_RATIO = 0.25;
+
+  it('куча между точками A и B не растёт: записи исчезнувших сущностей возвращаются', () => {
+    const view = new ViewBuffer({ tickSeconds: 1 / 60, clock: () => 0 });
+    const buffer = new ArrayBuffer(requiredBytes(TURNOVER_ENTITIES, 0));
+    const half = (from: number): void => {
+      for (let round = from; round < from + TURNOVER_ROUNDS; round++) {
+        // Каждый раунд — НОВЫЙ набор идентификаторов: приёмник обязан снять
+        // записи исчезнувших, а не копить их поколениями.
+        const ext = syntheticTick(TURNOVER_ENTITIES, round * TURNOVER_ENTITIES);
+        ext.tick = round + 1;
+        writeTick(buffer, ext);
+        view.apply(readTick(buffer, ext.events, ext.kindTable));
+      }
+    };
+
+    half(0);
+    const a = sampleMemory();
+    half(TURNOVER_ROUNDS);
+    const b = sampleMemory();
+    const growth = growthOf(a, b);
+
+    console.log(
+      `[bench] куча, оборот доставки (${TURNOVER_ENTITIES} сущностей ×${TURNOVER_ROUNDS}): ` +
+        `${mib(a.heapUsed)} → ${mib(b.heapUsed)} (рост ${(growth.ratio * 100).toFixed(1)} %, ` +
+        `буферы ${mib(a.arrayBuffers)} → ${mib(b.arrayBuffers)})`,
+    );
+    expect(view.view.entities.size).toBe(TURNOVER_ENTITIES);
+    expect(growth.ratio).toBeLessThan(MAX_GROWTH_RATIO);
   });
 });

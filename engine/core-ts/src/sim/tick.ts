@@ -26,6 +26,7 @@ import {
   hasComponent,
   hasComponentByHandle,
   isAlive,
+  reportWorldFootprint,
   resolveComponentHandle,
   resolveFieldHandle,
 } from '../ecs/world.js';
@@ -268,6 +269,13 @@ function runSystems(
       endSystem();
     }
   }
+
+  // Величины занятой памяти мира — в конце тика (PERF-8), рядом с тем местом,
+  // где диагностика пишет сводку: раньше состав мира ещё не окончателен —
+  // спавны и смерти последней системы уже применены её `flush`, но не учтены.
+  // Оборванный тик сюда не доходит вовсе, и записи о нём не будет — тот же
+  // контракт, что у сводки стоимости. Без стока — одно сравнение на тик.
+  reportWorldFootprint(world);
 
   return result(state, isReplay);
 }

@@ -42,6 +42,19 @@ import {
 } from 'three.quarks';
 import type { ParticleEffectDocument } from '@fluxus/assets';
 import type { WarnOnce } from './warnOnce.js';
+import {
+  footprintSink,
+  own,
+  peak,
+  type FootprintResource,
+  type FootprintResourceKind,
+} from './footprint.js';
+
+/**
+ * Владелец ресурсов эффектов в учёте памяти (PERF-8) — разделяемый МОДУЛЬ, а не
+ * подсистема: граф разворачивает пул, и живёт он ровно столько, сколько пул.
+ */
+const PARTICLE_EFFECTS_OWNER = 'particles.effects';
 
 /** Генератор числа частиц — эмиссия во времени и счёт единовременного выброса. */
 type EmissionGenerator = ValueGenerator | FunctionValueGenerator;
@@ -106,6 +119,14 @@ export class ParticleEffectPool {
     const entry = this.expand(id, doc);
     if (entry.template === null) return null;
     const instance = entry.pool.pop() ?? this.create(id, entry, entry.template);
+    // Экземпляров в пуле (PERF-8): живые и отдыхающие вместе. Оборот эффектов
+    // растить это число MUST NOT — взятие из пула на то и заведено (PERF-9).
+    //
+    // Проверка стока — ЗДЕСЬ, а не внутри `peak`: аргумент вычисляется до
+    // вызова, а `created` — геттер с обходом карты эффектов, то есть работа и
+    // аллокация итератора на каждое взятие из пула. Без стока их быть не должно
+    // вовсе (PERF-8, сценарий «Учёт без стока бесплатен»).
+    if (footprintSink() !== undefined) peak('particlesPooled', this.created);
     parent.add(instance.object);
     instance.object.visible = true;
     restartInstance(instance);
@@ -165,6 +186,11 @@ export class ParticleEffectPool {
     this.effects.set(doc, entry);
     try {
       entry.template = new QuarksLoader().parse(doc);
+      // Ресурсы GPU, объявленные ДОКУМЕНТОМ, инстанцировал загрузчик
+      // библиотеки, а владеет ими пул (см. `releaseTemplate`) — учёт PERF-8
+      // получает их здесь, потому что `new THREE.*` этому владению не
+      // соответствует ни одной строкой: строит их чужой код.
+      ownTemplateResources(entry.template, documentResources(doc));
     } catch (e) {
       this.warnOnce(
         `expand:${id}`,
@@ -294,9 +320,54 @@ function documentResources(doc: ParticleEffectDocument): Set<string> {
 }
 
 /** Ресурс THREE глазами сноса: одно имя и одна операция. */
-interface DisposableResource {
+interface DisposableResource extends FootprintResource {
   readonly uuid: string;
   dispose(): void;
+}
+
+/**
+ * Вид ресурса графа эффекта для учёта (PERF-8). Различается по тому, в каком
+ * поле системы он лежит: библиотека кладёт материал, текстуру и геометрию
+ * инстансирования по своим именам, и гадать по классу здесь не о чем.
+ */
+function ownEffectResource(
+  kind: FootprintResourceKind,
+  seen: Set<string>,
+  owned: ReadonlySet<string>,
+  resource: DisposableResource | null | undefined,
+): void {
+  if (resource == null || !owned.has(resource.uuid) || seen.has(resource.uuid)) return;
+  seen.add(resource.uuid);
+  own(kind, PARTICLE_EFFECTS_OWNER, resource);
+}
+
+/**
+ * Регистрирует в учёте (PERF-8) ресурсы разобранного графа, которые объявил
+ * ДОКУМЕНТ, — ровно те, что отдаёт `releaseTemplate`: иначе живое число не
+ * сошлось бы с нулём после сноса (PERF-9). Каждый uuid считается один раз —
+ * материал системы и материал меша в графе законно совпадают.
+ *
+ * Без стока обход не идёт вовсе: он O(узлов графа), и платить за него обычной
+ * игрой незачем (PERF-3).
+ */
+function ownTemplateResources(template: THREE.Object3D, owned: ReadonlySet<string>): void {
+  if (footprintSink() === undefined) return;
+  const seen = new Set<string>();
+  template.traverse((node) => {
+    if (node instanceof ParticleEmitter) {
+      const system = node.system as ParticleSystem;
+      ownEffectResource('material', seen, owned, system.material);
+      ownEffectResource('texture', seen, owned, system.texture);
+      ownEffectResource('geometry', seen, owned, system.instancingGeometry);
+      return;
+    }
+    if (!(node instanceof THREE.Mesh)) return;
+    const mesh = node as THREE.Mesh;
+    ownEffectResource('geometry', seen, owned, mesh.geometry);
+    for (const material of Array.isArray(mesh.material) ? mesh.material : [mesh.material]) {
+      ownEffectResource('material', seen, owned, material);
+    }
+  });
 }
 
 /**

@@ -85,6 +85,7 @@ import {
   type FogWorldRect,
 } from '../fog/mask.js';
 import type { FogSegment } from '../fog/shadowDepth.js';
+import { own, peak } from '../footprint.js';
 
 /**
  * Ручка качества подсистемы (`render-quality` QUAL-1, FOW-10): разрешение маски
@@ -208,7 +209,7 @@ export class FogSubsystem implements RenderSubsystem {
     // существует — маска и пост-проход от этого не зависят.
     this.minimap = new FogMinimapSurface(this.rect, () => this.current.strength, options.createCanvas);
 
-    this.postMaterial = new THREE.ShaderMaterial({
+    this.postMaterial = own('material', 'fog', new THREE.ShaderMaterial({
       vertexShader: POST_VERTEX,
       fragmentShader: POST_FRAGMENT,
       uniforms: {
@@ -225,8 +226,8 @@ export class FogSubsystem implements RenderSubsystem {
       },
       depthTest: false,
       depthWrite: false,
-    });
-    this.postQuad = new THREE.Mesh(new THREE.PlaneGeometry(2, 2), this.postMaterial);
+    }));
+    this.postQuad = new THREE.Mesh(own('geometry', 'fog', new THREE.PlaneGeometry(2, 2)), this.postMaterial);
     this.postQuad.frustumCulled = false;
     this.postScene.add(this.postQuad);
   }
@@ -270,8 +271,7 @@ export class FogSubsystem implements RenderSubsystem {
    */
   dispose(): void {
     this.maskTexture.dispose();
-    this.target?.dispose();
-    this.target = null;
+    this.releaseTarget();
     this.postMaterial.dispose();
     this.postQuad?.geometry.dispose();
     this.postQuad?.removeFromParent();
@@ -416,6 +416,10 @@ export class FogSubsystem implements RenderSubsystem {
   private uploadTexture(cost: RenderCostCounters | undefined): void {
     this.maskTexture.needsUpdate = true;
     if (cost !== undefined) cost.fogMaskUploadBytes += this.mask.data.length;
+    // Байты растра маски (PERF-8): опубликованный и задний растры плюс копия
+    // показанного. Величина — функция разрешения (FOW-10), и потолок пресета
+    // качества виден в эталоне памяти той же строкой, что и в эталоне работы.
+    peak('fogMaskBytes', this.mask.byteLength + this.shown.byteLength);
   }
 
   /**
@@ -704,10 +708,7 @@ export class FogSubsystem implements RenderSubsystem {
     const chain = this.post?.active === true ? this.post : null;
     // Цепочка взяла отрисовку сцены на себя — своя цель тумана больше не нужна
     // ни одному проходу и отдаётся сразу, а не доживает до сноса (REND-31).
-    if (chain !== null && this.target !== null) {
-      this.target.dispose();
-      this.target = null;
-    }
+    if (chain !== null) this.releaseTarget();
     if (!this.built) {
       if (chain !== null) {
         chain.renderToScreen(renderer, camera);
@@ -754,6 +755,19 @@ export class FogSubsystem implements RenderSubsystem {
     return { color: target.texture, depth: target.depthTexture };
   }
 
+  /**
+   * Отдаёт промежуточную цель кадра вместе с её текстурой глубины (REND-31).
+   * Текстуру заводит ПОДСИСТЕМА, а не цель: `dispose()` цели рассылает только
+   * собственное событие, поэтому без этой строки текстура пережила бы и смену
+   * размера окна, и снос подсистемы — молча, по одной на каждый ресайз.
+   */
+  private releaseTarget(): void {
+    if (this.target === null) return;
+    this.target.depthTexture?.dispose();
+    this.target.dispose();
+    this.target = null;
+  }
+
   /** Render target кадра с текстурой глубины; пересоздаётся при смене размера окна. */
   private ensureTarget(width: number, height: number): THREE.WebGLRenderTarget {
     const w = Math.max(1, Math.floor(width));
@@ -761,9 +775,9 @@ export class FogSubsystem implements RenderSubsystem {
     if (this.target !== null && this.target.width === w && this.target.height === h) {
       return this.target;
     }
-    this.target?.dispose();
-    const depthTexture = new THREE.DepthTexture(w, h);
-    this.target = new THREE.WebGLRenderTarget(w, h, { depthTexture, depthBuffer: true });
+    this.releaseTarget();
+    const depthTexture = own('texture', 'fog', new THREE.DepthTexture(w, h));
+    this.target = own('renderTarget', 'fog', new THREE.WebGLRenderTarget(w, h, { depthTexture, depthBuffer: true }));
     return this.target;
   }
 

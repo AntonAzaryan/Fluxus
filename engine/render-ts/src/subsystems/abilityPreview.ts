@@ -104,6 +104,7 @@ import {
   type PreviewShape,
   type ShapeGeometry,
 } from './abilityPreviewShape.js';
+import { own } from '../footprint.js';
 
 /** Подъём фигуры над полем: без него она тонет в ступени террейна (REND-7). */
 const DEFAULT_LIFT = 0.05;
@@ -239,18 +240,18 @@ export class AbilityPreviewSubsystem implements RenderSubsystem {
     this.options.surface?.init(ctx);
     this.circle ??= circleGeometry();
     this.square ??= squareGeometry();
-    this.confirmedMaterial ??= new THREE.LineBasicMaterial({
+    this.confirmedMaterial ??= own('material', 'abilityPreview', new THREE.LineBasicMaterial({
       color: this.colors.confirmed,
       transparent: true,
       opacity: 0.7,
       depthWrite: false,
-    });
-    this.currentMaterial ??= new THREE.LineBasicMaterial({
+    }));
+    this.currentMaterial ??= own('material', 'abilityPreview', new THREE.LineBasicMaterial({
       color: this.colors.current,
       transparent: true,
       opacity: 0.9,
       depthWrite: false,
-    });
+    }));
     this.confirmedFill ??= this.fillMaterial(this.colors.confirmed);
     this.currentFill ??= this.fillMaterial(this.colors.current);
     // Группа в сцену не добавляется: пустое превью не меняет кадр ничем (REND-28).
@@ -297,13 +298,13 @@ export class AbilityPreviewSubsystem implements RenderSubsystem {
    * ни контур над собой, ни то, что стоит в зоне.
    */
   private fillMaterial(color: number): THREE.MeshBasicMaterial {
-    return new THREE.MeshBasicMaterial({
+    return own('material', 'abilityPreview', new THREE.MeshBasicMaterial({
       color,
       transparent: true,
       opacity: this.fillOpacity,
       side: THREE.DoubleSide,
       depthWrite: false,
-    });
+    }));
   }
 
   /** Доставленное состояние: из него берутся подтверждённые шаги (REND-28). */

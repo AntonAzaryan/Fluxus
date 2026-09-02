@@ -71,6 +71,24 @@ export interface DiagnosticsContext {
   costNavNodes: number;
   costNpcNeighbors: number;
   costRaycasts: number;
+  /**
+   * Величины занятой памяти тика (PERF-8). Живут теми же плоскими целыми
+   * полями контекста и по той же причине, что счётчики стоимости выше:
+   * контекст заводится один на тик, поэтому учёт не стоит ни одной аллокации.
+   *
+   * Арифметика у них ДРУГАЯ: у стоимости `+=`, здесь — либо снимок величины на
+   * момент записи (мир), либо максимум за тик (буфер команд, куча поиска пути),
+   * либо длина, которая внутри тика только растёт (журнал событий). Память —
+   * состояние, а не работа, и «сколько всего» для неё бессмысленно.
+   */
+  footWorldBytes: number;
+  footEntitiesAlive: number;
+  footEntitiesFree: number;
+  footTagEntries: number;
+  footCommandsPeak: number;
+  footEvents: number;
+  footNavHeapCapacity: number;
+  footNavBytes: number;
 }
 
 const TRACE_ORDER: Readonly<Record<TraceLevel, number>> = { off: 0, systems: 1, full: 2 };
@@ -109,6 +127,14 @@ export function withDiagnostics<T>(
     costNavNodes: 0,
     costNpcNeighbors: 0,
     costRaycasts: 0,
+    footWorldBytes: 0,
+    footEntitiesAlive: 0,
+    footEntitiesFree: 0,
+    footTagEntries: 0,
+    footCommandsPeak: 0,
+    footEvents: 0,
+    footNavHeapCapacity: 0,
+    footNavBytes: 0,
   };
   current = ctx;
   try {
@@ -118,6 +144,11 @@ export function withDiagnostics<T>(
     // своей записью со своим `tick` — счётчики живут в контексте, а он у каждого
     // прогона свой.
     recordTickCost(ctx);
+    // Сводка размера состояния — следом за сводкой работы (PERF-8) и по тем же
+    // правилам: последней записью штатно завершённого тика, тем же контрактом
+    // числа записей. Порядок двух сводок между собой фиксирован здесь: он и
+    // задаёт их номера в тике, а номер — часть побитовой сверки трейса (DIAG-6).
+    recordTickFootprint(ctx);
     return value;
   } finally {
     current = previous;
@@ -137,6 +168,19 @@ function traceSystems(): DiagnosticsContext | undefined {
 /** Контекст, если включён полный поток команд и событий (DIAG-3). */
 export function traceFull(): DiagnosticsContext | undefined {
   return atLeast('full');
+}
+
+/**
+ * Контекст сводки размера состояния (PERF-8), если её вообще будут писать —
+ * то есть на уровне границ систем и выше (DIAG-3).
+ *
+ * Наружу выходит потому, что величины мира знает только сам мир (`ecs/world.ts`),
+ * а сюда они приезжают готовыми числами. Проверка ЗДЕСЬ, а не там: обход тегов
+ * стоит O(сущностей с тегами), и на выключенной диагностике его быть не должно
+ * вовсе — это ровно та инертность, которой PERF-8 требует от учёта.
+ */
+export function tickFootprint(): DiagnosticsContext | undefined {
+  return atLeast('systems');
 }
 
 /** Номер записи резервируется в момент её возникновения — он и задаёт порядок (DIAG-2). */
@@ -247,12 +291,24 @@ export function countCommands(issued: number, applied: number): void {
   // сквозь все системы. Одна калитка на оба — второй вызов из flush'а стоил бы
   // ещё одного чтения контекста на каждую систему каждого тика.
   ctx.costCommandsApplied += applied;
+  // Пиковая длина журнала команд за тик (PERF-8), снятая в той же точке и той
+  // же калиткой: `flush` зовёт этот счётчик прямо перед очисткой журнала, то
+  // есть `issued` здесь и есть длина буфера на момент сброса. Максимум, а не
+  // сумма: буфер флашится в конце каждой системы, и памяти он занимает столько,
+  // сколько в самой длинной из них.
+  if (issued > ctx.footCommandsPeak) ctx.footCommandsPeak = issued;
 }
 
 export function countEvent(): void {
   const ctx = current;
   if (ctx === undefined) return;
   ctx.counters.events++;
+  // Длина журнала событий за тик (PERF-8). Считается ЭМИССИЯ, а не читается
+  // длина шины перед сбросом: шина чистится в начале СЛЕДУЮЩЕГО тика
+  // (`runSystems`), и снятая там длина уехала бы в чужую запись. Внутри тика
+  // журнал только растёт, поэтому число эмиссий равно и длине на конец тика, и
+  // её пику.
+  ctx.footEvents++;
 }
 
 // -------------------------------------------- счётчики стоимости тика (PERF-3)
@@ -322,6 +378,24 @@ export function countCostNavNodes(nodes: number): void {
   ctx.costNavNodes += nodes;
 }
 
+/**
+ * Величины занятой памяти навигации (`pathfinding` NAV-5, PERF-8): ёмкость кучи
+ * открытых узлов и байты рабочих структур поиска вместе с запечённой сеткой.
+ * Обе — величины занятого, а не работы: они живут на сборке навигации и растут
+ * только перевыделением, поэтому пик за тик и текущее значение у них совпадают.
+ *
+ * Одна калитка на обе: запрос пути зовёт её один раз, а два вызова на запрос
+ * стоили бы второго чтения контекста на каждом поиске каждого агента.
+ * Максимум берётся всё равно — запросов за тик много, и записать в поле
+ * последний из них значило бы отдать эталону не пик.
+ */
+export function countNavFootprint(heapCapacity: number, bytes: number): void {
+  const ctx = current;
+  if (ctx === undefined) return;
+  if (heapCapacity > ctx.footNavHeapCapacity) ctx.footNavHeapCapacity = heapCapacity;
+  if (bytes > ctx.footNavBytes) ctx.footNavBytes = bytes;
+}
+
 /** Вызов детерминированного raycast Physics API (PERF-3). */
 export function countCostRaycast(): void {
   const ctx = current;
@@ -368,6 +442,49 @@ function recordTickCost(ctx: DiagnosticsContext): void {
       navNodes: ctx.costNavNodes,
       npcNeighbors: ctx.costNpcNeighbors,
       raycasts: ctx.costRaycasts,
+    },
+  });
+}
+
+/**
+ * Сводка размера состояния тика — одна запись на тик (PERF-8) обычной формы
+ * DIAG-2, рядом со сводкой стоимости и тем же контрактом числа записей:
+ * оборванный тик её не получает, тик вне `Running` не получает тоже, реплей
+ * перемотки (REW-2) выдаёт её заново.
+ *
+ * Величины машинно-независимы: байты типизированных массивов мира, числа
+ * сущностей, тегов, команд и узлов кучи. Байтов кучи среды исполнения здесь нет
+ * и быть не может (PERF-8): они меняются с версией среды при неизменном коде, и
+ * эталоном стать не могут — их зона у сторожа PERF-10.
+ *
+ * - `worldBytes` — ёмкость хранилища мира: колонки плоской таблицы полей, слова
+ *   масок и типизированные массивы индекса сущностей. Константа мира,
+ *   посчитанная при его создании, — запись её только читает;
+ * - `entitiesAlive`, `entitiesFree` — живые сущности и слоты, ждущие
+ *   переиспользования (ID-2, ID-6): пара, по которой видно и населённость мира,
+ *   и возврат слотов оборотом;
+ * - `tagEntries` — записей тегов суммарно по сущностям;
+ * - `commandsPeak`, `eventsPeak` — длины буфера команд и журнала событий за тик;
+ * - `navHeapCapacity` — ёмкость кучи открытых узлов поиска пути (NAV-5);
+ * - `navBytes` — байты рабочих структур поиска (пять массивов по клетке) и
+ *   запечённой сетки: они растут площадью арены, а ёмкость кучи — нет, и по
+ *   одной ей рост памяти навигации не читался бы вовсе.
+ *
+ * Имени системы у записи нет: она принадлежит тику целиком — как и сводка
+ * стоимости, и по той же причине.
+ */
+function recordTickFootprint(ctx: DiagnosticsContext): void {
+  if (TRACE_ORDER[ctx.trace] < TRACE_ORDER.systems) return;
+  record(ctx, 'tickFootprint', 'info', 'TICK_FOOTPRINT', {
+    data: {
+      worldBytes: ctx.footWorldBytes,
+      entitiesAlive: ctx.footEntitiesAlive,
+      entitiesFree: ctx.footEntitiesFree,
+      tagEntries: ctx.footTagEntries,
+      commandsPeak: ctx.footCommandsPeak,
+      eventsPeak: ctx.footEvents,
+      navHeapCapacity: ctx.footNavHeapCapacity,
+      navBytes: ctx.footNavBytes,
     },
   });
 }

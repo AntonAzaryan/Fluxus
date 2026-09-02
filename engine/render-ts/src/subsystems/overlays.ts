@@ -58,6 +58,7 @@ import {
   type OverlayItem,
   type OverlayOptions,
 } from './overlayItems.js';
+import { own } from '../footprint.js';
 
 /** Толщина ручки как доля её длины. */
 const HANDLE_THICKNESS = 0.08;
@@ -144,39 +145,69 @@ export class OverlaySubsystem implements RenderSubsystem, PickProxySource {
       this.surfaceDirty = true;
     });
 
-    this.highlightMaterial = new THREE.LineBasicMaterial({
-      color: this.colors.highlight,
-      depthTest: false,
-    });
-    this.gridMaterial = new THREE.LineBasicMaterial({ color: this.colors.grid, transparent: true, opacity: 0.5 });
-    this.cellsMaterial = new THREE.MeshBasicMaterial({
-      color: this.colors.cells,
-      transparent: true,
-      opacity: 0.35,
-      depthWrite: false,
-    });
+    this.highlightMaterial = own(
+      'material',
+      'overlays',
+      new THREE.LineBasicMaterial({
+        color: this.colors.highlight,
+        depthTest: false,
+      }),
+    );
+    this.gridMaterial = own(
+      'material',
+      'overlays',
+      new THREE.LineBasicMaterial({ color: this.colors.grid, transparent: true, opacity: 0.5 }),
+    );
+    this.cellsMaterial = own(
+      'material',
+      'overlays',
+      new THREE.MeshBasicMaterial({
+        color: this.colors.cells,
+        transparent: true,
+        opacity: 0.35,
+        depthWrite: false,
+      }),
+    );
+    // Материал ручки — одной фабрикой на все пять: они отличаются ровно цветом,
+    // и учёт ресурса (PERF-8) у них поэтому тоже один.
+    const handleMaterial = (color: number): THREE.MeshBasicMaterial =>
+      own('material', 'overlays', new THREE.MeshBasicMaterial({ color, depthTest: false }));
     this.handleMaterials = new Map([
-      ['x', new THREE.MeshBasicMaterial({ color: this.colors.axisX, depthTest: false })],
-      ['y', new THREE.MeshBasicMaterial({ color: this.colors.axisY, depthTest: false })],
-      ['z', new THREE.MeshBasicMaterial({ color: this.colors.axisZ, depthTest: false })],
-      ['hovered', new THREE.MeshBasicMaterial({ color: this.colors.hovered, depthTest: false })],
-      ['active', new THREE.MeshBasicMaterial({ color: this.colors.active, depthTest: false })],
+      ['x', handleMaterial(this.colors.axisX)],
+      ['y', handleMaterial(this.colors.axisY)],
+      ['z', handleMaterial(this.colors.axisZ)],
+      ['hovered', handleMaterial(this.colors.hovered)],
+      ['active', handleMaterial(this.colors.active)],
     ]);
 
-    this.boxEdges = new THREE.EdgesGeometry(new THREE.BoxGeometry(1, 1, 1));
-    const arm = new THREE.BoxGeometry(
-      this.handleSize,
-      this.handleSize * HANDLE_THICKNESS,
-      this.handleSize * HANDLE_THICKNESS,
+    // Куб-источник живёт ровно до построения рёбер: `EdgesGeometry` читает его
+    // в конструкторе и дальше держит СВОИ буферы. Отдаётся он тут же — учёт
+    // ресурсов (PERF-8) видит и его создание, и его освобождение, а инвариант
+    // «после сноса живых ноль» (PERF-9) на нём не спотыкается.
+    const boxSource = own('geometry', 'overlays', new THREE.BoxGeometry(1, 1, 1));
+    this.boxEdges = own('geometry', 'overlays', new THREE.EdgesGeometry(boxSource));
+    boxSource.dispose();
+    const arm = own(
+      'geometry',
+      'overlays',
+      new THREE.BoxGeometry(
+        this.handleSize,
+        this.handleSize * HANDLE_THICKNESS,
+        this.handleSize * HANDLE_THICKNESS,
+      ),
     );
     arm.translate(this.handleSize / 2, 0, 0);
     arm.computeBoundingBox();
     this.armGeometry = arm;
-    const ring = new THREE.TorusGeometry(
-      this.handleSize * 0.8,
-      (this.handleSize * HANDLE_THICKNESS) / 2,
-      6,
-      24,
+    const ring = own(
+      'geometry',
+      'overlays',
+      new THREE.TorusGeometry(
+        this.handleSize * 0.8,
+        (this.handleSize * HANDLE_THICKNESS) / 2,
+        6,
+        24,
+      ),
     );
     ring.computeBoundingBox();
     this.ringGeometry = ring;

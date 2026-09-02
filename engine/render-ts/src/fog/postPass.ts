@@ -7,6 +7,7 @@
  */
 import * as THREE from 'three';
 import type { VisibilityMask } from './mask.js';
+import { own } from '../footprint.js';
 
 
 /** Полноэкранный треугольник не нужен: квад 2×2 в NDC, вершины насквозь. */
@@ -87,12 +88,16 @@ void main() {
 
 /** Одноканальная текстура поверх растра маски; фильтрация билинейная (design D2). */
 export function createMaskTexture(mask: VisibilityMask, shown: Uint8Array): THREE.DataTexture {
-  const texture = new THREE.DataTexture(
-    shown,
-    mask.width,
-    mask.height,
-    THREE.RedFormat,
-    THREE.UnsignedByteType,
+  const texture = own(
+    'texture',
+    'fog',
+    new THREE.DataTexture(
+      shown,
+      mask.width,
+      mask.height,
+      THREE.RedFormat,
+      THREE.UnsignedByteType,
+    ),
   );
   texture.minFilter = THREE.LinearFilter;
   texture.magFilter = THREE.LinearFilter;

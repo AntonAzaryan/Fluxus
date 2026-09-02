@@ -37,6 +37,7 @@ import type { BakedPartVisibility, NormalizedMesh } from '@fluxus/assets';
 import type { RenderCostCounters } from '../cost.js';
 import { geometryFromMesh, type SharedMeshData } from './build.js';
 import type { VatMaterial } from './vatMaterial.js';
+import { own } from '../footprint.js';
 
 /** Начальная ёмкость батча: меньше — и первая же группа юнитов её удвоит. */
 const INITIAL_CAPACITY = 32;
@@ -410,7 +411,7 @@ export class ModelBatch {
     buffers: BatchBuffers,
     capacity: number,
   ): BatchPart {
-    const geometry = new THREE.BufferGeometry();
+    const geometry = own('geometry', 'model', new THREE.BufferGeometry());
     // Буферы вершин РАЗДЕЛЯЮТСЯ с геометрией ассета (REND-3): батчу нужна своя
     // геометрия только ради инстанс-атрибута, а не ради копии вершин.
     for (const [name, attribute] of Object.entries(source.geometry.attributes)) {
@@ -424,7 +425,7 @@ export class ModelBatch {
     const material = this.materials[source.materialIndex] ?? this.materials[0];
     const mesh = new THREE.InstancedMesh(
       geometry,
-      material?.material ?? new THREE.MeshStandardMaterial(),
+      material?.material ?? own('material', 'model', new THREE.MeshStandardMaterial()),
       capacity,
     );
     mesh.instanceMatrix = buffers.matrix;

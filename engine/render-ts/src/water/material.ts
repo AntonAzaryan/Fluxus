@@ -42,6 +42,7 @@ import {
   type WaterBodyConfig,
 } from './config.js';
 import { uniformOf } from '../uniforms.js';
+import { own } from '../footprint.js';
 
 /** Позиция меша — уже мировая (меш строится в мировых координатах, REND-7). */
 const WATER_VERTEX = /* glsl */ `
@@ -329,15 +330,19 @@ export function createWaterMaterial(input: WaterMaterialInput): THREE.ShaderMate
       tDetailFlow: { value: null },
     },
   ]);
-  const material = new THREE.ShaderMaterial({
-    vertexShader: WATER_VERTEX,
-    fragmentShader: waterFragmentShader(textured, input.rippleSources),
-    uniforms,
-    defines,
-    lights: true,
-    transparent: true,
-    depthWrite: false,
-  });
+  const material = own(
+    'material',
+    'water',
+    new THREE.ShaderMaterial({
+      vertexShader: WATER_VERTEX,
+      fragmentShader: waterFragmentShader(textured, input.rippleSources),
+      uniforms,
+      defines,
+      lights: true,
+      transparent: true,
+      depthWrite: false,
+    }),
+  );
   applyWaterUniforms(material, input, textured);
   return material;
 }

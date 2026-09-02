@@ -24,6 +24,7 @@
  */
 import * as THREE from 'three';
 import type { NormalizedMaterial } from '@fluxus/assets';
+import { own } from '../footprint.js';
 
 /** Вид карты материала — тот же словарь, что у мест употребления слотов (REND-6). */
 export type VatMapKind = 'base' | 'normal' | 'emissive';
@@ -73,7 +74,11 @@ export function materialMapKinds(source: NormalizedMaterial): Set<VatMapKind> {
  * `texelFetch`, а мипы у таблицы матриц смысла не имеют.
  */
 export function createVatTexture(width: number, height: number, data: Float32Array): THREE.DataTexture {
-  const texture = new THREE.DataTexture(data, width, height, THREE.RGBAFormat, THREE.FloatType);
+  const texture = own(
+    'texture',
+    'model',
+    new THREE.DataTexture(data, width, height, THREE.RGBAFormat, THREE.FloatType),
+  );
   texture.minFilter = THREE.NearestFilter;
   texture.magFilter = THREE.NearestFilter;
   texture.wrapS = THREE.ClampToEdgeWrapping;
@@ -90,7 +95,13 @@ export function createVatTexture(width: number, height: number, data: Float32Arr
  * (ASSET-4): до их готовности запись рисуется цветом материала, а не мусором.
  */
 export function createSkinPlaceholder(): THREE.DataArrayTexture {
-  const texture = new THREE.DataArrayTexture(new Uint8Array([255, 255, 255, 255]), 1, 1, 1);
+  // Владелец — «заглушки процесса» (PERF-8): текстура заводится один раз на
+  // процесс и сноса сцены не переживает по недосмотру, а по устройству.
+  const texture = own(
+    'texture',
+    'placeholders',
+    new THREE.DataArrayTexture(new Uint8Array([255, 255, 255, 255]), 1, 1, 1),
+  );
   texture.needsUpdate = true;
   return texture;
 }
@@ -105,7 +116,10 @@ export function createVatMaterial(
   maps: ReadonlySet<VatMapKind>,
   placeholder: THREE.DataArrayTexture,
 ): VatMaterial {
-  const material = source.clone();
+  // Клон — СВОЙ материал батча, а не разделяемый материал ассета: владеет им
+  // подсистема моделей и отдаёт его сносом (REND-31), поэтому и в учёт (PERF-8)
+  // он входит наравне с созданными через `new`.
+  const material = own('material', 'model', source.clone());
   // Fade «ушла в туман» (FOW-8): доля проявленности едет пер-инстансным
   // атрибутом в альфу, и материал живёт в прозрачном проходе постоянно —
   // запись с fade = 1 рисуется теми же пикселями, что рисовалась бы в
@@ -153,7 +167,7 @@ export function createVatMaterial(
  * — глубина не читает ни карт, ни скинов, только позу.
  */
 export function createVatDepthMaterial(vatTexture: THREE.Texture): THREE.MeshDepthMaterial {
-  const material = new THREE.MeshDepthMaterial();
+  const material = own('material', 'model', new THREE.MeshDepthMaterial());
   // Держатель uniform'а — по той же причине, что у боевого материала:
   // `shader.uniforms` существует только внутри `onBeforeCompile`.
   const vatMap = { value: vatTexture };

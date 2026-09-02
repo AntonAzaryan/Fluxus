@@ -51,6 +51,8 @@ export class NavSearch {
   /** Поколение, в котором клетка РАСКРЫТА (закрыта для повторного раскрытия). */
   private readonly closed: Int32Array;
   private heap: Int32Array;
+  /** Байты рабочих структур; пересчитывается только при перевыделении кучи. */
+  private bytesValue = 0;
   private heapSize = 0;
   private generation = 0;
   /** Коридор клеток от старта к цели — результат последнего успешного поиска. */
@@ -58,6 +60,31 @@ export class NavSearch {
   corridorLength = 0;
   /** Раскрытых узлов последнего запроса — единица бюджета (NAV-5) и стоимости (PERF-3). */
   expansions = 0;
+
+  /**
+   * Ёмкость кучи открытых узлов в СЛОТАХ массива (PERF-8) — величина занятого,
+   * а не работы. Растёт только перевыделением под нужду запроса (`grow`) и не
+   * падает никогда: буфер живёт на экземпляре и переиспользуется между
+   * запросами (см. шапку файла). Наружу отдаётся ради записи `TICK_FOOTPRINT`;
+   * ход поиска от чтения не меняется (NAV-2).
+   */
+  get heapCapacity(): number {
+    return this.heap.length;
+  }
+
+  /**
+   * Байты РАБОЧИХ СТРУКТУР поиска (PERF-8): пять массивов по клетке сетки
+   * (`gScore`, `parent`, `seen`, `closed`, `corridor`) плюс куча открытых узлов.
+   * Куча из них наименьшая и от размера карты не зависит вовсе — по одной её
+   * ёмкости рост памяти поиска на большей арене не читался бы ни одним байтом.
+   *
+   * Величина машинно-независима — это `byteLength` типизированных массивов — и
+   * считается ОДИН раз: при создании и при перевыделении кучи. Запрос её только
+   * читает: на горячем пути суммирования нет.
+   */
+  get bytes(): number {
+    return this.bytesValue;
+  }
 
   constructor(nav: NavGrid) {
     this.nav = nav;
@@ -69,6 +96,18 @@ export class NavSearch {
     this.closed = new Int32Array(this.size);
     this.corridor = new Int32Array(this.size);
     this.heap = new Int32Array(HEAP_MIN * HEAP_STRIDE);
+    this.measure();
+  }
+
+  /** Сумма байтов рабочих структур — считается при создании и при регросте. */
+  private measure(): void {
+    this.bytesValue =
+      this.gScore.byteLength +
+      this.parent.byteLength +
+      this.seen.byteLength +
+      this.closed.byteLength +
+      this.corridor.byteLength +
+      this.heap.byteLength;
   }
 
   /**
@@ -271,6 +310,7 @@ export class NavSearch {
     const grown = new Int32Array(this.heap.length * 2);
     grown.set(this.heap);
     this.heap = grown;
+    this.measure();
   }
 
   /** Ключ NAV-8: `f` меньше, затем `g` БОЛЬШЕ, затем индекс клетки меньше. */

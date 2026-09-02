@@ -1,0 +1,113 @@
+{
+  "tick": {
+    "commandsPeak": 12,
+    "entitiesAlive": 2,
+    "entitiesFree": 0,
+    "eventsPeak": 0,
+    "navBytes": 0,
+    "navHeapCapacity": 0,
+    "tagEntries": 2,
+    "ticks": 60,
+    "worldBytes": 680
+  },
+  "history": {
+    "bytes": 5440,
+    "snapshots": 8
+  },
+  "performance": {
+    "resources": {
+      "fog": {
+        "geometry": 1,
+        "material": 1,
+        "texture": 1
+      },
+      "lighting": {
+        "geometry": 1,
+        "material": 1,
+        "texture": 1
+      },
+      "model": {
+        "geometry": 11,
+        "material": 5,
+        "texture": 1
+      },
+      "particles.effects": {
+        "geometry": 1,
+        "material": 1
+      },
+      "postprocess": {
+        "geometry": 1,
+        "material": 1,
+        "texture": 1,
+        "renderTarget": 2
+      },
+      "terrain": {
+        "geometry": 3,
+        "material": 3
+      },
+      "water": {
+        "geometry": 1,
+        "material": 1,
+        "texture": 1
+      }
+    },
+    "state": {
+      "fogMaskBytes": 768,
+      "modelsBatchRecords": 2,
+      "modelsBatches": 2,
+      "modelsInstances": 2,
+      "particlesPooled": 1,
+      "terrainChunks": 1,
+      "viewFacingMemory": 2,
+      "viewRecords": 2
+    }
+  },
+  "ultra": {
+    "resources": {
+      "fog": {
+        "geometry": 1,
+        "material": 1,
+        "texture": 1
+      },
+      "lighting": {
+        "geometry": 1,
+        "material": 1,
+        "texture": 1
+      },
+      "model": {
+        "geometry": 11,
+        "material": 5,
+        "texture": 1
+      },
+      "particles.effects": {
+        "geometry": 1,
+        "material": 1
+      },
+      "postprocess": {
+        "geometry": 1,
+        "material": 6,
+        "texture": 1,
+        "renderTarget": 7
+      },
+      "terrain": {
+        "geometry": 3,
+        "material": 3
+      },
+      "water": {
+        "geometry": 1,
+        "material": 1,
+        "texture": 1
+      }
+    },
+    "state": {
+      "fogMaskBytes": 3072,
+      "modelsBatchRecords": 2,
+      "modelsBatches": 2,
+      "modelsInstances": 2,
+      "particlesPooled": 1,
+      "terrainChunks": 1,
+      "viewFacingMemory": 2,
+      "viewRecords": 2
+    }
+  }
+}

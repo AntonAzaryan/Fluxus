@@ -22,6 +22,7 @@ import type {
   NormalizedModel,
   NormalizedSequence,
 } from '@fluxus/assets';
+import { own } from '../footprint.js';
 
 // --------------------------------------------------------- разделяемая часть
 
@@ -53,7 +54,7 @@ export interface SharedModelData {
  * уровень — те же части с упрощённой геометрией, и второй сборки они не требуют.
  */
 export function geometryFromMesh(mesh: NormalizedMesh): THREE.BufferGeometry {
-  const geometry = new THREE.BufferGeometry();
+  const geometry = own('geometry', 'model', new THREE.BufferGeometry());
   geometry.setAttribute('position', new THREE.BufferAttribute(mesh.positions, 3));
   // Нормали ассета годятся, только если их ровно столько же, сколько вершин:
   // иначе атрибут описывал бы другую геометрию. Условие считается ОДИН раз —
@@ -398,14 +399,18 @@ export interface ModelInstance {
  * `setRGB` без указания пространства это ровно то, что нужно.
  */
 function materialFromAsset(source: NormalizedMaterial): THREE.MeshStandardMaterial {
-  const material = new THREE.MeshStandardMaterial({
-    roughness: source.roughnessFactor,
-    metalness: source.metallicFactor,
-    side: source.doubleSided ? THREE.DoubleSide : THREE.FrontSide,
-    transparent: source.alphaMode === 'blend',
-    opacity: source.baseColorFactor[3],
-    alphaTest: source.alphaMode === 'mask' ? source.alphaCutoff : 0,
-  });
+  const material = own(
+    'material',
+    'model',
+    new THREE.MeshStandardMaterial({
+      roughness: source.roughnessFactor,
+      metalness: source.metallicFactor,
+      side: source.doubleSided ? THREE.DoubleSide : THREE.FrontSide,
+      transparent: source.alphaMode === 'blend',
+      opacity: source.baseColorFactor[3],
+      alphaTest: source.alphaMode === 'mask' ? source.alphaCutoff : 0,
+    }),
+  );
   material.color.setRGB(source.baseColorFactor[0], source.baseColorFactor[1], source.baseColorFactor[2]);
   material.emissive.setRGB(source.emissiveFactor[0], source.emissiveFactor[1], source.emissiveFactor[2]);
   // Сила эмиссии ассета (ASSET-5) — как есть, БЕЗ клампа: значение больше
@@ -537,9 +542,16 @@ export function createModelInstance(
    */
   const ownTextureTargets = (): ReadonlyMap<number, readonly TextureTarget[]> => {
     if (ownsMaterials) return textureTargets;
-    const own = shared.materials.map((material) => material.clone());
+    // Клоны — СВОИ материалы инстанса (REND-6): владеет ими инстанс и отдаёт их
+    // своим сносом, поэтому в учёт (PERF-8) они входят наравне с созданными
+    // через `new`. Имя локальной переменной — `clones`, а не `own`: последнее
+    // заняла обёртка учёта, и затенять её здесь значило бы делать невозможным
+    // учёт внутри этой же функции.
+    const clones = shared.materials.map((material) =>
+      own('material', 'model', material.clone()),
+    );
     const byShared = new Map<THREE.MeshStandardMaterial, THREE.MeshStandardMaterial>();
-    shared.materials.forEach((material, i) => byShared.set(material, own[i]!));
+    shared.materials.forEach((material, i) => byShared.set(material, clones[i]!));
     for (const mesh of meshes) {
       const replacement = byShared.get(mesh.material as THREE.MeshStandardMaterial);
       if (replacement !== undefined) mesh.material = replacement;
@@ -551,7 +563,7 @@ export function createModelInstance(
         places.map((place) => ({ material: byShared.get(place.material) ?? place.material, map: place.map })),
       );
     }
-    materials = own;
+    materials = clones;
     textureTargets = targets;
     ownsMaterials = true;
     return textureTargets;

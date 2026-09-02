@@ -397,6 +397,9 @@ export type TraceLevel = (typeof TRACE_LEVELS)[number];
  * Вид записи (DIAG-2). `tickCost` — сводка объёма работы тика (`performance-budget`
  * PERF-3): счётчики стоимости покидают симуляцию тем же стоком, что и трейс, и
  * потому остаются обычной записью диагностики, а не вторым каналом.
+ * `tickFootprint` — сводка размера состояния тика (PERF-8): едет той же дорогой
+ * и по тому же основанию, но арифметика у неё другая — не сумма работы, а
+ * величина занятого, и потому запись своя, а не поля соседней.
  *
  * Перечень рантайм-значением, а не одним союзом типов: половину словаря отбора
  * записей (DIAG-9) составляют именно виды, и запускалкам нужно проверять имя,
@@ -411,6 +414,7 @@ export const DIAGNOSTIC_KINDS = [
   'command',
   'event',
   'tickCost',
+  'tickFootprint',
 ] as const;
 
 export type DiagnosticKind = (typeof DIAGNOSTIC_KINDS)[number];
@@ -456,6 +460,8 @@ export const DIAGNOSTIC_CODES = [
   'EVENT',
   // счётчики стоимости (PERF-3)
   'TICK_COST',
+  // величины занятой памяти (PERF-8)
+  'TICK_FOOTPRINT',
 ] as const;
 
 export type DiagnosticCode = (typeof DIAGNOSTIC_CODES)[number];

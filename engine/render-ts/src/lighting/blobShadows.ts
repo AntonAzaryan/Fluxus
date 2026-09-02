@@ -34,6 +34,7 @@
  */
 import * as THREE from 'three';
 import type { BlobCaster, BlobCasterPose } from '../types.js';
+import { own } from '../footprint.js';
 
 /**
  * Сторона генерируемой текстуры пятна в текселях. Шестьдесят четыре — предел, за
@@ -79,7 +80,11 @@ function createBlobTexture(): THREE.DataTexture {
       data[at + 3] = Math.round(alpha * 255);
     }
   }
-  const texture = new THREE.DataTexture(data, side, side, THREE.RGBAFormat);
+  const texture = own(
+    'texture',
+    'lighting',
+    new THREE.DataTexture(data, side, side, THREE.RGBAFormat),
+  );
   texture.minFilter = THREE.LinearFilter;
   texture.magFilter = THREE.LinearFilter;
   texture.needsUpdate = true;
@@ -104,7 +109,7 @@ export class BlobShadowField {
    */
   private readonly casters = new Set<BlobCaster>();
   private readonly texture = createBlobTexture();
-  private readonly geometry = new THREE.PlaneGeometry(1, 1);
+  private readonly geometry = own('geometry', 'lighting', new THREE.PlaneGeometry(1, 1));
   private readonly material: THREE.MeshBasicMaterial;
   private mesh: THREE.InstancedMesh | null = null;
   private capacity = 0;
@@ -118,17 +123,21 @@ export class BlobShadowField {
   private readonly pose: BlobCasterPose = { x: 0, y: 0, z: 0 };
 
   constructor() {
-    this.material = new THREE.MeshBasicMaterial({
-      map: this.texture,
-      color: 0x000000,
-      transparent: true,
-      depthWrite: false,
-      // Пятно ко-планарно полу: смещение глубины — вторая линия обороны после
-      // подъёма над опорой, для склонов и мелких карт глубины.
-      polygonOffset: true,
-      polygonOffsetFactor: -1,
-      polygonOffsetUnits: -1,
-    });
+    this.material = own(
+      'material',
+      'lighting',
+      new THREE.MeshBasicMaterial({
+        map: this.texture,
+        color: 0x000000,
+        transparent: true,
+        depthWrite: false,
+        // Пятно ко-планарно полу: смещение глубины — вторая линия обороны после
+        // подъёма над опорой, для склонов и мелких карт глубины.
+        polygonOffset: true,
+        polygonOffsetFactor: -1,
+        polygonOffsetUnits: -1,
+      }),
+    );
   }
 
   /** Пятен, написанных последним кадром, — вход счётчиков стоимости и тестов. */

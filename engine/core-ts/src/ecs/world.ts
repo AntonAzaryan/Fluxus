@@ -24,7 +24,7 @@
  * здесь — это разрешение имени плюс тот же вызов (SYS-10): два пути чтения не
  * могут разойтись семантикой, потому что после разрешения имён путь один.
  */
-import { DEBUG, assert } from '../debug.js';
+import { DEBUG, assert, tickFootprint } from '../debug.js';
 import type {
   ComponentHandle,
   ComponentSchema,
@@ -114,6 +114,15 @@ interface WorldInternal {
   dirty: Set<EntityId>[];
   /** Плоская таблица полей — адресное пространство handle (SYS-10). */
   fields: FieldTable;
+  /**
+   * Ёмкость хранилища мира в байтах (`performance-budget` PERF-8): колонки
+   * плоской таблицы полей, слова масок и типизированные массивы индекса
+   * сущностей. Считается ОДИН раз — при создании мира и при клонировании, — а
+   * не на каждой записи диагностики: величина эта функция схем сцены и ёмкости,
+   * то есть константа мира, и пересчитывать её каждый тик значило бы платить
+   * обходом таблицы за число, которое не меняется.
+   */
+  readonly bytes: number;
 }
 
 const DEFAULT_CAPACITY = 1024;
@@ -137,9 +146,11 @@ export function createWorld(
 
   const { stores, table } = createStores(schemaMap, capacity);
 
+  const entities = createEntityIndex(capacity);
+  const masks = createMasks(capacity, Math.max(stores.size, 1));
   const internal: WorldInternal = {
-    entities: createEntityIndex(capacity),
-    masks: createMasks(capacity, Math.max(stores.size, 1)),
+    entities,
+    masks,
     capacity,
     schemas: schemaMap,
     prefabs: prefabMap,
@@ -147,8 +158,49 @@ export function createWorld(
     tags: new Map(),
     dirty: createDirty(stores.size),
     fields: table,
+    bytes: storageBytes(table, masks, entities),
   };
   return toState(internal);
+}
+
+// ------------------------------------------- величины занятой памяти (PERF-8)
+
+/**
+ * Байты, занятые хранилищем мира (PERF-8): суммируются `byteLength` РЕАЛЬНЫХ
+ * контейнеров, а не считаются по формуле от ёмкости и числа полей — вторая
+ * запись того же знания разошлась бы с первой на первом же поле нового типа
+ * (`entity` шире `i32`, ECS-6).
+ *
+ * Список свободных слотов сюда не входит: он обычный JS-массив, размер которого
+ * в байтах средой исполнения не назван, — а величина PERF-8 обязана оставаться
+ * машинно-независимой. Длину этого списка отдаёт `entitiesFree` записи.
+ */
+function storageBytes(fields: FieldTable, masks: ComponentMasks, entities: EntityIndex): number {
+  let bytes = masks.words.byteLength + entities.generations.byteLength + entities.alive.byteLength;
+  for (const column of fields.arrays) bytes += column.byteLength;
+  return bytes;
+}
+
+/**
+ * Кладёт величины мира в контекст диагностики (PERF-8). Зовётся тиком в его
+ * конце, а живёт здесь потому, что читать `WorldInternal` вправе только этот
+ * модуль (TICK-3): наружу уходят готовые числа, а не устройство мира.
+ *
+ * Без стока (или на выключенном трейсе) не делает НИЧЕГО, даже обхода тегов:
+ * инертность учёта — требование PERF-8, а не оптимизация.
+ */
+export function reportWorldFootprint(state: WorldState): void {
+  const ctx = tickFootprint();
+  if (ctx === undefined) return;
+  const internal = toInternal(state);
+  ctx.footWorldBytes = internal.bytes;
+  ctx.footEntitiesAlive = internal.entities.aliveCount;
+  ctx.footEntitiesFree = internal.entities.freeList.length;
+  // Обход множеств тегов — O(сущностей С ТЕГАМИ), а не O(сущностей): карта
+  // держит только помеченные (`tagEntity`, `destroy` снимает запись целиком).
+  let entries = 0;
+  for (const set of internal.tags.values()) entries += set.size;
+  ctx.footTagEntries = entries;
 }
 
 // ------------------------------------------------------ dirty (OBS-6, NET-8)
@@ -320,6 +372,9 @@ export function cloneWorld(state: WorldState): WorldState {
     // Снапшот — значение, а не живой мир: срез изменений в него не переносится.
     dirty: createDirty(stores.size),
     fields: table,
+    // Копия занимает столько же: та же ёмкость и те же колонки по тем же
+    // схемам (PERF-8) — считать сумму заново нечего.
+    bytes: src.bytes,
   });
 }
 

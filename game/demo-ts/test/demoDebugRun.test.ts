@@ -28,6 +28,13 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
  * шага (ABIL-5).
  */
 const MAX_TICKS = 600;
+/**
+ * Каденс проб памяти прогона (CLI-11) — В ТИКАХ: число проб тогда
+ * воспроизводимо от прогона к прогону, хотя их значения — нет. Сотня даёт
+ * несколько проб на матч в шестьсот тиков, то есть наклон, который есть по чему
+ * считать.
+ */
+const MEMORY_EVERY = 100;
 const STAND = join(dirname(fileURLToPath(import.meta.url)), '..', 'bin', 'demo-serve.mjs');
 
 /** Свободный порт у системы: фиксированный номер занял бы соседний прогон. */
@@ -39,6 +46,9 @@ function freePort(): number {
   probe.close();
   return port;
 }
+
+/** Имя файла ряда проб памяти — он ОТДЕЛЬНЫЙ и в набор артефактов не входит. */
+const MEMORY_SERIES = 'memory.jsonl';
 
 interface RunSummary {
   readonly ticks: number;
@@ -59,7 +69,22 @@ describe('CLI-11: отладочный прогон матча одной ком
     dir = mkdtempSync(join(tmpdir(), 'demo-debug-'));
     const run = spawnSync(
       process.execPath,
-      [STAND, '--debug', '--port', String(freePort()), '--max-ticks', String(MAX_TICKS), '--out-dir', dir],
+      [
+        STAND,
+        '--debug',
+        '--port',
+        String(freePort()),
+        '--max-ticks',
+        String(MAX_TICKS),
+        '--out-dir',
+        dir,
+        '--memory-every',
+        String(MEMORY_EVERY),
+        // Ряд проб пишется ТОЛЬКО по явному флагу и ложится ОТДЕЛЬНЫМ файлом
+        // (CLI-11): в набор сравнимых артефактов он не входит.
+        '--memory-out',
+        join(dir, MEMORY_SERIES),
+      ],
       { encoding: 'utf8', env: { ...process.env, NODE_OPTIONS: '' }, timeout: 120_000 },
     );
     status = run.status;
@@ -132,6 +157,44 @@ describe('CLI-11: отладочный прогон матча одной ком
       expect(value).toHaveProperty('code');
     }
     expect(marks).toBeGreaterThan(0);
+  });
+
+  it('отчёт называет первую пробу памяти, последнюю и наклон на 1000 тиков', () => {
+    // Длинный прогон без человека — самое дешёвое место увидеть рост памяти
+    // сервера, и увидеть его обязан ШТАТНЫЙ прогон (CLI-11).
+    const lines = stdout.split('\n').filter((line) => line.startsWith('память процесса,'));
+    expect(lines, stdout.slice(-400)).toHaveLength(3);
+    expect(lines[0]).toContain('первая проба');
+    expect(lines[1]).toContain('последняя проба');
+    expect(lines[2]).toContain('наклон на 1000 тиков');
+    for (const line of lines) {
+      // Все три величины названы в каждой строке: RSS, куча среды и байты
+      // буферов — то, что требование перечисляет поимённо.
+      expect(line).toMatch(/rss/);
+      expect(line).toMatch(/куча/);
+      expect(line).toMatch(/буферы/);
+    }
+  });
+
+  it('ряд проб лежит отдельным файлом, и проб в нём ⌊тиков / каденс⌋', () => {
+    const series = readFileSync(join(dir, MEMORY_SERIES), 'utf8')
+      .split('\n')
+      .filter((line) => line !== '');
+    expect(series).toHaveLength(Math.floor(summary.ticks / MEMORY_EVERY));
+    const first = JSON.parse(series[0]!) as Record<string, number>;
+    expect(Object.keys(first).sort()).toEqual(['arrayBuffers', 'heapUsed', 'rss', 'tick']);
+    expect(first.tick).toBe(MEMORY_EVERY);
+  });
+
+  it('сводка прогона полей памяти не содержит ни одного (CLI-11)', () => {
+    // Значения проб — данные окружения: в сравнимые посимвольно артефакты они
+    // MUST NOT попадать, иначе два прогона одной записи перестали бы
+    // сравниваться `diff`'ом. Ряд по флагу лежит рядом и в набор не входит.
+    const text = readFileSync(join(dir, 'run.json'), 'utf8');
+    for (const field of ['rss', 'heapUsed', 'arrayBuffers', 'memory']) {
+      expect(text, `run.json: поле "${field}"`).not.toContain(`"${field}"`);
+    }
+    expect(summary.record).toBe('match.scenario.json');
   });
 
   it('собственный отчёт запускалки идёт потоком, отдельным от трейса', () => {

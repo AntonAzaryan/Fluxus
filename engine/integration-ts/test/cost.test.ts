@@ -51,9 +51,14 @@ import {
   createCostCounters,
   withCostSink,
   type CostStage,
-  type QualityPreset,
   type RenderCostCounters,
 } from '@fluxus/render';
+import {
+  BASE_LOAD,
+  SCALING_AXES,
+  benchFor,
+  type ScalingSize,
+} from './benchAxes.js';
 import {
   BENCH_PRESETS,
   BENCH_PRESET_NAMES,
@@ -63,9 +68,7 @@ import {
   loadNpcStress,
   GOLDEN_DIR,
   MATCH_STAND,
-  PresentationBench,
   RECORDED_MATCHES,
-  benchGrid,
   extractSizes,
   loadRecording,
   matchBench,
@@ -76,7 +79,6 @@ import {
   syntheticTick,
   type AxisSize,
   type BenchPresetName,
-  type SyntheticLoad,
 } from './benchLoad.js';
 
 const UPDATE = process.env.UPDATE_COST === '1';
@@ -228,108 +230,12 @@ function measureMatch(name: string): unknown {
 }
 
 // -------------------------------------------------- оси масштабирования (PERF-6)
+//
+// Сами оси — общие данные двух гейтов (`benchAxes.ts`): гейт памяти (PERF-8)
+// снимает величины на ТОЙ ЖЕ нагрузке, и вторая её копия рядом разошлась бы с
+// первой молча.
 
-/** Сторона синтетической арены в клетках — общая у всех осей. */
-const SCALING_EXTENT = 16;
-/** Шаг решётки укрытий по умолчанию: без укрытий теневой путь маски мёртв (FOW-9). */
-const SCALING_PILLARS = 4;
-
-const BASE_LOAD: SyntheticLoad = {
-  entities: 64,
-  observers: 4,
-  vision: 1.5,
-  extent: SCALING_EXTENT,
-  shots: 4,
-};
-
-interface ScalingSize {
-  /** Величина оси — то единственное, чем размеры и различаются. */
-  readonly magnitude: number;
-  readonly pillarStep: number;
-  readonly resolution: number;
-  readonly load: SyntheticLoad;
-  /**
-   * Документ пресета размера; нет — базовый ультра-документ стенда. Отличаться
-   * от него вправе ровно та ось, чья величина ЕСТЬ значение ручки: у террейна
-   * плотность разбиения приходит только потолком пресета (QUAL-1) — авторское
-   * значение живёт конфигом рендера и осью быть не может.
-   */
-  readonly preset?: QualityPreset;
-}
-
-interface ScalingAxis {
-  readonly axis: string;
-  readonly small: ScalingSize;
-  readonly large: ScalingSize;
-}
-
-function size(magnitude: number, over: Partial<ScalingSize> = {}): ScalingSize {
-  return {
-    magnitude,
-    pillarStep: SCALING_PILLARS,
-    resolution: 4,
-    load: BASE_LOAD,
-    ...over,
-  };
-}
-
-/** Сколько cliff-отрезков даёт решётка укрытий шагом `step` — величина своей оси. */
-function segmentsOf(step: number): number {
-  return benchGrid(SCALING_EXTENT, step).cliffs.length;
-}
-
-/**
- * Документ оси разбиения террейна: базовый ультра плюс потолок (QUAL-1). Ручка
- * потолочная, поэтому действующая плотность — min(конфига рендера, потолка), и
- * величиной оси служит именно потолок: он один и приходит извне подсистемы.
- */
-function tessellationCeiling(ceiling: number): QualityPreset {
-  return Object.freeze({ ...BENCH_PRESETS.ultra, 'terrain.curvatureTessellation': ceiling });
-}
-
-/**
- * Оси стоимости и их размеры S/L (PERF-6). Каждая ось двигает РОВНО одну
- * величину — иначе отношение L/S нечего было бы приписать.
- */
-const AXES: readonly ScalingAxis[] = [
-  {
-    axis: 'entities',
-    small: size(32, { load: { ...BASE_LOAD, entities: 32 } }),
-    large: size(256, { load: { ...BASE_LOAD, entities: 256 } }),
-  },
-  {
-    axis: 'fogObservers',
-    small: size(4, { load: { ...BASE_LOAD, observers: 4 } }),
-    large: size(32, { load: { ...BASE_LOAD, observers: 32 } }),
-  },
-  {
-    axis: 'cliffSegments',
-    small: size(segmentsOf(8), { pillarStep: 8 }),
-    large: size(segmentsOf(2), { pillarStep: 2 }),
-  },
-  {
-    axis: 'maskResolution',
-    small: size(4, { resolution: 4 }),
-    large: size(8, { resolution: 8 }),
-  },
-  {
-    // Число событий одноразового эффекта в доставке (REND-24): выстрелы —
-    // единственная работа частиц, которую двигает СВОЯ величина, а не состав
-    // сущностей; оболочки типов при этом стоят на месте, и отношение L/S
-    // приписывается частицам целиком.
-    axis: 'particleShots',
-    small: size(4, { load: { ...BASE_LOAD, shots: 4 } }),
-    large: size(32, { load: { ...BASE_LOAD, shots: 32 } }),
-  },
-  {
-    // Потолок плотности разбиения клеток с кривизной (REND-9, QUAL-1): пол
-    // растёт его КВАДРАТОМ, стенки — линейно, и обе зависимости читаются
-    // отношением L/S. Авторская плотность конфига рендера у обоих размеров одна.
-    axis: 'terrainTessellation',
-    small: size(2, { preset: tessellationCeiling(2) }),
-    large: size(4, { preset: tessellationCeiling(4) }),
-  },
-];
+const AXES = SCALING_AXES;
 
 /**
  * Одна доставка и один кадр синтетической нагрузки под снятым замером.
@@ -344,11 +250,7 @@ const AXES: readonly ScalingAxis[] = [
  * рассуждение про маску остаётся в силе.
  */
 function measureSize(config: ScalingSize): RenderCostCounters {
-  const bench = new PresentationBench({
-    grid: benchGrid(SCALING_EXTENT, config.pillarStep),
-    resolution: config.resolution,
-    ...(config.preset !== undefined ? { preset: config.preset } : {}),
-  });
+  const bench = benchFor(config);
   const ext = syntheticTick(config.load);
   const counters = createCostCounters();
   withCostSink(counters, () => {

@@ -17,9 +17,9 @@
  * геометрии ищет честно и отвечает `unreachable`, если выхода из него нет.
  * Исключений `findPath` не бросает: исключение посреди тика останавливает матч.
  */
-import { countCostNavNodes } from '../../debug.js';
+import { countCostNavNodes, countNavFootprint } from '../../debug.js';
 import { cellAt } from '../terrain.js';
-import { bakeNavGrid } from './bake.js';
+import { bakeNavGrid, navGridBytes } from './bake.js';
 import { NavSearch } from './astar.js';
 import { NavSmoothing } from './smooth.js';
 import type {
@@ -115,6 +115,9 @@ export function buildNavigation(grid: TerrainGrid, options: NavigationBuildOptio
   const nav = bakeNavGrid(grid);
   const search = new NavSearch(nav);
   const smoothing = new NavSmoothing(nav);
+  // Байты запечённой сетки — константа сборки (PERF-8): считаются здесь, один
+  // раз, и запрос их только читает.
+  const gridBytes = navGridBytes(nav);
   const budget = options.budget;
   const tileSize = grid.tileSize;
   const metered = options.cost ?? true;
@@ -136,6 +139,13 @@ export function buildNavigation(grid: TerrainGrid, options: NavigationBuildOptio
       if (fromCell === toCell) return { status: 'found', waypoints: [{ x: to.x, y: to.y }] };
 
       const status = search.run(fromCell, toCell, minClearance, budget);
+      // Величины занятой памяти навигации (PERF-8) — той же калиткой, что и
+      // работа поиска: проба отладочного слоя идёт ВНЕ оплачиваемого пути
+      // (RDBG-8), и её структуры не вправе попасть в сводку игрового тика так
+      // же, как не вправе попасть её работа. Байты — рабочие структуры поиска
+      // ПЛЮС запечённая сетка: и то и другое растёт площадью арены, а ёмкость
+      // кучи от неё не зависит вовсе.
+      if (metered) countNavFootprint(search.heapCapacity, search.bytes + gridBytes);
       if (status !== 'found') {
         if (metered) countCostNavNodes(search.expansions);
         return status === 'budgetExhausted' ? BUDGET_EXHAUSTED : UNREACHABLE;

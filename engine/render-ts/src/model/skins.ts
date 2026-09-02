@@ -26,6 +26,7 @@ import type {
   NormalizedModel,
 } from '@fluxus/assets';
 import type { TextureTarget } from './build.js';
+import { own } from '../footprint.js';
 
 /**
  * Откуда инстанс берёт пиксели слота: файл дерева контента (запрашивается через
@@ -74,7 +75,11 @@ export function textureFromImage(image: DecodedImage, map: TextureTarget['map'])
   // сужение до Uint8Array<ArrayBuffer> — формальность (SharedArrayBuffer здесь
   // взяться неоткуда, буфер приходит из декодера).
   const pixels = image.pixels as Uint8Array<ArrayBuffer>;
-  const texture = new THREE.DataTexture(pixels, image.width, image.height, THREE.RGBAFormat);
+  const texture = own(
+    'texture',
+    'model',
+    new THREE.DataTexture(pixels, image.width, image.height, THREE.RGBAFormat),
+  );
   // Цветовые карты хранятся в sRGB, карты нормалей — линейные данные, а не цвет.
   texture.colorSpace = map === 'normal' ? THREE.NoColorSpace : THREE.SRGBColorSpace;
   // Пиксели идут сверху вниз, v=0 — верх изображения. Это совпадает с UV и MDX,

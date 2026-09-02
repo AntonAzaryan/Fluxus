@@ -382,6 +382,78 @@ export interface DebugProgramsProbe extends DebugProbe {
  * Рисовальщика у источника нет: число живёт в дампе (RDBG-7) и в панели
  * встраивающего приложения — текста наложения не рисуют (RDBG-3).
  */
+/**
+ * Рендерер глазами источника занятых ресурсов (`render.memory`, RDBG-1). Та же
+ * форма, что у `ProgramCountRenderer`, и по той же причине: живой WebGL здесь не
+ * нужен — читается готовое `renderer.info.memory`, которое рендерер ведёт сам.
+ */
+export interface MemoryInfoRenderer {
+  readonly info: {
+    /** Живые геометрии и текстуры рендерера; нет — считать нечего. */
+    readonly memory?: { readonly geometries: number; readonly textures: number } | null;
+  };
+}
+
+export interface DebugMemoryProbe extends DebugProbe {
+  /** Живых геометрий в наборе рендерера, штук. */
+  readonly liveGeometries: number;
+  /** Живых текстур в наборе рендерера, штук. */
+  readonly liveTextures: number;
+}
+
+/**
+ * Источник числа ЖИВЫХ геометрий и текстур рендерера (`render.memory`,
+ * RDBG-1). Регистрирует его ВЛАДЕЛЕЦ рендерера — сборка, создавшая
+ * `WebGLRenderer` (см. шапку файла), — рядом с источником программ.
+ *
+ * ## Что этим числом видно
+ *
+ * Оборот ресурсов GPU за окно игры (`performance-budget` PERF-7): каждое
+ * появление сущности, создающее текстуру и не отдающее её, растит живой набор, и
+ * рост этот виден приращением между двумя пробами. Точный учёт того, чем движок
+ * владеет САМ, держат величины PERF-8 в гейте; здесь — набор рендерера целиком,
+ * включая то, что завела сторонняя библиотека.
+ *
+ * ## Граница метода: это размер живого набора, а не счётчик созданий
+ *
+ * `renderer.info.memory` — живые счётчики: `dispose()` уменьшает их через
+ * обработчик рендерера. Создание, уравновешенное освобождением внутри окна,
+ * поэтому даёт нулевую разность, и читать нулевую дельту как «ничего не
+ * создавалось» нельзя — оговорку печатает потребитель (бенч, PERF-7), а не
+ * молчание источника.
+ *
+ * ## Почему это не инструментализация (RDBG-8)
+ *
+ * Источник читает ГОТОВОЕ `renderer.info`: набор живых ресурсов рендерер ведёт
+ * сам и без отладки. Инструментированной работы у подсистем он не заказывает и в
+ * сток счётчиков не пишет ни разу.
+ */
+export function memoryDebugSource(renderer: MemoryInfoRenderer): DebugSource<DebugMemoryProbe> {
+  // Переиспользуемая проба (RDBG-2): поля переписываются, объект живёт.
+  const probe = {
+    liveGeometries: 0,
+    liveTextures: 0,
+    noData: undefined as string | undefined,
+  };
+
+  return {
+    id: 'render.memory',
+    title: 'живые геометрии и текстуры рендерера',
+    probe(): DebugMemoryProbe {
+      const memory = renderer.info.memory;
+      if (memory === null || memory === undefined) {
+        probe.noData =
+          'рендерер не ведёт счётчиков живых ресурсов (renderer.info.memory): считать нечего';
+        return probe;
+      }
+      probe.noData = undefined;
+      probe.liveGeometries = memory.geometries;
+      probe.liveTextures = memory.textures;
+      return probe;
+    },
+  };
+}
+
 export function programsDebugSource(
   renderer: ProgramCountRenderer,
 ): DebugSource<DebugProgramsProbe> {

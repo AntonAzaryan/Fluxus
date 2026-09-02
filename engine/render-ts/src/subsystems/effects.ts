@@ -73,6 +73,7 @@ import {
   type EventPoint,
   type StateReader,
 } from './shellSupport.js';
+import { own } from '../footprint.js';
 
 /** Примитивы, которые умеет рисовать подсистема; перечень принадлежит рендеру. */
 const PRIMITIVE_SPHERE = 'sphere';
@@ -210,7 +211,11 @@ export class EffectsSubsystem implements RenderSubsystem {
     this.ctx = ctx;
     // Общий с подсистемами террейна и моделей источник поверхности; init идемпотентен.
     this.options.surface?.init(ctx);
-    this.geometry ??= new THREE.SphereGeometry(1, SPHERE_SEGMENTS, SPHERE_RINGS);
+    this.geometry ??= own(
+      'geometry',
+      'effects',
+      new THREE.SphereGeometry(1, SPHERE_SEGMENTS, SPHERE_RINGS),
+    );
     ctx.scene.add(this.group);
   }
 
@@ -495,10 +500,14 @@ export class EffectsSubsystem implements RenderSubsystem {
   private createNode(): EffectNode {
     const geometry = this.geometry;
     if (geometry === null) throw new Error('EffectsSubsystem: init() не вызван (REND-8)');
-    const material = new THREE.MeshBasicMaterial({
-      transparent: true,
-      depthWrite: false,
-    });
+    const material = own(
+      'material',
+      'effects',
+      new THREE.MeshBasicMaterial({
+        transparent: true,
+        depthWrite: false,
+      }),
+    );
     const mesh = new THREE.Mesh(geometry, material);
     mesh.name = 'effect';
     // Эффект — изображение, а не сущность: в picking он не участвует (REND-15),

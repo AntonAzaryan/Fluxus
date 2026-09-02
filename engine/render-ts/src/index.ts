@@ -69,15 +69,18 @@ export type {
 export {
   costCountersDebugSource,
   deliveryDebugSource,
+  memoryDebugSource,
   programsDebugSource,
 } from './debug/sources.js';
 export type {
   DebugCostProbe,
   DebugDeliveryProbe,
   DebugDeliveryRow,
+  DebugMemoryProbe,
   DebugProgramsProbe,
   DebugSnapReason,
   DeliverySourceOptions,
+  MemoryInfoRenderer,
   ProgramCountRenderer,
 } from './debug/sources.js';
 export type { DebugFogProbe } from './debug/fogSource.js';
@@ -98,6 +101,32 @@ export {
   withCostSink,
 } from './cost.js';
 export type { CostStage, RenderCostCounters } from './cost.js';
+
+// Величины занятой памяти рендера (`performance-budget` PERF-8): второй
+// инжектируемый сток рядом со счётчиками стоимости — живые ресурсы GPU по виду
+// и владельцу (REND-31) и размеры состояния доставки и кэшей. Без стока учёт не
+// исполняется; стадией конвейера (PERF-2) эти величины не помечаются — создание
+// ресурса событие, а не стадия кадра.
+export {
+  FOOTPRINT_RESOURCE_KINDS,
+  attachFootprintSink,
+  createFootprint,
+  footprintLive,
+  footprintPeakLive,
+  footprintSink,
+  own,
+  peak,
+  releaseFootprintSink,
+  withFootprintSink,
+} from './footprint.js';
+export type {
+  FootprintResource,
+  FootprintResourceKind,
+  FootprintState,
+  FootprintStateField,
+  RenderFootprint,
+  ResourceTally,
+} from './footprint.js';
 
 // Хост — TickObserver ядра (REND-1, REND-2) и продюсер presentation-состояния.
 export { RenderHost, kindByTags } from './host.js';

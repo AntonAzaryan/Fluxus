@@ -1,0 +1,622 @@
+{
+  "axes": [
+    {
+      "axis": "entities",
+      "small": 32,
+      "large": 256,
+      "footprint": {
+        "small": {
+          "resources": {
+            "fog": {
+              "geometry": 1,
+              "material": 1,
+              "texture": 1
+            },
+            "lighting": {
+              "geometry": 1,
+              "material": 1,
+              "texture": 1
+            },
+            "model": {
+              "geometry": 11,
+              "material": 5,
+              "texture": 1
+            },
+            "particles.effects": {
+              "geometry": 1,
+              "material": 1
+            },
+            "postprocess": {
+              "geometry": 1,
+              "material": 6,
+              "texture": 1,
+              "renderTarget": 7
+            },
+            "terrain": {
+              "geometry": 12,
+              "material": 3
+            },
+            "water": {
+              "geometry": 1,
+              "material": 1,
+              "texture": 1
+            }
+          },
+          "state": {
+            "fogMaskBytes": 12288,
+            "modelsBatchRecords": 32,
+            "modelsBatches": 2,
+            "modelsInstances": 32,
+            "particlesPooled": 20,
+            "terrainChunks": 4,
+            "viewFacingMemory": 0,
+            "viewRecords": 32
+          }
+        },
+        "large": {
+          "resources": {
+            "fog": {
+              "geometry": 1,
+              "material": 1,
+              "texture": 1
+            },
+            "lighting": {
+              "geometry": 1,
+              "material": 1,
+              "texture": 1
+            },
+            "model": {
+              "geometry": 11,
+              "material": 5,
+              "texture": 1
+            },
+            "particles.effects": {
+              "geometry": 1,
+              "material": 1
+            },
+            "postprocess": {
+              "geometry": 1,
+              "material": 6,
+              "texture": 1,
+              "renderTarget": 7
+            },
+            "terrain": {
+              "geometry": 12,
+              "material": 3
+            },
+            "water": {
+              "geometry": 1,
+              "material": 1,
+              "texture": 1
+            }
+          },
+          "state": {
+            "fogMaskBytes": 12288,
+            "modelsBatchRecords": 256,
+            "modelsBatches": 2,
+            "modelsInstances": 256,
+            "particlesPooled": 132,
+            "terrainChunks": 4,
+            "viewFacingMemory": 0,
+            "viewRecords": 256
+          }
+        }
+      }
+    },
+    {
+      "axis": "fogObservers",
+      "small": 4,
+      "large": 32,
+      "footprint": {
+        "small": {
+          "resources": {
+            "fog": {
+              "geometry": 1,
+              "material": 1,
+              "texture": 1
+            },
+            "lighting": {
+              "geometry": 1,
+              "material": 1,
+              "texture": 1
+            },
+            "model": {
+              "geometry": 11,
+              "material": 5,
+              "texture": 1
+            },
+            "particles.effects": {
+              "geometry": 1,
+              "material": 1
+            },
+            "postprocess": {
+              "geometry": 1,
+              "material": 6,
+              "texture": 1,
+              "renderTarget": 7
+            },
+            "terrain": {
+              "geometry": 12,
+              "material": 3
+            },
+            "water": {
+              "geometry": 1,
+              "material": 1,
+              "texture": 1
+            }
+          },
+          "state": {
+            "fogMaskBytes": 12288,
+            "modelsBatchRecords": 64,
+            "modelsBatches": 2,
+            "modelsInstances": 64,
+            "particlesPooled": 36,
+            "terrainChunks": 4,
+            "viewFacingMemory": 0,
+            "viewRecords": 64
+          }
+        },
+        "large": {
+          "resources": {
+            "fog": {
+              "geometry": 1,
+              "material": 1,
+              "texture": 1
+            },
+            "lighting": {
+              "geometry": 1,
+              "material": 1,
+              "texture": 1
+            },
+            "model": {
+              "geometry": 11,
+              "material": 5,
+              "texture": 1
+            },
+            "particles.effects": {
+              "geometry": 1,
+              "material": 1
+            },
+            "postprocess": {
+              "geometry": 1,
+              "material": 6,
+              "texture": 1,
+              "renderTarget": 7
+            },
+            "terrain": {
+              "geometry": 12,
+              "material": 3
+            },
+            "water": {
+              "geometry": 1,
+              "material": 1,
+              "texture": 1
+            }
+          },
+          "state": {
+            "fogMaskBytes": 12288,
+            "modelsBatchRecords": 64,
+            "modelsBatches": 2,
+            "modelsInstances": 64,
+            "particlesPooled": 36,
+            "terrainChunks": 4,
+            "viewFacingMemory": 0,
+            "viewRecords": 64
+          }
+        }
+      }
+    },
+    {
+      "axis": "cliffSegments",
+      "small": 12,
+      "large": 240,
+      "footprint": {
+        "small": {
+          "resources": {
+            "fog": {
+              "geometry": 1,
+              "material": 1,
+              "texture": 1
+            },
+            "lighting": {
+              "geometry": 1,
+              "material": 1,
+              "texture": 1
+            },
+            "model": {
+              "geometry": 11,
+              "material": 5,
+              "texture": 1
+            },
+            "particles.effects": {
+              "geometry": 1,
+              "material": 1
+            },
+            "postprocess": {
+              "geometry": 1,
+              "material": 6,
+              "texture": 1,
+              "renderTarget": 7
+            },
+            "terrain": {
+              "geometry": 12,
+              "material": 3
+            },
+            "water": {
+              "geometry": 1,
+              "material": 1,
+              "texture": 1
+            }
+          },
+          "state": {
+            "fogMaskBytes": 12288,
+            "modelsBatchRecords": 64,
+            "modelsBatches": 2,
+            "modelsInstances": 64,
+            "particlesPooled": 36,
+            "terrainChunks": 4,
+            "viewFacingMemory": 0,
+            "viewRecords": 64
+          }
+        },
+        "large": {
+          "resources": {
+            "fog": {
+              "geometry": 1,
+              "material": 1,
+              "texture": 1
+            },
+            "lighting": {
+              "geometry": 1,
+              "material": 1,
+              "texture": 1
+            },
+            "model": {
+              "geometry": 11,
+              "material": 5,
+              "texture": 1
+            },
+            "particles.effects": {
+              "geometry": 1,
+              "material": 1
+            },
+            "postprocess": {
+              "geometry": 1,
+              "material": 6,
+              "texture": 1,
+              "renderTarget": 7
+            },
+            "terrain": {
+              "geometry": 12,
+              "material": 3
+            },
+            "water": {
+              "geometry": 1,
+              "material": 1,
+              "texture": 1
+            }
+          },
+          "state": {
+            "fogMaskBytes": 12288,
+            "modelsBatchRecords": 64,
+            "modelsBatches": 2,
+            "modelsInstances": 64,
+            "particlesPooled": 36,
+            "terrainChunks": 4,
+            "viewFacingMemory": 0,
+            "viewRecords": 64
+          }
+        }
+      }
+    },
+    {
+      "axis": "maskResolution",
+      "small": 4,
+      "large": 8,
+      "footprint": {
+        "small": {
+          "resources": {
+            "fog": {
+              "geometry": 1,
+              "material": 1,
+              "texture": 1
+            },
+            "lighting": {
+              "geometry": 1,
+              "material": 1,
+              "texture": 1
+            },
+            "model": {
+              "geometry": 11,
+              "material": 5,
+              "texture": 1
+            },
+            "particles.effects": {
+              "geometry": 1,
+              "material": 1
+            },
+            "postprocess": {
+              "geometry": 1,
+              "material": 6,
+              "texture": 1,
+              "renderTarget": 7
+            },
+            "terrain": {
+              "geometry": 12,
+              "material": 3
+            },
+            "water": {
+              "geometry": 1,
+              "material": 1,
+              "texture": 1
+            }
+          },
+          "state": {
+            "fogMaskBytes": 12288,
+            "modelsBatchRecords": 64,
+            "modelsBatches": 2,
+            "modelsInstances": 64,
+            "particlesPooled": 36,
+            "terrainChunks": 4,
+            "viewFacingMemory": 0,
+            "viewRecords": 64
+          }
+        },
+        "large": {
+          "resources": {
+            "fog": {
+              "geometry": 1,
+              "material": 1,
+              "texture": 1
+            },
+            "lighting": {
+              "geometry": 1,
+              "material": 1,
+              "texture": 1
+            },
+            "model": {
+              "geometry": 11,
+              "material": 5,
+              "texture": 1
+            },
+            "particles.effects": {
+              "geometry": 1,
+              "material": 1
+            },
+            "postprocess": {
+              "geometry": 1,
+              "material": 6,
+              "texture": 1,
+              "renderTarget": 7
+            },
+            "terrain": {
+              "geometry": 12,
+              "material": 3
+            },
+            "water": {
+              "geometry": 1,
+              "material": 1,
+              "texture": 1
+            }
+          },
+          "state": {
+            "fogMaskBytes": 49152,
+            "modelsBatchRecords": 64,
+            "modelsBatches": 2,
+            "modelsInstances": 64,
+            "particlesPooled": 36,
+            "terrainChunks": 4,
+            "viewFacingMemory": 0,
+            "viewRecords": 64
+          }
+        }
+      }
+    },
+    {
+      "axis": "particleShots",
+      "small": 4,
+      "large": 32,
+      "footprint": {
+        "small": {
+          "resources": {
+            "fog": {
+              "geometry": 1,
+              "material": 1,
+              "texture": 1
+            },
+            "lighting": {
+              "geometry": 1,
+              "material": 1,
+              "texture": 1
+            },
+            "model": {
+              "geometry": 11,
+              "material": 5,
+              "texture": 1
+            },
+            "particles.effects": {
+              "geometry": 1,
+              "material": 1
+            },
+            "postprocess": {
+              "geometry": 1,
+              "material": 6,
+              "texture": 1,
+              "renderTarget": 7
+            },
+            "terrain": {
+              "geometry": 12,
+              "material": 3
+            },
+            "water": {
+              "geometry": 1,
+              "material": 1,
+              "texture": 1
+            }
+          },
+          "state": {
+            "fogMaskBytes": 12288,
+            "modelsBatchRecords": 64,
+            "modelsBatches": 2,
+            "modelsInstances": 64,
+            "particlesPooled": 36,
+            "terrainChunks": 4,
+            "viewFacingMemory": 0,
+            "viewRecords": 64
+          }
+        },
+        "large": {
+          "resources": {
+            "fog": {
+              "geometry": 1,
+              "material": 1,
+              "texture": 1
+            },
+            "lighting": {
+              "geometry": 1,
+              "material": 1,
+              "texture": 1
+            },
+            "model": {
+              "geometry": 11,
+              "material": 5,
+              "texture": 1
+            },
+            "particles.effects": {
+              "geometry": 1,
+              "material": 1
+            },
+            "postprocess": {
+              "geometry": 1,
+              "material": 6,
+              "texture": 1,
+              "renderTarget": 7
+            },
+            "terrain": {
+              "geometry": 12,
+              "material": 3
+            },
+            "water": {
+              "geometry": 1,
+              "material": 1,
+              "texture": 1
+            }
+          },
+          "state": {
+            "fogMaskBytes": 12288,
+            "modelsBatchRecords": 64,
+            "modelsBatches": 2,
+            "modelsInstances": 64,
+            "particlesPooled": 64,
+            "terrainChunks": 4,
+            "viewFacingMemory": 0,
+            "viewRecords": 64
+          }
+        }
+      }
+    },
+    {
+      "axis": "terrainTessellation",
+      "small": 2,
+      "large": 4,
+      "footprint": {
+        "small": {
+          "resources": {
+            "fog": {
+              "geometry": 1,
+              "material": 1,
+              "texture": 1
+            },
+            "lighting": {
+              "geometry": 1,
+              "material": 1,
+              "texture": 1
+            },
+            "model": {
+              "geometry": 11,
+              "material": 5,
+              "texture": 1
+            },
+            "particles.effects": {
+              "geometry": 1,
+              "material": 1
+            },
+            "postprocess": {
+              "geometry": 1,
+              "material": 6,
+              "texture": 1,
+              "renderTarget": 7
+            },
+            "terrain": {
+              "geometry": 12,
+              "material": 3
+            },
+            "water": {
+              "geometry": 1,
+              "material": 1,
+              "texture": 1
+            }
+          },
+          "state": {
+            "fogMaskBytes": 12288,
+            "modelsBatchRecords": 64,
+            "modelsBatches": 2,
+            "modelsInstances": 64,
+            "particlesPooled": 36,
+            "terrainChunks": 4,
+            "viewFacingMemory": 0,
+            "viewRecords": 64
+          }
+        },
+        "large": {
+          "resources": {
+            "fog": {
+              "geometry": 1,
+              "material": 1,
+              "texture": 1
+            },
+            "lighting": {
+              "geometry": 1,
+              "material": 1,
+              "texture": 1
+            },
+            "model": {
+              "geometry": 11,
+              "material": 5,
+              "texture": 1
+            },
+            "particles.effects": {
+              "geometry": 1,
+              "material": 1
+            },
+            "postprocess": {
+              "geometry": 1,
+              "material": 6,
+              "texture": 1,
+              "renderTarget": 7
+            },
+            "terrain": {
+              "geometry": 12,
+              "material": 3
+            },
+            "water": {
+              "geometry": 1,
+              "material": 1,
+              "texture": 1
+            }
+          },
+          "state": {
+            "fogMaskBytes": 12288,
+            "modelsBatchRecords": 64,
+            "modelsBatches": 2,
+            "modelsInstances": 64,
+            "particlesPooled": 36,
+            "terrainChunks": 4,
+            "viewFacingMemory": 0,
+            "viewRecords": 64
+          }
+        }
+      }
+    }
+  ]
+}

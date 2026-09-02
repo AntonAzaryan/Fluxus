@@ -3,9 +3,13 @@
  * TypeScript Compiler API. Комментарии и строки не сканируются — это AST,
  * а не grep, поэтому «Q16.16» в тексте ошибки не даёт ложного срабатывания.
  *
- * Инвариантов здесь два, и оба — про то, чего в коде быть не должно:
- * детерминизм ядра (часы, чужая случайность, float-литералы, async) и свобода
- * пакета рендера от DOM (`rendering` REND-19, `render-debug` RDBG-3).
+ * Инвариантов здесь три. Два — про то, чего в коде быть НЕ должно: детерминизм
+ * ядра (часы, чужая случайность, float-литералы, async) и свобода пакета
+ * рендера от DOM (`rendering` REND-19, `render-debug` RDBG-3). Третий,
+ * наоборот, про то, что БЫТЬ ОБЯЗАНО: каждое создание ресурса GPU в рендере
+ * проходит через учёт занятой памяти (`performance-budget` PERF-8, PERF-9) —
+ * инвариант «после сноса живых ноль» проверяет только учтённое, и ресурс,
+ * заведённый мимо учёта, прошёл бы его молча.
  *
  * Списки запрещённого и разрешённого — данные этого файла: их правка обязана
  * попадать в дифф на ревью (CLI-8). Сканер общий для всех реализаций-пакетов,
@@ -216,6 +220,193 @@ export function scanDomInSource(fileName: string, text: string): GuardViolation[
   };
   visit(sf);
   return out;
+}
+
+// ------------------------------------- полнота учёта ресурсов GPU (PERF-8, PERF-9)
+
+/**
+ * Классы ресурсов GPU по видам учёта (`performance-budget` PERF-8). Список —
+ * ДАННЫЕ правила: его правка обязана попадать в дифф на ревью (CLI-8), как и
+ * список исключений. Перечислены классы `three`, у которых есть `dispose()`, —
+ * то есть ровно те, чьё создание что-то занимает в GPU и чьё освобождение
+ * нормирует `rendering` REND-31.
+ *
+ * Ловится создание, а не переменная: `new THREE.BufferGeometry()` обязано
+ * стоять аргументом `own(...)`, иначе живое число подсистемы недосчитается
+ * ресурса, и течь пришлось бы искать профилировщиком вместо красной строки.
+ */
+const GPU_RESOURCE_CLASSES = new Map<string, string>([
+  ...[
+    'BufferGeometry',
+    'InstancedBufferGeometry',
+    'BoxGeometry',
+    'CapsuleGeometry',
+    'CircleGeometry',
+    'ConeGeometry',
+    'CylinderGeometry',
+    'DodecahedronGeometry',
+    'EdgesGeometry',
+    'ExtrudeGeometry',
+    'IcosahedronGeometry',
+    'LatheGeometry',
+    'OctahedronGeometry',
+    'PlaneGeometry',
+    'PolyhedronGeometry',
+    'RingGeometry',
+    'ShapeGeometry',
+    'SphereGeometry',
+    'TetrahedronGeometry',
+    'TorusGeometry',
+    'TorusKnotGeometry',
+    'TubeGeometry',
+    'WireframeGeometry',
+  ].map((name): [string, string] => [name, 'geometry']),
+  ...[
+    'Material',
+    'LineBasicMaterial',
+    'LineDashedMaterial',
+    'MeshBasicMaterial',
+    'MeshDepthMaterial',
+    'MeshDistanceMaterial',
+    'MeshLambertMaterial',
+    'MeshMatcapMaterial',
+    'MeshNormalMaterial',
+    'MeshPhongMaterial',
+    'MeshPhysicalMaterial',
+    'MeshStandardMaterial',
+    'MeshToonMaterial',
+    'PointsMaterial',
+    'RawShaderMaterial',
+    'ShaderMaterial',
+    'ShadowMaterial',
+    'SpriteMaterial',
+  ].map((name): [string, string] => [name, 'material']),
+  ...[
+    'Texture',
+    'CanvasTexture',
+    'CompressedArrayTexture',
+    'CompressedTexture',
+    'CubeTexture',
+    'Data3DTexture',
+    'DataArrayTexture',
+    'DataTexture',
+    'DepthTexture',
+    'FramebufferTexture',
+    'VideoTexture',
+  ].map((name): [string, string] => [name, 'texture']),
+  ...[
+    'WebGL3DRenderTarget',
+    'WebGLArrayRenderTarget',
+    'WebGLCubeRenderTarget',
+    'WebGLRenderTarget',
+  ].map((name): [string, string] => [name, 'renderTarget']),
+]);
+
+/** Имя учётной обёртки — то же, что экспортирует `render-ts/src/footprint.ts`. */
+const OWN_CALL = 'own';
+
+/**
+ * Приёмники `clone()`, чья копия ресурсом GPU НЕ является, — данные правила с
+ * причиной у каждого, как и список классов выше. Ключ — текст приёмника, а не
+ * его имя: `source.clone()` в одном модуле копирует материал, а `this.source.clone()`
+ * в другом — генератор значений, и разрешать их одним именем значило бы
+ * простить будущему материалу то, что прощено генератору.
+ *
+ * Копия материала или геометрии — такое же создание ресурса, как `new`: у неё
+ * свои буферы и своя программа, и отдавать её обязан тот же владелец (REND-31).
+ * Поэтому по умолчанию `clone()` требует учёта, а исключение объявляется здесь.
+ */
+const CLONE_ALLOWED_RECEIVERS = new Map<string, string>([
+  [
+    'template',
+    'граф объектов эффекта (three.quarks): клон ДЕЛИТ материал и геометрию с образцом, своих ресурсов не заводит (REND-24)',
+  ],
+  [
+    'this.source',
+    'генератор значений three.quarks (`ScaledValue`/`ScaledFunction`): ресурсом GPU не является вовсе',
+  ],
+]);
+
+/** Имя класса в `new X()` / `new NS.X()`; иначе — `undefined`. */
+function newExpressionClass(node: ts.NewExpression): string | undefined {
+  const target = node.expression;
+  if (ts.isIdentifier(target)) return target.text;
+  if (ts.isPropertyAccessExpression(target)) return target.name.text;
+  return undefined;
+}
+
+/** Стоит ли выражение аргументом `own(...)` — того самого вызова учёта. */
+function isOwned(node: ts.Expression): boolean {
+  const parent = parentOf(node);
+  if (parent === undefined || !ts.isCallExpression(parent)) return false;
+  if (!ts.isIdentifier(parent.expression) || parent.expression.text !== OWN_CALL) return false;
+  return parent.arguments.some((argument) => argument === node);
+}
+
+/** Приёмник вызова `x.clone()` в тексте исходника; `undefined` — вызов не `clone()`. */
+function cloneReceiver(node: ts.CallExpression, sf: ts.SourceFile): string | undefined {
+  const target = node.expression;
+  if (!ts.isPropertyAccessExpression(target) || target.name.text !== 'clone') return undefined;
+  return target.expression.getText(sf).replace(/\s+/g, '');
+}
+
+/**
+ * Скан полноты учёта ресурсов GPU в одном исходнике (PERF-9): создание ресурса
+ * мимо `own(...)` — красная строка с файлом, строкой и видом ресурса.
+ *
+ * Отдельная функция, а не режим `scanSourceText`: правило не про детерминизм, и
+ * смешивать их в одном перечне значило бы, что правка одного молча трогает
+ * другой — тот же довод, что у скана DOM.
+ */
+export function scanResourceOwnershipInSource(fileName: string, text: string): GuardViolation[] {
+  const sf = ts.createSourceFile(fileName, text, ts.ScriptTarget.Latest, true);
+  const out: GuardViolation[] = [];
+  const push = (node: ts.Node, message: string): void => {
+    const { line } = sf.getLineAndCharacterOfPosition(node.getStart(sf));
+    out.push({
+      file: fileName,
+      line: line + 1,
+      rule: 'gpu-resource-ownership',
+      message: `${message} (PERF-8, PERF-9) — ${CONFIG_HINT}`,
+    });
+  };
+
+  const visit = (node: ts.Node): void => {
+    if (ts.isNewExpression(node)) {
+      const name = newExpressionClass(node) ?? '';
+      const kind = GPU_RESOURCE_CLASSES.get(name);
+      if (kind !== undefined && !isOwned(node)) {
+        push(
+          node,
+          `${name}: ресурс GPU вида "${kind}" создан мимо учёта — оберните выражение ` +
+            `в ${OWN_CALL}('${kind}', '<владелец>', …)`,
+        );
+      }
+    }
+    if (ts.isCallExpression(node)) {
+      const receiver = cloneReceiver(node, sf);
+      if (
+        receiver !== undefined &&
+        !CLONE_ALLOWED_RECEIVERS.has(receiver) &&
+        !isOwned(node)
+      ) {
+        push(
+          node,
+          `${receiver}.clone(): копия — такое же создание ресурса GPU, как \`new\` — ` +
+            `оберните её в ${OWN_CALL}('<вид>', '<владелец>', …) либо объявите приёмник ` +
+            'в списке не-ресурсов правила',
+        );
+      }
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(sf);
+  return out;
+}
+
+/** Скан полноты учёта ресурсов GPU по директории с учётом исключений конфига. */
+export function scanResourceOwnership(config: Omit<ScanConfig, 'mode'>): GuardViolation[] {
+  return applyConfig({ ...config, mode: 'strict' }, scanResourceOwnershipInSource);
 }
 
 /** Все спецификаторы import/export/`import()` одного исходника. */

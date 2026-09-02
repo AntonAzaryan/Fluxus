@@ -15,6 +15,7 @@ import * as THREE from 'three';
 import { FIXED_ONE, type TerrainGrid } from '@fluxus/core';
 import type { VisualSurface } from '../visualSurface.js';
 import type { OverlayGrid } from './overlayItems.js';
+import { own } from '../footprint.js';
 
 /**
  * Заливка набора клеток; null — рисовать нечего (все клетки вне сетки).
@@ -43,7 +44,7 @@ export function cellsGeometry(
     pushDividedCell(positions, indices, surface, x, y, tile, lift, tessellation);
   }
   if (indices.length === 0) return null;
-  const geometry = new THREE.BufferGeometry();
+  const geometry = own('geometry', 'overlays', new THREE.BufferGeometry());
   geometry.setAttribute('position', new THREE.BufferAttribute(new Float32Array(positions), 3));
   geometry.setIndex(new THREE.BufferAttribute(new Uint32Array(indices), 1));
   return geometry;
@@ -120,7 +121,7 @@ export function gridGeometry(
     }
   }
   if (positions.length === 0) return null;
-  const geometry = new THREE.BufferGeometry();
+  const geometry = own('geometry', 'overlays', new THREE.BufferGeometry());
   geometry.setAttribute('position', new THREE.BufferAttribute(new Float32Array(positions), 3));
   return geometry;
 }

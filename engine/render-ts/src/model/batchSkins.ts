@@ -24,6 +24,7 @@ import {
 } from '@fluxus/assets';
 import { skinTextureSources, type SkinTextureSource } from './skins.js';
 import type { VatMapKind } from './vatMaterial.js';
+import { own } from '../footprint.js';
 
 /** Имя базового варианта — модель как она есть, без подмен записи (ASSET-6). */
 export const BASE_SKIN_VARIANT = '';
@@ -138,11 +139,15 @@ export function skinArrayTexture(
 ): THREE.DataArrayTexture | null {
   const baked = set.slots.find((candidate) => candidate.slot === slot);
   if (baked === undefined) return null;
-  const texture = new THREE.DataArrayTexture(
-    baked.pixels,
-    baked.width,
-    baked.height,
-    set.variants.length,
+  const texture = own(
+    'texture',
+    'model',
+    new THREE.DataArrayTexture(
+      baked.pixels,
+      baked.width,
+      baked.height,
+      set.variants.length,
+    ),
   );
   texture.colorSpace = kind === 'normal' ? THREE.NoColorSpace : THREE.SRGBColorSpace;
   texture.needsUpdate = true;

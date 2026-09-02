@@ -23,6 +23,7 @@ import { createWaterMaterial, type WaterMaterialInput } from './material.js';
 import { waterGeometryOf, type WaterRegion } from './region.js';
 import { WaterRippleField, type WaterRippleOptions } from './ripples.js';
 import { uniformOf } from '../uniforms.js';
+import { own } from '../footprint.js';
 
 /**
  * Место воды среди прозрачных (design D6): ниже частиц и превью каста, поэтому
@@ -73,12 +74,16 @@ export class WaterBodyView {
     const surfaceHeight = config.surfaceLevel * heightStep;
     this.layout = waterDepthLayout(region, tile, options.limits.depthTexelsPerCell);
     this.data = new Uint16Array(Math.max(1, this.layout.width * this.layout.height));
-    this.texture = new THREE.DataTexture(
-      this.data,
-      Math.max(1, this.layout.width),
-      Math.max(1, this.layout.height),
-      THREE.RedFormat,
-      THREE.HalfFloatType,
+    this.texture = own(
+      'texture',
+      'water',
+      new THREE.DataTexture(
+        this.data,
+        Math.max(1, this.layout.width),
+        Math.max(1, this.layout.height),
+        THREE.RedFormat,
+        THREE.HalfFloatType,
+      ),
     );
     // Билинейная выборка — то, чем берег остаётся линией поля, а не лесенкой
     // текселей; зажим по краям: за покрытием воды нет по построению.
@@ -89,7 +94,7 @@ export class WaterBodyView {
     this.texture.colorSpace = THREE.NoColorSpace;
     this.texture.needsUpdate = true;
 
-    this.geometry = new THREE.BufferGeometry();
+    this.geometry = own('geometry', 'water', new THREE.BufferGeometry());
     const data = waterGeometryOf(region.rects, tile, surfaceHeight);
     this.geometry.setAttribute('position', new THREE.BufferAttribute(data.positions, 3));
     this.geometry.setIndex(new THREE.BufferAttribute(data.indices, 1));

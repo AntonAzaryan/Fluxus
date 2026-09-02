@@ -63,6 +63,7 @@ import type { DebugSource } from '../debug/contract.js';
 import { terrainSurfaceDebugSource } from '../debug/terrainSource.js';
 import type { VisualSurface } from '../visualSurface.js';
 import type { VisualSurfaceSource } from '../surfaceSource.js';
+import { own, peak } from '../footprint.js';
 
 /**
  * Ручка качества подсистемы (`render-quality` QUAL-1): плотность разбиения
@@ -180,23 +181,35 @@ export class TerrainSubsystem implements RenderSubsystem {
     // Плотность — конфиг рендера под потолком пресета (REND-9, QUAL-1): порядок
     // «init, потом контроллер качества» и обратный дают одно и то же.
     this.tessellation = this.effectiveTessellation();
-    this.floorMaterial = new THREE.MeshStandardMaterial({
-      color: this.floorColor,
-      roughness: 0.95,
-      metalness: 0,
-    });
-    this.wallMaterial = new THREE.MeshStandardMaterial({
-      color: this.wallColor,
-      roughness: 0.95,
-      metalness: 0,
-      side: THREE.DoubleSide,
-    });
-    this.skirtMaterial = new THREE.MeshStandardMaterial({
-      color: this.skirtColor,
-      roughness: 0.95,
-      metalness: 0,
-      side: THREE.DoubleSide,
-    });
+    this.floorMaterial = own(
+      'material',
+      'terrain',
+      new THREE.MeshStandardMaterial({
+        color: this.floorColor,
+        roughness: 0.95,
+        metalness: 0,
+      }),
+    );
+    this.wallMaterial = own(
+      'material',
+      'terrain',
+      new THREE.MeshStandardMaterial({
+        color: this.wallColor,
+        roughness: 0.95,
+        metalness: 0,
+        side: THREE.DoubleSide,
+      }),
+    );
+    this.skirtMaterial = own(
+      'material',
+      'terrain',
+      new THREE.MeshStandardMaterial({
+        color: this.skirtColor,
+        roughness: 0.95,
+        metalness: 0,
+        side: THREE.DoubleSide,
+      }),
+    );
 
     // Поверхность меняется асинхронной догрузкой карты кривизны (REND-9) и
     // правкой документа (ED-10, ED-11); в первом случае меняется вся, во втором
@@ -404,6 +417,10 @@ export class TerrainSubsystem implements RenderSubsystem {
     if (cost !== undefined) cost.terrainChunksRebuilt += this.dirtyChunks.size;
     for (const chunk of this.dirtyChunks) this.rebuildChunk(chunk);
     this.dirtyChunks.clear();
+    // Чанков в сетке (PERF-8): величина растёт площадью арены и мельчанием
+    // чанка, а не частотой пересборок — снимается после неё, когда геометрия
+    // чанков уже построена.
+    peak('terrainChunks', this.chunksX * this.chunksY);
   }
 
   private allocateChunks(): void {

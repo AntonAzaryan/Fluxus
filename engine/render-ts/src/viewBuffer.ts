@@ -18,6 +18,7 @@ import {
   type ExtractedTick,
 } from './extractor.js';
 import type { EntityView, TickView } from './types.js';
+import { peak } from './footprint.js';
 
 /** Скачок позиции за тик больше этого — телепорт: интерполяция «проехала бы» пол-арены. */
 const DEFAULT_SNAP_DISTANCE = 2;
@@ -261,6 +262,12 @@ export class ViewBuffer {
 
     if (tickAdvanced || !this.hasTick) this.lastTickAtMs = this.clock();
     this.hasTick = true;
+
+    // Величины состояния приёма доставки (PERF-8): записи сущностей и память
+    // курсов — то, что оборот обязан возвращать (PERF-9). Две пробы на
+    // доставку, а не на сущность, и без стока — два сравнения.
+    peak('viewRecords', this.records.size);
+    peak('viewFacingMemory', this.facingMemory.size);
   }
 
   /**

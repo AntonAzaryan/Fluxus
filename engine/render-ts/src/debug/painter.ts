@@ -22,6 +22,7 @@
 import * as THREE from 'three';
 import type { DebugColor, DebugDraw, DebugPose, DebugRaster } from './contract.js';
 import type { VisualSurfaceSource } from '../surfaceSource.js';
+import { own } from '../footprint.js';
 
 /** Сегментов на окружность и диск: контур читается, а вершин остаётся немного. */
 const CIRCLE_SEGMENTS = 32;
@@ -169,33 +170,45 @@ export class DebugPainter implements DebugDraw {
       (geometry) =>
         new THREE.LineSegments(
           geometry,
-          new THREE.LineBasicMaterial({ vertexColors: true, depthTest: false, depthWrite: false }),
+          own(
+            'material',
+            'debug',
+            new THREE.LineBasicMaterial({ vertexColors: true, depthTest: false, depthWrite: false }),
+          ),
         ),
     );
     this.points = carrier(
       (geometry) =>
         new THREE.Points(
           geometry,
-          new THREE.PointsMaterial({
-            vertexColors: true,
-            size: 6,
-            sizeAttenuation: false,
-            depthTest: false,
-            depthWrite: false,
-          }),
+          own(
+            'material',
+            'debug',
+            new THREE.PointsMaterial({
+              vertexColors: true,
+              size: 6,
+              sizeAttenuation: false,
+              depthTest: false,
+              depthWrite: false,
+            }),
+          ),
         ),
     );
     this.triangles = carrier(
       (geometry) =>
         new THREE.Mesh(
           geometry,
-          new THREE.MeshBasicMaterial({
-            vertexColors: true,
-            transparent: true,
-            opacity: 0.28,
-            depthWrite: false,
-            side: THREE.DoubleSide,
-          }),
+          own(
+            'material',
+            'debug',
+            new THREE.MeshBasicMaterial({
+              vertexColors: true,
+              transparent: true,
+              opacity: 0.28,
+              depthWrite: false,
+              side: THREE.DoubleSide,
+            }),
+          ),
         ),
     );
     for (const one of [this.lines, this.points, this.triangles]) this.group.add(one.object);
@@ -382,23 +395,31 @@ export class DebugPainter implements DebugDraw {
     }
     // Одноканальный растр: цвет плашки задаёт источник, яркость — сам тексель.
     const texels = new Uint8Array(raster.widthTexels * raster.heightTexels);
-    const texture = new THREE.DataTexture(
-      texels,
-      raster.widthTexels,
-      raster.heightTexels,
-      THREE.RedFormat,
-      THREE.UnsignedByteType,
+    const texture = own(
+      'texture',
+      'debug',
+      new THREE.DataTexture(
+        texels,
+        raster.widthTexels,
+        raster.heightTexels,
+        THREE.RedFormat,
+        THREE.UnsignedByteType,
+      ),
     );
     texture.minFilter = THREE.LinearFilter;
     texture.magFilter = THREE.NearestFilter;
     texture.unpackAlignment = 1;
-    const material = new THREE.MeshBasicMaterial({
-      map: texture,
-      transparent: true,
-      opacity: 0.55,
-      depthWrite: false,
-    });
-    const geometry = new THREE.PlaneGeometry(1, 1);
+    const material = own(
+      'material',
+      'debug',
+      new THREE.MeshBasicMaterial({
+        map: texture,
+        transparent: true,
+        opacity: 0.55,
+        depthWrite: false,
+      }),
+    );
+    const geometry = own('geometry', 'debug', new THREE.PlaneGeometry(1, 1));
     const mesh = new THREE.Mesh(geometry, material);
     mesh.name = `render-debug:${id}`;
     const plane: RasterPlane = {
@@ -429,7 +450,7 @@ export class DebugPainter implements DebugDraw {
 }
 
 function carrier(build: (geometry: THREE.BufferGeometry) => THREE.Object3D): Carrier {
-  const geometry = new THREE.BufferGeometry();
+  const geometry = own('geometry', 'debug', new THREE.BufferGeometry());
   geometry.setAttribute('position', new THREE.BufferAttribute(new Float32Array(INITIAL_VERTICES * 3), 3));
   geometry.setAttribute('color', new THREE.BufferAttribute(new Float32Array(INITIAL_VERTICES * 3), 3));
   const object = build(geometry);

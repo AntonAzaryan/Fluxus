@@ -13,7 +13,12 @@ import { describe, expect, it, vi } from 'vitest';
 import * as THREE from 'three';
 import { ParticleEmitter, type ParticleSystem } from 'three.quarks';
 import { FIXED_ONE, createTerrainGrid, type EntityId } from '@fluxus/core';
-import type { NormalizedMesh, ParticleEffectDocument, VisualManifest } from '@fluxus/assets';
+import type {
+  NormalizedMesh,
+  ParticleEffectDocument,
+  PresentationWater,
+  VisualManifest,
+} from '@fluxus/assets';
 import {
   EffectsSubsystem,
   FogSubsystem,
@@ -22,13 +27,21 @@ import {
   ModelsSubsystem,
   OverlaySubsystem,
   ParticlesSubsystem,
+  PostprocessSubsystem,
   PresentationStage,
   TerrainSubsystem,
+  ViewBuffer,
+  VisualSurfaceSource,
+  WaterSubsystem,
   batchLevels,
   createCostCounters,
+  createFootprint,
+  footprintLive,
   geometryFromMesh,
   withCostSink,
+  withFootprintSink,
   type RenderContext,
+  type RenderFootprint,
   type RenderSubsystem,
   type SharedMeshData,
   type TickView,
@@ -39,6 +52,7 @@ import {
   flatGrid,
   makeAssets,
   makeEntityView,
+  makeExtractedTick,
   makeModel,
   makeRenderContext,
   makeTickView,
@@ -589,5 +603,200 @@ describe('время жизни fade-копий материалов (FOW-8 → 
     subsystem.syncTick(makeTickView([], { snapAll: true }));
     expect(subsystem.instanceFor(HERO)).toBeNull();
     for (const spy of spies) expect(spy).toHaveBeenCalledTimes(1);
+  });
+});
+
+// ------------------------------ инвариант освобождения по учёту (PERF-8, PERF-9)
+
+/**
+ * Цикл «собрать тракт → отыграть доставки → снести», повторённый десять раз, —
+ * ровно так живёт вьюпорт авторинга (`editor` ED-15), и ровно на нём видна
+ * утечка, которую шпион не поймает: шпион проверяет то, что автор теста
+ * вспомнил заранее, а учёт (PERF-8) — ВСЁ, что было создано.
+ *
+ * Проверяются две вещи, и ни одной из них не нужен эталон (PERF-9):
+ *
+ * - после каждого сноса живых ресурсов GPU у каждой подсистемы ноль;
+ * - величины состояния после десятого цикла равны величинам после первого.
+ *
+ * Полноту учёта — что всякое создание вообще проходит через `own` — стережёт
+ * `guard.test.ts` по исходнику: без него этот инвариант проверял бы только
+ * учтённое.
+ */
+const CYCLES = 10;
+const DELIVERIES_PER_CYCLE = 4;
+/** Сущностей в доставке цикла: состав сменяется целиком на каждой (PERF-9). */
+const CYCLE_ENTITIES = 6;
+const CYCLE_MODEL = 'models/cycle.mdx';
+const CYCLE_EFFECT = 'vfx/cycle.effect.json';
+
+/**
+ * Владелец, живущий ДОЛЬШЕ стенда, — процессные заглушки (ASSET-4): геометрия и
+ * материал незагруженной модели и текстура-заглушка вариантов скина строятся
+ * один раз на процесс и сносом сцены не отдаются по устройству, а не по
+ * недосмотру. Инвариант PERF-9 — про подсистемы, и их этот владелец не
+ * освобождает ни одной.
+ *
+ * Из инварианта он не ВЫЧЁРКИВАЕТСЯ, а проверяется отдельно (см.
+ * `expectPlaceholders`): молчаливое исключение сделало бы единственного
+ * владельца, который сноса не переживает по замыслу, ещё и единственным, кого
+ * никто не считает, — и новый синглтон под этим именем прошёл бы гейт молча.
+ */
+const PLACEHOLDER_OWNER = 'placeholders';
+
+/**
+ * Заглушки процесса поимённо: вид ресурса → чем он является. Каждая — ОДНА на
+ * процесс, поэтому живых у каждого вида не больше единицы; чего в этом списке
+ * нет — тому под этим владельцем не место, и новый синглтон обязан появиться в
+ * диффе вместе с причиной.
+ */
+const PLACEHOLDER_SINGLETONS: Readonly<Record<string, string>> = {
+  geometry: 'коробка заглушки незагруженной модели (ASSET-4)',
+  material: 'материал той же заглушки',
+  texture: 'массив вариантов скина до прихода текстур (REND-6)',
+};
+
+/** Живые заглушки процесса: вид известен списку, и их не больше одной на вид. */
+function expectPlaceholders(sink: RenderFootprint, where: string): void {
+  const live = footprintLive(sink)[PLACEHOLDER_OWNER] ?? {};
+  for (const [kind, count] of Object.entries(live)) {
+    expect(PLACEHOLDER_SINGLETONS[kind], `${where}: незнакомая заглушка "${kind}"`).toBeDefined();
+    expect(count, `${where}: заглушек вида "${kind}"`).toBeLessThanOrEqual(1);
+  }
+  expect(
+    Object.values(live).reduce((sum, count) => sum + count, 0),
+    `${where}: всего живых заглушек процесса`,
+  ).toBeLessThanOrEqual(Object.keys(PLACEHOLDER_SINGLETONS).length);
+}
+
+/** Манифест цикла: обе подсистемы получают по записи — модель и эмиттер. */
+function cycleManifest(): VisualManifest {
+  return {
+    entities: { Runner: { model: CYCLE_MODEL, scale: 1 } },
+    particles: { byKind: { Runner: { effect: CYCLE_EFFECT } } },
+  };
+}
+
+/** Секция воды под сетку стенда: ряды карты совпадают с сеткой клетка в клетку. */
+function cycleWater(size: number): PresentationWater {
+  return {
+    cells: Array.from({ length: size }, () => '0'.repeat(size)),
+    bodies: [
+      {
+        surfaceLevel: 0.5,
+        shallowColor: '#4db8c4',
+        deepColor: '#16505e',
+        maxDepth: 0.5,
+        detail: { source: 'procedural', layers: 2 },
+      },
+    ],
+  };
+}
+
+/** Собранный тракт одного цикла: сцена подсистем и приём доставки перед ней. */
+interface CycleStand {
+  readonly stage: PresentationStage;
+  /**
+   * Приём доставки цикла (SHELL-2). Доставки идут ЧЕРЕЗ него, а не мимо:
+   * величины состояния приёмника (`viewRecords`, `viewFacingMemory`) — часть
+   * того, что цикл обязан вернуть, и стенд без него проверял бы только
+   * подсистемы.
+   */
+  readonly buffer: ViewBuffer;
+}
+
+function buildCycleStand(): CycleStand {
+  const grid = flatGrid(8);
+  const assets = makeAssets();
+  const ctx: RenderContext = {
+    scene: new THREE.Scene(),
+    assets: assets.service,
+    config: { heightStep: 0.5 },
+  };
+  const manifest = cycleManifest();
+  const warn = (): void => {};
+  const surface = new VisualSurfaceSource(grid, { warn });
+  const postprocess = new PostprocessSubsystem({
+    config: { toneMapping: { operator: 'aces' }, bloom: { enabled: true } },
+  });
+  const lighting = new LightingSubsystem({ grid, config: { shadows: { mode: 'full' } } });
+  const fog = new FogSubsystem({
+    grid,
+    stats: { visionRadius: 'vision', team: 'team' },
+    hero: () => HERO,
+    createCanvas: fogCanvasFactory(),
+  });
+  const stage = new PresentationStage(ctx);
+  stage
+    .register(postprocess)
+    .register(lighting)
+    .register(fog)
+    .register(new TerrainSubsystem(grid, { chunkSize: 8, surface, shadows: lighting }))
+    .register(new WaterSubsystem({ grid, config: cycleWater(8), surface, warn }))
+    .register(new ModelsSubsystem(manifest, { warn, shadows: lighting }))
+    .register(new ParticlesSubsystem(manifest, { warn }))
+    .register(new EffectsSubsystem(manifest, { warn }))
+    .register(new OverlaySubsystem());
+  // Ассеты приезжают ПОСЛЕ регистрации — тем же путём, что в игре (ASSET-4):
+  // подсистемы успевают завести заглушки, а потом получают настоящие данные.
+  assets.resolve('model', CYCLE_MODEL, makeModel());
+  assets.resolve('particle-effect', CYCLE_EFFECT, subEffectDoc());
+  return { stage, buffer: new ViewBuffer({ tickSeconds: 1 / 60, clock: () => 0 }) };
+}
+
+/**
+ * Одна доставка цикла — плоской формой через приём (SHELL-2), как в игре: так в
+ * цикл входят и величины приёмника, а не только пулы подсистем.
+ *
+ * Идентификаторы сменяются от доставки к доставке (`base` растёт): цикл обязан
+ * возвращать записи исчезнувших сущностей, а не копить их (PERF-9).
+ */
+function deliverCycle(stand: CycleStand, tick: number): void {
+  const ext = makeExtractedTick(CYCLE_ENTITIES, tick * CYCLE_ENTITIES);
+  ext.tick = tick;
+  stand.buffer.apply(ext);
+  stand.stage.publish({ name: 'cycle' }, stand.buffer.view);
+  stand.stage.frame(1 / 60, 0.5, 1 / 60);
+}
+
+/** Живые ресурсы подсистем — процессные заглушки в счёт инварианта не идут. */
+function subsystemLive(sink: RenderFootprint): Record<string, Record<string, number>> {
+  const out: Record<string, Record<string, number>> = {};
+  for (const [owner, kinds] of Object.entries(footprintLive(sink))) {
+    if (owner === PLACEHOLDER_OWNER) continue;
+    const nonzero = Object.fromEntries(Object.entries(kinds).filter(([, value]) => value !== 0));
+    if (Object.keys(nonzero).length > 0) out[owner] = nonzero;
+  }
+  return out;
+}
+
+describe('PERF-9: цикл сборки и сноса тракта не оставляет живых ресурсов', () => {
+  it(`${String(CYCLES)} циклов: после каждого сноса живых ноль, величины состояния не растут`, () => {
+    const sink = createFootprint();
+    let first: Record<string, number> | null = null;
+    withFootprintSink(sink, () => {
+      for (let cycle = 0; cycle < CYCLES; cycle++) {
+        const stand = buildCycleStand();
+        for (let i = 0; i < DELIVERIES_PER_CYCLE; i++) deliverCycle(stand, i + 1);
+        // Учёт обязан был увидеть работу цикла: пустой сток прошёл бы проверку
+        // ниже молча, и инвариант стерёг бы пустоту.
+        expect(Object.keys(footprintLive(sink)).length, 'учёт пуст').toBeGreaterThan(0);
+
+        stand.stage.dispose();
+
+        // Ноль — по КАЖДОМУ владельцу и виду: текст находки называет подсистему
+        // и вид ресурса, а не «где-то что-то течёт».
+        expect(subsystemLive(sink), `цикл ${String(cycle + 1)}`).toEqual({});
+        // Заглушки процесса сноса не переживают по недосмотру, а по замыслу —
+        // и потому считаются отдельно, а не пропускаются молча.
+        expectPlaceholders(sink, `цикл ${String(cycle + 1)}`);
+
+        const state = { ...sink.state };
+        if (first === null) first = state;
+        // Величины состояния — пики за прогон: цикл, который что-то не
+        // возвращает, поднял бы их выше первого цикла (PERF-9).
+        else expect(state, `цикл ${String(cycle + 1)}`).toEqual(first);
+      }
+    });
   });
 });

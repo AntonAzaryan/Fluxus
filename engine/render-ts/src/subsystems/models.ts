@@ -169,6 +169,7 @@ import {
   type VatMapKind,
   type VatMaterial,
 } from '../model/vatMaterial.js';
+import { footprintSink, own, peak } from '../footprint.js';
 
 /**
  * Видимая поза инстанса (REND-3): преобразование, которым он нарисован в этом
@@ -461,6 +462,14 @@ let placeholderGeometry: THREE.BufferGeometry | null = null;
 let placeholderMaterial: THREE.MeshStandardMaterial | null = null;
 /** Заглушка массива вариантов скина — одна на процесс по тем же основаниям. */
 let skinPlaceholder: THREE.DataArrayTexture | null = null;
+
+/**
+ * Владелец заглушек в учёте занятой памяти (PERF-8). Отдельный от подсистемы
+ * намеренно: заглушки — процессные синглтоны, они переживают снос сцены по
+ * построению, и инвариант «после сноса живых ноль» (PERF-9) относится к
+ * подсистемам, а не к ним.
+ */
+const PLACEHOLDER_OWNER = 'placeholders';
 /** Наименьшая высота нормализации модели — как у `createModelInstance`. */
 const MIN_MODEL_HEIGHT = 1e-3;
 
@@ -1099,6 +1108,24 @@ export class ModelsSubsystem implements RenderSubsystem, InstanceProxySource {
         record.controller?.handleEvent(event.type);
       }
     }
+    this.reportFootprint();
+  }
+
+  /**
+   * Величины занятой памяти подсистемы (PERF-8): инстансы обоих пулов и
+   * граница кэша батчей, которую нормирует REND-31. Считаются после сведения —
+   * то есть тогда, когда пулы и кэш уже приведены к составу доставки.
+   *
+   * Без подключённого стока не исполняется вовсе: `batchStats()` строит объект,
+   * и звать его на каждой доставке ради выключенного учёта значило бы платить
+   * за бенчмарк обычным матчем (PERF-3).
+   */
+  private reportFootprint(): void {
+    if (footprintSink() === undefined) return;
+    peak('modelsInstances', this.instances.size + this.decorations.size);
+    const stats = this.batchStats();
+    peak('modelsBatches', stats.batches);
+    peak('modelsBatchRecords', stats.records);
   }
 
   /**
@@ -1109,6 +1136,7 @@ export class ModelsSubsystem implements RenderSubsystem, InstanceProxySource {
    */
   syncDecorations(entities: ReadonlyMap<EntityId, EntityView>): void {
     this.syncPool(this.requireCtx(), this.decorations, entities, true, null, costSink());
+    this.reportFootprint();
     // Набор декораций переподан — статика могла переехать, и кэшированная карта
     // теней устарела вместе с ней. Вход событийный (REND-18), а не кадровый:
     // в матче он приходит однажды, в режиме правки — на правку (ED-15).
@@ -1650,7 +1678,9 @@ export class ModelsSubsystem implements RenderSubsystem, InstanceProxySource {
   private borrowFadeClone(original: THREE.Material): THREE.Material {
     const pooled = this.fadeClones.get(original)?.pop();
     if (pooled === undefined) {
-      const fresh = original.clone();
+      // Копия живёт в пуле подсистемы и отдаётся её сносом (`disposeFadeClones`),
+      // поэтому она такой же учтённый ресурс, как созданный через `new` (PERF-8).
+      const fresh = own('material', 'models', original.clone());
       fresh.transparent = true;
       // База берётся у ОРИГИНАЛА на каждой выдаче: копия живёт дольше эпизода,
       // и запомни она свою же (уже умноженную) непрозрачность — следующий
@@ -1928,7 +1958,10 @@ export class ModelsSubsystem implements RenderSubsystem, InstanceProxySource {
   ): WarmVariant {
     const materials = new Map<THREE.Material, THREE.MeshStandardMaterial>();
     for (const material of data.materials) {
-      const anchor = material.clone();
+      // Якорь прогрева — копия материала ассета, живущая в записи `warmAnchors`
+      // и отдаваемая `releaseShared` (FOW-8, REND-31): в учёт (PERF-8) она
+      // входит наравне с прочими материалами подсистемы.
+      const anchor = own('material', 'models', material.clone());
       // Только вверх: непрозрачный вариант оставляет `transparent` записи
       // ассета (`materialFromAsset` берёт его из `alphaMode`), прозрачный —
       // поднимает, и ровно это и есть бит `opaque` ключа программы.
@@ -2811,11 +2844,22 @@ export class ModelsSubsystem implements RenderSubsystem, InstanceProxySource {
    */
   private makePlaceholder(ctx: RenderContext, record: InstanceRecord): void {
     if (placeholderGeometry === null) {
-      const geometry = new THREE.BoxGeometry(PLACEHOLDER_WIDTH, PLACEHOLDER_WIDTH, PLACEHOLDER_HEIGHT);
+      // Владелец — не подсистема, а «заглушки процесса»: пара живёт дольше
+      // любой сцены и любого стенда (ASSET-4), и записывать её на подсистему
+      // значило бы, что после сноса у той остаётся живой ресурс (PERF-9).
+      const geometry = own(
+        'geometry',
+        PLACEHOLDER_OWNER,
+        new THREE.BoxGeometry(PLACEHOLDER_WIDTH, PLACEHOLDER_WIDTH, PLACEHOLDER_HEIGHT),
+      );
       geometry.translate(0, 0, PLACEHOLDER_HEIGHT / 2); // стоит на земле, а не тонет в ней
       placeholderGeometry = geometry;
     }
-    placeholderMaterial ??= new THREE.MeshStandardMaterial({ color: PLACEHOLDER_COLOR });
+    placeholderMaterial ??= own(
+      'material',
+      PLACEHOLDER_OWNER,
+      new THREE.MeshStandardMaterial({ color: PLACEHOLDER_COLOR }),
+    );
     const mesh = new THREE.Mesh(placeholderGeometry, placeholderMaterial);
     this.ensureHolder(ctx, record).add(mesh);
     record.placeholder = mesh;
@@ -3046,7 +3090,7 @@ export class ModelsSubsystem implements RenderSubsystem, InstanceProxySource {
     const vatTexture = this.ensureVatTexture(visual?.model ?? '', derivatives);
     const materials = shared.model.materials.map((source, index) =>
       createVatMaterial(
-        shared.materials[index] ?? new THREE.MeshStandardMaterial(),
+        shared.materials[index] ?? own('material', 'models', new THREE.MeshStandardMaterial()),
         vatTexture,
         materialMapKinds(source),
         placeholder,

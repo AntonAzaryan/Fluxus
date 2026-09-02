@@ -18,6 +18,7 @@ import { FIXED_ONE, type TerrainGrid } from '@fluxus/core';
 import { DEFAULT_CURVATURE_TESSELLATION } from '../types.js';
 import { costSink } from '../cost.js';
 import { cornerLevels, type SurfaceNormal, type VisualSurface } from '../visualSurface.js';
+import { own } from '../footprint.js';
 
 export interface TerrainGeometryData {
   readonly positions: Float32Array;
@@ -539,7 +540,7 @@ export function sampleWallSide(
  * треугольникам, и стенка обрыва остаётся плоской.
  */
 export function toBufferGeometry(data: TerrainGeometryData): THREE.BufferGeometry {
-  const geometry = new THREE.BufferGeometry();
+  const geometry = own('geometry', 'terrain', new THREE.BufferGeometry());
   geometry.setAttribute('position', new THREE.BufferAttribute(data.positions, 3));
   geometry.setIndex(new THREE.BufferAttribute(data.indices, 1));
   if (data.normals?.length === data.positions.length) {

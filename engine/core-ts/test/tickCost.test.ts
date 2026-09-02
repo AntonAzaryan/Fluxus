@@ -234,15 +234,25 @@ describe('PERF-3: сводка стоимости — обычная запис�
     expect(costs[0]).toMatchObject({ tick: 1, kind: 'tickCost', level: 'info', code: COST_CODE });
     expect(costs[1]).toMatchObject({ tick: 2, kind: 'tickCost', level: 'info', code: COST_CODE });
 
-    // Сводка — ПОСЛЕДНЯЯ запись своего тика (PERF-3): раньше объём работы ещё
-    // неполон. На уровне `systems` с единственной системой тик выдаёт ровно три
-    // записи — SYSTEM_BEGIN (seq 0), SYSTEM_END (1) и сводку (2), — и номер
-    // сводки обязан быть наибольшим в тике, а не просто числом.
+    // Сводка идёт ПОСЛЕ всей работы тика (PERF-3): раньше её объём ещё неполон.
+    // На уровне `systems` с единственной системой тик выдаёт ровно четыре
+    // записи — SYSTEM_BEGIN (seq 0), SYSTEM_END (1), сводку стоимости (2) и
+    // сводку размера состояния (3, PERF-8). Порядок двух сводок между собой
+    // фиксирован и проверяется здесь: он задаёт их номера, а номер — часть
+    // побитовой сверки трейса (DIAG-6).
     for (const cost of costs) {
       const ofTick = entries.filter((entry) => entry.tick === cost.tick);
-      expect(ofTick.map((entry) => entry.code)).toEqual(['SYSTEM_BEGIN', 'SYSTEM_END', COST_CODE]);
+      expect(ofTick.map((entry) => entry.code)).toEqual([
+        'SYSTEM_BEGIN',
+        'SYSTEM_END',
+        COST_CODE,
+        'TICK_FOOTPRINT',
+      ]);
       expect(cost.seq).toBe(2);
-      expect(cost.seq).toBe(Math.max(...ofTick.map((entry) => entry.seq)));
+      // Ни одной записи РАБОТЫ после сводки: границы систем, команды и события
+      // своего тика уже позади, а следом идёт только соседняя сводка.
+      const after = ofTick.filter((entry) => entry.seq > cost.seq);
+      expect(after.map((entry) => entry.code)).toEqual(['TICK_FOOTPRINT']);
     }
   });
 

@@ -58,6 +58,7 @@ import {
   costCountersDebugSource,
   createCameraInput,
   deliveryDebugSource,
+  memoryDebugSource,
   programsDebugSource,
   resetCameraInput,
   resolveFogConfig,
@@ -1205,6 +1206,11 @@ function wireDebugPanel(surface: VisualSurfaceSource, bounds: CameraBounds): voi
     // того, что программа пересобирается с новым ключом на каждом появлении
     // (PERF-7).
     .register(programsDebugSource(renderer3))
+    // Живые геометрии и текстуры рендерера (RDBG-1): тот же владелец и то же
+    // основание, что у числа программ, — оборот ресурсов GPU за окно игры не
+    // растит ни одного счётчика стоимости, а рост живого набора на устоявшейся
+    // игре его называет (PERF-7).
+    .register(memoryDebugSource(renderer3))
     .register(staticCollidersDebugSource(() => remote?.terrain ?? null))
     .register(dynamicCollidersDebugSource(STATS.colliderRadius))
     // Нити пути NPC (`pathfinding` NAV-1, NPC-6): держимая точка агента приезжает

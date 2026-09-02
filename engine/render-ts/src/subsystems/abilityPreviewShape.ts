@@ -24,6 +24,7 @@ import {
   type Expression,
 } from '@fluxus/core';
 import * as THREE from 'three';
+import { own } from '../footprint.js';
 
 /** Разбиение единичной окружности: круглая на глаз и дешёвая — фигур в кадре единицы. */
 const CIRCLE_SEGMENTS = 64;
@@ -112,7 +113,7 @@ export function drawableShape(shape: PreviewShape | undefined): shape is Preview
 
 /** Геометрия из плоских позиций; индекс задан — это треугольники заливки. */
 function geometryOf(positions: readonly number[], index?: readonly number[]): THREE.BufferGeometry {
-  const geometry = new THREE.BufferGeometry();
+  const geometry = own('geometry', 'abilityPreview', new THREE.BufferGeometry());
   geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
   if (index !== undefined) geometry.setIndex([...index]);
   return geometry;

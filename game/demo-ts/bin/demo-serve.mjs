@@ -118,7 +118,9 @@ if (flag('help')) {
       '       [--on-disconnect bot|hold|pause] [--substitute-delay-ms 2000] [--silence-seconds <сек>]\n' +
       '       [--match <match.json>] [--bot <profile.json>] [--brain evaluated|scripted] [--json] [--once]\n' +
       '       [--control-adapter]\n' +
-      `       [--debug] [--max-ticks 600] [--out-dir runs/latest] [--dict <словарь>]\n       ${TRACE_USAGE}\n`,
+      `       [--debug] [--max-ticks 600] [--out-dir runs/latest] [--dict <словарь>]\n` +
+      '       [--memory-every <тиков>] [--memory-out <path>]\n' +
+      `       ${TRACE_USAGE}\n`,
   );
   process.exit(0);
 }
@@ -261,7 +263,122 @@ const serializer = flag('json') ? jsonSerializer : msgpackSerializer;
 // разойтись.
 const wireFormat = serializer.name;
 const tickRate = match.tickRate ?? 60;
+/**
+ * Каденс проб занятой памяти — В ТИКАХ, а не во времени (CLI-11): число проб
+ * тогда воспроизводимо от прогона к прогону, хотя их значения — нет. Умолчание
+ * — порядка десяти секунд игрового времени.
+ */
+const memoryEvery = Math.max(1, numberOption('memory-every', tickRate * 10));
+/** Путь ряда проб; пусто — ряда нет. Сводка на него не ссылается (CLI-11). */
+const memoryOut = option('memory-out', '');
+
 const scene = pack.scene(match.sceneRef);
+
+// ------------------------------------------- память процесса прогона (CLI-11)
+
+/**
+ * Пробы занятой памяти отладочного прогона. Съём идёт ВНЕ тика — наблюдателем
+ * после него (OBS-2, DIAG-8), поэтому ход матча от него не меняется: наблюдатель
+ * получает готовый отчёт и ничего в мире не трогает.
+ *
+ * Значения — данные ОКРУЖЕНИЯ: в сравнимые посимвольно артефакты (трейс, запись,
+ * журнал, `run.json`) они не попадают ни одним полем (CLI-11), печатаются в
+ * собственный отчёт запускалки и по явному флагу ложатся отдельным файлом.
+ */
+const memorySamples = [];
+
+/** Наблюдатель тика, снимающий пробу каждые `memoryEvery` тиков (CLI-11). */
+const memoryObserver = {
+  // Имя наблюдателя — часть контракта `TickObserver` (OBS-2): файл `.mjs` типы
+  // не проверяет, и без него расхождение с интерфейсом заметил бы только тот,
+  // кто однажды решит это имя прочитать.
+  name: 'memory-probe',
+  onTick: (result) => {
+    if (result.tick % memoryEvery !== 0) return;
+    const usage = process.memoryUsage();
+    memorySamples.push({
+      tick: result.tick,
+      rss: usage.rss,
+      heapUsed: usage.heapUsed,
+      arrayBuffers: usage.arrayBuffers,
+    });
+  },
+};
+
+/** Байты мегабайтами — печать отчёта, а не поле артефакта. */
+function memMib(bytes) {
+  return `${(bytes / (1024 * 1024)).toFixed(1)} МиБ`;
+}
+
+/**
+ * Наклон ряда на тысячу тиков методом наименьших квадратов. Наклон, а не
+ * разность краёв: одиночная проба ловит момент сборки мусора, а прямая по всем
+ * пробам этим моментом не двигается.
+ */
+function memorySlope(field) {
+  const n = memorySamples.length;
+  if (n < 2) return 0;
+  let meanTick = 0;
+  let meanValue = 0;
+  for (const sample of memorySamples) {
+    meanTick += sample.tick;
+    meanValue += sample[field];
+  }
+  meanTick /= n;
+  meanValue /= n;
+  let covariance = 0;
+  let variance = 0;
+  for (const sample of memorySamples) {
+    const dt = sample.tick - meanTick;
+    covariance += dt * (sample[field] - meanValue);
+    variance += dt * dt;
+  }
+  return variance === 0 ? 0 : (covariance / variance) * 1000;
+}
+
+/** Знак наклона печатается всегда: «+0.0» и «−0.0» читаются по-разному. */
+function memSlopeMib(field) {
+  const slope = memorySlope(field);
+  return `${slope >= 0 ? '+' : '−'}${memMib(Math.abs(slope))}`;
+}
+
+/**
+ * Отчёт о памяти прогона (CLI-11): первая проба, последняя и наклон каждой
+ * величины на тысячу тиков. Идёт в СОБСТВЕННЫЙ поток отчёта запускалки (stdout),
+ * отдельный от трейса, и ни в один сравнимый артефакт не попадает.
+ *
+ * Порога у наклона нет и быть не может: числа зависят от машины и сборщика, а
+ * гейт роста памяти держат сторожа `performance-budget` PERF-10, а не этот
+ * прогон.
+ */
+function reportMemory() {
+  if (memorySamples.length === 0) {
+    process.stdout.write(
+      `\nпамять процесса: проб нет — матч короче каденса (${memoryEvery} тиков)\n`,
+    );
+    return;
+  }
+  const first = memorySamples[0];
+  const last = memorySamples[memorySamples.length - 1];
+  const line = (label, sample) =>
+    `память процесса, ${label} (тик ${sample.tick}): rss ${memMib(sample.rss)}, ` +
+    `куча ${memMib(sample.heapUsed)}, буферы ${memMib(sample.arrayBuffers)}\n`;
+  process.stdout.write(`\n${line('первая проба', first)}`);
+  process.stdout.write(line('последняя проба', last));
+  process.stdout.write(
+    `память процесса, наклон на 1000 тиков: rss ${memSlopeMib('rss')}, ` +
+      `куча ${memSlopeMib('heapUsed')}, буферы ${memSlopeMib('arrayBuffers')} ` +
+      `(проб ${memorySamples.length}, каденс ${memoryEvery} тиков)\n`,
+  );
+  if (memoryOut === '') return;
+  try {
+    const jsonl = memorySamples.map((sample) => `${JSON.stringify(sample)}\n`).join('');
+    writeFileSync(memoryOut, jsonl);
+    process.stdout.write(`ряд проб памяти: ${memoryOut}\n`);
+  } catch (error) {
+    process.stdout.write(`ряда проб памяти не будет: ${error.message}\n`);
+  }
+}
 
 /**
  * Конфиг матча — один на все рестарты: следующий матч играется тем же (D3).
@@ -283,6 +400,9 @@ function matchConfig() {
     // Подключение sink'а ход матча не меняет (DIAG-8): отладочный матч — тот же
     // матч, и в запись (`toScenario`) это поле не входит (CLI-11).
     ...(tracing !== undefined ? { trace: tracing.trace } : {}),
+    // Проба памяти — наблюдатель тика отладочного прогона (CLI-11): вне тика
+    // (OBS-2), ход матча не меняет (DIAG-8), в запись (`toScenario`) не входит.
+    ...(debugRun ? { observers: [memoryObserver] } : {}),
   };
 }
 
@@ -783,7 +903,12 @@ async function runMatch(number) {
   await host.stop();
   stopping = true;
   await botWorker?.terminate();
-  if (debugRun) saveArtifacts(server, failure);
+  if (debugRun) {
+    saveArtifacts(server, failure);
+    // Отчёт о памяти — ПОСЛЕ артефактов и отдельно от них: значения проб в
+    // сравнимые документы не входят (CLI-11), а читаются глазами из stdout.
+    reportMemory();
+  }
   return failure !== null;
 }
 

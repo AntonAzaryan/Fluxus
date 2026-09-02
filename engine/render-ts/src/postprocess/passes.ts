@@ -22,6 +22,7 @@
 import * as THREE from 'three';
 import type { ColorLut } from '@fluxus/assets';
 import type { ToneMappingOperator } from './config.js';
+import { own } from '../footprint.js';
 
 /** Ярусов пирамиды bloom (design D4): пять — как у схемы UnrealBloomPass. */
 export const BLOOM_LEVELS = 5;
@@ -236,7 +237,7 @@ export function createLutTexture(lut: ColorLut): THREE.Data3DTexture {
     }
     data[index * 4 + 3] = 255;
   }
-  const texture = new THREE.Data3DTexture(data, size, size, size);
+  const texture = own('texture', 'postprocess', new THREE.Data3DTexture(data, size, size, size));
   texture.format = THREE.RGBAFormat;
   texture.type = THREE.UnsignedByteType;
   // Значения таблицы — СЫРЫЕ: и вход, и выход выборки живут в отображаемом
@@ -261,14 +262,18 @@ function fullscreenMaterial(
   uniforms: Record<string, THREE.IUniform>,
   defines?: Record<string, string>,
 ): THREE.ShaderMaterial {
-  return new THREE.ShaderMaterial({
-    vertexShader: FULLSCREEN_VERTEX,
-    fragmentShader,
-    uniforms,
-    ...(defines === undefined ? {} : { defines }),
-    depthTest: false,
-    depthWrite: false,
-  });
+  return own(
+    'material',
+    'postprocess',
+    new THREE.ShaderMaterial({
+      vertexShader: FULLSCREEN_VERTEX,
+      fragmentShader,
+      uniforms,
+      ...(defines === undefined ? {} : { defines }),
+      depthTest: false,
+      depthWrite: false,
+    }),
+  );
 }
 
 /** Материал прохода порога (REND-34): вход — цель сцены, порог — униформа. */

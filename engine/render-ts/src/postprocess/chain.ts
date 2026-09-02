@@ -46,6 +46,7 @@ import {
   createThresholdMaterial,
   toneMappingFunction,
 } from './passes.js';
+import { own } from '../footprint.js';
 
 /**
  * Расширение WebGL2, без которого цель half-float не является рисуемой
@@ -299,7 +300,7 @@ export class PostprocessChain {
   private ensureQuad(material: THREE.ShaderMaterial): THREE.Mesh {
     const existing = this.quad;
     if (existing !== null) return existing;
-    const quad = new THREE.Mesh(new THREE.PlaneGeometry(2, 2), material);
+    const quad = new THREE.Mesh(own('geometry', 'postprocess', new THREE.PlaneGeometry(2, 2)), material);
     quad.frustumCulled = false;
     this.passScene.add(quad);
     this.quad = quad;
@@ -333,13 +334,20 @@ export class PostprocessChain {
   private ensureSceneTarget(width: number, height: number): THREE.WebGLRenderTarget {
     const existing = this.sceneTarget;
     if (existing !== null && existing.width === width && existing.height === height) return existing;
+    // Пересоздание по размеру окна отдаёт и цель, и её текстуру глубины —
+    // тем же правилом, что и снос (см. `release`).
+    existing?.depthTexture?.dispose();
     existing?.dispose();
-    const depthTexture = new THREE.DepthTexture(width, height);
-    const target = new THREE.WebGLRenderTarget(width, height, {
-      depthTexture,
-      depthBuffer: true,
-      type: this.texelType,
-    });
+    const depthTexture = own('texture', 'postprocess', new THREE.DepthTexture(width, height));
+    const target = own(
+      'renderTarget',
+      'postprocess',
+      new THREE.WebGLRenderTarget(width, height, {
+        depthTexture,
+        depthBuffer: true,
+        type: this.texelType,
+      }),
+    );
     this.sceneTarget = target;
     return target;
   }
@@ -349,7 +357,11 @@ export class PostprocessChain {
     const existing = this.outputTarget;
     if (existing !== null && existing.width === width && existing.height === height) return existing;
     existing?.dispose();
-    const target = new THREE.WebGLRenderTarget(width, height, { depthBuffer: false });
+    const target = own(
+      'renderTarget',
+      'postprocess',
+      new THREE.WebGLRenderTarget(width, height, { depthBuffer: false }),
+    );
     this.outputTarget = target;
     return target;
   }
@@ -370,15 +382,19 @@ export class PostprocessChain {
     const levels: BloomLevel[] = [];
     for (let index = 0; index < BLOOM_LEVELS; index++) {
       const divisor = 2 ** index;
-      const target = new THREE.WebGLRenderTarget(
-        Math.max(1, Math.floor(topWidth / divisor)),
-        Math.max(1, Math.floor(topHeight / divisor)),
-        {
-          depthBuffer: false,
-          type: this.texelType,
-          minFilter: THREE.LinearFilter,
-          magFilter: THREE.LinearFilter,
-        },
+      const target = own(
+        'renderTarget',
+        'postprocess',
+        new THREE.WebGLRenderTarget(
+          Math.max(1, Math.floor(topWidth / divisor)),
+          Math.max(1, Math.floor(topHeight / divisor)),
+          {
+            depthBuffer: false,
+            type: this.texelType,
+            minFilter: THREE.LinearFilter,
+            magFilter: THREE.LinearFilter,
+          },
+        ),
       );
       levels.push({ target, material: index === 0 ? null : createDownsampleMaterial() });
     }
@@ -451,6 +467,10 @@ export class PostprocessChain {
    */
   private release(): void {
     this.releaseBloom();
+    // Текстуру глубины HDR-цели завела ЦЕПОЧКА, а не цель: `dispose()` цели
+    // рассылает только собственное событие, и без этой строки текстура
+    // пережила бы и смену размера окна, и снос (REND-31, PERF-9).
+    this.sceneTarget?.depthTexture?.dispose();
     this.sceneTarget?.dispose();
     this.sceneTarget = null;
     this.outputTarget?.dispose();

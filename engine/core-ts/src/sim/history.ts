@@ -68,6 +68,15 @@ export class RingHistory implements HistoryProvider {
     if (this.size < this.capacity) this.size++;
   }
 
+  /**
+   * Снапшотов в кольце сейчас (SNAP-3). Наружу выходит как множитель занятой
+   * историей памяти (`performance-budget` PERF-8): байты истории — это
+   * `снапшотов × ёмкость мира`, и первое число знает только провайдер.
+   */
+  get count(): number {
+    return this.size;
+  }
+
   get oldestTick(): number | undefined {
     return this.oldest()?.tick;
   }

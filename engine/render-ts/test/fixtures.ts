@@ -13,6 +13,7 @@ import type {
 } from '@fluxus/assets';
 import type {
   EntityView,
+  ExtractedTick,
   FogLayerCanvas,
   FogSubsystem,
   RenderContext,
@@ -368,4 +369,53 @@ export function makeTickView(entities: EntityView[], partial: Partial<TickView> 
     floorChangedCells: [],
     ...partial,
   };
+}
+
+/**
+ * Плоская форма доставки на `count` сущностей (SHELL-2) — вход `ViewBuffer`.
+ * `base` сдвигает НАБОР идентификаторов целиком: так тесты оборота (PERF-9)
+ * гоняют доставки со сменяющимся составом, а тесты величин — с постоянным.
+ *
+ * Курс доставлен у каждой: без него память курсов приёмника не заводится вовсе,
+ * и величина `viewFacingMemory` лежала бы нулём.
+ */
+export function makeExtractedTick(count: number, base = 0): ExtractedTick {
+  const ext: ExtractedTick = {
+    tick: 1,
+    mode: 'Running',
+    isReplay: false,
+    snapAll: false,
+    freshEvents: true,
+    count,
+    id: new Float64Array(count),
+    kind: new Int32Array(count),
+    x: new Float32Array(count),
+    y: new Float32Array(count),
+    level: new Uint8Array(count),
+    flags: new Uint8Array(count),
+    facingYaw: new Float32Array(count),
+    aimYaw: new Float32Array(count),
+    motion: new Uint8Array(count),
+    motionPhase: new Float32Array(count),
+    flightPhase: new Float32Array(count),
+    timeScale: new Float32Array(count).fill(1),
+    statNames: [],
+    statCount: new Uint8Array(count),
+    statIndex: new Int32Array(0),
+    statValue: new Float64Array(0),
+    statPairs: 0,
+    events: [],
+    floorDelta: [],
+    kindTable: ['Runner'],
+  };
+  for (let i = 0; i < count; i++) {
+    ext.id[i] = base + i + 1;
+    ext.x[i] = i % 8;
+    ext.y[i] = Math.floor(i / 8);
+    ext.facingYaw[i] = 1;
+    ext.aimYaw[i] = Number.NaN;
+    ext.motionPhase[i] = Number.NaN;
+    ext.flightPhase[i] = Number.NaN;
+  }
+  return ext;
 }

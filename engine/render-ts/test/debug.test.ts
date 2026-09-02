@@ -21,6 +21,7 @@ import {
   createCostCounters,
   deliveryDebugSource,
   costCountersDebugSource,
+  memoryDebugSource,
   programsDebugSource,
   withCostSink,
   type DebugDraw,
@@ -866,5 +867,63 @@ describe('render.programs: число живых шейдерных програ
 
     expect(reads.length).toBe(2);
     expect({ ...counters }).toEqual({ ...createCostCounters() });
+  });
+});
+
+// ------------------------------ render.memory: живые геометрии и текстуры
+
+describe('render.memory: живые ресурсы рендерера (RDBG-1, RDBG-7)', () => {
+  /** Рендерер стендом: живой WebGL источнику не нужен — он читает готовый набор. */
+  function fakeRenderer(): {
+    info: { memory: { geometries: number; textures: number } | null };
+  } {
+    return { info: { memory: { geometries: 0, textures: 0 } } };
+  }
+
+  /** Проба из дампа; undefined — секции нет (источник выключен). */
+  function probeOf(
+    layer: RenderDebugLayer,
+  ): { liveGeometries: number; liveTextures: number; noData?: string } | undefined {
+    return layer.dump().sections['render.memory'] as
+      | { liveGeometries: number; liveTextures: number; noData?: string }
+      | undefined;
+  }
+
+  it('включённый источник называет живой набор, выключенного в дампе нет', () => {
+    const renderer = fakeRenderer();
+    renderer.info.memory = { geometries: 7, textures: 3 };
+    const layer = new RenderDebugLayer(new PresentationStage(makeRenderContext()));
+    layer.register(memoryDebugSource(renderer));
+
+    // Выключенный источник секции не имеет вовсе — «выключено» и «данных нет»
+    // различаются (RDBG-7).
+    expect(probeOf(layer)).toBeUndefined();
+
+    layer.setEnabled('render.memory', true);
+    expect(probeOf(layer)).toMatchObject({ liveGeometries: 7, liveTextures: 3 });
+  });
+
+  it('оборот виден приращением: созданное и не отданное растит набор', () => {
+    const renderer = fakeRenderer();
+    renderer.info.memory = { geometries: 2, textures: 2 };
+    const layer = new RenderDebugLayer(new PresentationStage(makeRenderContext()));
+    layer.register(memoryDebugSource(renderer));
+    layer.setEnabled('render.memory', true);
+    const before = probeOf(layer)!.liveTextures;
+
+    // Сущность появилась из тумана, завела текстуру и не отдала её (PERF-7).
+    renderer.info.memory = { geometries: 2, textures: 5 };
+    expect(probeOf(layer)!.liveTextures - before).toBe(3);
+  });
+
+  it('рендерер без набора говорит ПРИЧИНУ, а не нулевой набор', () => {
+    const renderer = fakeRenderer();
+    renderer.info.memory = null;
+    const layer = new RenderDebugLayer(new PresentationStage(makeRenderContext()));
+    layer.register(memoryDebugSource(renderer));
+    layer.setEnabled('render.memory', true);
+    // «Не измерено» и «ноль живых» — разные утверждения: нулём числа набора
+    // читались бы как отсутствие ресурсов (RDBG-7).
+    expect(probeOf(layer)?.noData).toContain('renderer.info.memory');
   });
 });

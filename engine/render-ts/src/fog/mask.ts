@@ -286,6 +286,15 @@ export class VisibilityMask {
     return this.front;
   }
 
+  /**
+   * Байты обоих растров маски (`performance-budget` PERF-8): опубликованного и
+   * заднего, если порционная перестройка его уже завела. Величина
+   * машинно-независима — это длины типизированных массивов, а не куча.
+   */
+  get byteLength(): number {
+    return this.front.byteLength + (this.backing?.byteLength ?? 0);
+  }
+
   /** Всё в туман — начало перестройки, синхронный путь (design D1). */
   clear(): void {
     this.clearInto(this.front, 0, this.height - 1);

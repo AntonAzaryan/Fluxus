@@ -318,13 +318,17 @@ export function extractSizes(): { readonly small: AxisSize; readonly large: Axis
  * (PERF-2). Презентационного тракта здесь нет: ось меряет экстракцию, и
  * доставка с кадром только смешали бы в документ чужие стадии.
  */
-export function playExtraction(def: ScenarioDef): void {
+export function playExtraction(def: ScenarioDef, diagnostics?: DiagnosticsSink): void {
   const kindOf = benchKinds();
   const extractor = new Extractor({
     kindOf: (_state, entity) => kindOf(entity),
     stats: MATCH_STAT_SOURCES,
   });
   playRecording(def, {
+    // Сток диагностики — необязателен: гейту стоимости он не нужен вовсе
+    // (стадию `extract` считает сток рендера), а гейту памяти нужен — величины
+    // мира приезжают записью тика (PERF-8).
+    ...(diagnostics !== undefined ? { diagnostics } : {}),
     onTick: (result) => {
       extractor.extract(result);
     },
@@ -344,6 +348,12 @@ export interface PreparedRecording {
   readonly ticks: number;
   /** Прогон записи: её тики с её же каноническими вводами (TICK-2). */
   run(): void;
+  /**
+   * Прогон РОВНО `count` тиков того же мира — вход окна без сборки мусора
+   * (PERF-11): ширина окна меряется тиками, и укорачивать её кратно длине
+   * записи сторож не вправе.
+   */
+  runTicks(count: number): void;
 }
 
 /**
@@ -379,14 +389,19 @@ export function prepareRecording(def: ScenarioDef, hooks: RecordingHooks = {}): 
     else list.push(frame);
   }
 
+  const runTicks = (count: number): void => {
+    for (let i = 0; i < count; i++) {
+      const result = tick(sim, state, byTick.get(state.tick + 1) ?? []);
+      hooks.onTick?.(result);
+    }
+  };
+
   return {
     ticks: def.ticks,
     run: () => {
-      for (let i = 0; i < def.ticks; i++) {
-        const result = tick(sim, state, byTick.get(state.tick + 1) ?? []);
-        hooks.onTick?.(result);
-      }
+      runTicks(def.ticks);
     },
+    runTicks,
   };
 }
 
