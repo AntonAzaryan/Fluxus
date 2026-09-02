@@ -10,7 +10,7 @@ fi
 
 REPO_ROOT="${CLAUDE_PROJECT_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)}"
 
-OPENSPEC_PKG="@fission-ai/openspec@^1.7.0"
+OPENSPEC_PKG="@fission-ai/openspec@^1.11.0"
 
 # 1. OpenSpec CLI — глобально, чтобы `openspec ...` работал из любой директории.
 if command -v openspec >/dev/null 2>&1; then
