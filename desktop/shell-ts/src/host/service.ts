@@ -22,8 +22,10 @@ import {
   detachedFiles,
   detachedSurvivor,
   forgetDetached,
+  forgetPin,
   readAddressFile,
   readPinFile,
+  servicePinFile,
   serviceSpawnOptions,
   stopPid,
   writePid,
@@ -76,6 +78,11 @@ export interface HostServices {
    * Закрепление по идентичности сертификата строже модели CA и в такой привязке
    * не нуждается.
    *
+   * Отвязываемость закрепление не ограничивает: назвать своё вправе ЛЮБОЙ
+   * объявленный сервис (DSK-8). Ограничивается СРОК — закрепление отвязываемого
+   * читается и через границу сессий, закрепление обычного действует, пока жив
+   * поднявший его процесс.
+   *
    * Наружу страницы это не выходит: спрашивает реализация контейнера, когда
    * платформа отвергла сертификат, — словарь границы (DSK-2) отсюда ничего не
    * получает.
@@ -108,7 +115,9 @@ export function endpointOf(address: string): { host: string; port: number } | un
  * `{pinFile}` — единственный признак того, что сервис обещает закрепление
  * сертификата (DSK-8, решение D2): новых полей схема профиля не получает, как не
  * получала их и подстановка адресного файла. Сервис, чьё объявление её не
- * подставляет, живёт как жил.
+ * подставляет, живёт как жил. Отвязываемости этот признак не спрашивает:
+ * закрепление вправе назвать ЛЮБОЙ объявленный сервис, чей канал существует
+ * только шифрованным (DSK-8), — см. `servicePinFile`.
  */
 export function serviceArgs(
   service: ProfileService,
@@ -157,6 +166,20 @@ interface Owned {
   alive: boolean;
   /** Объявленная отвязываемость (DSK-7): такой процесс переживает сессию. */
   readonly detached: boolean;
+  /**
+   * Файл закрепления, если объявление его подставляет; иначе пустая строка
+   * (DSK-8). Держится рядом с процессом, потому что у НЕотвязываемого сервиса
+   * закрепление живёт ровно столько же, сколько он.
+   */
+  readonly pinFile: string;
+}
+
+/**
+ * Обещает ли объявление закрепление сертификата (DSK-8, решение D2): признак —
+ * сама подстановка `{pinFile}` в аргументах, отдельного поля у сервиса нет.
+ */
+function promisesPin(declared: ProfileService): boolean {
+  return declared.args.some((arg) => arg.includes('{pinFile}'));
 }
 
 function refuse(what: string): Error {
@@ -185,10 +208,27 @@ export function createHostServices(options: HostServicesOptions): HostServices {
    *
    * Закрепление сертификата (DSK-8) лежит среди них по той же причине, по
    * которой оно объявлено рядом с адресным файлом (решение D1): его читает и та
-   * сессия, которая сервиса не поднимала.
+   * сессия, которая сервиса не поднимала. Обычному сервису путь закрепления
+   * даёт `pinFileOf` — из той же раскладки, но без адреса и pid: переживать
+   * сессию ему нечем и незачем.
    */
   const filesOf = (declared: ProfileService): DetachedFiles | undefined =>
     declared.detached ? detachedFiles(stateDir, declared.id) : undefined;
+
+  /**
+   * Путь закрепления ЛЮБОГО объявленного сервиса, который его подставляет
+   * (DSK-8); `undefined` — объявление закрепления не обещает.
+   *
+   * Оговорки «только отвязываемый» в требовании нет, и её здесь тоже нет: сервис,
+   * живущий ровно одну сессию, называет своё закрепление тем же способом. Разница
+   * — в СРОКЕ: закрепление отвязываемого читает и новая сессия, закрепление
+   * обычного действует, пока жив поднявший его процесс (`certificatePins`).
+   *
+   * Файла эта функция не создаёт — только каталог состояния: закрепление пишет
+   * САМ процесс сервиса, и контейнер строить его не вправе (DSK-8).
+   */
+  const pinFileOf = (declared: ProfileService): string | undefined =>
+    promisesPin(declared) ? servicePinFile(stateDir, declared.id) : undefined;
 
   /**
    * Адрес сервиса: объявленный профилем либо написанный САМИМ процессом
@@ -229,7 +269,13 @@ export function createHostServices(options: HostServicesOptions): HostServices {
   };
 
   const launch = (declared: ProfileService, files: DetachedFiles | undefined): Owned => {
-    const args = serviceArgs(declared, files?.addressFile ?? '', files?.pinFile ?? '');
+    const pinFile = pinFileOf(declared) ?? '';
+    // Закрепление ПРОШЛОЙ сессии — не закрепление этой: неотвязываемый сервис
+    // сессию не переживает (DSK-8), и оставленный файл читался бы как закрепление
+    // процесса, который его ещё не писал. Отвязываемого это не касается — его
+    // файл принадлежит живому процессу, и уносит его `forgetDetached`.
+    if (pinFile !== '' && !declared.detached) forgetPin(pinFile);
+    const args = serviceArgs(declared, files?.addressFile ?? '', pinFile);
     const child = spawn(runtime, [declared.script, ...args], {
       ...serviceSpawnOptions(declared.detached, process.platform),
       ...(options.env === undefined ? {} : { env: { ...process.env, ...options.env } }),
@@ -244,6 +290,7 @@ export function createHostServices(options: HostServicesOptions): HostServices {
       child,
       alive: true,
       detached: declared.detached,
+      pinFile,
       exited: new Promise<void>((done) => {
         child.once('exit', () => {
           live.alive = false;
@@ -260,6 +307,11 @@ export function createHostServices(options: HostServicesOptions): HostServices {
 
   const kill = async (id: BridgeServiceId, live: Owned): Promise<void> => {
     owned.delete(id);
+    // Закрепление НЕотвязываемого сервиса действует ровно на срок жизни его
+    // процесса (DSK-8: через границу сессий действует закрепление отвязываемого),
+    // и уходит вместе с ним. У отвязываемого его уносит `forgetDetached` — там,
+    // где уносятся адрес и pid.
+    if (live.pinFile !== '' && !live.detached) forgetPin(live.pinFile);
     if (!live.alive) return;
     live.child.kill('SIGTERM');
     const killed = await Promise.race([live.exited.then(() => true), wait(graceMs).then(() => false)]);
@@ -462,9 +514,16 @@ export function createHostServices(options: HostServicesOptions): HostServices {
         // звучит на запуске сервиса (`start`), где ему и место.
         let pin = '';
         try {
-          const files = filesOf(declared);
-          if (files === undefined) continue;
-          pin = readPinFile(files.pinFile);
+          const pinFile = pinFileOf(declared);
+          if (pinFile === undefined) continue;
+          // Закрепление НЕотвязываемого сервиса живёт ровно столько, сколько
+          // поднявший его процесс: через границу сессий действует закрепление
+          // отвязываемого, и только его (DSK-8). Поэтому у обычного сервиса
+          // спрашивается ВЛАДЕНИЕ: файл, оставшийся от прежней сессии или
+          // написанный процессом, которым эта сессия не владеет, доверия не
+          // расширяет.
+          if (!declared.detached && owned.get(declared.id)?.alive !== true) continue;
+          pin = readPinFile(pinFile);
         } catch {
           continue;
         }
