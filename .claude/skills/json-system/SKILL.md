@@ -21,7 +21,7 @@ compatibility: Node >= 22.18, workspace installed (npm install из корня �
 - Выражение: литерал (`number`/`boolean`) либо объект **ровно с одним ключом-оператором**: `{"+": [a, b]}`. Строка допустима только как имя (компонента, поля, переменной) в позиции аргумента.
 - Действие: объект ровно с одним ключом-действием, аргументы **именованные**: `{"modifyComponent": {"entity": ..., "component": "Health", "values": {...}}}`.
 - Таблицы операторов и действий закрыты — неизвестное имя валит регистрацию системы (SYS-3), не тик. Это фича: проверяй систему регистрацией/прогоном, а не глазами.
-- Циклы существуют только в действиях (`forEach`, `forEachEvent`), в выражениях их нет и не будет (EXPR-5). Случайность — только действия `random`/`randomBelow` (связывают имя в теле `do`), оператора случайности нет: число обращений к RNG должно читаться из текста системы.
+- Циклы существуют только в действиях (`forEach`, `forEachEvent`), в выражениях их нет и не будет (EXPR-5). Аккумуляция — через изменяемые биндинги `let` и действие `set` (ACT-4). Случайность — только действия `random`/`randomBelow` (связывают имя в теле `do`), оператора случайности нет: число обращений к RNG должно читаться из текста системы.
 
 ## Скелет системы
 
@@ -39,10 +39,11 @@ compatibility: Node >= 22.18, workspace installed (npm install из корня �
 
 ## Куда что кладётся
 
-- Компоненты/prefab'ы/системы — в `scene` (`SceneDef`, см. `core-ts/src/sim/scene.ts`): `components` (порядок — часть формата!), `prefabs`, `systems`, опционально `terrain`, `arena`, `timeScale`, `tweens`, `fog`, `modifierSlots`.
+- Компоненты/prefab'ы/системы — в `scene` (`SceneDef`, см. `core-ts/src/sim/scene.ts`): `components` (порядок — часть формата!), `prefabs`, `systems`, опционально `capacity`, `terrain`, `arena`, `timeScale`, `tweens`, `fog`, `modifierSlots`, `softStealthChannels`, `initial` (расстановка сцены, порядок нормативен — SER-8) и таблицы платформ: `abilities` + `abilityRuntime` (способности, ABIL-2/ABIL-8), `buffs` (BUFF-2), `npc` (поведение NPC, NPC-2). Наличие таблицы подключает компоненты и системы платформы; из мира определение адресуется **индексом** в таблице, поэтому таблицы живут в конфиге сцены, а не отдельными файлами. Схемы их документов — `core-ts/src/dsl/abilitySchemas.ts`, `npcSchemas.ts`.
 - Сценарий (`ScenarioDef`, `core-ts/src/sim/scenario.ts`): `name`, `seed`, `ticks`, `scene`, опционально `initial` (порядок задаёт выданные ID), `inputs` + `players`, `physics`, `visibility`.
 - Баланс и любые тюнимые числа живут здесь, в JSON — не в коде ядра (mechanism vs policy).
-- **Где лежит файл.** Игровой контент — в дереве `content/` (`scenes/`, `matches/`, `visuals/`), никогда внутри пакета движка: `game-content` CONT-1, проверяется тестом `engine/integration-ts/test/contentBoundary.test.ts`. Исключение — фикстуры движка: golden-пары в `engine/tests/golden/` и временные сценарии отладки (CONT-4), они контентом не считаются.
+- **Где лежит файл.** Игровой контент — в дереве `content/` (`scenes/`, `matches/`, `visuals/`, `bots/`), никогда внутри пакета движка: `game-content` CONT-1, проверяется тестом `engine/integration-ts/test/contentBoundary.test.ts`. Исключение — фикстуры движка: golden-пары в `engine/tests/golden/` и временные сценарии отладки (CONT-4), они контентом не считаются.
+- Рядом со сценой могут лежать её парные документы: `<base>.presentation.json` (декорации, PRES-1) и `<base>.bots.json` (аннотации способностей для бот-профилей, BOT-13; после правки способностей сцены — `npm run bots:sync` из корня). Пространственный слой сцены (`initial`, террейн) пишет импорт из Blender (`npm run import`), руками его не тюнят.
 
 ## Проверка написанного
 
