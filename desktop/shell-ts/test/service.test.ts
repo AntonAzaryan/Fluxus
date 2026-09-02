@@ -373,4 +373,71 @@ describe('закрепление сертификата объявленного
     await services.start('stand');
     expect(services.certificatePins()).toEqual([]);
   });
+
+  it('НЕотвязываемый сервис называет своё закрепление тем же способом (DSK-8)', async () => {
+    const port = await freePort();
+    const root = await makeTree();
+    const stateDir = join(root, 'services');
+    // Оговорки «только отвязываемый» в DSK-8 нет: «объявленный профилем сервис
+    // (DSK-7), чей канал существует только шифрованным с self-signed
+    // сертификатом, SHALL иметь способ назвать контейнеру закрепление своего
+    // сертификата». Сервис ниже сессию не переживает — и закрепление у него
+    // всё равно есть.
+    const profile = profileWith(
+      port,
+      DETACHED_SERVICE_SCRIPT,
+      ['--port', '{port}', '--pin-file', '{pinFile}', '--pin', SERVICE_PIN],
+      false,
+    );
+    const services = createHostServices({ profile, stateDir });
+    cleanups.push(() => services.closeAll());
+    cleanups.push(() => dropTree(root));
+
+    // Подстановка получает НАСТОЯЩИЙ путь, а не пустую строку: сервис пишет
+    // закрепление туда же, куда его пишет отвязываемый, — раскладка одна.
+    expect(serviceArgs(profile.services[0]!, '', detachedFiles(stateDir, 'stand').pinFile)).toEqual([
+      '--port',
+      String(port),
+      '--pin-file',
+      join(stateDir, 'stand.pin'),
+      '--pin',
+      SERVICE_PIN,
+    ]);
+
+    expect(services.certificatePins()).toEqual([]);
+    await services.start('stand');
+    await waitFor(() => services.certificatePins().length > 0);
+    expect(services.certificatePins()).toEqual([SERVICE_PIN]);
+
+    // Через границу сессий действует закрепление ОТВЯЗЫВАЕМОГО, и только его
+    // (DSK-8): этот процесс сессию не переживает, и вторая сессия его
+    // закрепления не читает, хотя файл на диске ещё лежит.
+    expect(createHostServices({ profile, stateDir }).certificatePins()).toEqual([]);
+
+    // Ушёл процесс — ушло и закрепление: оставленное, оно расширяло бы доверие
+    // на сертификат сервиса, которого больше нет.
+    await services.closeAll();
+    expect(services.certificatePins()).toEqual([]);
+    expect(existsSync(detachedFiles(stateDir, 'stand').pinFile)).toBe(false);
+  });
+
+  it('объявление без `{pinFile}` не заводит сервису ни файла, ни каталога', async () => {
+    const port = await freePort();
+    const root = await makeTree();
+    const stateDir = join(root, 'services');
+    // «Сервис без файла закрепления SHALL вести себя как сегодня» (DSK-8) — в том
+    // числе неотвязываемый: признак остаётся один, подстановка (решение D2).
+    const services = createHostServices({
+      profile: profileWith(port, SERVICE_SCRIPT, ['--port', '{port}'], false),
+      stateDir,
+    });
+    cleanups.push(() => services.closeAll());
+    cleanups.push(() => dropTree(root));
+
+    await services.start('stand');
+    expect(services.certificatePins()).toEqual([]);
+    // Каталог состояния такому сервису не нужен вовсе, и он не заводится:
+    // «создаётся ровно то, что сервису нужно».
+    expect(existsSync(stateDir)).toBe(false);
+  });
 });

@@ -51,7 +51,13 @@ const F = fixed.fromFloat;
 
 const BASE: SceneDef['components'] = [
   { name: 'Position', fields: { x: 'fixed', y: 'fixed' } },
-  { name: 'Input', fields: { buttons: 'i32', prevButtons: 'i32' } },
+  // Пара полей точки прицела объявлена здесь потому, что её требует ЛЮБОЙ
+  // содержательный шаг прицеливания (ABIL-5): сцена без неё отвергается на
+  // загрузке, и определения этого файла до предмета своих проверок не дошли бы.
+  {
+    name: 'Input',
+    fields: { buttons: 'i32', prevButtons: 'i32', targetX: 'fixed', targetY: 'fixed' },
+  },
   { name: 'Player', fields: { slot: 'i32' } },
   { name: 'Dead', fields: { at: 'i32' } },
   { name: 'ActionLock', fields: { mask: 'i32' } },
@@ -208,6 +214,9 @@ describe('Предкомпиляция определений (ABIL-2, ABIL-10)'
     const def: AbilityDef = {
       id: 'x',
       trigger: { always: true },
+      // Бит отмены назначен: исход для `cancelInput` без него не сработал бы
+      // никогда, и загрузчик такое определение отвергает (ABIL-6, ABIL-10).
+      cancelBit: 3,
       interrupts: { cancelInput: { staged: 'keep' } },
       effects: [],
     };
@@ -261,6 +270,21 @@ describe('Проверки загрузки определений (ABIL-10)', (
     const def: AbilityDef = { ...SIMPLE, ...ability };
     return () => loadScene({ components: BASE, abilities: [def], ...extra });
   };
+
+  /**
+   * ABIL-2: «определение SHALL собираться из блоков, каждый из которых
+   * необязателен, кроме триггера и эффектов». Отсутствие блока читалось как
+   * пустой список, и одна и та же сцена была валидна для ядра и невалидна для
+   * редактора: порождённая схема поле требует (SER-5).
+   */
+  it('определение без блока эффектов — ошибка загрузки, называющая способность (ABIL-2)', () => {
+    const noEffects = { id: 'bolt', trigger: { input: { bit: 0 } } } as unknown as AbilityDef;
+    expect(() => loadScene({ components: BASE, abilities: [noEffects] })).toThrow(
+      /способность "bolt"\.effects: блок обязателен \(ABIL-2\)/,
+    );
+    // Пустой список записывается явно и принимается.
+    expect(() => loadScene({ components: BASE, abilities: [{ ...noEffects, effects: [] }] })).not.toThrow();
+  });
 
   it('неизвестное имя действия — ошибка загрузки, называющая способность и место', () => {
     expect(failing({ effects: [{ emitEvnet: { type: 'Cast' } }] })).toThrow(
@@ -435,8 +459,53 @@ describe('Биндинги сцены (ABIL-8)', () => {
     expect(catalog.bindings.teamFieldName).toBe('slot');
     expect(catalog.bindings.damageType).toBe('Hit');
     expect(catalog.bindings.hasInput).toBe(true);
-    // Полей точки прицела у этого компонента ввода нет — они приезжают с TICK-2.
+    expect(catalog.bindings.hasAimPoint).toBe(true);
+  });
+
+  /**
+   * Пара полей точки прицела приезжает с TICK-2, и компонент ввода вправе её не
+   * иметь: у способности без шагов прицеливания читать точку некому. Способность
+   * С шагом в такой сцене — уже ошибка загрузки (ABIL-5, отдельный тест ниже).
+   */
+  it('компонент ввода без пары полей точки прицела: hasAimPoint = false', () => {
+    const bare: SceneDef['components'] = [
+      { name: 'Position', fields: { x: 'fixed', y: 'fixed' } },
+      { name: 'Input', fields: { buttons: 'i32', prevButtons: 'i32' } },
+    ];
+    const def: Partial<SceneDef> = { abilities: [SIMPLE] };
+    const catalog = compileAbilityCatalog(def, loadScene({ components: bare, ...def }).world);
+
+    expect(catalog.bindings.hasInput).toBe(true);
     expect(catalog.bindings.hasAimPoint).toBe(false);
+  });
+
+  /**
+   * ABIL-5: шаг, берущий точку прицела ввода, в сцене без пары полей точки —
+   * ошибка ЗАГРУЗКИ, называющая способность, шаг и недостающие поля. Иначе
+   * платформа подставляла бы позицию владельца: направление считалось бы от
+   * владельца к владельцу, то есть нулевое, и способность стреляла бы «в
+   * никуда» каждый раз без единого сообщения.
+   */
+  it('шаг прицеливания в сцене без полей точки прицела — отказ загрузки (ABIL-5)', () => {
+    const bare: SceneDef['components'] = [
+      { name: 'Position', fields: { x: 'fixed', y: 'fixed' } },
+      { name: 'Input', fields: { buttons: 'i32', prevButtons: 'i32' } },
+    ];
+    for (const kind of ['point', 'unit', 'vector'] as const) {
+      expect(() =>
+        loadScene({
+          components: bare,
+          abilities: [{ ...SIMPLE, targeting: { steps: [{ kind }] } }],
+        }),
+      ).toThrow(/способность "bolt"\.targeting\.steps\[0\].*"targetX".*"targetY"/s);
+    }
+    // Шаг `none` точки прицела не берёт — такая сцена законна.
+    expect(() =>
+      loadScene({
+        components: bare,
+        abilities: [{ ...SIMPLE, targeting: { steps: [{ kind: 'none' }] } }],
+      }),
+    ).not.toThrow();
   });
 
   it('источник death без биндинга смерти — отказ загрузки с именем способности и биндинга', () => {
@@ -446,6 +515,41 @@ describe('Биндинги сцены (ABIL-8)', () => {
         abilities: [{ ...SIMPLE, interrupts: { death: {} } }],
       }),
     ).toThrow(/способность "bolt".*источник "death" недоступен.*"deadMarker"/s);
+  });
+
+  /**
+   * ABIL-6 плюс правило ABIL-10 «молча недействующего прерывания не бывает»:
+   * фронт бита отмены — единственный сигнал источника `cancelInput`, и без
+   * назначенного бита объявленный для него исход не сработал бы никогда.
+   */
+  it('исход cancelInput без назначенного бита отмены — отказ загрузки (ABIL-6)', () => {
+    expect(() =>
+      loadScene({
+        components: BASE,
+        abilities: [{ ...SIMPLE, interrupts: { cancelInput: { staged: 'keep' } } }],
+      }),
+    ).toThrow(/способность "bolt"\.cancelBit.*"cancelInput".*ABIL-6/s);
+
+    // Источник, объявленный БЛОКОМ ФАЗЫ, — тот же случай и та же ошибка.
+    expect(() =>
+      loadScene({
+        components: BASE,
+        abilities: [
+          {
+            ...SIMPLE,
+            phases: [{ id: 'cast', trigger: 'commit', interrupts: { cancelInput: {} } }],
+          },
+        ],
+      }),
+    ).toThrow(/способность "bolt"\.cancelBit.*"cancelInput".*ABIL-6/s);
+
+    // С назначенным битом та же сцена законна.
+    expect(() =>
+      loadScene({
+        components: BASE,
+        abilities: [{ ...SIMPLE, cancelBit: 9, interrupts: { cancelInput: { staged: 'keep' } } }],
+      }),
+    ).not.toThrow();
   });
 
   it('источник disable без биндинга лока — отказ загрузки', () => {

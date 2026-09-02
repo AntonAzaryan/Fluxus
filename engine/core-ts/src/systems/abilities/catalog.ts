@@ -14,10 +14,11 @@
  * предсвязанные имена платформы параметром `bound`, который он уже принимает.
  */
 import { SHAPE_AABB, SHAPE_CIRCLE } from '../physics.js';
-import { compileBindings } from './bindings.js';
+import { compileBindings, requireAimPoint } from './bindings.js';
 import { compileBuffs, emptyBuffBuffers } from './buffCatalog.js';
 import { ABILITY_STEPS } from './components.js';
 import {
+  checkCancelInputBit,
   defaultOutcome,
   INTERRUPT_DAMAGED,
   INTERRUPT_DISABLE,
@@ -65,6 +66,7 @@ import {
   fail,
   keyOf,
   literalName,
+  requiredActionsOf,
 } from './parse.js';
 import {
   CANDIDATE_NAME,
@@ -179,7 +181,7 @@ function compileAbility(
 
   const stepStart = buffers.steps.length;
   const targeting = def.targeting === undefined ? undefined : asObject(def.targeting, `${path}.targeting`);
-  compileSteps(targeting?.steps, world, buffers, path);
+  compileSteps(targeting?.steps, world, bindings, buffers, path);
   const stepCount = buffers.steps.length - stepStart;
 
   // Имя события связано только там, где событие существует — на тике
@@ -197,6 +199,11 @@ function compileAbility(
     def.projectile === undefined ? undefined : asObject(def.projectile, `${path}.projectile`);
   const duration = def.duration === undefined ? undefined : asObject(def.duration, `${path}.duration`);
 
+  // Проверка стоит после `compilePhases`: исход для `cancelInput` вправе
+  // объявить и блок фазы, а `recognition.declared` копит оба места (ABIL-6).
+  const cancelBit = def.cancelBit === undefined ? -1 : bitOf(def.cancelBit, `${path}.cancelBit`);
+  checkCancelInputBit(cancelBit, recognition.declared, path);
+
   return {
     id,
     triggerKind: trigger.kind,
@@ -211,7 +218,7 @@ function compileAbility(
     // определения разом (`npc-behavior` NPC-7).
     condition: expressionOf(def.condition, world, eventNames, `${path}.condition`),
     confirmBit: def.confirmBit === undefined ? -1 : bitOf(def.confirmBit, `${path}.confirmBit`),
-    cancelBit: def.cancelBit === undefined ? -1 : bitOf(def.cancelBit, `${path}.cancelBit`),
+    cancelBit,
     phaseStart,
     phaseCount: phases.length,
     stepStart,
@@ -219,7 +226,8 @@ function compileAbility(
     outcomeStart,
     outcomeCount,
     cooldownTicks: expressionOf(def.cooldownTicks, world, SLOT_BOUND_NAMES, `${path}.cooldownTicks`),
-    effects: actionsOf(
+    // Блок эффектов обязателен наравне с триггером (ABIL-2).
+    effects: requiredActionsOf(
       def.effects,
       world,
       phases.length > 0 ? SLOT_BOUND_NAMES : eventNames,
@@ -296,6 +304,7 @@ function shapeSize(node: unknown, path: string): Expression | undefined {
 function compileSteps(
   steps: unknown,
   world: WorldState,
+  bindings: CompiledBindings,
   buffers: CatalogBuffers,
   path: string,
 ): void {
@@ -316,8 +325,13 @@ function compileSteps(
     const shape = step.shape === undefined ? undefined : asObject(step.shape, `${at}.shape`);
     const shapeKind = shape === undefined ? -1 : keyOf(SHAPE_KINDS, shape.kind, `${at}.shape.kind`);
     const sizeField = shapeKind === SHAPE_AABB ? 'halfX' : 'radius';
+    const kind = keyOf(STEP_KINDS, step.kind, `${at}.kind`);
+    // Точку прицела ввода берут все три содержательных вида шага: `point` как
+    // есть, `unit` для выбора ближайшего и разворота фигуры, `vector` для
+    // направления. Сцена без пары полей точки такой шаг не выражает (ABIL-5).
+    if (kind !== STEP_NONE) requireAimPoint(bindings, step.kind as string, at);
     buffers.steps.push({
-      kind: keyOf(STEP_KINDS, step.kind, `${at}.kind`),
+      kind,
       filter: expressionOf(step.filter, world, bound, `${at}.filter`),
       range: expressionOf(step.range, world, SLOT_BOUND_NAMES, `${at}.range`),
       shapeKind,

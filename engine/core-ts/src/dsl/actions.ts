@@ -232,8 +232,13 @@ function querySpec(raw: unknown, ctx: SystemContext, vars: ExprVars): QuerySpec 
 
 /**
  * Буфер упорядоченной выборки: идентификатор сущности и смещение от `nearestTo`
- * рядом. `Float64Array` под id — `EntityId` 48-битный (ID-1); `Int32Array` под
- * смещения — это координаты Q16.16, то есть `i32` (FP-1).
+ * рядом. `Float64Array` под id — `EntityId` 48-битный (ID-1).
+ *
+ * Смещения тоже `Float64Array`, а не `Int32Array`: РАЗНОСТЬ двух координат
+ * `i32` по модулю доходит до 2^32 и в `i32` не помещается, а хранение её там
+ * заворачивало бы ключ ровно так же, как `sub` Math API, — то есть возвращало
+ * бы расхождение с `withinRadius`, которое ACT-5 запрещает (QUERY-1). Целое
+ * такой величины двоичный контейнер держит точно (DET-2, условие 2).
  *
  * Хранится смещение, а не готовый ключ: квадрат расстояния в Q16.16 не
  * помещается, и сравниваются они точной 64-битной арифметикой по паре
@@ -241,8 +246,8 @@ function querySpec(raw: unknown, ctx: SystemContext, vars: ExprVars): QuerySpec 
  */
 interface OrderedBuffer {
   readonly ids: Float64Array;
-  readonly dx: Int32Array;
-  readonly dy: Int32Array;
+  readonly dx: Float64Array;
+  readonly dy: Float64Array;
 }
 
 /**
@@ -264,24 +269,40 @@ function orderedBuffer(size: number): OrderedBuffer {
   if (existing !== undefined && existing.ids.length >= size) return existing;
   const grown: OrderedBuffer = {
     ids: new Float64Array(size),
-    dx: new Int32Array(size),
-    dy: new Int32Array(size),
+    dx: new Float64Array(size),
+    dy: new Float64Array(size),
   };
   orderedBuffers[orderedDepth] = grown;
   return grown;
 }
 
-/** Позиция сущности читается тотально (ECS-7): без компонента — мировое начало координат. */
+/**
+ * Позиция сущности читается тотально (ECS-7): без компонента — мировое начало
+ * координат, то же, что даёт фильтр `withinRadius` запроса (QUERY-1, ACT-5).
+ *
+ * Случай «компонента позиции в сцене нет вовсе» сюда не доходит: система с
+ * `nearestTo` в такой сцене отвергается на регистрации (SYS-3,
+ * `dsl/evaluatedSystem.ts`) — иначе запрос не пропускал бы никого, а
+ * упорядочивание считало бы всех стоящими в начале координат, то есть два
+ * потребителя одного правила отвечали бы по-разному.
+ */
 function positionOf(ctx: SystemContext, entity: EntityId, axis: 'x' | 'y'): Fixed {
   return ctx.has(entity, POSITION_COMPONENT) ? ctx.get(entity, POSITION_COMPONENT, axis) : 0;
 }
 
 /**
  * Выборка, упорядоченная по возрастанию квадрата расстояния до `center`
- * (ACT-5). Расстояние — той же арифметикой квадратов и до той же позиции, что
- * у `withinRadius` (QUERY-1): смещение считается через Math API (FP-4), как у
- * арены, а квадраты сравниваются точной 64-битной `distSqCompare` — приближения
- * Q16.16 здесь нет, и предела дальности у порядка тоже.
+ * (ACT-5). Расстояние — ТОЙ ЖЕ арифметикой и до той же позиции, что у
+ * `withinRadius` (QUERY-1): смещение — обычной разностью языка, ровно как в
+ * `ecs/query.ts`, а квадраты сравниваются точной 64-битной `distSqCompare` —
+ * приближения Q16.16 здесь нет, и предела дальности у порядка тоже.
+ *
+ * Разность НЕ через Math API (`sub`) намеренно: `sub` заворачивает по правилам
+ * fixed-point (FP-4), и на разнесённых координатах одна и та же пара точек
+ * давала бы в фильтре запроса одно расстояние, а в сортировке другое — ровно то
+ * расхождение, которое ACT-5 и запрещает. Промежуток при этом остаётся точным:
+ * разность двух `i32` по модулю меньше 2^32, `distSqCompare` держит её точно
+ * (DET-2, условие 2).
  *
  * Сортировка вставками, а не `Array.prototype.sort`: порядок сравнений и
  * устойчивость заданы здесь алгоритмом, а не реализацией JS-движка, — то, чего
@@ -295,8 +316,8 @@ function nearestByDistance(ctx: SystemContext, found: Float64Array, center: Vec2
   const { ids, dx, dy } = orderedBuffer(found.length);
   for (let i = 0; i < found.length; i++) {
     const entity = found[i]!;
-    const keyX = ctx.math.sub(positionOf(ctx, entity, 'x'), center.x);
-    const keyY = ctx.math.sub(positionOf(ctx, entity, 'y'), center.y);
+    const keyX = positionOf(ctx, entity, 'x') - center.x;
+    const keyY = positionOf(ctx, entity, 'y') - center.y;
     let j = i - 1;
     while (j >= 0 && distSqCompare(dx[j]!, dy[j]!, keyX, keyY) > 0) {
       dx[j + 1] = dx[j]!;

@@ -212,6 +212,7 @@ export class ViewBuffer {
       entities: this.records,
       statNames: EMPTY_STAT_NAMES,
       events: [],
+      expiredEvents: 0,
       floorBits: this.floorBits,
       floorChangedCells: [],
     };
@@ -227,8 +228,13 @@ export class ViewBuffer {
    * обычной интерполяцией (REND-2). Разрывом перемотка становится только на
    * входе и выходе — их приносит `snapAll` продюсера (смена режима, эпоха,
    * `isReplay`), а не номер тика.
+   *
+   * `expiredEvents` — величина КАНАЛА, а не извлечения (`client-shell`
+   * SHELL-4): сколько событий вытеснила граница аккумулятора с прошлой
+   * доставки, знает приёмник конверта, и он же называет её здесь. Умолчание —
+   * ноль: у сборки без канала (`RenderHost`) вытеснять события нечем.
    */
-  apply(ext: ExtractedTick): void {
+  apply(ext: ExtractedTick, expiredEvents = 0): void {
     const view = this.view;
     const tickAdvanced = !this.hasTick || ext.tick !== view.tick;
     const snapAll = ext.snapAll;
@@ -250,6 +256,7 @@ export class ViewBuffer {
     view.snapAll = snapAll;
     view.freshEvents = ext.freshEvents;
     view.events = ext.events;
+    view.expiredEvents = expiredEvents;
     view.floorChangedCells = floorChanged;
 
     if (tickAdvanced || !this.hasTick) this.lastTickAtMs = this.clock();

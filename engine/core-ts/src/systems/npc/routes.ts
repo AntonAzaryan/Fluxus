@@ -25,13 +25,23 @@ import type { NpcHandles } from './handles.js';
 import { NO_ENTITY, type EntityId, type QuerySpec, type SystemContext } from '../../types.js';
 
 /**
- * Шаг ключа по маршруту. Номер точки в маршруте меньше него по построению
- * документа: маршрут — цепочка ориентиров дизайнера, а не траектория.
+ * Индекс двухуровневый — «номер маршрута → номер точки → сущность», — а не
+ * плоская карта по ключу `маршрут × страйд + точка`. Страйд был бы вторым,
+ * необъявленным пределом платформы: маршрут в 5000 точек при страйде 4096 молча
+ * переписывал бы точки следующего маршрута, а отрицательный номер (поля
+ * `Waypoint` — обычные `i32` расстановки сцены) сталкивал бы соседние маршруты
+ * и подавно. Ровно ту же формулу и по той же причине отвергло проектное решение
+ * платформы баффов: «страйд — второй предел, о который однажды ударятся»
+ * (`abilities/runtime.ts`, `modifierIdOf`). Собственных пределов на длину
+ * маршрута платформа не объявляет (NPC-6), и индекс их не вводит.
+ *
+ * Карты второго уровня переиспользуются между наполнениями (`clear`, а не
+ * пересоздание), поэтому их число — число маршрутов, встреченных за прогон, то
+ * есть данные сцены: аллокации, пропорциональной числу СУЩНОСТЕЙ, здесь нет ни
+ * на первом наполнении, ни на последующих.
  */
-const ROUTE_STRIDE = 4096;
-
 export class NpcRoutes {
-  private readonly points = new Map<number, EntityId>();
+  private readonly points = new Map<number, Map<number, EntityId>>();
   /** Буфер выборки точек — свой у этого индекса (QUERY-3), переживает тики. */
   private readonly waypoints = new QueryBuffer();
   private spec: QuerySpec | undefined;
@@ -39,7 +49,9 @@ export class NpcRoutes {
   /** Снимает точки маршрутов текущего мира. */
   rebuild(ctx: SystemContext, position: string, handles: NpcHandles): void {
     this.spec ??= { all: [WAYPOINT_COMPONENT, position] };
-    this.points.clear();
+    // Карты маршрутов очищаются, а не выбрасываются: наполнение идёт каждый
+    // прогон системы, и пересоздание платило бы за это аллокацией.
+    for (const route of this.points.values()) route.clear();
     const found = this.waypoints.run(ctx, this.spec);
     for (let slot = 0; slot < found; slot++) {
       const entity = this.waypoints.ids[slot]!;
@@ -47,10 +59,14 @@ export class NpcRoutes {
       const at = this.waypoints.indices[slot]!;
       const route = ctx.getByIndex(at, handles.waypointRoute);
       const index = ctx.getByIndex(at, handles.waypointIndex);
+      let points = this.points.get(route);
+      if (points === undefined) {
+        points = new Map<number, EntityId>();
+        this.points.set(route, points);
+      }
       // Две точки на одном номере — опечатка расстановки; побеждает первая по
       // порядку обхода (QUERY-2), то есть исход остаётся детерминированным.
-      const key = route * ROUTE_STRIDE + index;
-      if (!this.points.has(key)) this.points.set(key, entity);
+      if (!points.has(index)) points.set(index, entity);
     }
   }
 
@@ -62,6 +78,6 @@ export class NpcRoutes {
    * бы платить за ответ, которого не ждут.
    */
   at(route: number, index: number): EntityId {
-    return this.points.get(route * ROUTE_STRIDE + index) ?? NO_ENTITY;
+    return this.points.get(route)?.get(index) ?? NO_ENTITY;
   }
 }

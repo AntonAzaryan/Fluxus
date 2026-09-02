@@ -20,11 +20,13 @@ import { ControlClientError, type ControlSocketFactory } from '@fluxus/server-ag
 import { nodeSocket } from '@fluxus/server-agent/client/node';
 import type { ServerEntry, StartParams } from '@fluxus/server-agent/protocol';
 import {
+  closeManager,
   createManagerSession,
   managerView,
   memoryStorage,
   startParamsOf,
   walk,
+  AGENT_SERVICE,
   LAUNCH_FIELDS,
   type ManagerSession,
   type ManagerState,
@@ -602,6 +604,69 @@ describe('политика завершения менеджера (MGR-4)', () 
     // Локальные остановлены, удалённые — нет, и это не зависит от тумблера.
     expect(local.registry.list()).toEqual([]);
     expect(remote.registry.list()).toHaveLength(1);
+  });
+
+  /**
+   * Вторая половина MGR-4 — «и сам агент». Она живёт в ответе на запрос закрытия
+   * контейнера (`closeManager`), а не в сессии: сессия говорит с агентом по
+   * протоколу, а гасит агента контейнер явной остановкой объявленного сервиса
+   * (DSK-7). Мост здесь подставной — предмет проверки политика, а не Electron
+   * (DSK-6).
+   */
+  it('с включённым тумблером закрытие гасит и сам агент, и «stop-all» уходит ПЕРВЫМ', async () => {
+    const agent = await liveAgent();
+    const session = manager();
+    await session.addLocal(agent.controlUrl, agent.tokens.issueCode(Date.now()), '');
+    await session.start(session.state.hosts[0]!.id, params());
+    expect(agent.registry.list()).toHaveLength(1);
+
+    // Мост запоминает не только СВОЙ вызов, но и то, сколько серверов было живо
+    // в этот момент: порядок здесь и есть лекарство от гонки, и проверяется он
+    // фактом, а не последовательностью вызовов подставного объекта.
+    const stopped: { id: string; serversAlive: number }[] = [];
+    const answer = await closeManager(session, {
+      stopService: (id) => {
+        stopped.push({ id, serversAlive: agent.registry.list().length });
+        return Promise.resolve({ id, running: false, address: '' });
+      },
+    });
+
+    expect(answer).toBe(true);
+    expect(stopped).toEqual([{ id: AGENT_SERVICE, serversAlive: 0 }]);
+    expect(agent.registry.list()).toEqual([]);
+  });
+
+  it('с выключенным тумблером закрытие не трогает ни серверы, ни агент', async () => {
+    const agent = await liveAgent();
+    const session = manager();
+    await session.addLocal(agent.controlUrl, agent.tokens.issueCode(Date.now()), '');
+    await session.start(session.state.hosts[0]!.id, params());
+
+    session.setKillOnExit(false);
+    const stopped: string[] = [];
+    const answer = await closeManager(session, {
+      stopService: (id) => {
+        stopped.push(id);
+        return Promise.resolve({ id, running: false, address: '' });
+      },
+    });
+
+    // «Серверы и агент SHALL переживать закрытие» (MGR-4): ни одной остановки.
+    expect(answer).toBe(true);
+    expect(stopped).toEqual([]);
+    expect(agent.registry.list()).toHaveLength(1);
+  });
+
+  it('без моста контейнера закрытие останавливает то, что достижимо', async () => {
+    const agent = await liveAgent();
+    const session = manager();
+    await session.addLocal(agent.controlUrl, agent.tokens.issueCode(Date.now()), '');
+    await session.start(session.state.hosts[0]!.id, params());
+
+    // Обычная вкладка браузера: сервиса агента без моста нет вовсе, и гасить
+    // остаётся только серверы. Отсутствие моста — не отказ закрытия.
+    expect(await closeManager(session, undefined)).toBe(true);
+    expect(agent.registry.list()).toEqual([]);
   });
 });
 

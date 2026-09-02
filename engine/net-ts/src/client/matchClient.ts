@@ -607,6 +607,21 @@ export class MatchClient {
     if (this.clientPhase !== 'closed') this.close('disconnected', 'соединение закрыто');
   }
 
+  /**
+   * Кадр сервера не разобрался — соединение рвётся с НАЗВАННЫМ исходом
+   * (`protocol-error`, NTR-4), и это третий исход рядом с `ended` и
+   * `disconnected`, а не пересказ одного из них: сломанный канал не является
+   * ни честно кончившимся матчем, ни обычным обрывом. Разница потребительская
+   * (NTR-17) — после конца матча возвращаться некуда, после сбоя протокола
+   * возвращаться незачем: та же сборка встретит тот же кадр.
+   *
+   * Зовёт его связка с транспортом, у которой на руках текст разбора; сам
+   * `MatchClient` кадров не декодирует.
+   */
+  onProtocolError(detail: string): void {
+    if (this.clientPhase !== 'closed') this.close('protocol-error', detail);
+  }
+
   private onWelcome(
     slot: number,
     players: readonly string[],

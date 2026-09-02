@@ -5,17 +5,21 @@
  * подписка HUD с `RemoteHost.register` или сузься доставленное состояние —
  * красной станет компиляция, а не первая доставка в рантайме.
  *
- * Только compile-time: `Assert`/`Extends` ломают tsc при несовместимости,
- * рантайм-утверждений здесь нет и не нужно.
+ * Типовая часть — только compile-time: `Assert`/`Extends` ломают tsc при
+ * несовместимости. Рантайм-проверка здесь одна и по делу: подписка HUD стоит в
+ * общем списке подсистем сцены, а значит обязана объявить свою стоимость
+ * (`render-quality` QUAL-3), и принять это объявление должен настоящий
+ * контроллер качества, а не копия его правил рядом.
  */
+import * as THREE from 'three';
 import { describe, expect, it } from 'vitest';
+import type { AssetService } from '@fluxus/assets';
 import type { InputSource, RemoteHost } from '@fluxus/client';
-import type {
-  HudActionsFacade,
-  HudControlChannel,
-  HudDeliveredState,
-  HudRuntime,
-} from '../src/index.js';
+import { PresentationStage, QualityController, type RenderContext } from '@fluxus/render';
+import { HudActionsFacade, HudOverlayHost, HudRegistry, HudRuntime } from '../src/index.js';
+import type { HudControlChannel, HudDeliveredState } from '../src/index.js';
+import { asElement, fakeDom } from './support/fakeDom.js';
+import { CameraSpy } from './support/hud.js';
 
 type Assert<T extends true> = T;
 type Extends<A, B> = A extends B ? true : false;
@@ -37,5 +41,43 @@ type _FacadeIsInputSource = Assert<Extends<HudActionsFacade, InputSource>>;
 describe('структурные контракты HUD ↔ оболочка (HUD-1)', () => {
   it('проверены компилятором: несовместимость — ошибка typecheck, не рантайма', () => {
     expect(true).toBe(true);
+  });
+});
+
+describe('подписка HUD объявляет свою стоимость (QUAL-3)', () => {
+  function hudRuntime(): HudRuntime {
+    const registry = new HudRegistry();
+    const host = new HudOverlayHost(asElement(fakeDom().container));
+    const actions = new HudActionsFacade({ actions: registry, camera: new CameraSpy() });
+    return new HudRuntime({ registry, host, actions });
+  }
+
+  function stage(): PresentationStage {
+    const context: RenderContext = {
+      scene: new THREE.Scene(),
+      assets: {} as AssetService,
+      config: { heightStep: 0.6 },
+    };
+    return new PresentationStage(context);
+  }
+
+  it('называет причину константности, а ручек не заводит', () => {
+    const declaration = hudRuntime().subsystem.quality();
+
+    expect(declaration.subsystem).toBe('match-hud');
+    expect(declaration.knobs).toEqual([]);
+    // Пустой список БЕЗ причины — то самое «ни то, ни другое», которое QUAL-3
+    // объявляет дефектом.
+    expect(declaration.constantCost).toBeTruthy();
+  });
+
+  it('настоящий контроллер качества принимает её и не находит у HUD ручек', () => {
+    const scene = stage();
+    scene.register(hudRuntime().subsystem);
+
+    // Регистрация не бросает — декларация законна; реестр ручек от HUD не
+    // растёт, потому что стоимостных осей у него нет.
+    const controller = new QualityController(scene);
+    expect(controller.knobs).toEqual([]);
   });
 });

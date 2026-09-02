@@ -226,9 +226,11 @@ export function createRewindController(
       const preserved = readExempt();
       const preservedOwners = readExemptComponents();
 
+      // Компенсации режима здесь нет и не нужно: `restoreSnapshot` машину
+      // состояний не трогает (REW-2), поэтому мир остаётся в `Rewinding`, в
+      // который его перевёл `beginRewind` (WSM-2, WSM-5). Многократный `seekTo`
+      // подряд (REW-7) поэтому и корректен.
       restoreSnapshot(state, snapshot);
-      // `restoreSnapshot` вернул и режим базы — но мы всё ещё перематываем.
-      state.mode = 'Rewinding';
 
       // Доигрывание вперёд по каноническим вводам (REW-2). Реплеевые тики
       // помечены `isReplay`, чтобы внешние потребители их не дублировали (WSM-6).

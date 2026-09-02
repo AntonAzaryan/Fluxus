@@ -18,7 +18,16 @@ import {
   world as coreWorld,
 } from '@fluxus/core';
 import { ViewBuffer, type RenderSubsystem, type TickView } from '@fluxus/render';
-import { RemoteHost, WorkerShell, shellPort, type WorkerToMain } from '../src/index.js';
+import {
+  RemoteHost,
+  ShellSender,
+  WorkerShell,
+  readTick,
+  shellPort,
+  type ShellPort,
+  type TickEnvelope,
+  type WorkerToMain,
+} from '../src/index.js';
 import {
   PLAYER_ID,
   STEP,
@@ -36,22 +45,30 @@ async function settle(rounds = 4): Promise<void> {
   for (let i = 0; i < rounds; i++) await new Promise((resolve) => setTimeout(resolve, 0));
 }
 
-/** Подсистема-зонд: копит снимки syncTick и все события с freshEvents. */
+/**
+ * Подсистема-зонд: копит снимки syncTick, все события с freshEvents и число
+ * вытесненных событий КАЖДОЙ доставки (SHELL-4) — счётчик хоста суммарен, а
+ * наблюдаемость требуется у доставки.
+ */
 function probe(): {
   subsystem: RenderSubsystem;
   views: unknown[];
   events: { tick: number | undefined; type: string }[];
+  expired: number[];
 } {
   const views: unknown[] = [];
   const events: { tick: number | undefined; type: string }[] = [];
+  const expired: number[] = [];
   return {
     views,
     events,
+    expired,
     subsystem: {
       name: 'probe',
       init: () => {},
       syncTick(view: TickView) {
         views.push(snapshotView(view));
+        expired.push(view.expiredEvents);
         if (view.freshEvents) {
           for (const event of view.events) events.push({ tick: event.tick, type: event.type });
         }
@@ -182,6 +199,9 @@ describe('conflation: состояние последнее, события вс
     // Дельта пола пережила conflation: клетка 0 выбита в тике 3.
     expect(view.floorBits![0]).toBe(0);
     expect(remote.expiredEvents).toBe(0);
+    // Ничего не вытеснено — и доставка говорит об этом числом (SHELL-4):
+    // «событий не было» не должно быть неотличимо от «события не доехали».
+    expect(remoteProbe.expired).toEqual([0, 0]);
   });
 
   it('лимит глубины аккумулятора: просроченные события считаются, не доставляются', () => {
@@ -246,6 +266,11 @@ describe('conflation: состояние последнее, события вс
 
     expect(frozenProbe.events).toHaveLength(0);
     expect(frozenRemote.expiredEvents).toBe(1);
+    // То же число доезжает ДО ПОТРЕБИТЕЛЯ той же доставкой (SHELL-4): виджет
+    // вправе показать разрыв ровно там, где события пропали, — а по суммарному
+    // счётчику хоста доставку не назовёшь.
+    expect(frozenProbe.expired).toEqual([1]);
+    expect(frozenRemote.view!.expiredEvents).toBe(1);
     expect(frozenRemote.view!.tick).toBe(6);
   });
 });
@@ -317,6 +342,120 @@ describe('окно доставки через перемотку: реплее�
     ]);
     expect(remote.view!.tick).toBe(6);
     expect(remote.view!.mode).toBe('Running');
+  });
+});
+
+describe('факты разрыва не уезжают проигрываемыми (SHELL-4, match-hud HUD-5)', () => {
+  it('обычная доставка после разрыва не воскрешает признак «эти факты можно проигрывать»', () => {
+    const rig = makeRig();
+    const posted: TickEnvelope[] = [];
+    const port: ShellPort = {
+      post(message) {
+        posted.push(message as TickEnvelope);
+      },
+      onMessage() {
+        // Обратного канала этому стенду не нужно: он проверяет отправителя.
+      },
+    };
+    // Свободного буфера нет вовсе — ровно то состояние, в котором доставка не
+    // уходит, а накопитель копит: узкое окно живёт здесь.
+    const sender = new ShellSender(port, { poolSize: 0 });
+    const extractor = makeExtractor(rig);
+
+    // Сетевая сторона кладёт факты, попавшие на разрыв непрерывности (SHELL-7):
+    // играть их нельзя — картинка через разрыв перескочила.
+    sender.pushEvents([{ type: 'CastFireball', tick: 2, data: {} }], false);
+    // Обычный честный тик следом: прежде его признак ИЛИ-ился с накопленным и
+    // делал проигрываемой всю пачку, включая факты по ту сторону разрыва.
+    sender.push(
+      extractor.extract(
+        tick(rig.sim, rig.state, [
+          {
+            tick: rig.state.tick + 1,
+            playerId: PLAYER_ID,
+            seq: 1,
+            move: { x: 0, y: 0 },
+            aimDir: 0,
+            buttons: 0,
+          },
+        ]),
+      ),
+    );
+    expect(posted).toHaveLength(0); // буфера нет — доставка ждёт
+
+    // Main вернул буфер: копившееся уезжает одним конвертом.
+    sender.ack(new ArrayBuffer(64 * 1024));
+    expect(posted).toHaveLength(1);
+    const envelope = posted[0]!;
+    const delivered = readTick(envelope.buffer, envelope.events, []);
+    expect(delivered.events.map((event) => event.type)).toEqual(['CastFireball']);
+    // «Нельзя» победило: доигрывать сквозь разрыв запрещено (HUD-5), а флаг у
+    // конверта один на всю пачку.
+    expect(delivered.freshEvents).toBe(false);
+  });
+
+  it('без разрыва признак остаётся честным: обычные факты проигрываются', () => {
+    const rig = makeRig();
+    const posted: TickEnvelope[] = [];
+    const port: ShellPort = {
+      post(message) {
+        posted.push(message as TickEnvelope);
+      },
+      onMessage() {
+        // См. выше: стенд проверяет отправителя.
+      },
+    };
+    const sender = new ShellSender(port, { poolSize: 1 });
+    const extractor = makeExtractor(rig);
+
+    sender.pushEvents([{ type: 'CastFireball', tick: 2, data: {} }], true);
+    sender.push(
+      extractor.extract(
+        tick(rig.sim, rig.state, [
+          {
+            tick: rig.state.tick + 1,
+            playerId: PLAYER_ID,
+            seq: 1,
+            move: { x: 0, y: 0 },
+            aimDir: 0,
+            buttons: 0,
+          },
+        ]),
+      ),
+    );
+
+    expect(posted).toHaveLength(1);
+    const delivered = readTick(posted[0]!.buffer, posted[0]!.events, []);
+    expect(delivered.events.map((event) => event.type)).toEqual(['CastFireball']);
+    expect(delivered.freshEvents).toBe(true);
+  });
+});
+
+describe('буфер возвращается воркеру всегда (SHELL-3)', () => {
+  it('конверт тика, приехавший до приветственного сообщения, не съедает буфер пула', () => {
+    const posted: { message: unknown; transfer: ArrayBuffer[] | undefined }[] = [];
+    let deliver: ((message: unknown) => void) | null = null;
+    const port: ShellPort = {
+      post(message, transfer) {
+        posted.push({ message, transfer });
+      },
+      onMessage(handler) {
+        deliver = handler;
+      },
+    };
+    new RemoteHost(dummyContext(), { clock: () => 0 }).connect(port);
+
+    // Порядок сообщений штатной сборки этого не допускает — потому и защита; но
+    // защита в одну сторону навсегда укорачивала бы пул канала (SHELL-3).
+    const buffer = new ArrayBuffer(1024);
+    const envelope: TickEnvelope = { t: 'tick', buffer, events: [], kinds: [], expiredEvents: 0 };
+    deliver!(envelope);
+
+    expect(posted).toHaveLength(1);
+    expect(posted[0]!.message).toEqual({ t: 'ret', buffer });
+    // Тем же transfer'ом, каким буфер приехал: круг «воркер → main → воркер»
+    // замыкается и на этом выходе.
+    expect(posted[0]!.transfer).toEqual([buffer]);
   });
 });
 

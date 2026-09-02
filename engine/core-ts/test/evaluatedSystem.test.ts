@@ -12,6 +12,8 @@ const F = fixed.fromFloat;
 
 const Health: ComponentSchema = { name: 'Health', fields: { current: 'fixed', max: 'fixed' } };
 const Burning: ComponentSchema = { name: 'Burning', fields: { dps: 'fixed' } };
+/** Не в `SCHEMAS`: отсутствие позиции — предмет отдельной проверки `nearestTo` (ACT-5). */
+const Position: ComponentSchema = { name: 'Position', fields: { x: 'fixed', y: 'fixed' } };
 const SCHEMAS = [Health, Burning];
 
 const PREFABS: PrefabDef[] = [
@@ -556,17 +558,40 @@ describe('валидация на регистрации (SYS-3)', () => {
     );
   });
 
-  it('nearestTo и limit forEach — выражения внешней области (ACT-5, SYS-3)', () => {
-    const ordered = (args: Readonly<Record<string, unknown>>): Partial<SystemDef> => ({
-      do: [{ forEach: { query: { all: ['Health'] }, as: 'target', ...args, do: [] } }],
-    });
+  /** Обход с необязательными аргументами упорядочивания (ACT-5). */
+  const ordered = (args: Readonly<Record<string, unknown>>): Partial<SystemDef> => ({
+    do: [{ forEach: { query: { all: ['Health'] }, as: 'target', ...args, do: [] } }],
+  });
 
-    expect(invalid(ordered({ nearestTo: { vec: [0, 0] }, limit: F(1) }))).not.toThrow();
-    expect(invalid(ordered({ nearestTo: { vec: [0, 0, 0] } }))).toThrow(
+  it('nearestTo и limit forEach — выражения внешней области (ACT-5, SYS-3)', () => {
+    // Мир с компонентом позиции: без него `nearestTo` отвергается отдельной
+    // проверкой конфигурации (следующий тест), и предмет этого затерялся бы.
+    const positioned = (patch: Partial<SystemDef>): (() => void) => {
+      const world = createWorld([...SCHEMAS, Position], PREFABS);
+      return () => { validateSystem({ ...BURNING_JSON, ...patch }, world); };
+    };
+
+    expect(positioned(ordered({ nearestTo: { vec: [0, 0] }, limit: F(1) }))).not.toThrow();
+    expect(positioned(ordered({ nearestTo: { vec: [0, 0, 0] } }))).toThrow(
       /оператор "vec": ожидалось аргументов 2, получено 3/,
     );
     // Переменная итерации связана телом, а не аргументами самого обхода.
     expect(invalid(ordered({ limit: v('target') }))).toThrow(/переменная "target" не связана/);
+  });
+
+  /**
+   * ACT-5: расстояние считается до той же позиции, что у `withinRadius`
+   * (QUERY-1). Сцена без компонента позиции развела бы ответы двух
+   * потребителей — запрос не пропустил бы никого, а упорядочивание сочло бы
+   * всех стоящими в начале координат, — и это дефект конфигурации, которому
+   * место на регистрации (SYS-3).
+   */
+  it('nearestTo в сцене без компонента позиции — отказ на регистрации (ACT-5, QUERY-1)', () => {
+    expect(invalid(ordered({ nearestTo: { vec: [0, 0] } }))).toThrow(
+      /forEach\.nearestTo:.*компонент "Position" сцена не объявляет/s,
+    );
+    // Обход без `nearestTo` позиции не спрашивает — такая система законна.
+    expect(invalid(ordered({ limit: F(1) }))).not.toThrow();
   });
 
   it('выражения-аргументы addTween, carveFloor и модификаторов проверяются на регистрации (SYS-3)', () => {

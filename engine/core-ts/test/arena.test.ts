@@ -97,6 +97,8 @@ function harness() {
       setField(world, floorEntity!, FLOOR_COMPONENT, word, bits & ~(1 << (cell & 31)));
     },
     step: (): readonly GameEvent[] => [...tick(sim, state).events],
+    /** Полный результат тика: правилу флага (ECS-3) нужен ещё и набор изменений (OBS-6). */
+    stepResult: () => tick(sim, state),
   };
 }
 
@@ -169,6 +171,40 @@ describe('выход за границу (ARENA-3)', () => {
     expect(types(h.step())).toEqual([]);
     h.move(actor, 0.5, 4.5);
     expect(types(h.step())).toEqual(['LeftArena']);
+  });
+
+  /**
+   * Сценарий ARENA-3 «В поле inside лежит не единица» вместе с ECS-3: «ненулевое
+   * значение означает „внутри“ по правилу флага», и «ядро не нормализует
+   * записанное контентом». Сравнение по числу вместо правила флага давало бы
+   * молчаливую замену тройки единицей — лишнюю запись, метку изменённого
+   * компонента (OBS-6) и лишнюю дельту при неизменной стороне границы.
+   */
+  it('в поле inside лежит не единица: тройка остаётся тройкой, записи и события нет', () => {
+    const h = harness();
+    const actor = h.place('Actor', 4, 4);
+    h.step();
+    setField(h.world, actor, ARENA_STATE_COMPONENT, 'inside', 3);
+
+    const result = h.stepResult();
+    expect(types([...result.events])).toEqual([]);
+    expect(getField(h.world, actor, ARENA_STATE_COMPONENT, 'inside')).toBe(3);
+    expect(result.changes.changedEntities(ARENA_STATE_COMPONENT).size).toBe(0);
+  });
+
+  it('переход из «не единицы» наружу — обычный переход: пишется ровно ноль (ECS-3)', () => {
+    const h = harness();
+    const actor = h.place('Actor', 4, 4);
+    h.step();
+    setField(h.world, actor, ARENA_STATE_COMPONENT, 'inside', 3);
+
+    h.move(actor, 0.5, 4.5);
+    expect(types(h.step())).toEqual(['LeftArena']);
+    expect(getField(h.world, actor, ARENA_STATE_COMPONENT, 'inside')).toBe(0);
+    // И обратно: ядро пишет ровно единицу, а не восстанавливает контентную тройку.
+    h.move(actor, 4, 4);
+    expect(types(h.step())).toEqual([]);
+    expect(getField(h.world, actor, ARENA_STATE_COMPONENT, 'inside')).toBe(1);
   });
 
   it('сужение догнало неподвижную сущность — тот же переход', () => {
@@ -260,6 +296,24 @@ describe('провал сквозь пол (ARENA-5)', () => {
     h.step();
     h.move(projectile, 0.5, 4.5);
     expect(types(h.step())).toEqual(['LeftArena']);
+  });
+
+  /** То же правило флага (ECS-3), что и у `inside` в ARENA-3: поля одного вида. */
+  it('в поле onFloor лежит не единица: тройка остаётся тройкой, записи и события нет', () => {
+    const h = harness();
+    const actor = h.place('Actor', 4.5, 4.5);
+    h.step();
+    setField(h.world, actor, ARENA_STATE_COMPONENT, 'onFloor', 3);
+
+    const result = h.stepResult();
+    expect(types([...result.events])).toEqual([]);
+    expect(getField(h.world, actor, ARENA_STATE_COMPONENT, 'onFloor')).toBe(3);
+    expect(result.changes.changedEntities(ARENA_STATE_COMPONENT).size).toBe(0);
+
+    // Переход при этом сохранён: выбитый пол даёт событие и ровно ноль в поле.
+    h.breakFloor(4 * 8 + 4);
+    expect(types(h.step())).toEqual(['FellThroughFloor']);
+    expect(getField(h.world, actor, ARENA_STATE_COMPONENT, 'onFloor')).toBe(0);
   });
 });
 

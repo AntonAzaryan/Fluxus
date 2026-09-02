@@ -75,26 +75,31 @@ type Structural =
   | { readonly kind: 'removeComponent'; readonly component: string };
 
 /**
- * Значение, которое поставит полю ОТЛОЖЕННЫЙ `addComponent` (CMD-5);
- * `undefined` — такая команда на этот адрес значения не ставит.
+ * Что СТРУКТУРНАЯ команда ставит по адресу поля (CMD-5); `undefined` — эта
+ * команда на адрес значения не ставит.
  *
  * Значение адресу ставит не только `setField`: `addComponent` на flush
  * переписывает все поля компонента (`values` → default схемы → нейтральное
- * значение типа, ECS-3, ECS-6). Порядок источников поэтому тот же, что у
- * мутатора в `world.ts`, а поле вне схемы (или незарегистрированный компонент)
- * такая команда не пишет вовсе.
+ * значение типа, ECS-3, ECS-6), а `removeComponent` делает чтение поля
+ * нейтралью ТИПА — после flush компонент сущности не принадлежит, а чтение
+ * такого поля тотально (ECS-7, ECS-8). Порядок источников поэтому тот же, что
+ * у мутатора в `world.ts`, а поле вне схемы (или незарегистрированный
+ * компонент) ни состав, ни снятие не пишут вовсе: читатель падает обратно на
+ * мир, который на такое имя отвечает по своим правилам (ECS-5).
  */
-function addedValue(
+function structuralAnswer(
   state: WorldState,
   body: Structural,
   component: string,
   field: string,
 ): number | undefined {
-  if (body.kind !== 'addComponent' || body.component !== component) return undefined;
+  if (body.kind === 'spawn' || body.component !== component) return undefined;
   const schema = world.componentSchema(state, component);
   const type = schema?.fields[field];
   if (type === undefined) return undefined;
-  return body.values?.[field] ?? schema?.defaults?.[field] ?? world.neutralValue(type);
+  const neutral = world.neutralValue(type);
+  if (body.kind === 'removeComponent') return neutral;
+  return body.values?.[field] ?? schema?.defaults?.[field] ?? neutral;
 }
 
 /**
@@ -241,7 +246,7 @@ export function createCommandBuffer(initial: WorldState): CommandBufferHandle {
           ? payloads[index]
           : undefined;
       case KIND_STRUCTURAL:
-        return addedValue(state, structuralAt(index), component, field);
+        return structuralAnswer(state, structuralAt(index), component, field);
       default:
         return undefined;
     }
@@ -460,9 +465,10 @@ export function createCommandBuffer(initial: WorldState): CommandBufferHandle {
      * разрешается в handle ОДИН раз на вызов — и только если handle-команды в
      * буфере вообще есть. Сравниваются после этого числа, а не строки.
      *
-     * Значение адресу ставит не только `setField`, но и отложенный
-     * `addComponent` — за него отвечает `addedValue`: иначе чтение разошлось бы
-     * с тем, что окажется в мире после flush (CMD-5).
+     * Значение адресу ставит не только `setField`, но и структурная команда —
+     * отложенные `addComponent` и `removeComponent`; за них отвечает
+     * `structuralAnswer`: иначе чтение разошлось бы с тем, что окажется в мире
+     * после flush (CMD-5).
      *
      * ponytail: O(команд в буфере) на вызов. Буфер флашится в конце каждой
      * системы, поэтому список короткий; индекс по адресу поля — когда

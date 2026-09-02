@@ -499,14 +499,23 @@ export function createManagerSession(options: ManagerSessionOptions): ManagerSes
       // локального менеджера не влияет ни при каком положении переключателя —
       // поэтому останов адресуется только локальному агенту.
       if (!killOnExit) return;
-      for (const host of hosts.values()) {
-        if (!host.view.local || host.client?.connected !== true) continue;
-        try {
-          await host.client.stopAll();
-        } catch {
-          // Агент мог уже уйти: закрытие менеджера не место для отказов.
-        }
-      }
+      const local = [...hosts.values()].filter(
+        (host) => host.view.local && host.client?.connected === true,
+      );
+      // Хосты останавливаются ПАРАЛЛЕЛЬНО, и порядок между ними не значит
+      // ничего: у закрывающегося менеджера есть общий срок ответа контейнеру
+      // (DSK-7), и складывать в него милость каждого агента подряд —
+      // единственный способ в него не уложиться. Сам агент тем же основанием
+      // останавливает все свои серверы одной операцией (`registry.stopAll`).
+      await Promise.all(
+        local.map(async (host) => {
+          try {
+            await host.client?.stopAll();
+          } catch {
+            // Агент мог уже уйти: закрытие менеджера не место для отказов.
+          }
+        }),
+      );
     },
     close() {
       for (const host of hosts.values()) host.client?.close();

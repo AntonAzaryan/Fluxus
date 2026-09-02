@@ -176,6 +176,7 @@ function tickView(entities: EntityView[], statNames: readonly string[]): TickVie
     entities: new Map(entities.map((entity) => [entity.id, entity])),
     statNames,
     events: [],
+    expiredEvents: 0,
     floorBits: null,
     floorChangedCells: [],
   };

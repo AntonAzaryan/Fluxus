@@ -136,6 +136,9 @@ export class DocumentSource implements PresentationProducer {
       // компоненты мира, а мира в режиме правки не идёт.
       statNames: [],
       events: [],
+      // Аккумулятора доставки у документного набора нет вовсе, поэтому и
+      // вытесненных событий не бывает (`client-shell` SHELL-4).
+      expiredEvents: 0,
       // Террейн приезжает подсистеме сеткой (REND-8), а не набором инстансов:
       // документная правка уровней и пола идёт через `TerrainSubsystem.applyGrid`.
       floorBits: null,
