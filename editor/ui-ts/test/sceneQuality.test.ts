@@ -6,27 +6,27 @@
  * Проверяется применимость документа и его содержание: он обязан проходить
  * валидацию против реестра, который собирает СЦЕНА РЕДАКТОРА (набор подсистем
  * у неё свой — тумана в кадре правки нет), и не обязан ничего ограничивать.
- * Собрать сам вьюпорт headless нельзя (`canRender`: WebGL), поэтому подсистемы
- * поднимаются здесь тем же набором и в том же порядке, что `createSceneStage`.
+ * Собрать сам вьюпорт headless нельзя (`canRender`: WebGL), а вот его НАБОР
+ * подсистем — можно: его поднимает `registerViewportSubsystems`, та же функция,
+ * которой пользуется `createSceneStage`. Своей копии набора здесь больше нет:
+ * копия и была тем, из-за чего пропуск подсистемы эффектов (REND-23) прожил
+ * незамеченным — она повторяла его слово в слово.
  */
 import { describe, expect, it } from 'vitest';
 import * as THREE from 'three';
 import { createTerrainGrid, type TerrainGrid } from '@fluxus/core';
 import type { AssetService, VisualManifest } from '@fluxus/assets';
 import {
-  LightingSubsystem,
-  ModelsSubsystem,
-  OverlaySubsystem,
-  ParticlesSubsystem,
-  PostprocessSubsystem,
   PresentationStage,
   QualityController,
-  TerrainSubsystem,
   validateQualityPreset,
   type QualityValue,
   type RenderContext,
 } from '@fluxus/render';
-import { EDITOR_QUALITY_PRESET } from '../src/areas/sceneStage.js';
+import {
+  EDITOR_QUALITY_PRESET,
+  registerViewportSubsystems,
+} from '../src/areas/sceneStage.js';
 
 const SIZE = 4;
 
@@ -41,9 +41,9 @@ function flatGrid(): TerrainGrid {
 }
 
 /**
- * Сцена вьюпорта без WebGL: те же подсистемы и тот же порядок регистрации, что
- * поднимает первая сетка документа (REND-8). Манифест пустой — реестр ручек
- * собирается из деклараций подсистем и от данных манифеста не зависит.
+ * Сцена вьюпорта без WebGL: подсистемы поднимает ТА ЖЕ функция, что и в
+ * `createSceneStage` (REND-8). Манифест пустой — реестр ручек собирается из
+ * деклараций подсистем и от данных манифеста не зависит.
  */
 function viewportStage(): PresentationStage {
   const visuals: VisualManifest = { entities: {} };
@@ -53,18 +53,11 @@ function viewportStage(): PresentationStage {
     config: { heightStep: 0.6 },
   };
   const stage = new PresentationStage(context);
-  const grid = flatGrid();
-  // Пост-обработка — первой подсистемой, как в `createSceneStage` (REND-34):
-  // её ручки такая же часть реестра вьюпорта, как ручки света и моделей.
-  stage.register(new PostprocessSubsystem());
-  // Свет — следом, как в `createSceneStage`: его ручки такая же
-  // часть реестра вьюпорта, как ручки моделей и частиц.
-  const lighting = new LightingSubsystem({ grid });
-  stage.register(lighting);
-  stage.register(new TerrainSubsystem(grid, { shadows: lighting }));
-  stage.register(new ModelsSubsystem(visuals, { shadows: lighting, warn: () => {} }));
-  stage.register(new ParticlesSubsystem(visuals, { warn: () => {} }));
-  stage.register(new OverlaySubsystem());
+  registerViewportSubsystems(stage, {
+    grid: flatGrid(),
+    camera: new THREE.PerspectiveCamera(),
+    visuals,
+  });
   return stage;
 }
 
@@ -103,6 +96,13 @@ describe('вьюпорт редактора живёт на «ультре» (QU
       'postprocess.bloomResolution',
       'postprocess.lut',
       'terrain.curvatureTessellation',
+      // Ручки воды (REND-35) — тем же порядком: подсистему поднимает сетка
+      // террейна, и её ручки в реестре вьюпорта есть, хотя зашитый документ их
+      // не называет. Прежняя копия набора их не знала вовсе — ровно тот сорт
+      // расхождения, ради которого набор теперь общий (см. шапку).
+      'water.depthTexelsPerCell',
+      'water.detailLayers',
+      'water.rippleSources',
     ]);
   });
 

@@ -1,17 +1,41 @@
 /* eslint-disable max-lines -- вьюпорт есть одно замыкание над подсистемами
    рендера: сборка, подача документов, кадровый цикл и указатель делят рендерер,
    камеру и набор подсистем. Вынесенная половина получила бы их параметрами,
-   то есть открыла бы наружу то, чем владеет вьюпорт (ED-15, REND-11). */
+   то есть открыла бы наружу то, чем владеет вьюпорт (ED-15, REND-11).
+   Изъятие из этого правила ровно одно и названо в шапке: подъём НАБОРА
+   подсистем (`registerViewportSubsystems`). Оно и правда берёт параметрами два
+   из перечисленных общих объектов — presentation-сцену и камеру кадра, — но
+   владения не отдаёт: набор возвращается вызывающему, живёт в его `parts` и
+   правится только им. Плата взята сознательно, ради проверяемости ED-1, и
+   обоснована в шапке. */
 /**
  * @contribution Сборка вьюпорта сцены — часть вклада области, а не каркаса.
  *
  * Здесь редактор встречается с рендером движка, и вся встреча — регистрация
  * подсистем и подача документного набора. Собственного рендера у редактора нет
  * (ED-1): террейн рисует `TerrainSubsystem` (REND-7, REND-9), модели —
- * `ModelsSubsystem` (REND-3..6, REND-10), эмиттерные виды — `ParticlesSubsystem`
+ * `ModelsSubsystem` (REND-3..6, REND-10), транзиентные эффекты —
+ * `EffectsSubsystem` (REND-23), эмиттерные виды — `ParticlesSubsystem`
  * (REND-24), служебные наложения — `OverlaySubsystem` (REND-16), а
  * presentation-состояние наполняет `DocumentSource` (REND-11) — тот же вход
  * подсистем, что у потока тиков.
+ *
+ * Сам НАБОР подсистем и порядок их регистрации (REND-8) вынесены отдельной
+ * функцией — `registerViewportSubsystems`. Не ради размера файла: набор есть
+ * то единственное, чем «вьюпорт рисует та же реализация rendering» (ED-1)
+ * проверяемо, а собрать вьюпорт целиком в headless-прогоне нечем (`canRender`:
+ * WebGL). Пока набор жил внутри замыкания, тест держал рядом его КОПИЮ — и
+ * копия повторила пропуск подсистемы эффектов вместо того, чтобы его назвать
+ * (а заодно успела потерять подсистему воды).
+ *
+ * Это изъятие из правила «не разрезать замыкание», записанного в `eslint-disable`
+ * выше, и цена его названа честно: presentation-сцену и камеру кадра функция
+ * получает параметрами, то есть два общих объекта вьюпорта границу пересекают.
+ * Изменяемого состояния вьюпорта она при этом не получает ни байта — только
+ * сцену, камеру и манифест, из которого набор поднимается, — и владения не
+ * отбирает: возвращённый набор живёт в `parts` вьюпорта, правит его вьюпорт, а
+ * функция после возврата о нём не знает. Обратная сделка — набор, не
+ * проверяемый ничем, — уже один раз стоила пропущенной подсистемы.
  *
  * Тика в режиме правки нет (ED-15): кадровый цикл не двигает мир, а только
  * сводит документный набор, считает позу камеры конвейером (ED-13) и рисует.
@@ -146,6 +170,7 @@ import type {
 import {
   DecorationSet,
   DocumentSource,
+  EffectsSubsystem,
   LightingSubsystem,
   ModelsSubsystem,
   OverlaySubsystem,
@@ -402,6 +427,164 @@ export function canRender(doc?: Document): boolean {
   );
 }
 
+/** Что нужно набору подсистем вьюпорта, чтобы подняться. */
+export interface ViewportSubsystemDeps {
+  /**
+   * Первая сетка террейна документа; `null` — кадр без террейна (ED-20). Всё,
+   * что из сетки выведено — визуальная поверхность (REND-9), сам террейн, вода
+   * (REND-35) и наложения (REND-16), — в таком кадре не поднимается вовсе.
+   */
+  readonly grid: TerrainGrid | null;
+  /**
+   * Камера кадра — та же, которой он рисуется и считается луч наведения
+   * (REND-15). Подсистемам она вход отбора: отсечение невидимых инстансов
+   * (REND-21) и выбор активных локальных источников по точке взгляда (REND-33).
+   */
+  readonly camera: THREE.PerspectiveCamera;
+  /** Манифест визуалов (ASSET-6), которым поднимаются читающие его подсистемы. */
+  readonly visuals: VisualManifest;
+}
+
+/**
+ * Набор подсистем вьюпорта: то, чем рисуется его кадр (ED-1). Наружу он выходит
+ * ради проверяемости — см. шапку файла; владеет им по-прежнему вьюпорт.
+ *
+ * `null` стоит ровно там, где подсистема выводится из сетки террейна и потому у
+ * вырожденного кадра (ED-20) не существует.
+ */
+export interface ViewportSubsystems {
+  readonly surface: VisualSurfaceSource | null;
+  readonly postprocess: PostprocessSubsystem;
+  readonly lighting: LightingSubsystem;
+  readonly terrain: TerrainSubsystem | null;
+  readonly water: WaterSubsystem | null;
+  readonly models: ModelsSubsystem;
+  readonly effects: EffectsSubsystem;
+  readonly particles: ParticlesSubsystem;
+  readonly overlays: OverlaySubsystem | null;
+  /**
+   * Правленый манифест визуалов целиком — КАЖДОМУ его читателю (REND-17):
+   * записи сущностей и decoration-видов читает подсистема моделей, секцию
+   * транзиентных эффектов — подсистема эффектов (REND-23), секцию эмиттеров —
+   * подсистема частиц (REND-24). Список читателей живёт здесь, рядом с их
+   * сборкой, а не в вызывающем: читатель, оставшийся без переподачи, показывал
+   * бы автору документ, которого уже нет, — тот же дефект ED-15, ради которого
+   * переподача существует.
+   */
+  applyManifest(next: VisualManifest): void;
+}
+
+/**
+ * Поднять подсистемы вьюпорта в порядке, который нормирует REND-8, — тот же
+ * набор и тот же порядок, что у игрового клиента, за вычетом того, чего у кадра
+ * правки нет по конструкции: тумана войны (FOW-7 — видимость есть часть
+ * симуляции, а симуляции здесь нет, REND-11) и превью каста (REND-28 — своего
+ * ввода у автора в кадре нет). Наложения (REND-16), наоборот, есть только здесь.
+ *
+ * Отдельной функцией — потому что этим набором и держится ED-1: расхождение
+ * кадра автора с кадром игрока начинается с подсистемы, которую забыли
+ * зарегистрировать, и увидеть это можно только на самом наборе.
+ */
+export function registerViewportSubsystems(
+  presentation: PresentationStage,
+  deps: ViewportSubsystemDeps,
+): ViewportSubsystems {
+  const { grid, camera, visuals } = deps;
+  // Пост-обработка кадра (REND-34) — ПЕРВОЙ подсистемой: она владеет
+  // проходами кадра, и вьюпорт рисует его её вызовом, а собственной
+  // пост-обработки поверх не ведёт (REND-34, ED-22). Секции у сцены может не
+  // быть — тогда цепочка неактивна, и кадр вьюпорта прежний: ни цели, ни
+  // прохода. Ни от сетки, ни от манифеста она не зависит.
+  const postprocess = new PostprocessSubsystem();
+  presentation.register(postprocess);
+  // Свет — следом (REND-8): геометрия ниже отдаёт ей свои корни
+  // теневыми кастерами и носителями локального света (REND-33), а сам он не
+  // зависит ни от сетки, ни от манифеста.
+  //
+  // Камера — та же, что у отсечения инстансов ниже, и по той же причине она
+  // нужна свету: активные локальные источники отбираются по расстоянию до
+  // ТОЧКИ ВЗГЛЯДА камеры (REND-33). Без неё точкой была бы середина арены, и
+  // на сцене, где носителей больше потолка, автор видел бы горящими не те
+  // источники, что игрок, — то есть кадры разошлись бы там, где ED-22 требует
+  // тождества. Позу на камеру сажает `applyCameraPose` до кадра подсистем (см.
+  // `frame`), поэтому отбор идёт по взгляду ЭТОГО кадра.
+  const lighting = new LightingSubsystem({ camera, ...(grid === null ? {} : { grid }) });
+  presentation.register(lighting);
+  let surface: VisualSurfaceSource | null = null;
+  let terrain: TerrainSubsystem | null = null;
+  let water: WaterSubsystem | null = null;
+  if (grid !== null) {
+    surface = new VisualSurfaceSource(grid);
+    terrain = new TerrainSubsystem(grid, { surface, shadows: lighting });
+    presentation.register(terrain);
+    // Вода (REND-35) — сразу за террейном, как в игровой сборке: глубину она
+    // берёт из той же визуальной поверхности, поэтому мазок кисти кривизны
+    // (ED-11) двигает и дно, и берег одним и тем же полем (REND-9). Сцены без
+    // террейна у воды не бывает вовсе — карта адресует клетки его сетки.
+    water = new WaterSubsystem({ grid, surface });
+    presentation.register(water);
+  }
+  // Камера подсистеме — вход отсечения невидимых инстансов (REND-21): та же
+  // самая, которой рисуется кадр и считается луч наведения. Позу на неё сажает
+  // `applyCameraPose` до кадра подсистем (см. `frame`), поэтому отсекается по
+  // пирамиде ЭТОГО кадра, а не прошлого.
+  const models = new ModelsSubsystem(visuals, {
+    camera,
+    shadows: lighting,
+    ...(surface === null ? {} : { surface }),
+  });
+  presentation.register(models);
+  // Транзиентные эффекты (REND-23) — после моделей, как в игровой сборке:
+  // оболочки рисуются поверх инстансов, а шарик снаряда и вовсе заменяет ему
+  // модель. Автору она нужна в превью (ED-9): пока прогон идёт, кадр наполняет
+  // поток тиков (REND-11), и вид, изображение которого отдано записи
+  // `effects.byKind`, без этой подсистемы не рисует НИКТО — заглушки моделей у
+  // него нет намеренно (REND-37). Она же — читатель секции эффектов манифеста,
+  // а значит и получатель его переподачи (REND-17, см. `applyVisuals`).
+  //
+  // Словаря доставленных состояний (`stateComponents`) у редактора нет — как и
+  // у частиц ниже: список СБОРКИ задаёт биты `EntityView.states` (CAM-6), а
+  // Extractor превью их не зеркалирует вовсе (`scenePreview.ts`). Оболочки
+  // `effects.byState` поэтому в кадре правки не оживают, и подсистема говорит
+  // об этом один раз, а не молчит.
+  const effects = new EffectsSubsystem(visuals, surface === null ? {} : { surface });
+  presentation.register(effects);
+  // Частицы (REND-24) — после моделей, как и в игровой сборке: эмиттер с
+  // сокетом снимает позу узла инстанса, посаженного в этом же кадре. Автору
+  // она нужна ради decoration-эмиттеров: факел на арене — такое же
+  // размещение, как статуя (ASSET-14, PRES-2), и не видеть его в кадре
+  // правки значило бы ставить его вслепую (ED-15).
+  const particles = new ParticlesSubsystem(visuals, {
+    sockets: models,
+    ...(surface === null ? {} : { surface }),
+  });
+  presentation.register(particles);
+  let overlays: OverlaySubsystem | null = null;
+  if (surface !== null) {
+    // Подсистему наложений регистрирует только вьюпорт редактора (REND-16):
+    // в игровом кадре её нет по конструкции. Подсветка встаёт по видимой позе
+    // инстанса, поэтому источник прокси у неё тот же, что у picking'а.
+    overlays = new OverlaySubsystem({ surface, instances: models });
+    presentation.register(overlays);
+  }
+  return {
+    surface,
+    postprocess,
+    lighting,
+    terrain,
+    water,
+    models,
+    effects,
+    particles,
+    overlays,
+    applyManifest(next: VisualManifest): void {
+      models.applyManifest(next);
+      effects.applyManifest(next);
+      particles.applyManifest(next);
+    },
+  };
+}
+
 export function createSceneStage(options: SceneStageOptions): SceneStage {
   const doc = options.document ?? document;
   const heightStep = options.heightStep ?? HEIGHT_STEP;
@@ -455,14 +638,13 @@ export function createSceneStage(options: SceneStageOptions): SceneStage {
   // остаются в кадре и в превью — гасить их смена режима не должна.
   const decorations = new DecorationSet(presentation);
 
-  let surface: VisualSurfaceSource | null = null;
-  let postprocess: PostprocessSubsystem | null = null;
-  let lighting: LightingSubsystem | null = null;
-  let terrain: TerrainSubsystem | null = null;
-  let water: WaterSubsystem | null = null;
-  let models: ModelsSubsystem | null = null;
-  let particles: ParticlesSubsystem | null = null;
-  let overlays: OverlaySubsystem | null = null;
+  /**
+   * Подсистемы вьюпорта; `null` — первая сетка их ещё не подняла. Один
+   * держатель на весь набор, а не переменная на подсистему: набор поднимается
+   * и живёт целиком, а список его участников принадлежит одному месту —
+   * `registerViewportSubsystems` (см. шапку).
+   */
+  let parts: ViewportSubsystems | null = null;
   let picking: ViewportPicking | null = null;
   let camera: SceneCamera | null = null;
   let grid: TerrainGrid | null = null;
@@ -610,71 +792,21 @@ export function createSceneStage(options: SceneStageOptions): SceneStage {
    */
   const build = (first: TerrainGrid | null): void => {
     built = true;
-    // Пост-обработка кадра (REND-34) — ПЕРВОЙ подсистемой: она владеет
-    // проходами кадра, и вьюпорт рисует его её вызовом, а собственной
-    // пост-обработки поверх не ведёт (REND-34, ED-22). Секции у сцены может не
-    // быть — тогда цепочка неактивна, и кадр вьюпорта прежний: ни цели, ни
-    // прохода. Ни от сетки, ни от манифеста она не зависит.
-    postprocess = new PostprocessSubsystem();
-    presentation.register(postprocess);
-    // Свет — следом (REND-8): геометрия ниже отдаёт ей свои корни
-    // теневыми кастерами и носителями локального света (REND-33), а сам он не
-    // зависит ни от сетки, ни от манифеста.
-    //
-    // Камера — та же (`camera3`), что у отсечения инстансов ниже, и по той же
-    // причине она нужна свету: активные локальные источники отбираются по
-    // расстоянию до ТОЧКИ ВЗГЛЯДА камеры (REND-33). Без неё точкой была бы
-    // середина арены, и на сцене, где носителей больше потолка, автор видел бы
-    // горящими не те источники, что игрок, — то есть кадры разошлись бы там,
-    // где ED-22 требует тождества. Позу на камеру сажает `applyCameraPose` до
-    // кадра подсистем (см. `frame`), поэтому отбор идёт по взгляду ЭТОГО кадра.
-    lighting = new LightingSubsystem({ camera: camera3, ...(first === null ? {} : { grid: first }) });
-    presentation.register(lighting);
-    if (first !== null) {
-      surface = new VisualSurfaceSource(first);
-      terrain = new TerrainSubsystem(first, { surface, shadows: lighting });
-      presentation.register(terrain);
-      // Вода (REND-35) — сразу за террейном, как в игровой сборке: глубину она
-      // берёт из той же визуальной поверхности, поэтому мазок кисти кривизны
-      // (ED-11) двигает и дно, и берег одним и тем же полем (REND-9). Сцены без
-      // террейна у воды не бывает вовсе — карта адресует клетки его сетки.
-      water = new WaterSubsystem({ grid: first, surface });
-      presentation.register(water);
-    }
-    // Камера подсистеме — вход отсечения невидимых инстансов (REND-21): та же
-    // самая (`camera3`), которой рисуется кадр и считается луч наведения. Позу
-    // на неё сажает `applyCameraPose` до кадра подсистем (см. `frame`), поэтому
-    // отсекается по пирамиде ЭТОГО кадра, а не прошлого.
-    models = new ModelsSubsystem(visuals, {
+    // Набор подсистем и порядок их регистрации (REND-8) — общей функцией (см.
+    // шапку): вьюпорт присваивает себе то, что она подняла, а не собирает свой.
+    const raised = registerViewportSubsystems(presentation, {
+      grid: first,
       camera: camera3,
-      shadows: lighting,
-      ...(surface === null ? {} : { surface }),
+      visuals,
     });
-    presentation.register(models);
-    // Частицы (REND-24) — после моделей, как и в игровой сборке: эмиттер с
-    // сокетом снимает позу узла инстанса, посаженного в этом же кадре. Автору
-    // она нужна ради decoration-эмиттеров: факел на арене — такое же
-    // размещение, как статуя (ASSET-14, PRES-2), и не видеть его в кадре
-    // правки значило бы ставить его вслепую (ED-15). Словаря состояний у
-    // редактора нет: доставленных состояний в кадре правки не бывает вовсе
-    // (тика здесь нет), и записи `particles.byState` в нём не оживают.
-    particles = new ParticlesSubsystem(visuals, {
-      sockets: models,
-      ...(surface === null ? {} : { surface }),
-    });
-    presentation.register(particles);
-    if (surface !== null) {
-      // Подсистему наложений регистрирует только вьюпорт редактора (REND-16):
-      // в игровом кадре её нет по конструкции. Подсветка встаёт по видимой позе
-      // инстанса, поэтому источник прокси у неё тот же, что у picking'а.
-      overlays = new OverlaySubsystem({ surface, instances: models });
-      presentation.register(overlays);
+    parts = raised;
+    if (raised.surface !== null && raised.overlays !== null) {
       // Камера picking'у отдаётся та же, которой рисуется кадр: «второго способа
       // посчитать луч MUST NOT существовать» (REND-15).
       picking = new ViewportPicking({
-        surface,
-        instances: models,
-        handles: overlays,
+        surface: raised.surface,
+        instances: raised.models,
+        handles: raised.overlays,
         camera: camera3,
       });
     }
@@ -713,36 +845,36 @@ export function createSceneStage(options: SceneStageOptions): SceneStage {
         // с нарисованным сама, а поверхность и чанки инвалидирует точечно.
         // Повторная доставка той же сетки не пуста — она возвращает карту пола
         // (REND-14), и на этом держится выход из превью (ED-9).
-        terrain?.applyGrid(next.grid);
+        parts?.terrain?.applyGrid(next.grid);
         // Той же доставкой (REND-14) идёт и вода: карта её тел адресует клетки
         // сетки, и другая арена — другая карта (REND-35).
-        water?.applyGrid(next.grid);
+        parts?.water?.applyGrid(next.grid);
         camera?.setGrid(next.grid);
         // Границы арены сменились — фрустумы теневых камер обтянуты по ним, а
         // кэшированная карта статики устарела вместе с геометрией (REND-14).
-        lighting?.applyGrid(next.grid);
+        parts?.lighting.applyGrid(next.grid);
       }
     }
     if (again || next.curvature !== curvature) {
       curvature = next.curvature;
       // Карта из памяти, а не ассетом: несохранённый документ кисти ассетом ещё
       // не является (ED-11, REND-14).
-      surface?.setCurvature(curvature);
+      parts?.surface?.setCurvature(curvature);
     }
     // Полный набор инстансов; что создать, обновить и убрать, решает источник.
     source.apply(next.placements);
     // Правка секции `lighting` — на живой подсистеме (ED-15): свет меняется не
     // позже следующего кадра, пересборки рендера нет. Подаётся секция целиком
     // и всегда, как манифест и сетка: решать, что применить, — дело подсистемы.
-    lighting?.applyConfig(next.lighting);
+    parts?.lighting.applyConfig(next.lighting);
     // Секция `postprocess` — тем же порядком и на живой подсистеме (ED-15,
     // REND-34): смена оператора или силы свечения видна не позже следующего
     // кадра, пересборки рендера нет.
-    postprocess?.applyConfig(next.postprocess);
+    parts?.postprocess.applyConfig(next.postprocess);
     // Секция `water` — тем же порядком и на живой подсистеме (ED-15, REND-35):
     // правка карты или чисел тела видна не позже следующего кадра, пересборки
     // рендера нет.
-    water?.applyConfig(next.water);
+    parts?.water?.applyConfig(next.water);
     // Декорации — отдельный набор и отдельная подача: продюсера они не
     // трогают, и в превью их гасить нечем (REND-18).
     decorations.apply(next.decorations ?? []);
@@ -795,6 +927,7 @@ export function createSceneStage(options: SceneStageOptions): SceneStage {
 
   /** Наложения в словаре рендера: подсветка адресуется сущностью (REND-16). */
   const pushOverlays = (): void => {
+    const overlays = parts?.overlays ?? null;
     if (overlays === null) return;
     const items: OverlayItem[] = [];
     for (const item of overlaySet) {
@@ -911,7 +1044,7 @@ export function createSceneStage(options: SceneStageOptions): SceneStage {
       // цепочке это ровно прямая отрисовка, при включённой — её проходы. Своей
       // пост-обработки поверх вьюпорт не ведёт, поэтому его кадр и кадр игрока
       // совпадают по построению (ED-22).
-      if (postprocess !== null) postprocess.render(renderer, camera3);
+      if (parts !== null) parts.postprocess.render(renderer, camera3);
       else renderer.render(scene, camera3);
       drawFailure = null;
     } catch (error) {
@@ -955,8 +1088,12 @@ export function createSceneStage(options: SceneStageOptions): SceneStage {
       // отобрать у автора позу, которую он выстроил, — а живой правкой этих
       // чисел он занимается на порядок реже, чем правкой записей манифеста.
       visuals = next;
-      models?.applyManifest(next);
-      particles?.applyManifest(next);
+      // Переподачу получает КАЖДЫЙ читатель манифеста (REND-17), а не одна
+      // подсистема моделей: записи сущностей и decoration-видов читает она,
+      // секцию транзиентных эффектов — подсистема эффектов (REND-23), секцию
+      // эмиттеров — подсистема частиц (REND-24). Читатель, оставшийся без
+      // переподачи, показывал бы автору документ, которого уже нет (ED-15).
+      parts?.applyManifest(next);
     },
     get flying(): boolean {
       return camera?.flying ?? false;
