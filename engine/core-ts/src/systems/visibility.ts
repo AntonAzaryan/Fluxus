@@ -259,10 +259,13 @@ export interface VisibilityDeps {
  * свёрток `StealthState`/`DetectionState`.
  *
  * ponytail: кандидаты берутся отдельным запросом на наблюдателя, то есть до
- * O(наблюдатели × сущности), а накопители масок — Map на прогон. При «до 10
- * сущностей с обзором» (FOW-4) это дешевле любого индекса, который пришлось бы
- * инвалидировать после каждой записи в `Position`. Пространственный индекс —
- * когда наблюдателей станут сотни.
+ * O(наблюдатели × сущности). При «до 10 сущностей с обзором» (FOW-4) это
+ * дешевле любого индекса, который пришлось бы инвалидировать после каждой
+ * записи в `Position`. Пространственный индекс — когда наблюдателей станут
+ * сотни. Накопители масок и свёрток стелса — долгоживущие Map системы,
+ * очищаемые на входе в прогон, а не новые на тик: их размер пропорционален
+ * числу целей, и аллокация на тик была бы ровно тем, что дисциплина ядра
+ * запрещает в горячем пути.
  */
 export class VisibilitySystem implements System {
   readonly name = 'Visibility';
@@ -275,6 +278,10 @@ export class VisibilitySystem implements System {
   private readonly deps: VisibilityDeps;
   /** Разрешаются на первом входе, ПОСЛЕ раннего выхода (SYS-10). */
   private handles: VisibilityHandles | undefined;
+  /** Маска `visibleTo` следующего тика по целям; живёт между прогонами, очищается на входе. */
+  private readonly next = new Map<EntityId, number>();
+  /** Свёртка стелса по целям (FOW-5) — один раз на цель, а не на пару; живёт как `next`. */
+  private readonly stealthOf = new Map<EntityId, number>();
 
   /** Списки источников и таблица каналов приходят извне (DI-1, FOW-12). */
   constructor(deps: VisibilityDeps) {
@@ -305,8 +312,10 @@ export class VisibilitySystem implements System {
     // Собственная команда видит свою сущность всегда, в том числе под стелсом
     // (FOW-3, NET-15) — с этого маска и начинается, а не с нуля. Свёртка стелса
     // считается здесь же, один раз на цель, а не на пару (FOW-5).
-    const next = new Map<EntityId, number>();
-    const stealthOf = new Map<EntityId, number>();
+    const next = this.next;
+    const stealthOf = this.stealthOf;
+    next.clear();
+    stealthOf.clear();
     for (const target of targets) {
       next.set(target, ownTeamBit(ctx, h, target));
       stealthOf.set(target, this.deps.lists.stealth.union(ctx, target));

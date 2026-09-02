@@ -10,15 +10,78 @@ import { PhysicsSystem, PhysicsWorld } from '../src/systems/physics.js';
 import { ArenaSystem } from '../src/systems/arena.js';
 import { VisibilitySystem, VISION_MODIFIER_COMPONENT } from '../src/systems/visibility.js';
 import { modifierList } from '../src/systems/modifiers.js';
+import { loadScene, type SceneDef } from '../src/sim/scene.js';
 import type { System, SystemContext } from '../src/types.js';
 
 const noop = (_ctx: SystemContext): void => {};
 
 const sys = (name: string, order: number): System => ({ name, order, run: noop });
 
-/** Все семь нативных систем таблицы DET-9, каждая со своими зависимостями (DI-1). */
+/** Минимальный документ поведения: одно состояние, один исполнитель (NPC-2). */
+const BEHAVIOR = {
+  schema: 1,
+  name: 'walker',
+  tier: 'mass',
+  decision: { intervalTicks: 1 },
+  ranges: { sense: 1310720, attack: 65536, arrive: 65536, separation: 131072 },
+  speed: 65536,
+  states: [
+    {
+      name: 'press',
+      actions: [
+        {
+          executor: 'seekTarget',
+          considerations: [
+            { input: 'targetKnown', curve: { type: 'linear', slope: 65536, intercept: 0 }, weight: 65536 },
+          ],
+        },
+      ],
+      transitions: [],
+    },
+  ],
+} as const;
+
+/**
+ * Сцена, включающая своим составом ВСЕ нативные системы, которые регистрирует
+ * загрузчик (SER-7): арена, темп, твины, туман, платформа способностей с
+ * баффами, платформа NPC с таблицей волн. Четыре оставшиеся системы таблицы
+ * DET-9 регистрирует не загрузчик, а сборка (`build.ts`): им нужны игроки,
+ * локомоушен и raycast (DI-3), — их тест добавляет руками.
+ */
+const FULL_SCENE: SceneDef = {
+  components: [
+    { name: 'Position', fields: { x: 'fixed', y: 'fixed' } },
+    { name: 'Input', fields: { buttons: 'i32', prevButtons: 'i32' } },
+    { name: 'Player', fields: { slot: 'i32' } },
+    { name: 'Dead', fields: { at: 'i32' } },
+    { name: 'ActionLock', fields: { mask: 'i32' } },
+  ],
+  terrain: { width: 2, height: 2, tileSize: 65536, levels: ['00', '00'], flags: ['..', '..'] },
+  arena: { center: { x: 0, y: 0 }, radius: 655360 },
+  timeScale: true,
+  tweens: [],
+  fog: true,
+  abilities: [{ id: 'bolt', trigger: { input: { bit: 0 } }, effects: [{ emitEvent: { type: 'Cast' } }] }],
+  buffs: [],
+  abilityRuntime: { teamField: ['Player', 'slot'] },
+  npc: {
+    behaviors: [BEHAVIOR],
+    bindings: { position: 'Position' },
+    waves: {
+      cap: 1,
+      entries: [{ prefab: 'Creep', count: 0, behavior: 0, delayTicks: 0, spacingTicks: 0, x: 0, y: 0 }],
+    },
+  },
+};
+
+/**
+ * Все девятнадцать нативных систем таблицы DET-9, каждая со своими
+ * зависимостями (DI-1): пятнадцать — теми экземплярами, что регистрирует
+ * загрузчик сцены, четыре — руками, как их регистрирует сборка.
+ */
 function nativeSystems(): readonly System[] {
   return [
+    ...loadScene(FULL_SCENE).systems.ordered(),
     new InputSystem({ players: ['p1'] }),
     new TimeScaleSystem(modifierList(TIME_SCALE_MODIFIERS_COMPONENT)),
     new LocomotionSystem(),
@@ -33,7 +96,7 @@ function nativeSystems(): readonly System[] {
       },
       hardStealthMask: ~0,
     }),
-  ];
+  ].filter((system, index, all) => all.findIndex((other) => other.name === system.name) === index);
 }
 
 describe('SystemRegistry (DET-3, SYS-2)', () => {
@@ -76,20 +139,33 @@ describe('SystemRegistry (DET-3, SYS-2)', () => {
 });
 
 describe('Шкала order (DET-9)', () => {
-  // Тест обязан краснеть от правки любой из семи констант: сверяются и сами
-  // значения таблицы, и последовательность, которая из них следует.
+  // Тест обязан краснеть от правки любой из девятнадцати констант
+  // `ANCHOR_ORDER`: сверяются и сами значения таблицы, и последовательность,
+  // которая из них следует, — строка в строку с таблицей требования.
   it('нативные системы стоят на якорях таблицы', () => {
     const registry = new SystemRegistry();
     for (const system of nativeSystems()) registry.register(system);
 
     expect(registry.ordered().map((s) => [s.name, s.order])).toEqual([
       ['Input', -1000],
+      ['NpcDirector', -960],
       ['TimeScale', -900],
+      ['TargetingCommit', -800],
+      ['NpcBehavior', -795],
+      ['CastPhase', -790],
       ['Locomotion', 0],
       ['Tween', 50],
+      ['NpcMovement', 70],
       ['Physics', 100],
       ['Arena', 110],
+      ['Projectile', 300],
+      ['Cooldown', 800],
+      ['EffectDuration', 810],
+      ['Buff', 820],
+      ['CastInterrupt', 830],
+      ['NpcThreat', 840],
       ['Visibility', 900],
+      ['AbilityVisibility', 910],
     ]);
   });
 
@@ -128,7 +204,7 @@ describe('Шкала order (DET-9)', () => {
     registry.register(new EvaluatedSystem({ name: 'BeforeBorder', order: 105, do: [] }));
 
     const names = registry.ordered().map((s) => s.name);
-    expect(names.slice(names.indexOf('Physics'))).toEqual(['Physics', 'BeforeBorder', 'Arena', 'Visibility']);
+    expect(names.slice(names.indexOf('Physics'), names.indexOf('Arena') + 1)).toEqual(['Physics', 'BeforeBorder', 'Arena']);
   });
 });
 
