@@ -54,7 +54,12 @@ const F = (value: number): number => Math.round(value * FIXED_ONE);
 const SCENE: SceneDef = {
   components: [
     { name: 'Position', fields: { x: 'fixed', y: 'fixed' } },
-    { name: 'Input', fields: { buttons: 'i32', prevButtons: 'i32' } },
+    // Пара полей точки прицела обязательна для любого содержательного шага
+    // прицеливания (`ability-system` ABIL-5): сцена без неё не загружается.
+    {
+      name: 'Input',
+      fields: { buttons: 'i32', prevButtons: 'i32', targetX: 'fixed', targetY: 'fixed' },
+    },
   ],
   abilities: [
     {

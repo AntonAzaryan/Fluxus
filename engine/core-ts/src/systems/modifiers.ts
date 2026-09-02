@@ -21,6 +21,7 @@
  * массива. Динамический список потребовал бы массивных полей в ECS; вводить их
  * до того, как известно реальное число одновременных эффектов, незачем.
  */
+import { numberedFieldIndex } from '../ecs/worldSchema.js';
 import {
   FIXED_ONE,
   type EntityId,
@@ -34,7 +35,7 @@ export const DEFAULT_MODIFIER_SLOTS = 4;
 
 /** Имена дополнены нулями до одной длины — иначе plain-форма сортирует id10 перед id2 (SER-6). */
 function slotName(prefix: string, index: number, total: number): string {
-  return `${prefix}${String(index).padStart(String(total - 1).length, '0')}`;
+  return `${prefix}${numberedFieldIndex(index, total)}`;
 }
 
 /**
@@ -110,6 +111,15 @@ export function modifierList(
 
     add(ctx, entity, id, value) {
       if (id === 0) throw new Error(`${component}: id источника не может быть нулём`);
+      // Постановка на сущность без самого списка — ошибка, а не пустая
+      // операция (TIME-8): запись ушла бы в хранилище, компонента у сущности
+      // нет, произведение источников её не увидело бы, и замедления не
+      // случилось бы молча. Платформа баффов в том же случае падает громко
+      // (`abilities/buffs.ts`, `placeStatMods`), и двум путям к одному и тому
+      // же расходиться нечем.
+      if (!ctx.has(entity, component)) {
+        throw new Error(`${component}: сущность ${entity} не несёт этого списка источников (TIME-8)`);
+      }
       const existing = findSlot(ctx, entity, id);
       const slot = existing >= 0 ? existing : findSlot(ctx, entity, 0);
       if (slot < 0) throw new Error(`${component}: все ${slots} слотов заняты`);

@@ -54,6 +54,40 @@ type Command = Traced &
       }
   );
 
+/**
+ * Что ОДНА команда ставит по адресу поля, либо `undefined` — «эта команда
+ * адреса не касается» (CMD-5). Отдельной функцией от обратного прохода:
+ * проход отвечает за порядок (побеждает последняя, CMD-3), а эта — за то, что
+ * каждый вид команды значит для чтения.
+ *
+ * Три вида отвечают, и все три — тем же, что окажется в мире после flush:
+ * `setField` — своим значением; `addComponent` — своим `values`, иначе
+ * default'ом схемы, иначе нейтралью типа (тот же порядок источников, что у
+ * мутатора в `world.ts`, ECS-3, ECS-6); `removeComponent` — нейтралью ТИПА,
+ * потому что после flush компонент сущности не принадлежит, а чтение такого
+ * поля тотально (ECS-7, ECS-8).
+ */
+function commandAnswer(
+  cmd: Command,
+  entity: EntityId,
+  component: string,
+  field: string,
+  state: WorldState,
+): number | undefined {
+  if (cmd.kind === 'spawn' || cmd.kind === 'destroy') return undefined;
+  if (cmd.entity !== entity || cmd.component !== component) return undefined;
+  if (cmd.kind === 'setField') return cmd.field === field ? cmd.value : undefined;
+  // Поле вне схемы (или незарегистрированный компонент): ни состав, ни снятие
+  // на этот адрес значения не ставят — читатель падает обратно на мир, который
+  // на такое имя отвечает по своим правилам (ECS-5).
+  const schema = world.componentSchema(state, component);
+  const type = schema?.fields[field];
+  if (type === undefined) return undefined;
+  const neutral = world.neutralValue(type);
+  if (cmd.kind === 'removeComponent') return neutral;
+  return cmd.values?.[field] ?? schema?.defaults?.[field] ?? neutral;
+}
+
 /** Данные записи о команде (DIAG-2): только скаляры, ссылок на мир нет (DIAG-4). */
 function commandData(cmd: Command): Readonly<Record<string, number | string>> {
   switch (cmd.kind) {
@@ -239,12 +273,8 @@ export function createCommandBuffer(state: WorldState): CommandBufferHandle {
     },
     /**
      * CMD-5: точечное чтение уже отложенного. Обратный проход — потому что
-     * побеждает последняя команда на поле, как и на flush (CMD-3).
-     *
-     * Значение адресу ставит не только `setField`: `addComponent` на flush
-     * переписывает все поля компонента (`values` → default схемы → нейтральное
-     * значение типа, ECS-3, ECS-6), поэтому и здесь он отвечает за поле — иначе
-     * чтение разошлось бы с тем, что окажется в мире после flush (CMD-5).
+     * побеждает последняя команда на поле, как и на flush (CMD-3); что именно
+     * ставит на адрес каждый вид команды, знает `commandAnswer`.
      *
      * ponytail: O(команд в буфере) на вызов. Буфер флашится в конце каждой
      * системы, поэтому список короткий; индекс по адресу поля — когда
@@ -252,19 +282,8 @@ export function createCommandBuffer(state: WorldState): CommandBufferHandle {
      */
     peekField(entity, component, field) {
       for (let i = commands.length - 1; i >= 0; i--) {
-        const cmd = commands[i]!;
-        if (cmd.kind === 'setField' && cmd.entity === entity && cmd.component === component && cmd.field === field) {
-          return cmd.value;
-        }
-        if (cmd.kind === 'addComponent' && cmd.entity === entity && cmd.component === component) {
-          const schema = world.componentSchema(state, component);
-          const type = schema?.fields[field];
-          // Поле вне схемы (или незарегистрированный компонент) `addComponent`
-          // не пишет — значения на этот адрес такая команда не ставит.
-          if (type === undefined) continue;
-          // Тот же порядок источников, что у мутатора в `world.ts` (ECS-3).
-          return cmd.values?.[field] ?? schema?.defaults?.[field] ?? world.neutralValue(type);
-        }
+        const answer = commandAnswer(commands[i]!, entity, component, field, state);
+        if (answer !== undefined) return answer;
       }
       return undefined;
     },

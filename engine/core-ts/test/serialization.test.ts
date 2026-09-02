@@ -23,6 +23,7 @@ import {
   toPlain,
   type PrefabDef,
 } from '../src/ecs/world.js';
+import { numberedFieldIndex } from '../src/ecs/worldSchema.js';
 import type { ComponentSchema, SystemDef } from '../src/index.js';
 
 const F = fixed.fromFloat;
@@ -160,6 +161,35 @@ describe('детерминированный порядок ключей (SER-6)
       [0, ['fire', 'omega']],
       [1, ['alpha', 'fire', 'zeta']],
     ]);
+  });
+
+  /**
+   * SER-6: «имена слотов SHALL дополняться нулями слева до одинаковой длины, и
+   * число цифр SHALL быть минимально достаточным … Число цифр — функция от
+   * числа слотов на конкретном ассете, а не константа формата».
+   *
+   * Правило живёт одной функцией ядра, и все четыре порождённые раскладки
+   * (карта пола, списки источников-модификаторов, шаги прицеливания, слоты
+   * threat-таблицы NPC) зовут её, а не повторяют. Проверяется здесь сама
+   * функция: своя копия в каждой раскладке ломала бы формат снапшота ровно там,
+   * где копию забыли обновить при росте ёмкости.
+   */
+  it('номер порождённого слота дополняется нулями до минимально достаточной ширины', () => {
+    // До десяти слотов ширина единичная — имена не меняются.
+    expect(numberedFieldIndex(0, 4)).toBe('0');
+    expect(numberedFieldIndex(3, 4)).toBe('3');
+    expect(numberedFieldIndex(9, 10)).toBe('9');
+
+    // Одиннадцать слотов — уже две цифры, и лексикографический порядок совпал
+    // с числовым: без дополнения было бы `0, 1, 10, 2, …`.
+    const names = Array.from({ length: 11 }, (_, i) => `source${numberedFieldIndex(i, 11)}`);
+    expect(names[0]).toBe('source00');
+    expect(names[10]).toBe('source10');
+    expect([...names].sort()).toEqual(names);
+
+    // Ширина — функция от ЧИСЛА слотов, а не константа формата.
+    expect(numberedFieldIndex(1, 100)).toBe('01');
+    expect(numberedFieldIndex(1, 101)).toBe('001');
   });
 
   it('байты двух прогонов одного сценария совпадают', () => {

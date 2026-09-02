@@ -282,6 +282,34 @@ describe('машина состояний мира (WSM-1..3, WSM-5, REW-8, REW-
     expect(getField(h.state.world, h.player, 'Input', 'moveX')).toBe(500);
   });
 
+  /**
+   * REW-2: «машина состояний мира восстанавливаемым содержимым MUST NOT быть,
+   * хотя в снапшот она входит». Компенсации в контроллере поэтому нет — режим
+   * держат разрешённые переходы (WSM-2) и core-API (WSM-5), а не снапшот.
+   */
+  it('restoreSnapshot режим мира не восстанавливает (REW-2, WSM-2, WSM-5)', () => {
+    const h = harness();
+    h.runTo(3);
+    const running = takeSnapshot(h.state); // снят в Running
+    expect(running.mode).toBe('Running');
+
+    const wsm = controller(h);
+    wsm.pause();
+    wsm.beginRewind();
+    expect(wsm.mode).toBe('Rewinding');
+
+    // Прямой внешний вызов со снапшотом Running мир из Rewinding не выбивает.
+    restoreSnapshot(h.state, running);
+    expect(h.state.mode).toBe('Rewinding');
+    expect(wsm.mode).toBe('Rewinding');
+
+    // И скраб контроллером — тоже: многократный seekTo остаётся корректным (REW-7).
+    wsm.seekTo(2);
+    expect(wsm.mode).toBe('Rewinding');
+    wsm.seekTo(1);
+    expect(wsm.mode).toBe('Rewinding');
+  });
+
   it('mode прокидывается в TickResult (WSM-1, WSM-6)', () => {
     const h = harness();
     const wsm = controller(h);

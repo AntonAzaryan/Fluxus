@@ -9,6 +9,7 @@
  */
 import { INT32_MAX, distSqLe } from '../math/fixed.js';
 import { getField, hasComponent, type PrefabDef } from '../ecs/world.js';
+import { numberedFieldIndex } from '../ecs/worldSchema.js';
 import {
   LEVEL_OVERRIDE_COMPONENT,
   POSITION_COMPONENT,
@@ -395,7 +396,7 @@ function wordCount(grid: TerrainGrid): number {
 
 /** Имена дополнены нулями до одной длины: иначе лексикографический порядок в plain-форме (SER-6) даёт w0, w10, w2. */
 function wordName(index: number, total: number): string {
-  return `w${String(index).padStart(String(total - 1).length, '0')}`;
+  return `w${numberedFieldIndex(index, total)}`;
 }
 
 /**
@@ -520,12 +521,33 @@ function carveCircle(grid: TerrainGrid, at: Vec2, radius: Fixed, clear: (cell: n
   }
 }
 
-/** Нижняя граница обхода в клетках, с запасом в клетку. */
+/**
+ * Границы обхода в клетках, с запасом в клетку. Обе площадки делят координату,
+ * которая бывает отрицательной, и потому несут обоснование по DET-2 здесь, а не
+ * только у вызывающих (`carveCircle`, `floorWithin`): требование просит его
+ * РЯДОМ С РАСЧЁТОМ.
+ *
+ * DET-2, условие 4 — конвенция округления. Взят `Math.floor`, то есть
+ * округление к минус бесконечности, а не усечение к нулю: у координаты левее
+ * начала сетки они расходятся ровно на единицу (при `value = -1`, `tileSize = 1`
+ * floor даёт −1, усечение — 0). Записанная конвенция обязательна, но на ответ не
+ * влияет, и это второй довод, а не первый: границы заведомо надмножество с
+ * запасом в клетку, лишняя клетка отсеивается точным целочисленным тестом
+ * расстояния внутри обхода (`distSqLe`), а выход за сетку снимает `clamp`.
+ * Поэтому вторая реализация ядра с усечением к нулю обойдёт другое надмножество
+ * и получит тот же ответ.
+ *
+ * DET-2, условия 3 и 5 — граница промежутка. Делимое `value` — `at.x ± radius`
+ * либо `position.x ± radius`, сумма двух `i32` обычной арифметикой, то есть по
+ * модулю меньше 2^32; делитель `tileSize` — целое ≥ 1 (TERR-2). Частное по
+ * модулю меньше 2^32, приводится к целому `Math.floor`, и ни один промежуток из
+ * 2^53 не выходит.
+ */
 function cellLo(value: Fixed, tileSize: number, max: number): number {
   return clamp(Math.floor(value / tileSize) - 1, max);
 }
 
-/** Верхняя граница обхода в клетках, с запасом в клетку. */
+/** Верхняя граница обхода; конвенция округления и граница — см. `cellLo` (DET-2). */
 function cellHi(value: Fixed, tileSize: number, max: number): number {
   return clamp(Math.floor(value / tileSize) + 1, max);
 }

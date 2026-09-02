@@ -30,6 +30,23 @@ const INT32_MAX = 2147483647;
 /** Набор типов полей закрыт (ECS-3); имена — из одного места с самим типом. */
 const FIELD_TYPE_NAMES: readonly string[] = FIELD_TYPES;
 
+/**
+ * Номер слота в имени ПОРОЖДЁННОГО поля, дополненный нулями слева (SER-6):
+ * «имена слотов SHALL дополняться нулями слева до одинаковой длины, и число
+ * цифр SHALL быть минимально достаточным». Ширина считается от числа слотов
+ * конкретной раскладки, а не берётся константой формата, — поэтому `total`
+ * обязателен.
+ *
+ * Функция одна на все порождённые раскладки ядра: карта пола (`terrain`
+ * TERR-6), списки источников-модификаторов (`time-system` TIME-7), шаги
+ * прицеливания и слоты threat-таблицы NPC. Своя копия правила в каждой из них
+ * означала бы, что выросшая ёмкость ломает формат снапшота ровно у тех
+ * раскладок, где копию забыли обновить.
+ */
+export function numberedFieldIndex(index: number, total: number): string {
+  return String(index).padStart(String(total - 1).length, '0');
+}
+
 function isKnownFieldType(name: string): boolean {
   return FIELD_TYPE_NAMES.includes(name);
 }
