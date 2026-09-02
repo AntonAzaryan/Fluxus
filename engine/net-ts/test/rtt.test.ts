@@ -89,9 +89,8 @@ describe('задолженность отправки — наблюдаемая
     const client = await connectWebSocket(`ws://127.0.0.1:${String(port)}`);
     await until(() => accepted.length > 0);
 
-    const backlog = transportBacklog(accepted[0]!);
-    expect(backlog.kind).toBe('measured');
-    if (backlog.kind === 'measured') expect(backlog.bytes).toBeGreaterThanOrEqual(0);
+    // Серверная сторона ещё ничего не отправляла: очередь видна и ровно пуста.
+    expect(transportBacklog(accepted[0]!)).toEqual({ kind: 'measured', bytes: 0 });
 
     client.close();
     await server.close();

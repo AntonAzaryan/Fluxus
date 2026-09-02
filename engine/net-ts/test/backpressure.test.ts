@@ -382,8 +382,19 @@ describe('обратное давление на эмуляторе канала
     // состояний, а не отбирает у игрока управление (NTR-7).
     const applied = match.server.metrics.slots[1]!.applied - settled;
     expect(applied).toBeGreaterThan(1100);
+    // Потолок запаса — окно приёма за вычетом запаса оценки тика (NTR-7); до
+    // него запас не доходит: канал узкий, а не длинный.
+    const pacing = match.server.pacing;
+    const ceiling = pacing.inputWindow - pacing.tickRate / pacing.snapshotRate - pacing.inputDelay;
     const lead = match.clients[1]!.client.metrics.inputLead!;
-    expect(lead).toBeLessThan(match.server.pacing.inputWindow);
+    expect(lead).toBeLessThan(ceiling);
+    // Счётчик сервера считает ОТПРАВЛЕННЫЕ снапшоты (NTR-11): пропущенные в него
+    // не входят, и он равен сумме по соединениям — админ, делящий байты на
+    // снапшоты (SRV-4), делит на то, что ушло.
+    const report = match.host.report();
+    const perConnection = report.connections.reduce((sum, connection) => sum + connection.snapshots, 0);
+    expect(match.server.metrics.snapshotsSent).toBe(perConnection);
+    expect(report.connections.some((connection) => connection.snapshotsSkipped > 0)).toBe(true);
   });
 
   it('соседа не задевает: его снапшоты и его канонический ввод — те же (OBS-2)', () => {
