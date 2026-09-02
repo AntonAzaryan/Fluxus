@@ -36,7 +36,12 @@ function view(overrides: Partial<StandMatchView> = {}): StandMatchView & { calls
     pause: () => 'running',
     lease: () => ({ ...LEASE, claimed: true, attached: true, role: 'owner' }),
     counters: () => ({ applied: 10, predicted: 1, late: 0 }),
-    wire: () => ({ snapshotBytes: 2048, rtt: { kind: 'measured', ms: 12 }, responseMs: 40 }),
+    wire: () => ({
+      snapshotBytes: 2048,
+      snapshotsSkipped: 7,
+      rtt: { kind: 'measured', ms: 12 },
+      responseMs: 40,
+    }),
     metrics: () => {
       calls.push('metrics');
       return {
@@ -130,6 +135,9 @@ describe('периодический отчёт стенда (решение D2)
       rtt: { kind: 'measured', ms: 12 },
       serverResponseMs: 40,
       snapshotBytes: 2048,
+      // Пропущенные по очереди снапшоты едут рядом с их размером (NTR-22):
+      // третий ответ на «дорога, сервер или канал» в том же отчёте (SRV-4).
+      snapshotsSkipped: 7,
     });
   });
 
@@ -150,6 +158,8 @@ describe('периодический отчёт стенда (решение D2)
       rtt: { kind: 'unsupported' },
       serverResponseMs: null,
       snapshotBytes: 0,
+      // Соединения нет — пропускать было нечего и некому.
+      snapshotsSkipped: 0,
     });
   });
 

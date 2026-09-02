@@ -13,7 +13,7 @@ import { describe, expect, it } from 'vitest';
 import { connectWebSocket } from '../src/transport/webSocketClient.js';
 import { webSocketTransportServer } from '../src/transport/webSocketServer.js';
 import { LoopbackHub, loopbackPair } from '../src/transport/loopback.js';
-import { transportRtt, type Transport } from '../src/transport/transport.js';
+import { transportBacklog, transportRtt, type Transport } from '../src/transport/transport.js';
 import { freePort, until } from './support/net.js';
 
 describe('RTT — наблюдаемая несущего канала (NTR-11)', () => {
@@ -76,5 +76,50 @@ describe('RTT — наблюдаемая несущего канала (NTR-11)'
 
     client.close();
     await server.close();
+  });
+});
+
+describe('задолженность отправки — наблюдаемая несущего канала (NTR-22, NTR-11)', () => {
+  it('у ws-соединения очередь видна: пустая — ноль, а не отсутствие', async () => {
+    const port = await freePort();
+    const server = webSocketTransportServer({ port, pingEveryMs: 0 });
+    const accepted: Transport[] = [];
+    server.onConnection((transport) => accepted.push(transport));
+
+    const client = await connectWebSocket(`ws://127.0.0.1:${String(port)}`);
+    await until(() => accepted.length > 0);
+
+    // Серверная сторона ещё ничего не отправляла: очередь видна и ровно пуста.
+    expect(transportBacklog(accepted[0]!)).toEqual({ kind: 'measured', bytes: 0 });
+
+    client.close();
+    await server.close();
+  });
+
+  it('лупбэк без планировщика сборки отсутствие очереди называет явно, с планировщиком — отдаёт его величину', () => {
+    const [a, b] = loopbackPair();
+    expect(transportBacklog(a)).toEqual({ kind: 'unsupported' });
+    expect(transportBacklog(b)).toEqual({ kind: 'unsupported' });
+
+    let queued = 0;
+    const [listening, connecting] = loopbackPair({
+      schedule: (deliver) => { deliver(); },
+      backlog: () => queued,
+      backlogBack: () => queued * 2,
+    });
+    queued = 7;
+    // Подключившаяся сторона — прямое направление, слушающая — обратное.
+    expect(transportBacklog(connecting)).toEqual({ kind: 'measured', bytes: 7 });
+    expect(transportBacklog(listening)).toEqual({ kind: 'measured', bytes: 14 });
+
+    // Транспорт, не объявивший наблюдаемую вовсе, говорит то же, что `unsupported`.
+    const bare: Transport = {
+      send: () => undefined,
+      close: () => undefined,
+      isClosed: false,
+      onMessage: () => undefined,
+      onClose: () => undefined,
+    };
+    expect(transportBacklog(bare)).toEqual({ kind: 'unsupported' });
   });
 });

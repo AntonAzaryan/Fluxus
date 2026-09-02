@@ -64,6 +64,30 @@ describe('поиск по тику', () => {
     expect(ring.at(5)).toBeUndefined();
   });
 
+  it('второй кадр на тот же тик той же эпохи не заслоняет первый: первый выигрывает, как у сервера (NTR-7)', () => {
+    // Подтягивание оценки тика вниз и спуск запаса разметки заставляют клиента
+    // пометить следующий кадр тем же тиком, что и предыдущий. Сервер применит
+    // первый принятый, а второй отбросит («Повторный фрейм», NTR-7) — и эхо
+    // `seq` вернёт первый. Держи кольцо второй — подтверждение не находилось бы
+    // ни для метрики отклика, ни для контроллера запаса.
+    const ring = new InputRing(8);
+    ring.push(frame(5, 1), 1000, 0);
+    ring.push(frame(5, 2), 1016, 0);
+
+    expect(ring.at(5)).toEqual({ frame: frame(5, 1), sentAtMs: 1000, epoch: 0 });
+    expect(ring.bySeq(1)).toEqual({ frame: frame(5, 1), sentAtMs: 1000, epoch: 0 });
+    expect(ring.bySeq(2)).toBeUndefined();
+  });
+
+  it('тот же тик в новой эпохе — другой тик матча: кадр заменяется (NTR-16)', () => {
+    const ring = new InputRing(8);
+    ring.push(frame(5, 1), 1000, 0);
+    ring.push(frame(5, 2), 5000, 1);
+
+    expect(ring.at(5)).toEqual({ frame: frame(5, 2), sentAtMs: 5000, epoch: 1 });
+    expect(ring.bySeq(1)).toBeUndefined();
+  });
+
   it('хранит ровно capacity последних тиков, на тик глубже — уже нет', () => {
     const ring = new InputRing(4);
     for (let tick = 0; tick < 10; tick++) ring.push(frame(tick), tick * 16, 0);

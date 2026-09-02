@@ -144,6 +144,7 @@ function slotView(slot: StandSlotReport): SlotView {
     predicted: slot.predicted,
     late: slot.late,
     snapshotBytes: slot.snapshotBytes,
+    snapshotsSkipped: slot.snapshotsSkipped,
   };
 }
 
@@ -160,6 +161,7 @@ function pendingSlots(players: readonly string[]): readonly SlotView[] {
     predicted: 0,
     late: 0,
     snapshotBytes: 0,
+    snapshotsSkipped: 0,
   }));
 }
 

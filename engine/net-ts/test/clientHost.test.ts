@@ -16,15 +16,25 @@
  *    продолжает шагать мёртвым клиентом.
  * 3. `stop()` идемпотентен и действительно останавливает.
  *
- * Подменяются только `setInterval`/`clearInterval`: доставка в loopback идёт
- * микротасками и `settle()` — реальным `setTimeout`, их фейк сломал бы.
+ * Подменяются `setTimeout`/`clearTimeout` и `performance` — то, на чём стоит
+ * расписание без дрейфа (`schedule.ts`): шаг назначается от точки отсчёта по
+ * часам, и часы обязаны идти вместе с таймером. Доставка в loopback идёт
+ * микротасками, а ожидание доставки — продвижением фейковых таймеров на ноль
+ * (`flush`), а не реальным `setTimeout` из `settle()`.
  */
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { connectClient, duelConfig, duelScene, harness, settle } from './fixtures.js';
+import { connectClient, duelConfig, duelScene, harness } from './fixtures.js';
 
 afterEach(() => {
   vi.useRealTimers();
 });
+
+const FAKED = ['setTimeout', 'clearTimeout', 'performance'] as const;
+
+/** Доставка loopback'а под фейковыми таймерами: микротаски и таймеры на ноль. */
+async function flush(): Promise<void> {
+  await vi.advanceTimersByTimeAsync(0);
+}
 
 /**
  * Оба слота заняты — матч в игре, `advance()` считает тики. Handshake ещё не
@@ -41,43 +51,43 @@ function connected(tickRate: number) {
 
 describe('темп клиентского хоста', () => {
   it('перестраивается с умолчания на темп матча из Welcome', async () => {
-    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] });
+    vi.useFakeTimers({ toFake: [...FAKED] });
     const { a } = connected(30);
 
     // Темпа матча ещё нет — таймер заводится на 60 Гц.
     a.host.run();
-    await settle();
+    await flush();
     expect(a.client.pacing?.tickRate).toBe(30);
 
     vi.advanceTimersByTime(1000);
 
-    // Первый шаг приходит по умолчанию (16.6 мс), на нём же таймер
+    // Первый шаг приходит по умолчанию (16.6 мс), на нём же расписание
     // перезаводится на 33.3 мс — за секунду выходит примерно тридцать шагов.
-    // Точное число зависит от того, как планировщик округляет период, поэтому
-    // проверяется полоса; останься клиент на 60 Гц, шагов было бы вдвое больше,
-    // и в неё он не попал бы.
-    expect(a.client.serverTick).toBeGreaterThanOrEqual(28);
-    expect(a.client.serverTick).toBeLessThanOrEqual(32);
+    // Полоса, а не точное число: первый шаг — от прежнего темпа; останься
+    // клиент на 60 Гц, шагов было бы вдвое больше, и в неё он не попал бы.
+    expect(a.client.serverTick).toBeGreaterThanOrEqual(29);
+    expect(a.client.serverTick).toBeLessThanOrEqual(31);
   });
 
   it('идёт темпом матча и без перестройки, когда Welcome уже приехал', async () => {
-    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] });
+    vi.useFakeTimers({ toFake: [...FAKED] });
     const { a } = connected(60);
-    await settle();
+    await flush();
 
     a.host.run();
     // Повторный run() на том же темпе не перезаводит таймер и не сбивает фазу.
     a.host.run();
     vi.advanceTimersByTime(1000);
 
-    expect(a.client.serverTick).toBeGreaterThanOrEqual(58);
-    expect(a.client.serverTick).toBeLessThanOrEqual(63);
+    // Ровно темп матча: расписание без дрейфа исполняет за секунду `tickRate`
+    // шагов, а не 62–63, как `setInterval` с периодом, округлённым до 16 мс.
+    expect(a.client.serverTick).toBe(60);
   });
 
   it('stop() останавливает шаг и переживает повторный вызов', async () => {
-    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] });
+    vi.useFakeTimers({ toFake: [...FAKED] });
     const { a } = connected(60);
-    await settle();
+    await flush();
 
     a.host.run();
     vi.advanceTimersByTime(100);
@@ -94,9 +104,9 @@ describe('темп клиентского хоста', () => {
   });
 
   it('закрытие канала снимает таймер и закрывает клиента', async () => {
-    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] });
+    vi.useFakeTimers({ toFake: [...FAKED] });
     const { a } = connected(60);
-    await settle();
+    await flush();
 
     a.host.run();
     vi.advanceTimersByTime(100);

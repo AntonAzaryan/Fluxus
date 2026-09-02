@@ -77,14 +77,26 @@ process.stdout.write(
 
 host.start();
 
+/**
+ * Снапшоты, не отправленные слоту из-за очереди отправки его соединения
+ * (NTR-22). Тире — живого соединения у слота нет: пропускать было нечего и
+ * некому, и ноль тут соврал бы про здоровый канал.
+ */
+function skippedOf(slot) {
+  const connection = server.slotLease(slot).connection;
+  if (connection === undefined) return '—';
+  return host.connectionMetrics(connection)?.snapshotsSkipped ?? '—';
+}
+
 // Раздельные счётчики по слотам (NTR-11): «ввод теряется» и «ввод вялый» —
-// разные дефекты, и различить их можно только раздельным счётом.
+// разные дефекты, и различить их можно только раздельным счётом. Пропущенные по
+// очереди снапшоты стоят в том же ряду третьим ответом — «канал узкий» (NTR-22).
 const report = setInterval(() => {
   const slots = server.metrics.slots
-    .map((slot, i) => `${match.players[i]}: ${slot.applied}/${slot.predicted}/${slot.late}`)
+    .map((slot, i) => `${match.players[i]}: ${slot.applied}/${slot.predicted}/${slot.late}/${skippedOf(i)}`)
     .join('  ');
   process.stdout.write(
-    `\rтик ${server.tick} [${server.phase}]  применено/предсказано/опоздало → ${slots}  ` +
+    `\rтик ${server.tick} [${server.phase}]  применено/предсказано/опоздало/пропущено → ${slots}  ` +
       `снапшотов ${server.metrics.snapshotsSent}, ${(server.metrics.bytesSent / 1024).toFixed(1)} КиБ   `,
   );
   if (server.phase === 'ended') {

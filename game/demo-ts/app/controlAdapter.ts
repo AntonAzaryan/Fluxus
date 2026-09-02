@@ -97,7 +97,13 @@ export interface StandMatchView {
   lease(slot: number): AdapterLease;
   counters(slot: number): { readonly applied: number; readonly predicted: number; readonly late: number };
   /** Наблюдаемые соединения слота; `undefined` — живого соединения нет. */
-  wire(slot: number): { readonly snapshotBytes: number; readonly rtt: AdapterRtt; readonly responseMs: number | undefined } | undefined;
+  wire(slot: number): {
+    readonly snapshotBytes: number;
+    /** Снапшоты, не отправленные из-за очереди отправки соединения (NTR-22). */
+    readonly snapshotsSkipped: number;
+    readonly rtt: AdapterRtt;
+    readonly responseMs: number | undefined;
+  } | undefined;
   /** Счётчики матча и хоста (NTR-11); зовётся ТОЛЬКО при подписке (решение D9). */
   metrics(): Omit<StandMetricsReport, 'eventLoopDelayMs' | 'rssBytes'>;
   disconnect(slot: number): string;
@@ -164,6 +170,10 @@ export function standControl(options: StandControlOptions): StandControl {
       predicted: counters.predicted,
       late: counters.late,
       snapshotBytes: wire?.snapshotBytes ?? 0,
+      // Пропущенные по очереди снапшоты (NTR-22) — третий ответ на вопрос
+      // «дорога, сервер или канал» рядом с кругом и длительностью тика: узкий
+      // канал виден ими при здоровых первых двух (NTR-11).
+      snapshotsSkipped: wire?.snapshotsSkipped ?? 0,
     };
   };
 

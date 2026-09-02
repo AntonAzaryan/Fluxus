@@ -66,15 +66,23 @@ export {
 export type { Codec } from './protocol/codec.js';
 
 // транспорт
-export { BaseTransport, transportRtt, RTT_PENDING, RTT_UNSUPPORTED } from './transport/transport.js';
+export {
+  BaseTransport,
+  transportBacklog,
+  transportRtt,
+  BACKLOG_UNSUPPORTED,
+  RTT_PENDING,
+  RTT_UNSUPPORTED,
+} from './transport/transport.js';
 export type {
   ConnectionId,
   Transport,
+  TransportBacklog,
   TransportRtt,
   TransportServer,
 } from './transport/transport.js';
 export { loopbackPair, LoopbackHub } from './transport/loopback.js';
-export type { LoopbackOptions } from './transport/loopback.js';
+export type { LoopbackOptions, LoopbackSchedule } from './transport/loopback.js';
 export { connectWebSocket } from './transport/webSocketClient.js';
 export { webSocketTransportServer, webSocketChannelServer } from './transport/webSocketServer.js';
 export type { WebSocketChannelServer, WebSocketServerOptions } from './transport/webSocketServer.js';
@@ -128,6 +136,8 @@ export type {
 } from './client/matchClient.js';
 export type { DeliveredPause } from './client/pause.js';
 export { ClientHost } from './client/host.js';
+export { startPaced } from './schedule.js';
+export type { PacedTimer } from './schedule.js';
 export type { ClientHostOptions, ClientStep, InputSource } from './client/host.js';
 export { InputRing, DEFAULT_RING_TICKS } from './client/inputRing.js';
 export type { SentInput } from './client/inputRing.js';

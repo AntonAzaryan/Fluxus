@@ -5,6 +5,7 @@
 import type { Serializer } from '@fluxus/core';
 import { clientCodec, DEFAULT_SERIALIZER, type Codec } from '../protocol/codec.js';
 import { ProtocolError, type ClientMessage, type ServerMessage } from '../protocol/messages.js';
+import { startPaced, type PacedTimer } from '../schedule.js';
 import type { Transport } from '../transport/transport.js';
 import type { DeliveredEvents, InputSample, MatchClient, MatchSample } from './matchClient.js';
 
@@ -41,7 +42,7 @@ export class ClientHost {
   private readonly codec: Codec<ClientMessage, ServerMessage>;
   private readonly input: InputSource | undefined;
   private readonly now: () => number;
-  private timer: ReturnType<typeof setInterval> | undefined;
+  private timer: PacedTimer | undefined;
   private timerRate: number | undefined;
 
   constructor(client: MatchClient, transport: Transport, options: ClientHostOptions = {}) {
@@ -117,27 +118,36 @@ export class ClientHost {
     return { state, events };
   }
 
-  /** Запускает собственный темп. Частота берётся из `Welcome`, до него — 60 Гц по умолчанию. */
+  /**
+   * Запускает собственный темп. Частота берётся из `Welcome`, до него — 60 Гц
+   * по умолчанию. Расписание без дрейфа (`schedule.ts`): собственный шаг
+   * клиента и тик сервера идут разными таймерами, и период, округлённый до
+   * целых миллисекунд, копил бы расхождение, которое `resyncTick` гасил бы
+   * перешагиванием номеров — тиками без кадра (NTR-10).
+   */
   run(): void {
     this.ensureTimer(this.client.pacing?.tickRate ?? 60);
   }
 
   private ensureTimer(rate: number): void {
     if (this.timer !== undefined && this.timerRate === rate) return;
-    if (this.timer !== undefined) clearInterval(this.timer);
+    this.timer?.stop();
     this.timerRate = rate;
-    this.timer = setInterval(() => {
-      // Темп матча приезжает в `Welcome`; до него клиент идёт умолчанием и
-      // перестраивается, как только узнал настоящий.
-      const actual = this.client.pacing?.tickRate;
-      if (actual !== undefined && actual !== this.timerRate) this.ensureTimer(actual);
-      this.step();
-    }, 1000 / rate);
+    this.timer = startPaced(
+      1000 / rate,
+      () => {
+        // Темп матча приезжает в `Welcome`; до него клиент идёт умолчанием и
+        // перестраивается, как только узнал настоящий.
+        const actual = this.client.pacing?.tickRate;
+        if (actual !== undefined && actual !== this.timerRate) this.ensureTimer(actual);
+        this.step();
+      },
+    );
   }
 
   stop(): void {
     if (this.timer === undefined) return;
-    clearInterval(this.timer);
+    this.timer.stop();
     this.timer = undefined;
     this.timerRate = undefined;
   }

@@ -505,6 +505,10 @@ describe('окно деталей сервера (MGR-3)', () => {
     // Пинг и отклик живого соединения видны рядом со статусом (MGR-3).
     expect(nodesOf(before, 'mg-slot__rtt')[0]?.text).toContain('мс');
     expect(nodesOf(before, 'mg-slot__response')[0]?.text).toContain('45');
+    // Размер снапшотов и пропущенные по очереди — рядом (NTR-22): «канал узкий»
+    // третьим ответом к пингу и длительности тика.
+    expect(nodesOf(before, 'mg-slot__snapshots')[0]?.text).toContain('4.0 КиБ');
+    expect(nodesOf(before, 'mg-slot__snapshots')[0]?.text).toContain('пропущено 3');
 
     // «Убрать» — это запирание слота (NTR-19).
     await session.admin(host, server, 'bar-slot', 0);

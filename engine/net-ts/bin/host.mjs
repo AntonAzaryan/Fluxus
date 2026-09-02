@@ -100,9 +100,22 @@ started.host.start();
 
 if (flag('keys')) process.stdout.write('управление: WASD — движение, пробел — каст, Ctrl+C — выход\n\n');
 
+/**
+ * Снапшоты, не отправленные слоту из-за очереди отправки его соединения
+ * (NTR-22). Тире — живого соединения у слота нет: пропускать было нечего, и ноль
+ * тут соврал бы про здоровый канал.
+ */
+function skippedOf(slot) {
+  const connection = started.server.slotLease(slot).connection;
+  if (connection === undefined) return '—';
+  return started.host.connectionMetrics(connection)?.snapshotsSkipped ?? '—';
+}
+
 const report = reportClient(local.client, () => {
+  // Применено/предсказано/опоздало/пропущено (NTR-11, NTR-22): четвёртым идёт
+  // «канал узкий» — ответ, которого раздельные счётчики слота не давали.
   const slots = started.server.metrics.slots
-    .map((slot, i) => `${started.server.config.players[i]}: ${slot.applied}/${slot.predicted}/${slot.late}`)
+    .map((slot, i) => `${started.server.config.players[i]}: ${slot.applied}/${slot.predicted}/${slot.late}/${skippedOf(i)}`)
     .join('  ');
   return `[${session.info.mode}/${session.info.phase}] тик ${started.server.tick}  ${slots}`;
 });

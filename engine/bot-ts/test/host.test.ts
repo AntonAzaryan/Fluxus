@@ -82,7 +82,10 @@ describe('уход бота из матча (BOT-1)', () => {
 
 describe('собственный темп хоста (BOT-4)', () => {
   it('`run()` двигает ботов сам: клиент входит в матч и шлёт ввод без ручных шагов', async () => {
-    vi.useFakeTimers();
+    // Часы — вместе с таймерами: расписание хостов без дрейфа (`startPaced`)
+    // назначает шаг от точки отсчёта по `performance.now`, и фейковые таймеры
+    // при настоящих часах дали бы шаги всё реже.
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval', 'Date', 'performance'] });
     const fixture = harness(duelConfig({ players: ['bot-1'] }));
     const bots = new BotHost();
     const seat = connectBot(fixture, bots, {
@@ -102,7 +105,10 @@ describe('собственный темп хоста (BOT-4)', () => {
   });
 
   it('таймер останавливается, когда каналы всех ботов закрыты', async () => {
-    vi.useFakeTimers();
+    // Часы — вместе с таймерами: расписание хостов без дрейфа (`startPaced`)
+    // назначает шаг от точки отсчёта по `performance.now`, и фейковые таймеры
+    // при настоящих часах дали бы шаги всё реже.
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval', 'Date', 'performance'] });
     const fixture = harness(duelConfig({ players: ['bot-1'] }));
     const bots = new BotHost();
     const transport: Transport = fixture.hub.connect();

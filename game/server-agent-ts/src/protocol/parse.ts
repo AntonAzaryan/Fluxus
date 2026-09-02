@@ -215,6 +215,7 @@ function slotView(value: unknown): SlotView {
     predicted: int(source, 'predicted', 'слот', 0, Number.MAX_SAFE_INTEGER),
     late: int(source, 'late', 'слот', 0, Number.MAX_SAFE_INTEGER),
     snapshotBytes: int(source, 'snapshotBytes', 'слот', 0, Number.MAX_SAFE_INTEGER),
+    snapshotsSkipped: int(source, 'snapshotsSkipped', 'слот', 0, Number.MAX_SAFE_INTEGER),
   };
 }
 

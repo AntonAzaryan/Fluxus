@@ -173,6 +173,10 @@ describe('операции реестра и подписка (SRV-2)', () => {
     // Игрок ОСТАЛСЯ в перечне слотов, а не исчез из него (SRV-5).
     const last = seen[seen.length - 1]!;
     expect(last.server.slots).toHaveLength(2);
+    // Счётчики канала слота едут тем же путём, что статус: размер снапшотов и
+    // пропущенные из-за очереди отправки (NTR-22) — рядом, как их и читают.
+    expect(last.server.slots[1]?.snapshotBytes).toBe(1024);
+    expect(last.server.slots[1]?.snapshotsSkipped).toBe(2);
 
     // Снятие возвращает его в строй тем же путём.
     await client.admin(id, 'unbar-slot', 0);
