@@ -288,6 +288,11 @@ function orAxis(normal: Vec2, axisNormal: Vec2): Vec2 {
 /**
  * Луч против прямоугольника — метод слэбов в расстояниях вдоль луча, а не в
  * параметре `t`: параметр потребовал бы деления на длину и второго диапазона.
+ *
+ * Начало луча ВНУТРИ коробки даёт нулевую ближнюю границу, то есть попадание на
+ * нулевой дистанции. Это норма PHYS-6, а не побочный эффект слэбов: `rayVsCircle`
+ * отвечает так же (см. его комментарий), и форма коллайдера — свободный выбор
+ * контента (PHYS-2) — на ответ луча не влияет.
  */
 export function rayVsBox(from: Vec2, dir: Vec2, rayLength: Fixed, box: Bounds): number | undefined {
   let near = 0;
@@ -343,6 +348,15 @@ function ratio(numerator: Fixed, denominator: Fixed, limit: Fixed): number {
  * Луч против круга — через проекцию на нормированное направление, без
  * дискриминанта: у квадратичной формы промежуточные произведения выходят за
  * Q16.16 уже на десятке единиц, здесь же все множители порядка расстояния.
+ *
+ * Начало луча внутри круга — попадание на нулевой дистанции, ровно как у
+ * прямоугольника (`rayVsBox`). Исключение СОБСТВЕННОГО коллайдера источника
+ * остаётся делом вызывающей стороны или маски (PHYS-6) и здесь не
+ * подразумевается; чужое препятствие, внутри которого оказалось начало, луч не
+ * пропускает. Для LoS это консервативный ответ — наблюдатель внутри укрытия
+ * сквозь него не смотрит, — и он один на обе формы: по PHYS-2 форма коллайдера
+ * свободный выбор контента, и разный ответ у круга и коробки означал бы, что
+ * этот выбор меняет видимость.
  */
 export function rayVsCircle(
   from: Vec2,
@@ -352,15 +366,21 @@ export function rayVsCircle(
   radius: Fixed,
 ): number | undefined {
   const toCenter = vec.sub(center, from);
+  const distanceSq = vec.lengthSq(toCenter);
   const projection = vec.dot(toCenter, dir);
-  const perpendicularSq = fixed.sub(vec.lengthSq(toCenter), fixed.mul(projection, projection));
+  const perpendicularSq = fixed.sub(distanceSq, fixed.mul(projection, projection));
   const radiusSq = fixed.mul(radius, radius);
   if (perpendicularSq > radiusSq) return undefined;
 
   const halfChord = fixed.sqrt(fixed.sub(radiusSq, perpendicularSq));
   const entry = fixed.sub(projection, halfChord);
-  // Источник внутри круга: попадание в нулевой дистанции — дефект вызова
-  // (PHYS-6 требует исключать источник), а не хит.
-  if (entry < 0) return undefined;
+  if (entry < 0) {
+    // Ближняя граница позади источника означает «внутри» только вместе с самим
+    // источником: `entry < 0` при начале СНАРУЖИ — это круг целиком позади
+    // луча, и попадания у него нет. «Позади» и «внутри» различает ровно одно
+    // сравнение — расстояние до центра против радиуса, обе величины уже
+    // посчитаны выше и в тех же сырых единицах Q16.16.
+    return distanceSq <= radiusSq ? 0 : undefined;
+  }
   return entry > rayLength ? undefined : entry;
 }

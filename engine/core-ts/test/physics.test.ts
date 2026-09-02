@@ -777,6 +777,21 @@ describe('направленный гейт обрыва (PHYS-11)', () => {
     expect(h.position(airborne).y).toBe(fixed.add(F(0.5), F(0.3)));
   });
 
+  it('ход вдоль ребра при нулевом допуске блокируется как обычная статика (PHYS-11)', () => {
+    const h = harness(true, TERRAIN_STEEP);
+    // Та же геометрия, но гейта нет: при `cliffRise = 0` ребро — обычная
+    // статика, и сущность, стоящая на его линии, за него цепляется по любой
+    // оси. Скольжение вдоль обрыва свободно только при активном допуске.
+    const grounded = h.place('Mover', {
+      Position: { x: F(2), y: F(0.5) },
+      Velocity: { y: F(0.3) },
+      Collider: { cliffRise: 0 },
+    });
+    const events = h.step();
+    expect(h.position(grounded).y).toBe(F(0.5));
+    expect(events.map((e) => e.type)).toEqual(['Collision']);
+  });
+
   // Отрицательный допуск — гейт с НУЛЕВЫМ допуском подъёма: гейт активен
   // (выключает его ровно ноль), но `rise > cliffRise` не пропускает даже
   // единицу. Арена `TERRAIN` — перепад ровно в один уровень на ребре x = 2.
@@ -1071,6 +1086,57 @@ describe('raycast (PHYS-6)', () => {
   it('луч нулевой длины не даёт попадания', () => {
     const h = harness();
     expect(h.physics.raycast(at(1, 1), at(1, 1))).toBeNull();
+  });
+
+  /**
+   * Начало луча внутри ЧУЖОГО коллайдера (PHYS-6). Источник исключает
+   * вызывающая сторона или маска, а препятствие, внутри которого оказалось
+   * начало, луч не пропускает: для LoS это консервативно — наблюдатель внутри
+   * укрытия сквозь него не смотрит. Ответ один на обе формы: по PHYS-2 форма
+   * коллайдера — свободный выбор контента.
+   */
+  it('начало внутри чужого круга даёт попадание в нулевой дистанции', () => {
+    const h = harness(false);
+    const ball = h.place('Ball', { Position: { x: F(2), y: F(0) } });
+    const hit = h.physics.raycast(at(2, 0), at(5, 0), { mask: BLOCKS_VISION });
+    expect(hit).not.toBeNull();
+    expect(hit!.entity).toBe(ball);
+    expect(hit!.point).toEqual(at(2, 0));
+  });
+
+  it('начало внутри чужого прямоугольника даёт то же попадание в нулевой дистанции', () => {
+    const h = harness(false);
+    const wall = h.place('Wall', { Position: { x: F(2), y: F(0) } });
+    const hit = h.physics.raycast(at(2, 0), at(5, 0), { mask: BLOCKS_VISION });
+    expect(hit).not.toBeNull();
+    expect(hit!.entity).toBe(wall);
+    expect(hit!.point).toEqual(at(2, 0));
+  });
+
+  it('круг целиком позади источника попадания не даёт: «позади» — это не «внутри»', () => {
+    const h = harness(false);
+    h.place('Ball', { Position: { x: F(-2), y: F(0) } });
+    // Луч смотрит в противоположную сторону: ближняя граница круга позади
+    // источника, но сам источник СНАРУЖИ — попадания нет.
+    expect(h.physics.raycast(at(0, 0), at(5, 0), { mask: BLOCKS_VISION })).toBeNull();
+    // Анти-вакуумность: та же геометрия лучом в другую сторону даёт попадание.
+    expect(h.physics.raycast(at(0, 0), at(-5, 0), { mask: BLOCKS_VISION })).not.toBeNull();
+  });
+
+  it('форма укрытия ответа не меняет: наблюдатель внутри круга и внутри коробки упирается одинаково', () => {
+    const cover = (prefab: string) => {
+      const h = harness(false);
+      const entity = h.place(prefab, { Position: { x: F(2), y: F(0) } });
+      // Цель за укрытием: без гейта «начало внутри» луч дошёл бы до неё.
+      h.place('Wall', { Position: { x: F(6), y: F(0) } });
+      return { entity, hit: h.physics.raycast(at(2, 0), at(8, 0), { mask: BLOCKS_VISION }) };
+    };
+    const box = cover('Wall');
+    const ball = cover('Ball');
+    expect(box.hit!.entity).toBe(box.entity);
+    expect(ball.hit!.entity).toBe(ball.entity);
+    expect(ball.hit!.point).toEqual(box.hit!.point);
+    expect(ball.hit!.point).toEqual(at(2, 0));
   });
 
   /**
