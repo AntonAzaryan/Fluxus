@@ -6,7 +6,7 @@
 
 ## 1. Норма по работающему движку (D1)
 
-- [x] 1.1 `specs/rng/spec.md`: MODIFIED RNG-8 — диапазон `bound`, сценарий «bound не меньше 2^32».
+- [x] 1.1 ~~`specs/rng/spec.md`: MODIFIED RNG-8~~ — закрыт параллельно в main (`sec01-rng-bound-range`), при слиянии взята редакция main; дельта снята.
 - [x] 1.2 `specs/tick-loop/spec.md`: MODIFIED TICK-2 — необязательность `target`, сценарий «Кадр без точки прицела».
 - [x] 1.3 `specs/data-driven-systems/spec.md`: MODIFIED SYS-5 — норма о контракте, сценарий про расширение типа.
 - [x] 1.4 `specs/npc-behavior/spec.md`: MODIFIED NPC-4 — поле `decisionBudget`, умолчание «без предела», ноль — находка валидации; сценарий.
@@ -30,7 +30,7 @@
 
 ## 4. Код
 
-- [x] 4.1 `engine/core-ts`: RNG-8, DET-9 (тест на девятнадцать якорей), DET-2 (комментарий `cellLo`/`cellHi`), REW-2 (D5), SER-6 (общее дополнение нулями), NPC-6 (индекс маршрутов), ABIL-2, ABIL-5, ABIL-6, TIME-8, DIAG-4, ACT-5, CMD-5, комментарии (DI-3/DI-6, DI-3/DI-4, FP-5, OBS-3, TWEEN-1, SNAP-2/SNAP-4, CLI-7).
+- [x] 4.1 `engine/core-ts`: RNG-8, DET-9 и DET-2 — редакция main (`sec01-rng-bound-range`, слияние), REW-2 (D5), SER-6 (общее дополнение нулями), NPC-6 (индекс маршрутов), ABIL-2, ABIL-5, ABIL-6, TIME-8, DIAG-4, ACT-5, CMD-5, комментарии (DI-3/DI-6, DI-3/DI-4, FP-5, OBS-3, TWEEN-1, SNAP-2/SNAP-4, CLI-7).
 - [x] 4.2 `engine/core-ts`: PHYS-6 (круг — попадание на нуле), ARENA-3 (флаг по правилу ECS-3, запись только на смене стороны).
 - [x] 4.3 `engine/net-ts`: SES-1 (тип), NTR-4 (перечни и `protocol-error`), шапка `BranchHistory`, DI-6 в тесте границы.
 - [x] 4.4 `engine/client-ts`, `engine/hud-ts`, `game/demo-ts`: SHELL-4 (счётчик до HUD), SHELL-4/HUD-5 (накопитель), SHELL-3 (возврат буфера), QUAL-3 (константная стоимость HUD), комментарий про пресет «баланс».

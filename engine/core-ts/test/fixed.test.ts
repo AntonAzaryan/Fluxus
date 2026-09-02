@@ -41,6 +41,50 @@ function bigintMulShift(a: number, b: number): number {
   return Number(BigInt.asIntN(32, raw));
 }
 
+/**
+ * Эталон truncate toward zero на BigInt: магнитуда сдвигается, знак применяется
+ * после (FP-2, FP-3). Отличается от `bigintMulShift` ровно на отрицательных
+ * произведениях с ненулевым остатком, где арифметический сдвиг даёт floor.
+ */
+function bigintMulTruncate(a: number, b: number): number {
+  const product = BigInt(a) * BigInt(b);
+  const magnitude = (product < 0n ? -product : product) >> 16n;
+  return Number(BigInt.asIntN(32, product < 0n ? -magnitude : magnitude));
+}
+
+/**
+ * Копия медленного (hi/lo) пути `mul` — эталон парности быстрого пути (FP-2).
+ * Именно копия, а не экспорт из ядра: отдельный «медленный mul» в поверхности
+ * ядра был бы публичным API ради теста (CLI-8), а копия краснеет ровно тогда,
+ * когда реализация от эталона расходится. `| 0` в конце повторяет `wrap()`:
+ * магнитуда сравнивается уже завёрнутой в i32, как её отдаёт ядро (FP-4).
+ */
+function hiLoMulShift(a: number, b: number): number {
+  const negative = a < 0 !== b < 0;
+  const ua = Math.abs(a);
+  const ub = Math.abs(b);
+
+  const aHi = Math.floor(ua / 0x10000);
+  const aLo = ua % 0x10000;
+  const bHi = Math.floor(ub / 0x10000);
+  const bLo = ub % 0x10000;
+
+  const lo = Math.imul(aLo, bLo) >>> 0;
+  const cross = Math.imul(aHi, bLo) + Math.imul(aLo, bHi);
+  const high = Math.imul(aHi, bHi) * 0x10000;
+
+  const magnitude = high + cross + Math.floor(lo / 0x10000);
+  return (negative ? -magnitude : magnitude) | 0;
+}
+
+/** Точное произведение по модулю — им проверяется, по какую сторону 2^53 лежит пара. */
+function exactMagnitude(a: number, b: number): bigint {
+  const product = BigInt(a) * BigInt(b);
+  return product < 0n ? -product : product;
+}
+
+const TWO_POW_53 = 9007199254740992n;
+
 describe('fromInt/toInt/fromFloat/toFloat', () => {
   it('round-trip целых', () => {
     expect(fixed.toInt(fixed.fromInt(42))).toBe(42);
@@ -109,6 +153,132 @@ describe('mul — 64-битный промежуток без BigInt (FP-2)', ()
     expect(f(fixed.mul(F(-1.5), F(1)))).toBeCloseTo(-1.5, 4);
     const result = fixed.mul(F(-1.5), F(1));
     expect(fixed.toInt(result)).toBe(-1); // truncate(-1.5) == -1, floor(-1.5) == -2
+  });
+});
+
+/**
+ * Быстрый путь `mul` (FP-2, DET-2 «точная целочисленная арифметика в двоичном
+ * контейнере»): при `|a|·|b| < 2^53` магнитуда берётся прямым произведением, за
+ * порогом — hi/lo-разложением. Пути обязаны совпадать БИТ В БИТ, иначе одно и
+ * то же геймплейное умножение считалось бы двумя способами и вторая реализация
+ * ядра (CORE-2) разошлась бы с первой на границе — то есть десинк (DET-1).
+ *
+ * Эталон парности — `hiLoMulShift` выше: копия медленного пути внутри теста.
+ * Эталонов два намеренно: hi/lo проверяет «оба пути ядра — одно и то же»,
+ * BigInt (`bigintMulTruncate`) — «и это то самое, что требует FP-2/FP-3».
+ */
+describe('mul — быстрый путь для малых операндов (FP-2, DET-2)', () => {
+  it('парность с hi/lo-путём на 2^16 псевдослучайных пар из геймплейного диапазона', () => {
+    // Диапазон ±2^23 — это ±128 юнитов в Q16.16: произведение ≤ 2^46 (быстрый
+    // путь), магнитуда ≤ 2^30 (в i32, то есть debug-assert переполнения молчит).
+    let seed = 0x1234_5678;
+    const nextOperand = (): number => {
+      seed = (Math.imul(seed, 1_103_515_245) + 12_345) & 0x7fffffff;
+      return (seed % 0x1000000) - 0x800000;
+    };
+
+    const mismatches: string[] = [];
+    let maxMagnitude = 0n;
+    for (let i = 0; i < 65_536; i++) {
+      const a = nextOperand();
+      const b = nextOperand();
+      if (fixed.mul(a, b) !== hiLoMulShift(a, b)) mismatches.push(`${a} * ${b}`);
+      const magnitude = exactMagnitude(a, b);
+      if (magnitude > maxMagnitude) maxMagnitude = magnitude;
+    }
+
+    expect(mismatches.slice(0, 5)).toEqual([]);
+    expect(mismatches).toHaveLength(0);
+    // Партия действительно про быстрый путь: ни одна пара порога не достигла.
+    expect(maxMagnitude < TWO_POW_53).toBe(true);
+  });
+
+  it('граница 2^53: пары чуть ниже и чуть выше порога дают один результат обоими путями', async () => {
+    // Магнитуда здесь заведомо за i32 — не место для debug-assert переполнения.
+    const release = await importUnder('production');
+
+    // (2^26 − 1)·(2^27 + k) = 2^53 − 2^27 + k·(2^26 − 1): порог переходится
+    // между k = 2 (2^53 − 2, ещё быстрый путь) и k = 3 (уже медленный).
+    const a = 0x3ffffff; // 2^26 − 1
+    let below = 0;
+    let above = 0;
+    for (let k = -4; k <= 4; k++) {
+      const b = 0x8000000 + k; // 2^27 + k
+      for (const [sa, sb] of [[1, 1], [1, -1], [-1, 1], [-1, -1]] as const) {
+        const x = sa * a;
+        const y = sb * b;
+        if (exactMagnitude(x, y) < TWO_POW_53) below++;
+        else above++;
+        expect(release.mul(x, y), `${x} * ${y}`).toBe(hiLoMulShift(x, y));
+        expect(release.mul(x, y), `${x} * ${y}`).toBe(bigintMulTruncate(x, y));
+      }
+    }
+    // Порог действительно пересечён в обе стороны — иначе тест проверял бы одну ветку.
+    expect(below).toBeGreaterThan(0);
+    expect(above).toBeGreaterThan(0);
+    expect(exactMagnitude(a, 0x8000002)).toBe(TWO_POW_53 - 2n);
+    expect(exactMagnitude(a, 0x8000003) > TWO_POW_53).toBe(true);
+  });
+
+  it('сам порог: произведение ровно 2^53 − 1 ещё быстрый путь, ровно 2^53 — уже нет', async () => {
+    const release = await importUnder('production');
+
+    // 2^53 − 1 = 6361 · 69431 · 20394401; пара сомножителей помещается в i32,
+    // и это последнее целое, точное в двоичном контейнере (Number.MAX_SAFE_INTEGER).
+    const lastExact: readonly [number, number] = [20_394_401, 441_650_591];
+    expect(exactMagnitude(...lastExact)).toBe(TWO_POW_53 - 1n);
+
+    // 2^53 = 2^26 · 2^27 — первое целое, которое контейнер уже не различает от
+    // соседа; проверка `|p| ≤ MAX_SAFE_INTEGER` его не пропускает.
+    const firstInexact: readonly [number, number] = [0x4000000, 0x8000000];
+    expect(exactMagnitude(...firstInexact)).toBe(TWO_POW_53);
+
+    for (const [x, y] of [lastExact, firstInexact]) {
+      for (const [sa, sb] of [[1, 1], [1, -1], [-1, 1], [-1, -1]] as const) {
+        expect(release.mul(sa * x, sb * y), `${sa * x} * ${sb * y}`).toBe(hiLoMulShift(sa * x, sb * y));
+        expect(release.mul(sa * x, sb * y), `${sa * x} * ${sb * y}`).toBe(bigintMulTruncate(sa * x, sb * y));
+      }
+    }
+  });
+
+  it('углы i32: INT32_MIN и INT32_MAX во всех сочетаниях (FP-2, FP-4)', async () => {
+    const release = await importUnder('production');
+    const corners = [
+      fixed.INT32_MIN,
+      fixed.INT32_MIN + 1,
+      -0x10000,
+      -1,
+      0,
+      1,
+      0x10000,
+      fixed.INT32_MAX - 1,
+      fixed.INT32_MAX,
+    ];
+    for (const x of corners) {
+      for (const y of corners) {
+        expect(release.mul(x, y), `${x} * ${y}`).toBe(hiLoMulShift(x, y));
+        expect(release.mul(x, y), `${x} * ${y}`).toBe(bigintMulTruncate(x, y));
+      }
+    }
+  });
+
+  it('быстрый путь усекает к нулю, а не к минус бесконечности (FP-3)', () => {
+    // Ненулевой остаток на отрицательном произведении — ровно то место, где floor
+    // и truncate расходятся; быстрый путь считает магнитуду и применяет знак после.
+    const pairs: readonly (readonly [number, number])[] = [
+      [-3, 1],
+      [-98_305, 65_537],
+      [98_305, -65_537],
+      [-65_535, 1],
+      [-1, 0x10000 + 1],
+    ];
+    for (const [x, y] of pairs) {
+      expect(exactMagnitude(x, y) < TWO_POW_53, `${x} * ${y} — быстрый путь`).toBe(true);
+      expect(fixed.mul(x, y), `${x} * ${y}`).toBe(hiLoMulShift(x, y));
+      expect(fixed.mul(x, y), `${x} * ${y}`).toBe(bigintMulTruncate(x, y));
+      // И это НЕ floor: арифметический сдвиг знакового произведения дал бы на единицу меньше.
+      expect(bigintMulTruncate(x, y), `${x} * ${y} — floor против truncate`).not.toBe(bigintMulShift(x, y));
+    }
   });
 });
 
