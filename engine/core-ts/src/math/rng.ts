@@ -138,9 +138,13 @@ export class XorShift128Stream implements RngStream {
 
   /** Lemire multiply-shift с отбраковкой — детерминированно и воспроизводимо в Rust (без float). */
   nextBelow(bound: number): number {
+    // Верхняя граница — часть формулы, а не запас (RNG-8): алгоритм описан над
+    // `s = bound как u32`, и `bound = 2^32` дал бы `s = 0`, порог «не число» и
+    // вечный ноль на выходе без единого исключения. Диапазон 1…2^32−1 закрыт
+    // жёстко в обоих режимах сборки, как и нижняя граница (FP-4).
     assertInvariant(
-      Number.isInteger(bound) && bound > 0,
-      'nextBelow: bound должен быть положительным целым',
+      Number.isInteger(bound) && bound > 0 && bound <= 0xffff_ffff,
+      'nextBelow: bound должен быть целым в диапазоне 1…2^32−1',
       'RNG_BOUND_INVALID',
     );
     const s = bound >>> 0;

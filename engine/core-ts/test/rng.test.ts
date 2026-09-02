@@ -179,6 +179,26 @@ describe('nextBelow', () => {
       expect(stream.nextBelow(1)).toBe(0);
     }
   });
+
+  it('bound = 2^32 — жёсткая ошибка, генератор не продвинулся (RNG-8)', () => {
+    // Без проверки `s = bound >>> 0` обнулился бы, порог отбраковки стал бы
+    // «не числом», и метод молча отдавал бы 0 при продвинувшемся генераторе.
+    const stream = new XorShift128Stream(seedStateFromName(555, 'BoundsSystem'));
+    const reference = new XorShift128Stream(seedStateFromName(555, 'BoundsSystem'));
+    expect(() => stream.nextBelow(2 ** 32)).toThrow(/1…2\^32−1/);
+    expect(() => stream.nextBelow(2 ** 40)).toThrow(/1…2\^32−1/);
+    expect(stream.next()).toBe(reference.next());
+  });
+
+  it('bound = 2^32−1 — предельное законное значение, результат в диапазоне (RNG-8)', () => {
+    const stream = new XorShift128Stream(seedStateFromName(555, 'BoundsSystem'));
+    for (let i = 0; i < 20; i++) {
+      const v = stream.nextBelow(2 ** 32 - 1);
+      expect(Number.isInteger(v)).toBe(true);
+      expect(v).toBeGreaterThanOrEqual(0);
+      expect(v).toBeLessThan(2 ** 32 - 1);
+    }
+  });
 });
 
 describe('nextFixed', () => {
