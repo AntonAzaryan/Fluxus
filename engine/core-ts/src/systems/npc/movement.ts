@@ -44,13 +44,15 @@ import { lengthOf } from '../../math/vector.js';
 import { NpcGrid } from './grid.js';
 import { NpcRoutes } from './routes.js';
 import { isDead, livingAgents, posX, posY } from './runtime.js';
-import { NPC_ACTION_NONE, NPC_AGENT_COMPONENT, NPC_ROUTE_COMPONENT } from './components.js';
+import { NPC_ACTION_NONE } from './components.js';
 import { resolveNpcHandles, type NpcHandles } from './handles.js';
+import { QueryBuffer } from '../queryBuffer.js';
 import { EXEC_FOLLOW_ROUTE, EXEC_SEEK_TARGET, type CompiledBehavior, type NpcCatalog } from './model.js';
 import {
   FIXED_ONE,
   NO_ENTITY,
   type EntityId,
+  type FieldHandle,
   type Fixed,
   type NavigationApi,
   type PathRequestOptions,
@@ -58,6 +60,12 @@ import {
   type System,
   type SystemContext,
 } from '../../types.js';
+
+/** Поля скорости агента (биндинг NPC-1): в них уходит решение о шаге. */
+interface VelocityHandles {
+  readonly x: FieldHandle;
+  readonly y: FieldHandle;
+}
 
 /** Место в шкале `order` и его основание — таблица DET-9; параметром сборки не является. */
 const ANCHOR_ORDER = 70;
@@ -92,6 +100,8 @@ export class NpcMovementSystem implements System {
   private readonly grid = new NpcGrid(CELL_SIZE);
   private readonly scratch = new Int32Array(NEIGHBOR_LIMIT);
   private readonly spec: QuerySpec;
+  /** Буфер выборки агентов — свой у системы (QUERY-3), переживает тики. */
+  private readonly agents = new QueryBuffer();
   /** Направление шага текущего агента: единичный вектор либо ноль. */
   private dirX: Fixed = 0;
   private dirY: Fixed = 0;
@@ -109,6 +119,14 @@ export class NpcMovementSystem implements System {
   private pointY: Fixed = 0;
   /** Handle платформы (SYS-10): один раз на первом входе, после раннего выхода. */
   private handles: NpcHandles | undefined;
+  /**
+   * Поля скорости — handle отдельно от общих: имя компонента скорости
+   * разрешается ЗДЕСЬ, после раннего выхода, а не в общем наборе платформы.
+   * Сцена, где скорости нет вовсе, до этой строки не доходит — её выборка
+   * агентов пуста по построению спецификации (`all` содержит компонент
+   * скорости), и падать ей на имени, которого она не объявляла, не на чем.
+   */
+  private velocity: VelocityHandles | undefined;
 
   constructor(catalog: NpcCatalog) {
     this.catalog = catalog;
@@ -123,30 +141,38 @@ export class NpcMovementSystem implements System {
   }
 
   run(ctx: SystemContext): void {
-    const agents = ctx.query(this.spec);
-    if (agents.length === 0) return;
+    const found = this.agents.run(ctx, this.spec);
+    if (found === 0) return;
     const bindings = this.catalog.bindings;
     const handles = (this.handles ??= resolveNpcHandles(ctx, bindings));
+    const velocity = (this.velocity ??= {
+      x: ctx.resolveField(bindings.velocity, 'x'),
+      y: ctx.resolveField(bindings.velocity, 'y'),
+    });
     this.routes.rebuild(ctx, bindings.position, handles);
-    this.grid.begin(agents.length);
-    for (let slot = 0; slot < agents.length; slot++) {
-      const entity = agents[slot]!;
-      this.grid.add(slot, posX(ctx, handles, entity), posY(ctx, handles, entity));
+    this.grid.begin(found);
+    // Позиция, скорость и компонент агента перечислены в `all` выборки, поэтому
+    // все они читаются по индексу слота, без разбора идентификатора (SYS-10);
+    // чужие сущности (точка маршрута, цель) остаются на handle-пути.
+    for (let slot = 0; slot < found; slot++) {
+      const at = this.agents.indices[slot]!;
+      this.grid.add(slot, ctx.getByIndex(at, handles.posX), ctx.getByIndex(at, handles.posY));
     }
 
-    for (let slot = 0; slot < agents.length; slot++) {
-      const entity = agents[slot]!;
-      const behavior = this.catalog.behaviors[ctx.getByHandle(entity, handles.agentBehavior)];
+    for (let slot = 0; slot < found; slot++) {
+      const entity = this.agents.ids[slot]!;
+      const at = this.agents.indices[slot]!;
+      const behavior = this.catalog.behaviors[ctx.getByIndex(at, handles.agentBehavior)];
       if (behavior === undefined) continue;
-      this.desired(ctx, handles, behavior, entity);
+      this.desired(ctx, handles, behavior, entity, at);
       let vx = mul(this.dirX, behavior.speed);
       let vy = mul(this.dirY, behavior.speed);
-      this.separation(ctx, handles, behavior, entity, slot);
+      this.separation(ctx, handles, behavior, entity, at, slot);
       const push = mul(behavior.speed, behavior.separationWeight);
       vx = add(vx, mul(this.dirX, push));
       vy = add(vy, mul(this.dirY, push));
-      ctx.commands.setField(entity, bindings.velocity, 'x', vx);
-      ctx.commands.setField(entity, bindings.velocity, 'y', vy);
+      ctx.commands.setFieldByHandle(entity, velocity.x, vx);
+      ctx.commands.setFieldByHandle(entity, velocity.y, vy);
     }
   }
 
@@ -168,15 +194,16 @@ export class NpcMovementSystem implements System {
     handles: NpcHandles,
     behavior: CompiledBehavior,
     entity: EntityId,
+    at: number,
   ): void {
     this.dirX = 0;
     this.dirY = 0;
-    const action = ctx.getByHandle(entity, handles.agentAction);
+    const action = ctx.getByIndex(at, handles.agentAction);
     if (action === NPC_ACTION_NONE) return;
-    const state = behavior.states[ctx.getByHandle(entity, handles.agentState)];
+    const state = behavior.states[ctx.getByIndex(at, handles.agentState)];
     const executor = state?.actions[action]?.executor;
-    if (executor === EXEC_FOLLOW_ROUTE) this.followRoute(ctx, handles, behavior, entity);
-    else if (executor === EXEC_SEEK_TARGET) this.seekTarget(ctx, handles, behavior, entity);
+    if (executor === EXEC_FOLLOW_ROUTE) this.followRoute(ctx, handles, behavior, entity, at);
+    else if (executor === EXEC_SEEK_TARGET) this.seekTarget(ctx, handles, behavior, entity, at);
     // `hold` и `cast` стоят на месте: идущий каст двигать себя не должен, а
     // «атака в контакте» — это остановка, а не отдельный исполнитель.
   }
@@ -191,21 +218,22 @@ export class NpcMovementSystem implements System {
     handles: NpcHandles,
     behavior: CompiledBehavior,
     entity: EntityId,
+    at: number,
   ): void {
     if (!ctx.hasByHandle(entity, handles.route)) return;
     const route = ctx.getByHandle(entity, handles.routeRoute);
     let index = ctx.getByHandle(entity, handles.routeIndex);
     let point = this.routes.at(route, index);
     if (point === NO_ENTITY) return;
-    const x = posX(ctx, handles, entity);
-    const y = posY(ctx, handles, entity);
+    const x = ctx.getByIndex(at, handles.posX);
+    const y = ctx.getByIndex(at, handles.posY);
     if (distSqLe(posX(ctx, handles, point) - x, posY(ctx, handles, point) - y, behavior.arrive)) {
       index += 1;
-      ctx.commands.setField(entity, NPC_ROUTE_COMPONENT, 'index', index);
+      ctx.commands.setFieldByHandle(entity, handles.routeIndex, index);
       point = this.routes.at(route, index);
       if (point === NO_ENTITY) return;
     }
-    this.steer(ctx, handles, behavior, entity, posX(ctx, handles, point), posY(ctx, handles, point));
+    this.steer(ctx, handles, behavior, entity, at, posX(ctx, handles, point), posY(ctx, handles, point));
   }
 
   /** Сближение с целью; в пределах дистанции контакта агент стоит (NPC-4). */
@@ -214,15 +242,16 @@ export class NpcMovementSystem implements System {
     handles: NpcHandles,
     behavior: CompiledBehavior,
     entity: EntityId,
+    at: number,
   ): void {
-    const target = ctx.getByHandle(entity, handles.agentTarget);
+    const target = ctx.getByIndex(at, handles.agentTarget);
     if (target === NO_ENTITY || !ctx.isAlive(target) || isDead(ctx, handles, target)) return;
     const goalX = posX(ctx, handles, target);
     const goalY = posY(ctx, handles, target);
-    const dx = goalX - posX(ctx, handles, entity);
-    const dy = goalY - posY(ctx, handles, entity);
+    const dx = goalX - ctx.getByIndex(at, handles.posX);
+    const dy = goalY - ctx.getByIndex(at, handles.posY);
     if (distSqLe(dx, dy, behavior.attack)) return;
-    this.steer(ctx, handles, behavior, entity, goalX, goalY);
+    this.steer(ctx, handles, behavior, entity, at, goalX, goalY);
   }
 
   /**
@@ -243,12 +272,13 @@ export class NpcMovementSystem implements System {
     handles: NpcHandles,
     behavior: CompiledBehavior,
     entity: EntityId,
+    at: number,
     goalX: Fixed,
     goalY: Fixed,
   ): void {
-    const x = posX(ctx, handles, entity);
-    const y = posY(ctx, handles, entity);
-    if (this.holdsPoint(ctx, handles, behavior, entity, goalX, goalY)) {
+    const x = ctx.getByIndex(at, handles.posX);
+    const y = ctx.getByIndex(at, handles.posY);
+    if (this.holdsPoint(ctx, handles, behavior, entity, at, goalX, goalY)) {
       this.normalize(sub(this.pointX, x), sub(this.pointY, y));
       return;
     }
@@ -271,19 +301,20 @@ export class NpcMovementSystem implements System {
     handles: NpcHandles,
     behavior: CompiledBehavior,
     entity: EntityId,
+    at: number,
     goalX: Fixed,
     goalY: Fixed,
   ): boolean {
     const navigation = ctx.navigation;
     if (navigation === undefined) return false;
-    if (ctx.getByHandle(entity, handles.agentDecidedTick) === ctx.tick) {
-      return this.requestPath(ctx, handles, navigation, entity, goalX, goalY);
+    if (ctx.getByIndex(at, handles.agentDecidedTick) === ctx.tick) {
+      return this.requestPath(ctx, handles, navigation, entity, at, goalX, goalY);
     }
-    if (ctx.getByHandle(entity, handles.agentPathValid) === 0) return false;
-    this.pointX = ctx.getByHandle(entity, handles.agentPathX);
-    this.pointY = ctx.getByHandle(entity, handles.agentPathY);
-    const x = posX(ctx, handles, entity);
-    const y = posY(ctx, handles, entity);
+    if (ctx.getByIndex(at, handles.agentPathValid) === 0) return false;
+    this.pointX = ctx.getByIndex(at, handles.agentPathX);
+    this.pointY = ctx.getByIndex(at, handles.agentPathY);
+    const x = ctx.getByIndex(at, handles.posX);
+    const y = ctx.getByIndex(at, handles.posY);
     return !distSqLe(sub(this.pointX, x), sub(this.pointY, y), behavior.arrive);
   }
 
@@ -298,11 +329,12 @@ export class NpcMovementSystem implements System {
     handles: NpcHandles,
     navigation: NavigationApi,
     entity: EntityId,
+    at: number,
     goalX: Fixed,
     goalY: Fixed,
   ): boolean {
-    this.requestFrom.x = posX(ctx, handles, entity);
-    this.requestFrom.y = posY(ctx, handles, entity);
+    this.requestFrom.x = ctx.getByIndex(at, handles.posX);
+    this.requestFrom.y = ctx.getByIndex(at, handles.posY);
     this.requestTo.x = goalX;
     this.requestTo.y = goalY;
     const radius = ctx.physics?.inradiusOf(entity);
@@ -319,16 +351,16 @@ export class NpcMovementSystem implements System {
       // Команда — только на изменившееся: поля агента участвуют в dirty-дельте
       // тика (OBS-6), и запись прежнего нуля объявляла бы изменение, которого не
       // было, — каждое окно решений каждого агента без пути.
-      if (ctx.getByHandle(entity, handles.agentPathValid) !== 0) {
-        ctx.commands.setField(entity, NPC_AGENT_COMPONENT, 'pathValid', 0);
+      if (ctx.getByIndex(at, handles.agentPathValid) !== 0) {
+        ctx.commands.setFieldByHandle(entity, handles.agentPathValid, 0);
       }
       return false;
     }
     this.pointX = next.x;
     this.pointY = next.y;
-    ctx.commands.setField(entity, NPC_AGENT_COMPONENT, 'pathValid', 1);
-    ctx.commands.setField(entity, NPC_AGENT_COMPONENT, 'pathX', next.x);
-    ctx.commands.setField(entity, NPC_AGENT_COMPONENT, 'pathY', next.y);
+    ctx.commands.setFieldByHandle(entity, handles.agentPathValid, 1);
+    ctx.commands.setFieldByHandle(entity, handles.agentPathX, next.x);
+    ctx.commands.setFieldByHandle(entity, handles.agentPathY, next.y);
     return true;
   }
 
@@ -350,6 +382,7 @@ export class NpcMovementSystem implements System {
     handles: NpcHandles,
     behavior: CompiledBehavior,
     entity: EntityId,
+    at: number,
     slot: number,
   ): void {
     if (behavior.separation <= 0 || behavior.separationWeight <= 0) {
@@ -360,13 +393,13 @@ export class NpcMovementSystem implements System {
       return;
     }
     if ((ctx.tick + slot) % behavior.separationIntervalTicks !== 0) {
-      this.dirX = ctx.getByHandle(entity, handles.agentSepX);
-      this.dirY = ctx.getByHandle(entity, handles.agentSepY);
+      this.dirX = ctx.getByIndex(at, handles.agentSepX);
+      this.dirY = ctx.getByIndex(at, handles.agentSepY);
       return;
     }
     this.recomputeSeparation(behavior, slot);
-    ctx.commands.setField(entity, NPC_AGENT_COMPONENT, 'sepX', this.dirX);
-    ctx.commands.setField(entity, NPC_AGENT_COMPONENT, 'sepY', this.dirY);
+    ctx.commands.setFieldByHandle(entity, handles.agentSepX, this.dirX);
+    ctx.commands.setFieldByHandle(entity, handles.agentSepY, this.dirY);
   }
 
   /**

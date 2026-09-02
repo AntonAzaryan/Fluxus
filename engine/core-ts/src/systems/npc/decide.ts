@@ -36,6 +36,7 @@ import {
   type CompiledState,
 } from './model.js';
 import { NpcPerception } from './perception.js';
+import type { QueryBuffer } from '../queryBuffer.js';
 import type { NpcRoutes } from './routes.js';
 import {
   healthFraction,
@@ -59,13 +60,6 @@ export const NO_ACTION = -1;
  */
 const TIE_LIMIT = 8;
 
-/**
- * Пустая выборка слотов: ею решатель и живёт вне окна валидности результата
- * запроса (QUERY-3) — система ставит настоящую выборку на время обхода агентов
- * и отпускает её тем же вызовом.
- */
-export const NO_SLOTS = new Float64Array(0);
-
 export class NpcDecider {
   readonly perception: NpcPerception;
   private readonly ties = new Int32Array(TIE_LIMIT);
@@ -73,9 +67,10 @@ export class NpcDecider {
    * Выборка слотов способностей ТЕКУЩЕГО тика — по ней вход `abilityReady`
    * ищет слот агента (NPC-7). Одна на тик и на всех решающих агентов: порядок
    * обхода детерминирован (QUERY-2), а исход от него не зависит вовсе —
-   * `slotIndex` у владельца уникален (ABIL-1).
+   * `slotIndex` у владельца уникален (ABIL-1). `undefined` — вне окна её
+   * валидности (QUERY-3): буфером владеет система, решатель его только читает.
    */
-  private slots: Float64Array = NO_SLOTS;
+  private slots: QueryBuffer | undefined;
 
   // Кадр текущего агента: заполняется перед пересмотром и живёт до его конца.
   private entity: EntityId = NO_ENTITY;
@@ -121,13 +116,13 @@ export class NpcDecider {
 
   /**
    * Выборка слотов способностей тика; ставит её система поведения перед
-   * обходом агентов и только если словарь документов эту выборку спрашивает,
-   * а после обхода отпускает обратно в `NO_SLOTS` — окно валидности результата
+   * обходом агентов и только если словарь документов эту выборку спрашивает, а
+   * после обхода отпускает обратно в `undefined` — окно валидности результата
    * запроса есть тело вызвавшей системы, и удерживать его дольше нельзя
-   * (QUERY-3). Пустая — сцена без способностей либо документ без входа
-   * `abilityReady`.
+   * (QUERY-3). Отпущенная либо пустая — сцена без способностей либо документ
+   * без входа `abilityReady`.
    */
-  set abilitySlots(slots: Float64Array) {
+  set abilitySlots(slots: QueryBuffer | undefined) {
     this.slots = slots;
   }
 
@@ -257,10 +252,16 @@ export class NpcDecider {
   private abilityReady(ctx: SystemContext, handles: NpcHandles, slotIndex: number): Fixed {
     const fields = handles.abilitySlot;
     if (fields === undefined) return 0;
-    for (const slot of this.slots) {
-      if (ctx.getByHandle(slot, fields.owner) !== this.entity) continue;
-      if (ctx.getByHandle(slot, fields.slotIndex) !== slotIndex) continue;
-      return slotReady(ctx, fields, slot) ? FIXED_ONE : 0;
+    const slots = this.slots;
+    if (slots === undefined) return 0;
+    for (let i = 0; i < slots.count; i++) {
+      // Компонент слота перечислен в `all` выборки, поэтому владелец и номер
+      // читаются по индексу слота (SYS-10): их спрашивают у КАЖДОГО слота на
+      // каждом решении, а готовность — только у совпавшего.
+      const at = slots.indices[i]!;
+      if (ctx.getByIndex(at, fields.owner) !== this.entity) continue;
+      if (ctx.getByIndex(at, fields.slotIndex) !== slotIndex) continue;
+      return slotReady(ctx, fields, slots.ids[i]!) ? FIXED_ONE : 0;
     }
     return 0;
   }

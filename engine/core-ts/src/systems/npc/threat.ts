@@ -22,6 +22,7 @@
  */
 import { mul } from '../../math/fixed.js';
 import { NPC_AGENT_COMPONENT, NPC_THREAT_COMPONENT } from './components.js';
+import { QueryBuffer } from '../queryBuffer.js';
 import { resolveNpcHandles, type NpcHandles } from './handles.js';
 import { threatAdd, threatDecay, threatOf } from './runtime.js';
 import type { CompiledThreatSource, NpcCatalog } from './model.js';
@@ -56,6 +57,8 @@ export class NpcThreatSystem implements System {
   readonly order = ANCHOR_ORDER;
   private readonly catalog: NpcCatalog;
   private readonly spec: QuerySpec = { all: [NPC_AGENT_COMPONENT, NPC_THREAT_COMPONENT] };
+  /** Выборка агентов забывания: буфер системы, а не контейнер на тик (QUERY-3). */
+  private readonly agents = new QueryBuffer();
   /** Тип события → объявившие его источники. Строится один раз, на загрузке. */
   private readonly byType = new Map<string, DeclaredSource[]>();
   /** Handle платформы (SYS-10): один раз на первом входе, после раннего выхода. */
@@ -74,13 +77,15 @@ export class NpcThreatSystem implements System {
   }
 
   run(ctx: SystemContext): void {
-    const agents = ctx.query(this.spec);
-    if (agents.length === 0) return;
+    const found = this.agents.run(ctx, this.spec);
+    if (found === 0) return;
     const handles = (this.handles ??= resolveNpcHandles(ctx, this.catalog.bindings));
-    for (const entity of agents) {
-      const behavior = this.catalog.behaviors[ctx.getByHandle(entity, handles.agentBehavior)];
+    for (let slot = 0; slot < found; slot++) {
+      // Компонент агента перечислен в `all`, поэтому документ поведения
+      // читается по индексу слота, без разбора идентификатора (SYS-10).
+      const behavior = this.catalog.behaviors[ctx.getByIndex(this.agents.indices[slot]!, handles.agentBehavior)];
       if (behavior === undefined || behavior.decayPerTick === FIXED_ONE) continue;
-      threatDecay(ctx, handles, entity, behavior.decayPerTick);
+      threatDecay(ctx, handles, this.agents.ids[slot]!, behavior.decayPerTick);
     }
     if (this.byType.size === 0) return;
     for (let index = 0; index < ctx.events.length; index++) {
@@ -159,6 +164,6 @@ export class NpcThreatSystem implements System {
     if (from === target || from === NO_ENTITY) return;
     const held = target === NO_ENTITY ? 0 : threatOf(ctx, handles, entity, target);
     if (threatOf(ctx, handles, entity, from) <= held + mul(held, switchMargin)) return;
-    ctx.commands.setField(entity, NPC_AGENT_COMPONENT, 'decidedTick', -1);
+    ctx.commands.setFieldByHandle(entity, handles.agentDecidedTick, -1);
   }
 }

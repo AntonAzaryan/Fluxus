@@ -25,7 +25,8 @@
  * стоимости тика (NPC-4), и агент, думающий вдвое реже под замедлением, увёл бы
  * её из-под контроля документа.
  */
-import { NpcDecider, NO_ACTION, NO_SLOTS } from './decide.js';
+import { NpcDecider, NO_ACTION } from './decide.js';
+import { QueryBuffer } from '../queryBuffer.js';
 import { NpcRoutes } from './routes.js';
 import { healthFraction, isDead, livingAgents, posX, posY, teamOf } from './runtime.js';
 import { NPC_ACTION_NONE, NPC_AGENT_COMPONENT } from './components.js';
@@ -73,6 +74,13 @@ export class NpcBehaviorSystem implements System {
   /** Выборка слотов способностей — её обходит вход `abilityReady` (NPC-7). */
   private readonly slotSpec: QuerySpec = { all: [ABILITY_SLOT_COMPONENT] };
   /**
+   * Буферы выборок: свой на каждую (QUERY-3), оба переживают тики — прогон
+   * системы снимает выборку заново, и контейнер на вызов был бы аллокацией
+   * размером в мир (SYS-10).
+   */
+  private readonly agents = new QueryBuffer();
+  private readonly slots = new QueryBuffer();
+  /**
    * Спрашивает ли хоть один документ каталога готовность слота. Считается на
    * загрузке, а не каждый тик: сцене, ни один документ которой про
    * способности не спрашивает, лишний запрос к миру был бы работой ни за чем —
@@ -99,22 +107,29 @@ export class NpcBehaviorSystem implements System {
   }
 
   run(ctx: SystemContext): void {
-    const agents = ctx.query(this.spec);
-    if (agents.length === 0) return;
+    const found = this.agents.run(ctx, this.spec);
+    if (found === 0) return;
     const bindings = this.catalog.bindings;
     const handles = (this.handles ??= resolveNpcHandles(ctx, bindings));
     // Выборка слотов — ОДНА на тик и на всех агентов: обход её детерминирован
     // (QUERY-2), и запрос на каждое вычисление входа был бы работой, кратной
     // числу решающих агентов.
-    if (this.readsSlots) this.decider.abilitySlots = ctx.query(this.slotSpec);
+    if (this.readsSlots) {
+      this.slots.run(ctx, this.slotSpec);
+      this.decider.abilitySlots = this.slots;
+    }
     this.decider.perception.rebuild(ctx, bindings, handles);
     this.routes.rebuild(ctx, bindings.position, handles);
     const rng = ctx.rng.stream(RNG_STREAM);
     let budget = this.catalog.decisionBudget;
 
-    for (let slot = 0; slot < agents.length; slot++) {
-      const entity = agents[slot]!;
-      const behavior = this.catalog.behaviors[ctx.getByHandle(entity, handles.agentBehavior)];
+    for (let slot = 0; slot < found; slot++) {
+      const entity = this.agents.ids[slot]!;
+      // Поля компонента агента читаются по индексу слота: он перечислен в `all`
+      // выборки, поэтому и живость, и владение доказаны отбором (SYS-10).
+      // Позиция и сторона — не перечислены, и остаются на handle-пути.
+      const at = this.agents.indices[slot]!;
+      const behavior = this.catalog.behaviors[ctx.getByIndex(at, handles.agentBehavior)];
       // Индекс за таблицей поймать здесь нечем: документ проверен на загрузке
       // (NPC-2), а расстановка вправе поставить любое число. Агент без
       // документа просто не ведёт себя — молчаливым умолчанием это не является,
@@ -128,21 +143,21 @@ export class NpcBehaviorSystem implements System {
         posX(ctx, handles, entity),
         posY(ctx, handles, entity),
         teamOf(ctx, handles, entity) ?? 0,
-        ctx.getByHandle(entity, handles.agentTarget),
-        ctx.getByHandle(entity, handles.agentEnteredTick),
+        ctx.getByIndex(at, handles.agentTarget),
+        ctx.getByIndex(at, handles.agentEnteredTick),
         route,
         route < 0 ? 0 : ctx.getByHandle(entity, handles.routeIndex),
       );
-      const state = this.advanceState(ctx, handles, behavior, entity);
-      if (this.wants(ctx, handles, behavior, entity, this.entered, slot) && budget > 0) {
+      const state = this.advanceState(ctx, handles, behavior, entity, at);
+      if (this.wants(ctx, handles, behavior, entity, at, this.entered, slot) && budget > 0) {
         budget--;
-        this.decide(ctx, handles, behavior, entity, state, rng.next());
+        this.decide(ctx, handles, behavior, entity, at, state, rng.next());
       }
     }
     // Выборка отпускается здесь же: её окно валидности — тело этого вызова
     // (QUERY-3), и решатель за него результат не удерживает — ровно так же
     // отпускает свою выборку слотов машина фаз (`abilities/phase.ts`).
-    this.decider.abilitySlots = NO_SLOTS;
+    this.decider.abilitySlots = undefined;
   }
 
   /**
@@ -155,12 +170,13 @@ export class NpcBehaviorSystem implements System {
     handles: NpcHandles,
     behavior: CompiledBehavior,
     entity: EntityId,
+    at: number,
   ): number {
     this.entered = false;
-    let index = ctx.getByHandle(entity, handles.agentState);
+    let index = ctx.getByIndex(at, handles.agentState);
     if (index < 0 || index >= behavior.states.length) {
       // Начальное состояние — первое в документе (NPC-2).
-      this.enter(ctx, entity, 0);
+      this.enter(ctx, handles, entity, 0);
       return 0;
     }
     const current = behavior.states[index]!;
@@ -171,6 +187,7 @@ export class NpcBehaviorSystem implements System {
           handles,
           behavior,
           entity,
+          at,
           transition.kind,
           transition.value,
           transition.ticks,
@@ -182,17 +199,17 @@ export class NpcBehaviorSystem implements System {
       }
       if (transition.to === index) continue;
       index = transition.to;
-      this.enter(ctx, entity, index);
+      this.enter(ctx, handles, entity, index);
       return index;
     }
     return index;
   }
 
-  private enter(ctx: SystemContext, entity: EntityId, state: number): void {
+  private enter(ctx: SystemContext, handles: NpcHandles, entity: EntityId, state: number): void {
     this.entered = true;
-    ctx.commands.setField(entity, NPC_AGENT_COMPONENT, 'state', state);
-    ctx.commands.setField(entity, NPC_AGENT_COMPONENT, 'enteredTick', ctx.tick);
-    ctx.commands.setField(entity, NPC_AGENT_COMPONENT, 'action', NPC_ACTION_NONE);
+    ctx.commands.setFieldByHandle(entity, handles.agentState, state);
+    ctx.commands.setFieldByHandle(entity, handles.agentEnteredTick, ctx.tick);
+    ctx.commands.setFieldByHandle(entity, handles.agentAction, NPC_ACTION_NONE);
     // Кадр решателя правится тем же значением: пересмотр случается на ЭТОМ же
     // тике, а мир поставленной команды ещё не видит (CMD-5). Без этого вход
     // «сколько агент в состоянии» отвечал бы о состоянии, которое агент только
@@ -206,6 +223,7 @@ export class NpcBehaviorSystem implements System {
     handles: NpcHandles,
     behavior: CompiledBehavior,
     entity: EntityId,
+    at: number,
     kind: number,
     value: number,
     ticks: number,
@@ -219,7 +237,7 @@ export class NpcBehaviorSystem implements System {
       case COND_HEALTH_ABOVE:
         return healthFraction(ctx, handles, entity) > value;
       case COND_ELAPSED:
-        return ctx.tick - ctx.getByHandle(entity, handles.agentEnteredTick) >= ticks;
+        return ctx.tick - ctx.getByIndex(at, handles.agentEnteredTick) >= ticks;
       case COND_EVENT:
         return hasEvent(ctx, eventType, entityField, entity);
       case COND_TARGET_WITHIN:
@@ -255,13 +273,14 @@ export class NpcBehaviorSystem implements System {
     handles: NpcHandles,
     behavior: CompiledBehavior,
     entity: EntityId,
+    at: number,
     entered: boolean,
     slot: number,
   ): boolean {
     if (entered) return true;
-    const decidedTick = ctx.getByHandle(entity, handles.agentDecidedTick);
+    const decidedTick = ctx.getByIndex(at, handles.agentDecidedTick);
     if (decidedTick < 0) return true;
-    const target = ctx.getByHandle(entity, handles.agentTarget);
+    const target = ctx.getByIndex(at, handles.agentTarget);
     if (target !== NO_ENTITY && (!ctx.isAlive(target) || isDead(ctx, handles, target))) {
       // Смерть цели — событие, а не срок: держать мёртвую цель до следующего
       // окна значило бы стоять на месте, пока идёт бой.
@@ -276,6 +295,7 @@ export class NpcBehaviorSystem implements System {
     handles: NpcHandles,
     behavior: CompiledBehavior,
     entity: EntityId,
+    at: number,
     stateIndex: number,
     jitter: number,
   ): void {
@@ -287,10 +307,10 @@ export class NpcBehaviorSystem implements System {
     // тике, а мир до flush её не видит.
     const previous =
       ctx.commands.peekField(entity, NPC_AGENT_COMPONENT, 'action') ??
-      ctx.getByHandle(entity, handles.agentAction);
-    ctx.commands.setField(entity, NPC_AGENT_COMPONENT, 'target', target);
-    ctx.commands.setField(entity, NPC_AGENT_COMPONENT, 'action', action);
-    ctx.commands.setField(entity, NPC_AGENT_COMPONENT, 'decidedTick', ctx.tick);
+      ctx.getByIndex(at, handles.agentAction);
+    ctx.commands.setFieldByHandle(entity, handles.agentTarget, target);
+    ctx.commands.setFieldByHandle(entity, handles.agentAction, action);
+    ctx.commands.setFieldByHandle(entity, handles.agentDecidedTick, ctx.tick);
     if (action === NO_ACTION || action === previous) return;
     const chosen = state.actions[action]!;
     if (chosen.executor !== EXEC_CAST) return;

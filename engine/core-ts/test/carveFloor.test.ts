@@ -15,10 +15,11 @@ import * as fixed from '../src/math/fixed.js';
 import { mathApi } from '../src/math/mathApi.js';
 import { createRngRegistry } from '../src/math/rng.js';
 import { createCommandBuffer, type CommandBufferHandle } from '../src/ecs/commands.js';
-import { query } from '../src/ecs/query.js';
+import { query, queryInto } from '../src/ecs/query.js';
 import {
   getField,
   getFieldByHandle,
+  getFieldByIndex,
   hasComponent,
   hasComponentByHandle,
   isAlive,
@@ -91,11 +92,13 @@ function harness(def: TerrainDef | null = TERRAIN): Harness {
   const ctx: SystemContext = {
     tick: 1,
     query: (spec) => query(world, spec),
+    queryInto: (spec, ids, indices) => queryInto(world, spec, ids, indices),
     get: (e, c, f) => getField(world, e, c, f),
     has: (e, c) => hasComponent(world, e, c),
     resolveField: (c, f) => resolveFieldHandle(world, c, f),
     resolveComponent: (c) => resolveComponentHandle(world, c),
     getByHandle: (e, handle) => getFieldByHandle(world, e, handle),
+    getByIndex: (index, handle) => getFieldByIndex(world, index, handle),
     hasByHandle: (e, handle) => hasComponentByHandle(world, e, handle),
     isAlive: (e) => isAlive(world, e),
     commands: {

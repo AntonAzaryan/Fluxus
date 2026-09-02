@@ -78,6 +78,13 @@ export interface FieldTable {
   readonly owners: Int32Array;
   /** Значение при отсутствии владения (ECS-7). */
   readonly neutrals: Int32Array;
+  /**
+   * Тип поля (ECS-3) — им проверяется представимость значения у команды,
+   * адресованной handle'ом (CMD-1): строковый путь берёт тот же тип из схемы
+   * компонента, handle-путь читает его отсюда, и второго определения
+   * представимости от этого не заводится.
+   */
+  readonly types: readonly FieldType[];
   /** Имя компонента и имя поля — только для текста находки ECS-7 в debug-сборке. */
   readonly components: readonly string[];
   readonly fields: readonly string[];
@@ -94,12 +101,13 @@ interface TableBuilder {
   readonly arrays: FieldArray[];
   readonly owners: number[];
   readonly neutrals: number[];
+  readonly types: FieldType[];
   readonly components: string[];
   readonly fields: string[];
 }
 
 function newBuilder(): TableBuilder {
-  return { arrays: [], owners: [], neutrals: [], components: [], fields: [] };
+  return { arrays: [], owners: [], neutrals: [], types: [], components: [], fields: [] };
 }
 
 function finish(builder: TableBuilder): FieldTable {
@@ -107,6 +115,7 @@ function finish(builder: TableBuilder): FieldTable {
     arrays: builder.arrays,
     owners: Int32Array.from(builder.owners),
     neutrals: Int32Array.from(builder.neutrals),
+    types: builder.types,
     components: builder.components,
     fields: builder.fields,
   };
@@ -130,6 +139,7 @@ function storage(
     builder.arrays.push(fields[field]!);
     builder.owners.push(id);
     builder.neutrals.push(neutralValue(type));
+    builder.types.push(type);
     builder.components.push(schema.name);
     builder.fields.push(field);
   }
@@ -210,6 +220,36 @@ export function readByHandle(
       );
     }
     return table.neutrals[handle]!;
+  }
+  return table.arrays[handle]![index]!;
+}
+
+/**
+ * Чтение поля по RAW-ИНДЕКСУ слота (SYS-10) — та же колонка и то же значение,
+ * что у `readByHandle`, но без доказательства того, что уже доказано отбором
+ * запроса: индекс приходит из `queryInto`, чья спецификация перечислила
+ * компонент этого поля в `all` (`ecs-foundation` QUERY-3), поэтому и живость
+ * слота, и владение компонентом истинны по построению.
+ *
+ * Тотальности ECS-7 это не отменяет и второго правила чтения не заводит: пути
+ * ЧТЕНИЯ по-прежнему два — по имени и по handle, — а здесь адресуется тот же
+ * handle, только уже разрешённой сущностью. Ошибку использования ловит
+ * debug-сборка мягким assert'ом (FP-4): он не бросает, значения не меняет и
+ * потому не делает прогоны debug и release различимыми.
+ *
+ * Текст находки строится ТОЛЬКО на ветке отказа — как и у `readByHandle`:
+ * шаблонная строка в аргументе `assert` вычислялась бы на каждом чтении, то
+ * есть debug-сборка платила бы аллокацией за проверку, которая почти всегда
+ * проходит.
+ */
+export function readByIndex(world: FieldReadSource, index: number, handle: FieldHandle): number {
+  const table = world.fields;
+  if (DEBUG && !maskHas(world.masks, index, table.owners[handle]!)) {
+    assert(
+      false,
+      `getByIndex: слот ${index} не владеет компонентом "${table.components[handle]!}" (ECS-7), поле "${table.fields[handle]!}"`,
+      'COMPONENT_READ_WITHOUT_OWNERSHIP',
+    );
   }
   return table.arrays[handle]![index]!;
 }

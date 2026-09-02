@@ -11,8 +11,8 @@
 import { EventBus } from '../ecs/events.js';
 import { createRngRegistry } from '../math/rng.js';
 import { SystemRegistry } from '../systems/registry.js';
-import { createCommandBuffer } from '../ecs/commands.js';
-import { query as runQuery } from '../ecs/query.js';
+import { createCommandBuffer, type CommandBufferHandle } from '../ecs/commands.js';
+import { query as runQuery, queryInto as runQueryInto } from '../ecs/query.js';
 import {
   clearDirty,
   cloneWorld,
@@ -21,6 +21,7 @@ import {
   dirtyIsEmpty,
   getField,
   getFieldByHandle,
+  getFieldByIndex,
   hasComponent,
   hasComponentByHandle,
   isAlive,
@@ -92,6 +93,19 @@ export interface Simulation {
    * перемоткой, зависимость сборки — нет.
    */
   readonly diagnostics?: DiagnosticsSink;
+  /**
+   * Буфер команд симуляции — единственное мутабельное поле этой части, и
+   * заводит его сам тик на первом прогоне (`runSystems`), а не сборка: снаружи
+   * его не заполняют и не читают.
+   *
+   * Живёт он здесь, а не в `SimulationState`, по той же причине, что и
+   * диагностика: состояние копируется в снапшот и восстанавливается перемоткой,
+   * а буфер между тиками ПУСТ по построению и состоянием симуляции не является
+   * — переживают тик только его массивы, то есть выделенная под команды память
+   * (аллокационная дисциплина ядра). Пара «одна симуляция — один буфер»
+   * означает и то, что две симуляции в одном процессе буфера не делят (DI-1).
+   */
+  commands?: CommandBufferHandle;
 }
 
 export function initialState(world: WorldState, worldSeed: number): SimulationState {
@@ -155,15 +169,21 @@ function runSystems(
 
   state.events.clear();
   clearDirty(world);
-  // Буфер живёт один тик и локален этому вызову (CMD-2). Отсюда пост-условие
-  // оборванного тика (SYS-9): команды, накопленные упавшей системой, до `flush`
-  // не доходят ни на каком пути выхода — исключение уносит вызов вместе с
-  // буфером, и применить его частично уже некому. Второй путь к тому же
-  // пост-условию держит сам `flush`: он проверяет весь буфер до первой мутации,
-  // и отказ внутри него мир не задевает. Единица атомарности — система, та же,
-  // что у flush'а; поднимать буфер выше тика значило бы завести путь, на котором
-  // накопленное упавшей системой доживает до следующего вызова.
-  const commands = createCommandBuffer(world);
+  // Буфер переживает тик РАДИ СВОИХ МАССИВОВ (аллокационная дисциплина ядра:
+  // объект на каждую запись поля был бы аллокацией, пропорциональной числу
+  // сущностей), а логически живёт один тик: `reset` на входе привязывает его к
+  // миру и очищает журнал.
+  //
+  // Пост-условие оборванного тика (SYS-9) держится именно этой очисткой на
+  // ВХОДЕ. Команды, накопленные упавшей системой, до `flush` не доходят ни на
+  // каком пути выхода: исключение уносит вызов, `flush` их не увидит, а
+  // следующий вызов `tick()` начинается с `reset` и застаёт журнал пустым —
+  // применить накопленное упавшей системой некому и негде. Второй путь к тому
+  // же пост-условию держит сам `flush`: он проверяет весь буфер до первой
+  // мутации, и отказ внутри него мир не задевает. Единица атомарности —
+  // система, та же, что у flush'а.
+  const commands = (sim.commands ??= createCommandBuffer(world));
+  commands.reset(world);
 
   // Контекст собирается один раз на тик, а не на каждую систему: между
   // системами меняется только `rng` (его назначает цикл ниже), остальное
@@ -179,16 +199,28 @@ function runSystems(
       countQuery(matched.length);
       return matched;
     },
+    queryInto: (spec, ids, indices) => {
+      const matched = runQueryInto(world, spec, ids, indices);
+      // Счётчик считает ОТДАННЫЙ результат (DIAG-3): проба, не поместившаяся в
+      // буфер вызывающего, результата не отдала — её место займёт повторный
+      // запрос по выросшему буферу, и он же будет посчитан. Иначе число
+      // запросов в трейсе зависело бы от того, на каком тике буфер системы
+      // дорос, то есть от истории прогона, а не от его состояния.
+      if (matched <= Math.min(ids.length, indices.length)) countQuery(matched);
+      return matched;
+    },
     get: (entity, component, field) => getField(world, entity, component, field),
     has: (entity, component) => hasComponent(world, entity, component),
-    // Handle-путь чтения (SYS-10): разрешение имён оплачивается один раз — при
+    // Handle-путь (SYS-10): разрешение имён оплачивается один раз — при
     // конструировании системы или на первом её входе, — а горячий цикл дальше
-    // читает без строкового поиска. Канала записи по handle здесь нет и не
-    // появится: мутации идут через `commands` (CMD-1, TICK-3).
+    // и читает, и заказывает записи без строкового поиска. Изменяемой ссылки на
+    // колонку хранилища здесь нет и не появится: запись по handle — та же
+    // команда буфера, что и по имени (CMD-1, TICK-3).
     resolveField: (component, field) => resolveFieldHandle(world, component, field),
     resolveComponent: (component) => resolveComponentHandle(world, component),
     getByHandle: (entity, handle) => getFieldByHandle(world, entity, handle),
     hasByHandle: (entity, handle) => hasComponentByHandle(world, entity, handle),
+    getByIndex: (index, handle) => getFieldByIndex(world, index, handle),
     isAlive: (entity) => isAlive(world, entity),
     commands,
     events: state.events,

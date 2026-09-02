@@ -3,7 +3,10 @@
  * `withinRadius`/`withTag`), комбинируемые в одном запросе.
  *
  * Результат материализуется на момент вызова (QUERY-3): последующие
- * структурные изменения мира на уже отданный результат не влияют.
+ * структурные изменения мира на уже отданный результат не влияют. Входа два —
+ * `query` с контейнером на вызов (форма SYS-5, ею живут JSON-системы) и
+ * `queryInto` в буферы вызывающего (SYS-10): отбор, фильтры и порядок у них
+ * общие по построению — одно тело.
  *
  * Порядок — по возрастанию raw-индекса сущности (QUERY-2). Он получается по
  * построению: обходим слоты слева направо. Сортировки нет, и по той же причине
@@ -39,32 +42,74 @@ function maskOf(state: WorldState, names: readonly string[]): Uint32Array | 'unk
 }
 
 export function query(state: WorldState, spec: QuerySpec): Float64Array {
-  const masks = componentMasks(state);
-
-  const allMask = spec.all ? maskOf(state, spec.all) : undefined;
-  // Требуется компонент, которого нет в мире вообще — результат заведомо пуст.
-  if (allMask === 'unknown') return EMPTY;
-  const anyMask = spec.any ? maskOf(state, spec.any) : undefined;
-  if (anyMask === 'unknown') return EMPTY;
-  // Запрет по несуществующему компоненту никого не отсеивает — фильтр опускаем.
-  const notMaskRaw = spec.not ? maskOf(state, spec.not) : undefined;
-  const notMask = notMaskRaw === 'unknown' ? undefined : notMaskRaw;
-
   // Слоты обходятся напрямую, без материализации массива живых сущностей на
   // каждый запрос (запросы зовутся системами каждый тик — это была бы лишняя
   // аллокация размером в мир). Порядок QUERY-2 сохраняется по построению, а id
   // упаковывается только для прошедших фильтр по маске.
-  const entities = entityIndexOf(state);
-  const result = new Float64Array(entities.aliveCount);
-  const count = collectMatches(state, spec, masks, entities, allMask, anyMask, notMask, result);
+  const result = new Float64Array(entityIndexOf(state).aliveCount);
+  // Ёмкость результата — число живых, то есть заведомо не меньше числа
+  // совпавших: усечения на этом пути не бывает, и `count` здесь всегда полный.
+  const count = collect(state, spec, result, undefined);
+  if (count === 0) return EMPTY;
   return count === result.length ? result : result.subarray(0, count);
 }
 
 /**
- * Обход слотов и упаковка прошедших фильтр (QUERY-2, QUERY-3) — сколько
- * записано, столько и вернулось. Аргументы плоские, а не одним объектом
- * фильтра: запросы зовутся системами каждый тик, и объект на вызов был бы
- * аллокацией, пропорциональной числу систем.
+ * Тот же отбор в буферы ВЫЗЫВАЮЩЕГО (`data-driven-systems` SYS-10): `ids`
+ * получает идентификаторы, `indices` — raw-индексы их слотов, возвращается
+ * ПОЛНОЕ число совпавших. Буфер короче него не ошибка: записаны первые
+ * `min(совпавших, ёмкость)` в порядке QUERY-2, а по возвращённому числу
+ * вызывающий растит свои буферы и повторяет запрос.
+ */
+export function queryInto(
+  state: WorldState,
+  spec: QuerySpec,
+  ids: Float64Array,
+  indices: Int32Array,
+): number {
+  return collect(state, spec, ids, indices);
+}
+
+/**
+ * Разрешение имён спецификации в маски-фильтры и обход слотов — ОДНО тело на
+ * оба входа: расходиться отбору или порядку (QUERY-2) у них не на чем.
+ */
+function collect(
+  state: WorldState,
+  spec: QuerySpec,
+  ids: Float64Array,
+  indices: Int32Array | undefined,
+): number {
+  const allMask = spec.all ? maskOf(state, spec.all) : undefined;
+  // Требуется компонент, которого нет в мире вообще — результат заведомо пуст.
+  if (allMask === 'unknown') return 0;
+  const anyMask = spec.any ? maskOf(state, spec.any) : undefined;
+  if (anyMask === 'unknown') return 0;
+  // Запрет по несуществующему компоненту никого не отсеивает — фильтр опускаем.
+  const notMaskRaw = spec.not ? maskOf(state, spec.not) : undefined;
+  const notMask = notMaskRaw === 'unknown' ? undefined : notMaskRaw;
+  return collectMatches(
+    state,
+    spec,
+    componentMasks(state),
+    entityIndexOf(state),
+    allMask,
+    anyMask,
+    notMask,
+    ids,
+    indices,
+  );
+}
+
+/**
+ * Обход слотов и упаковка прошедших фильтр (QUERY-2, QUERY-3). Возвращается
+ * число СОВПАВШИХ, а записываются только те, кому хватило ёмкости буферов:
+ * счёт продолжается и после её исчерпания — обход слотов всё равно идёт до
+ * конца, и полное число совпавших достаётся вызывающему бесплатно.
+ *
+ * Аргументы плоские, а не одним объектом фильтра: запросы зовутся системами
+ * каждый тик, и объект на вызов был бы аллокацией, пропорциональной числу
+ * систем.
  */
 function collectMatches(
   state: WorldState,
@@ -74,15 +119,23 @@ function collectMatches(
   allMask: Uint32Array | undefined,
   anyMask: Uint32Array | undefined,
   notMask: Uint32Array | undefined,
-  result: Float64Array,
+  ids: Float64Array,
+  indices: Int32Array | undefined,
 ): number {
+  // Ёмкость — меньшая из длин: индексы и идентификаторы описывают один и тот
+  // же результат, и записать половину пары значило бы отдать индекс без
+  // сущности, которой он принадлежит.
+  const capacity = indices === undefined ? ids.length : Math.min(ids.length, indices.length);
   let count = 0;
   for (let index = 0; index < entities.nextIndex; index++) {
     if (entities.alive[index] !== 1) continue;
     if (!maskFilterPasses(masks, index, allMask, anyMask, notMask)) continue;
     const entity = makeEntityId(index, entities.generations[index] ?? 0);
     if (!entityFilterPasses(state, spec, entity)) continue;
-    result[count] = entity;
+    if (count < capacity) {
+      ids[count] = entity;
+      if (indices !== undefined) indices[count] = index;
+    }
     count++;
   }
   return count;

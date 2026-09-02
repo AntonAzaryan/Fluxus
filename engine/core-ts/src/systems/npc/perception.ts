@@ -9,12 +9,11 @@
  */
 import { distSqCompare, distSqLe } from '../../math/fixed.js';
 import { NpcGrid } from './grid.js';
-import { hiddenFrom, isDead, posX, posY, teamOf } from './runtime.js';
+import { hiddenFrom, isDead, posX, posY } from './runtime.js';
+import { QueryBuffer } from '../queryBuffer.js';
 import type { NpcHandles } from './handles.js';
 import type { CompiledNpcBindings } from './model.js';
 import { NO_ENTITY, type EntityId, type Fixed, type QuerySpec, type SystemContext } from '../../types.js';
-
-const NO_CANDIDATES = new Float64Array(0);
 
 /**
  * Предел соседей на один запрос. Не «сколько поместится», а осознанный потолок
@@ -46,7 +45,12 @@ const EXAMINE_LIMIT = 1024;
 export class NpcPerception {
   private readonly grid: NpcGrid;
   private readonly scratch = new Int32Array(NEIGHBOR_LIMIT);
-  private candidates: Float64Array = NO_CANDIDATES;
+  /**
+   * Кандидаты тика: буфер СВОЙ у этого восприятия (QUERY-3) и переживает тики —
+   * выборка снимается каждый прогон системы, и контейнер на вызов был бы
+   * аллокацией размером в мир (SYS-10).
+   */
+  private readonly candidates = new QueryBuffer();
   private spec: QuerySpec | undefined;
 
   constructor(cellSize: Fixed) {
@@ -60,19 +64,29 @@ export class NpcPerception {
    */
   rebuild(ctx: SystemContext, bindings: CompiledNpcBindings, handles: NpcHandles): void {
     if (!bindings.hasTeam) {
-      this.candidates = NO_CANDIDATES;
+      this.candidates.count = 0;
       this.grid.begin(0);
       return;
     }
     // Спецификация запроса адресуется ИМЕНАМИ (QuerySpec не тронут), чтение
-    // позиций — handle'ами (SYS-10): имена нужны один раз, чтение — на каждого.
+    // позиций — по индексу слота (SYS-10): имена нужны один раз, чтение — на
+    // каждого, а владение позицией доказано самой спецификацией (`all`).
     this.spec ??= { all: [bindings.teamComponent, bindings.position] };
-    this.candidates = ctx.query(this.spec);
-    this.grid.begin(this.candidates.length);
-    for (let slot = 0; slot < this.candidates.length; slot++) {
-      const entity = this.candidates[slot]!;
-      this.grid.add(slot, posX(ctx, handles, entity), posY(ctx, handles, entity));
+    const found = this.candidates.run(ctx, this.spec);
+    this.grid.begin(found);
+    for (let slot = 0; slot < found; slot++) {
+      const index = this.candidates.indices[slot]!;
+      this.grid.add(slot, ctx.getByIndex(index, handles.posX), ctx.getByIndex(index, handles.posY));
     }
+  }
+
+  /**
+   * Сторона кандидата (биндинг NPC-1). Компонент стороны перечислен в `all`
+   * выборки, поэтому владение доказано отбором, и читается сторона по индексу
+   * слота (SYS-10); сцена без стороны кандидатов не собирает вовсе.
+   */
+  private teamAt(ctx: SystemContext, handles: NpcHandles, slot: number): number {
+    return ctx.getByIndex(this.candidates.indices[slot]!, handles.team!.field);
   }
 
   /**
@@ -95,9 +109,9 @@ export class NpcPerception {
     let bestY = 0;
     for (let i = 0; i < found; i++) {
       const slot = this.scratch[i]!;
-      const entity = this.candidates[slot]!;
+      const entity = this.candidates.ids[slot]!;
       if (entity === self) continue;
-      if (teamOf(ctx, handles, entity) === team) continue;
+      if (this.teamAt(ctx, handles, slot) === team) continue;
       if (isDead(ctx, handles, entity)) continue;
       // NPC-10: скрытая от агента цель не выбирается и во входы не попадает.
       if (hiddenFrom(ctx, handles, self, entity)) continue;
@@ -125,9 +139,9 @@ export class NpcPerception {
     let count = 0;
     for (let i = 0; i < found; i++) {
       const slot = this.scratch[i]!;
-      const entity = this.candidates[slot]!;
+      const entity = this.candidates.ids[slot]!;
       if (entity === self) continue;
-      if (teamOf(ctx, handles, entity) !== team) continue;
+      if (this.teamAt(ctx, handles, slot) !== team) continue;
       if (isDead(ctx, handles, entity)) continue;
       count++;
     }

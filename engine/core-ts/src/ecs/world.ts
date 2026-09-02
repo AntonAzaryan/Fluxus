@@ -47,6 +47,7 @@ import {
   neutralValue,
   ownsByHandle,
   readByHandle,
+  readByIndex,
   type ComponentStorage,
   type FieldTable,
 } from './fieldTable.js';
@@ -485,6 +486,20 @@ export function checkField(
 }
 
 /**
+ * То же условие для команды, адресованной handle'ом (CMD-1): существование
+ * компонента и поля доказано самим разрешением имени (SYS-10), поэтому
+ * проверять остаётся одну представимость значения (ECS-3) — и отказ у неё тот
+ * же самый, слово в слово, потому что текст его строит одна функция.
+ */
+export function checkFieldByHandle(state: WorldState, handle: FieldHandle, value: number): void {
+  const table = toInternal(state).fields;
+  const type = table.types[handle]!;
+  if (!representable(type, value)) {
+    throw valueError('setField', table.components[handle]!, table.fields[handle]!, type, value);
+  }
+}
+
+/**
  * Условия, на которых бросает `spawn`: prefab зарегистрирован, а `overrides`
  * адресуют только то, что prefab уже содержит (CMD-6). Мира не касается.
  */
@@ -654,11 +669,48 @@ export function resolveFieldHandle(
 }
 
 /**
+ * Тот же адрес поля, но БЕЗ броска на неизвестном имени: `undefined` значит
+ * «такого поля в мире нет». Нужен точечному чтению буфера команд (CMD-5),
+ * которое обязано отвечать «команд на это поле не было» и на имя, которого мир
+ * не знает, — падать там не на чем: спрашивают о поле, а не разрешают имя.
+ */
+export function lookupFieldHandle(
+  state: WorldState,
+  component: string,
+  field: string,
+): FieldHandle | undefined {
+  return toInternal(state).stores.get(component)?.handles[field];
+}
+
+/**
+ * Имена компонента и поля по handle — ровно те, из которых handle получен
+ * (SYS-10). Нужны записи о команде в трейсе (`diagnostics` DIAG-2): команда,
+ * адресованная handle'ом, обязана выглядеть в трейсе так же, как строковая, а
+ * держать имена рядом с самой командой значило бы платить за них на каждой
+ * записи поля ради выключенного в матче трейса.
+ */
+export function componentNameOf(state: WorldState, handle: FieldHandle): string {
+  return toInternal(state).fields.components[handle]!;
+}
+
+export function fieldNameOf(state: WorldState, handle: FieldHandle): string {
+  return toInternal(state).fields.fields[handle]!;
+}
+
+/**
  * Чтение поля по handle (SYS-10) — то же тотальное чтение ECS-7, что и
  * строковое, без строкового поиска. Тело общее с `getField`: см. `readByHandle`.
  */
 export function getFieldByHandle(state: WorldState, entity: EntityId, handle: FieldHandle): number {
   return readByHandle(toInternal(state), entity, handle);
+}
+
+/**
+ * Чтение поля по raw-индексу слота (SYS-10): индекс приходит из `queryInto`,
+ * то есть живость и владение доказаны отбором запроса. Тело — `readByIndex`.
+ */
+export function getFieldByIndex(state: WorldState, index: number, handle: FieldHandle): number {
+  return readByIndex(toInternal(state), index, handle);
 }
 
 /** Владение компонентом по handle (SYS-10) — то же, что `hasComponent` после резолва. */
@@ -765,6 +817,45 @@ export function setField(
   }
   store.fields[field]![index] = value;
   markDirty(internal, store.id, entity);
+}
+
+/**
+ * Запись поля по handle (SYS-10) — тот же мутатор, что `setField`, с уже
+ * разрешённым адресом: представимость (ECS-3), пустая операция без владения
+ * (ECS-8), порядок проверок и пометка dirty у них одни и те же. Имена
+ * компонента и поля берутся из плоской таблицы — там же, где их берёт текст
+ * находки handle-чтения, — поэтому отказ и запись диагностики читаются
+ * дословно как у строкового пути.
+ *
+ * Второго правила записи это не заводит: канал по-прежнему один — команда
+ * буфера (CMD-1), а мутатор мира из `index.ts` не публикуется (TICK-3).
+ */
+export function setFieldByHandle(
+  state: WorldState,
+  entity: EntityId,
+  handle: FieldHandle,
+  value: number,
+): void {
+  const internal = toInternal(state);
+  const table = internal.fields;
+  const type = table.types[handle]!;
+  if (!representable(type, value)) {
+    throw valueError('setField', table.components[handle]!, table.fields[handle]!, type, value);
+  }
+  const owner = table.owners[handle]!;
+  const index = aliveIndexOf(internal.entities, entity);
+  if (index < 0 || !maskHas(internal.masks, index, owner)) {
+    if (DEBUG) {
+      assert(
+        false,
+        `setField: сущность ${entity} не владеет компонентом "${table.components[handle]!}" (ECS-8), поле "${table.fields[handle]!}"`,
+        'COMPONENT_WRITE_WITHOUT_OWNERSHIP',
+      );
+    }
+    return;
+  }
+  table.arrays[handle]![index] = value;
+  markDirty(internal, owner, entity);
 }
 
 /**

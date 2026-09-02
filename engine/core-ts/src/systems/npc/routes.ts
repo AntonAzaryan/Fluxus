@@ -20,6 +20,7 @@
  * открытую адресацию — по профилю на реальной сцене, а не по вкусу.
  */
 import { WAYPOINT_COMPONENT } from './components.js';
+import { QueryBuffer } from '../queryBuffer.js';
 import type { NpcHandles } from './handles.js';
 import { NO_ENTITY, type EntityId, type QuerySpec, type SystemContext } from '../../types.js';
 
@@ -31,15 +32,21 @@ const ROUTE_STRIDE = 4096;
 
 export class NpcRoutes {
   private readonly points = new Map<number, EntityId>();
+  /** Буфер выборки точек — свой у этого индекса (QUERY-3), переживает тики. */
+  private readonly waypoints = new QueryBuffer();
   private spec: QuerySpec | undefined;
 
   /** Снимает точки маршрутов текущего мира. */
   rebuild(ctx: SystemContext, position: string, handles: NpcHandles): void {
     this.spec ??= { all: [WAYPOINT_COMPONENT, position] };
     this.points.clear();
-    for (const entity of ctx.query(this.spec)) {
-      const route = ctx.getByHandle(entity, handles.waypointRoute);
-      const index = ctx.getByHandle(entity, handles.waypointIndex);
+    const found = this.waypoints.run(ctx, this.spec);
+    for (let slot = 0; slot < found; slot++) {
+      const entity = this.waypoints.ids[slot]!;
+      // Компонент точки перечислен в `all` — номера читаются по индексу слота.
+      const at = this.waypoints.indices[slot]!;
+      const route = ctx.getByIndex(at, handles.waypointRoute);
+      const index = ctx.getByIndex(at, handles.waypointIndex);
       // Две точки на одном номере — опечатка расстановки; побеждает первая по
       // порядку обхода (QUERY-2), то есть исход остаётся детерминированным.
       const key = route * ROUTE_STRIDE + index;

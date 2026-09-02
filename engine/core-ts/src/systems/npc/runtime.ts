@@ -149,8 +149,9 @@ function addSaturating(accumulated: Fixed, amount: Fixed): Fixed {
 
 /**
  * Значение поля таблицы с учётом уже поставленных команд буфера (CMD-5).
- * Буферу нужно ИМЯ поля (адрес команды — строка, CMD-1), миру — handle: обе
- * величины разрешены заранее и лежат в слоте рядом (SYS-10).
+ * Точечное чтение буфера адресуется ИМЕНЕМ, запись и чтение мира — handle'ом:
+ * обе величины разрешены заранее и лежат в слоте рядом (SYS-10), а команду,
+ * заказанную по handle, точечное чтение видит наравне со строковой (CMD-5).
  */
 function pending(ctx: SystemContext, entity: EntityId, field: string, handle: FieldHandle): number {
   return ctx.commands.peekField(entity, NPC_THREAT_COMPONENT, field) ?? ctx.getByHandle(entity, handle);
@@ -223,10 +224,9 @@ function placeThreat(
   for (let slot = 0; slot < NPC_THREAT_SLOTS; slot++) {
     const holder = threatSourceAt(ctx, handles, entity, slot);
     if (holder === source) {
-      ctx.commands.setField(
+      ctx.commands.setFieldByHandle(
         entity,
-        NPC_THREAT_COMPONENT,
-        handles.threatSlots[slot]!.valueField,
+        handles.threatSlots[slot]!.value,
         addSaturating(threatValueAt(ctx, handles, entity, slot), amount),
       );
       return;
@@ -243,8 +243,8 @@ function placeThreat(
   }
   const slot = freeSlot >= 0 ? freeSlot : minSlot;
   const entry = handles.threatSlots[slot]!;
-  ctx.commands.setField(entity, NPC_THREAT_COMPONENT, entry.sourceField, source);
-  ctx.commands.setField(entity, NPC_THREAT_COMPONENT, entry.valueField, amount);
+  ctx.commands.setFieldByHandle(entity, entry.source, source);
+  ctx.commands.setFieldByHandle(entity, entry.value, amount);
 }
 
 /** Забывание: умножение накопленного на множитель документа (NPC-5). */
@@ -261,11 +261,11 @@ export function threatDecay(
     if (value <= 0) {
       // Забытый источник освобождает слот: иначе таблица навсегда занята
       // нулями, и вытеснять было бы нечего.
-      ctx.commands.setField(entity, NPC_THREAT_COMPONENT, entry.sourceField, NO_ENTITY);
-      ctx.commands.setField(entity, NPC_THREAT_COMPONENT, entry.valueField, 0);
+      ctx.commands.setFieldByHandle(entity, entry.source, NO_ENTITY);
+      ctx.commands.setFieldByHandle(entity, entry.value, 0);
       continue;
     }
-    ctx.commands.setField(entity, NPC_THREAT_COMPONENT, entry.valueField, value);
+    ctx.commands.setFieldByHandle(entity, entry.value, value);
   }
 }
 

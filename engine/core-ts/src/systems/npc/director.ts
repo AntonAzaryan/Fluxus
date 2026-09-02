@@ -26,6 +26,7 @@ import {
 } from './components.js';
 import { resolveNpcHandles, type NpcHandles } from './handles.js';
 import { NpcRoutes } from './routes.js';
+import { QueryBuffer } from '../queryBuffer.js';
 import { livingAgents, posX, posY } from './runtime.js';
 import type { NpcCatalog, NpcWaveDef, NpcWavesDef } from './model.js';
 import {
@@ -47,6 +48,9 @@ export class NpcDirectorSystem implements System {
   private readonly routes = new NpcRoutes();
   private readonly spec: QuerySpec = { all: [NPC_DIRECTOR_COMPONENT] };
   private readonly agentSpec: QuerySpec;
+  /** Буферы выборок: свой на каждую (QUERY-3), оба переживают тики. */
+  private readonly directors = new QueryBuffer();
+  private readonly agents = new QueryBuffer();
   /** Handle платформы (SYS-10): один раз на первом входе, после раннего выхода. */
   private handles: NpcHandles | undefined;
 
@@ -62,36 +66,38 @@ export class NpcDirectorSystem implements System {
   run(ctx: SystemContext): void {
     const waves = this.catalog.waves;
     if (waves === undefined) return;
-    const directors = ctx.query(this.spec);
-    if (directors.length === 0) return;
+    const found = this.directors.run(ctx, this.spec);
+    if (found === 0) return;
     const handles = (this.handles ??= resolveNpcHandles(ctx, this.catalog.bindings));
     this.routes.rebuild(ctx, this.catalog.bindings.position, handles);
     // Живые агенты считаются ОДИН раз на тик: предел общий, и пересчитывать его
     // на каждого режиссёра значило бы платить за один и тот же ответ дважды.
     // Мёртвых выборка не содержит по построению спецификации запроса.
-    let active = ctx.query(this.agentSpec).length;
+    let active = this.agents.run(ctx, this.agentSpec);
 
-    for (const director of directors) {
-      const index = ctx.getByHandle(director, handles.directorWave);
+    for (let slot = 0; slot < found; slot++) {
+      const director = this.directors.ids[slot]!;
+      const at = this.directors.indices[slot]!;
+      const index = ctx.getByIndex(at, handles.directorWave);
       if (index === NPC_WAVE_DONE || index < 0 || index >= waves.entries.length) continue;
       const wave = waves.entries[index]!;
-      const released = ctx.getByHandle(director, handles.directorReleased);
+      const released = ctx.getByIndex(at, handles.directorReleased);
       if (released === NPC_WAVE_UNARMED) {
         // Пауза перед первым бойцом волны — её собственное число таблицы.
-        ctx.commands.setField(director, NPC_DIRECTOR_COMPONENT, 'released', 0);
-        ctx.commands.setField(director, NPC_DIRECTOR_COMPONENT, 'timer', wave.delayTicks);
+        ctx.commands.setFieldByHandle(director, handles.directorReleased, 0);
+        ctx.commands.setFieldByHandle(director, handles.directorTimer, wave.delayTicks);
         continue;
       }
-      const timer = ctx.getByHandle(director, handles.directorTimer);
+      const timer = ctx.getByIndex(at, handles.directorTimer);
       if (timer > 0) {
-        ctx.commands.setField(director, NPC_DIRECTOR_COMPONENT, 'timer', timer - 1);
+        ctx.commands.setFieldByHandle(director, handles.directorTimer, timer - 1);
         continue;
       }
       if (released >= wave.count) {
         // Волна пуста либо выпущена целиком: проверка ДО выпуска, а не после
         // него. Иначе `count: 0` значило бы «один боец» — состав волны есть
         // данные (NPC-8), и ноль в них обязан значить ноль.
-        this.advance(ctx, director, index, waves);
+        this.advance(ctx, handles, director, index, waves);
         continue;
       }
       if (active >= waves.cap) {
@@ -101,8 +107,8 @@ export class NpcDirectorSystem implements System {
       }
       this.release(ctx, handles, wave);
       active++;
-      ctx.commands.setField(director, NPC_DIRECTOR_COMPONENT, 'released', released + 1);
-      ctx.commands.setField(director, NPC_DIRECTOR_COMPONENT, 'timer', wave.spacingTicks);
+      ctx.commands.setFieldByHandle(director, handles.directorReleased, released + 1);
+      ctx.commands.setFieldByHandle(director, handles.directorTimer, wave.spacingTicks);
     }
   }
 
@@ -129,17 +135,17 @@ export class NpcDirectorSystem implements System {
   /** Переход к следующей волне: волна отработана либо пуста (NPC-8). */
   private advance(
     ctx: SystemContext,
+    handles: NpcHandles,
     director: EntityId,
     index: number,
     waves: NpcWavesDef,
   ): void {
     const next = index + 1;
-    ctx.commands.setField(director, NPC_DIRECTOR_COMPONENT, 'released', NPC_WAVE_UNARMED);
-    ctx.commands.setField(director, NPC_DIRECTOR_COMPONENT, 'timer', 0);
-    ctx.commands.setField(
+    ctx.commands.setFieldByHandle(director, handles.directorReleased, NPC_WAVE_UNARMED);
+    ctx.commands.setFieldByHandle(director, handles.directorTimer, 0);
+    ctx.commands.setFieldByHandle(
       director,
-      NPC_DIRECTOR_COMPONENT,
-      'wave',
+      handles.directorWave,
       next >= waves.entries.length ? NPC_WAVE_DONE : next,
     );
   }
