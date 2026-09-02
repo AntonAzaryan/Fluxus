@@ -73,6 +73,8 @@ export class PresentationStage {
     entities: NO_ENTITIES,
     statNames: [],
     events: [],
+    // Вытеснять нечего: гашение набора — не доставка канала (SHELL-4).
+    expiredEvents: 0,
     floorBits: null,
     floorChangedCells: [],
   };

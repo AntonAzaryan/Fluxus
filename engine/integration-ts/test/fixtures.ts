@@ -683,6 +683,10 @@ export class RenderBridge {
     // отсюда — события тиков рассылки проигрались бы дважды, из состояния и из
     // потока.
     restoreSnapshot(this.world.state, { ...snapshot, events: NO_EVENTS });
+    // Режим — отдельным шагом, как в сетевой оболочке (`client-shell` SHELL-8):
+    // `restoreSnapshot` машину состояний не восстанавливает (REW-2), а режим
+    // здесь есть факт авторитетного сервера, приехавший вместе со снапшотом.
+    this.world.state.mode = snapshot.mode;
     this.host.onTick({
       state: this.world.state,
       tick: snapshot.tick,

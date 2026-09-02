@@ -12,6 +12,7 @@
  * вправе назваться чужим слотом, и это пришлось бы отдельно опровергать.
  */
 import { snapshotToPlain } from '@fluxus/core';
+import { END_REASONS, REJECT_REASONS, type EndReason, type RejectReason } from './reasons.js';
 import type {
   Fixed,
   GameEvent,
@@ -20,6 +21,11 @@ import type {
   ScenarioSpawn,
   Snapshot,
 } from '@fluxus/core';
+
+// Словари исходов — из `reasons.js`, но точка входа одна: потребитель, знающий
+// про `messages.js`, не обязан знать про второй файл (NTR-4).
+export { END_REASONS, REJECT_REASONS } from './reasons.js';
+export type { ClientCloseReason, EndReason, RejectReason } from './reasons.js';
 
 /** Пара версии игры (NET-16): непрозрачный идентификатор сборки и хеш контент-пака (NET-17). */
 export interface GameVersion {
@@ -35,46 +41,6 @@ export interface GameVersion {
  * роль технически может любая сторона.
  */
 export type ConnectionRole = 'owner' | 'substitute';
-
-/**
- * Исходы отказа во входе. Половина версии названа отдельно (NET-16): «обновить
- * сборку» и «обновить контент» — разные действия игрока, и это единственная
- * причина, по которой версия является парой, а не строкой.
- *
- * `match-ended` пришёл на смену прежнему «матч уже идёт»: идущий матч
- * участника ростера больше не отвергает — он принимает его реконнектом
- * (NTR-17), — и единственный матч, возвращаться в который некуда, это матч
- * завершённый (NTR-17, сценарий «Игрок вернулся слишком поздно»).
- */
-export type RejectReason =
-  | 'build-mismatch'
-  | 'content-mismatch'
-  | 'match-ended'
-  | 'unknown-player'
-  | 'slot-taken'
-  /** Заместитель до `Start`: до старта слоты занимают владельцы (NTR-18). */
-  | 'substitute-before-start'
-  /** Заместитель вытеснен вернувшимся владельцем слота (NTR-18). */
-  | 'displaced-by-owner'
-  /**
-   * Слот заперт админ-операцией (NTR-19): владельцу называется ЗАПРЕТ, а не
-   * занятость. Отличимость от `slot-taken` — не косметика: занятый слот игрок
-   * ждёт и пробует снова, а запрет ему сняли или не сняли, и это разные
-   * действия дальше. Данными существующего `Reject`, а не новым сообщением:
-   * набор закрыт (NTR-4).
-   */
-  | 'slot-barred'
-  | 'observer-not-allowed'
-  | 'protocol-error';
-
-/**
- * Исходы конца матча. Добровольного «игрок вышел» здесь нет намеренно: `Bye` в
- * идущем матче отвязывает соединение от слота, а не завершает матч (NTR-6:
- * «Разрыв соединения игрока MUST NOT останавливать матч»), — дальше работают
- * порог молчания и политика сборки-основателя (`bot-player` BOT-14). Иначе
- * ушедший добровольно убивал бы матч в обход заместителя.
- */
-export type EndReason = 'player-silent' | 'server-stopped';
 
 /**
  * Требуемое действие в `PauseRequest` (NTR-20): поставить паузу либо снять её.
@@ -133,22 +99,6 @@ export const PAUSE_DENY_REASONS = [
 ] as const;
 
 export type PauseDenyReason = (typeof PAUSE_DENY_REASONS)[number];
-
-/**
- * Исходы, по которым соединение рвёт сам клиент. Отделены от `RejectReason`:
- * это его решение, не серверное.
- *
- * `ended` и `disconnected` — разные исходы, и разница у них потребительская
- * (NTR-17): матч кончился сообщением `End`, возвращаться некуда, — против
- * «канал закрылся», после которого владелец слота вправе вернуться реконнектом.
- * Слитые в один исход, они заставляли бы сборку решать это по тексту.
- */
-export type ClientCloseReason =
-  | 'data-mismatch'
-  | 'rejected'
-  | 'ended'
-  | 'disconnected'
-  | 'protocol-error';
 
 /**
  * Кадр ввода на проводе (TICK-2) — плоский: `Vec2` разложен в пару полей, чтобы
@@ -309,7 +259,7 @@ export interface StartMessage {
  * Плоская форма ядра при этом не делится на две: `PlainSnapshot` обслуживает
  * вывод CLI (CLI-3, где `rng` обязателен), а кадр строится из её подмножества —
  * работа сетевого слоя, потому что «снапшот без rng» осмыслен только относительно
- * провода, о котором ядро не знает (DI-3).
+ * провода, о котором ядро не знает (DI-6).
  */
 export type WireSnapshot = Pick<PlainSnapshot, 'tick' | 'world' | 'events' | 'mode'>;
 
@@ -693,7 +643,10 @@ function wireSnapshot(value: unknown): WireSnapshot {
  */
 function oneOf<T extends string>(value: unknown, allowed: readonly T[], what: string): T {
   if (typeof value !== 'string' || !allowed.includes(value as T)) {
-    throw new ProtocolError(`${what} — одно из ${allowed.join(', ')} (NTR-20)`);
+    // Требование названо общее (NTR-4): перечни, которые здесь проверяются,
+    // принадлежат разным требованиям — состояние паузы NTR-20, исходы отказа и
+    // конца матча самому набору сообщений, — а закрытость у них одна.
+    throw new ProtocolError(`${what} — одно из ${allowed.join(', ')} (NTR-4)`);
   }
   return value as T;
 }
@@ -743,7 +696,11 @@ export function parseServerMessage(value: unknown): ServerMessage {
     case 'Reject':
       return {
         type: 'Reject',
-        reason: str(source, 'reason', 'Reject') as RejectReason,
+        // Перечень ПРОВЕРЯЕТСЯ, а не приводится (NTR-4): по причине отказа
+        // сборка решает, что предложить игроку — обновиться, подождать слот или
+        // вернуться реконнектом, — и незнакомое значение доехало бы до неё как
+        // своё, молча превратившись в «ничего из перечисленного».
+        reason: oneOf(source.reason, REJECT_REASONS, 'Reject: поле "reason"'),
         detail: typeof source.detail === 'string' ? source.detail : '',
       };
     case 'Start':
@@ -788,7 +745,10 @@ export function parseServerMessage(value: unknown): ServerMessage {
     case 'End':
       return {
         type: 'End',
-        reason: str(source, 'reason', 'End') as EndReason,
+        // Тот же закрытый перечень и та же причина его проверять (NTR-4): конец
+        // матча — объявление, которое потребитель показывает игроку, и делать
+        // его от имени сервера на неразобранном значении нечем.
+        reason: oneOf(source.reason, END_REASONS, 'End: поле "reason"'),
         tick: int(source, 'tick', 'End', 0, Number.MAX_SAFE_INTEGER),
       };
     default:

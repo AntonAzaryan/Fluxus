@@ -16,6 +16,7 @@
  * `Projectile` и `Lifetime`, и они остаются компонентами сцены — полезной
  * нагрузкой и презентационной фазой полёта.
  */
+import { numberedFieldIndex } from '../../ecs/worldSchema.js';
 import { NO_ENTITY, type ComponentSchema, type FieldType } from '../../types.js';
 
 export const ABILITY_SLOT_COMPONENT = 'AbilitySlot';
@@ -53,20 +54,22 @@ export const NO_INTERRUPT = 0;
 export const NO_BUFF_CLASS = 0;
 
 /**
- * Имена полей шага по правилу имён нумерованных полей (SER-6): при трёх шагах
- * достаточно одной цифры, и дополнять нулями нечего — `step0`…`step2`
- * сортируются лексикографически в том же порядке, что и числовой индекс.
+ * Имена полей шага по правилу имён нумерованных полей (SER-6): номер
+ * дополняется нулями слева общей функцией ядра, а не склейкой. При трёх шагах
+ * ширина равна единице, и имена сегодня те же — `step0`…`step2`; правило стоит
+ * здесь ради того дня, когда `ABILITY_STEPS` перевалит за десяток, а не ради
+ * сегодняшних имён.
  */
 export function stepFieldX(index: number): string {
-  return `step${index}x`;
+  return `step${numberedFieldIndex(index, ABILITY_STEPS)}x`;
 }
 
 export function stepFieldY(index: number): string {
-  return `step${index}y`;
+  return `step${numberedFieldIndex(index, ABILITY_STEPS)}y`;
 }
 
 export function stepFieldEntity(index: number): string {
-  return `step${index}e`;
+  return `step${numberedFieldIndex(index, ABILITY_STEPS)}e`;
 }
 
 function slotFields(): { fields: Record<string, FieldType>; defaults: Record<string, number> } {

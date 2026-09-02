@@ -266,6 +266,38 @@ describe('чтение отложенного из буфера (CMD-5)', () => 
     expect(getField(world, e, 'Ref', 'target')).toBe(NO_ENTITY);
     expect(getField(world, e, 'Position', 'x')).toBe(42);
   });
+
+  /**
+   * CMD-5: «результат чтения обязан совпадать с тем, что окажется в мире после
+   * flush». Отложенное снятие компонента — такая же команда на этот адрес, как
+   * `addComponent`: после flush компонент сущности не принадлежит, а чтение
+   * такого поля тотально и даёт нейтральное значение ТИПА (ECS-7, ECS-8).
+   */
+  it('removeComponent в буфере гасит прочитанное: чтение совпадает с миром после flush (CMD-5)', () => {
+    const Ref: ComponentSchema = { name: 'Ref', fields: { target: 'entity' } };
+    const world = createWorld([...schemas, Ref], [prefab('P', { Health: {}, Ref: {}, Stealth: {} })]);
+    const e = spawn(world, 'P');
+    const commands = createCommandBuffer(world);
+
+    commands.setField(e, 'Health', 'hp', 5);
+    commands.removeComponent(e, 'Health');
+    expect(commands.peekField(e, 'Health', 'hp')).toBe(0);
+
+    // Нейтраль берётся от ТИПА поля, а не «ноль всегда»: у `entity` это NO_ENTITY.
+    commands.setField(e, 'Ref', 'target', e);
+    commands.removeComponent(e, 'Ref');
+    expect(commands.peekField(e, 'Ref', 'target')).toBe(NO_ENTITY);
+
+    // Снятие перекрывается более поздним добавлением, как и всякая команда (CMD-3).
+    commands.removeComponent(e, 'Stealth');
+    commands.addComponent(e, 'Stealth', { flag: 3 });
+    expect(commands.peekField(e, 'Stealth', 'flag')).toBe(3);
+
+    commands.flush();
+    expect(getField(world, e, 'Health', 'hp')).toBe(0);
+    expect(getField(world, e, 'Ref', 'target')).toBe(NO_ENTITY);
+    expect(getField(world, e, 'Stealth', 'flag')).toBe(3);
+  });
 });
 
 describe('Command Buffer (CMD-1..5)', () => {

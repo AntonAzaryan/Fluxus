@@ -1,0 +1,7 @@
+schema: spec-driven
+created: 2026-09-02
+
+# Стаб очереди: спеки этого change'а появятся при его разработке через
+# /opsx:update blender-import-from-editor — тогда маркер снять.
+# Пока дельт нет намеренно: артефакты specs/design/tasks пусты, см. ## Notes в proposal.md.
+skip_specs: true

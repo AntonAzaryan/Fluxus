@@ -206,10 +206,10 @@ function updateArenaState(ctx: SystemContext, arena: ArenaApi, entity: EntityId)
     y: ctx.get(entity, POSITION_COMPONENT, 'y'),
   };
 
-  const inside = arena.contains(position) ? 1 : 0;
-  if (inside !== ctx.get(entity, ARENA_STATE_COMPONENT, 'inside')) {
-    ctx.commands.setField(entity, ARENA_STATE_COMPONENT, 'inside', inside);
-    if (inside === 0) ctx.events.emit(LEFT_ARENA_EVENT, { entity });
+  const inside = arena.contains(position);
+  if (inside !== flagOf(ctx, entity, 'inside')) {
+    ctx.commands.setField(entity, ARENA_STATE_COMPONENT, 'inside', inside ? 1 : 0);
+    if (!inside) ctx.events.emit(LEFT_ARENA_EVENT, { entity });
   }
 
   // ARENA-3, вторая дорога сценария: значение, записанное по ходу матча, ядру
@@ -230,11 +230,25 @@ function updateArenaState(ctx: SystemContext, arena: ArenaApi, entity: EntityId)
   // Без террейна проверять нечем (DI-3).
   const terrain = ctx.terrain;
   if (terrain === undefined || ctx.has(entity, LEVEL_OVERRIDE_COMPONENT)) return;
-  const onFloor = standsOnFloor(ctx, terrain, support, entity, position) ? 1 : 0;
-  if (onFloor !== ctx.get(entity, ARENA_STATE_COMPONENT, 'onFloor')) {
-    ctx.commands.setField(entity, ARENA_STATE_COMPONENT, 'onFloor', onFloor);
-    if (onFloor === 0) ctx.events.emit(FELL_THROUGH_FLOOR_EVENT, { entity });
+  const onFloor = standsOnFloor(ctx, terrain, support, entity, position);
+  if (onFloor !== flagOf(ctx, entity, 'onFloor')) {
+    ctx.commands.setField(entity, ARENA_STATE_COMPONENT, 'onFloor', onFloor ? 1 : 0);
+    if (!onFloor) ctx.events.emit(FELL_THROUGH_FLOOR_EVENT, { entity });
   }
+}
+
+/**
+ * Прошлое состояние флагового поля ПО ПРАВИЛУ ФЛАГА (`ecs-foundation` ECS-3):
+ * ноль — ложь, любое ненулевое — истина. Сравнение по числу вместо этого
+ * означало бы, что записанную контентом тройку («ещё внутри») ядро на первом же
+ * тике молча заменит единицей: ECS-3 запрещает нормализовать записанное
+ * контентом, а лишняя запись пометила бы компонент изменённым (OBS-6) и ушла бы
+ * в сетевую дельту, хотя сторона границы не менялась. Записывает ядро при этом
+ * ровно `0` или `1` (ECS-3): значение попадает в снапшот и обязано совпадать
+ * побитово у второй реализации (`cli-testing` CLI-6).
+ */
+function flagOf(ctx: SystemContext, entity: EntityId, field: 'inside' | 'onFloor'): boolean {
+  return ctx.get(entity, ARENA_STATE_COMPONENT, field) !== 0;
 }
 
 /**

@@ -90,6 +90,28 @@ export function actionsOf(
   return node as readonly Action[];
 }
 
+/**
+ * Обязательный список действий. Блоки определения необязательны все, КРОМЕ
+ * триггера и эффектов (ABIL-2), и отсутствие блока эффектов читалось как
+ * пустой список: одна и та же сцена оказывалась валидной для ядра и невалидной
+ * для редактора, которому порождённая схема поле требует (SER-5).
+ */
+export function requiredActionsOf(
+  node: unknown,
+  world: WorldState,
+  bound: readonly string[],
+  path: string,
+): readonly Action[] {
+  if (node === undefined) {
+    fail(
+      path,
+      'блок обязателен (ABIL-2): необязательны все блоки определения, кроме триггера и эффектов — ' +
+        'пустой список записывается явно, "effects": []',
+    );
+  }
+  return actionsOf(node, world, bound, path);
+}
+
 /** Выражение определения — тем же обходом и с теми же предсвязанными именами. */
 export function expressionOf(
   node: unknown,

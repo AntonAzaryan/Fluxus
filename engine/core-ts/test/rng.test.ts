@@ -259,6 +259,43 @@ describe('RNG-8: нормативная формула nextFixed/nextBelow (worl
     const releaseStream = new release.XorShift128Stream(release.seedStateFromName(1, 'X'));
     expect(() => releaseStream.nextBelow(0)).toThrow();
   });
+
+  // Верхняя граница диапазона RNG-8: алгоритм описан над `s = bound (как u32)`,
+  // и `bound = 2^32` дал бы `s = 0` — цикл вышел бы с первого раза, а функция
+  // ВСЕГДА возвращала бы 0, сдвинув генератор на шаг. Отказ обязан быть таким
+  // же жёстким, как у нижней границы: в обоих режимах сборки.
+  it('bound > 2^32−1: жёсткая граница в обоих режимах сборки (RNG-8)', async () => {
+    const stream = new XorShift128Stream(seedStateFromName(1, 'X'));
+    expect(() => stream.nextBelow(2 ** 32)).toThrow(/1…2\^32−1/);
+    expect(() => stream.nextBelow(2 ** 32 + 1)).toThrow(/1…2\^32−1/);
+
+    const release = await importRngUnder('production');
+    const releaseStream = new release.XorShift128Stream(release.seedStateFromName(1, 'X'));
+    expect(() => releaseStream.nextBelow(2 ** 32)).toThrow();
+  });
+
+  it('bound = 2^32−1 — законная граница диапазона и работает (RNG-8)', () => {
+    const stream = new XorShift128Stream(seedStateFromName(1, 'X'));
+    const reference = new XorShift128Stream(seedStateFromName(1, 'X'));
+
+    const bound = 2 ** 32 - 1;
+    const result = stream.nextBelow(bound);
+    // Порог отбраковки при таком `bound` равен единице, поэтому число шагов
+    // генератора здесь не константа теста — сверяется значение по формуле
+    // Lemire от того же состояния.
+    let hi = 0;
+    let lo = 0;
+    do {
+      const x = BigInt(reference.next() >>> 0);
+      const product = x * BigInt(bound);
+      hi = Number(product / 2n ** 32n);
+      lo = Number(product % 2n ** 32n);
+    } while (lo < ((2 ** 32 - bound) % bound));
+    expect(result).toBe(hi);
+    expect(result).toBeGreaterThanOrEqual(0);
+    expect(result).toBeLessThan(bound);
+    expect(stream.getState()).toEqual(reference.getState());
+  });
 });
 
 describe('GOLDEN: worldSeed=12345, "DamageSystem" — точка сверки с Rust', () => {

@@ -97,7 +97,12 @@ export class RemoteHost implements PresentationProducer {
    * потоком доставок не выводится и до handshake неизвестен.
    */
   mode: ShellMode | null = null;
-  /** Суммарно вытесненных лимитом аккумулятора событий (диагностика Risks). */
+  /**
+   * Суммарно вытесненных лимитом аккумулятора событий за сессию (диагностика
+   * Risks). Величина ЭТОЙ доставки едет отдельно — полем доставленного
+   * состояния (`TickView.expiredEvents`, SHELL-4): показать разрыв потребитель
+   * вправе на той доставке, где события пропали, а не по счётчику за матч.
+   */
   expiredEvents = 0;
   /**
    * Последнее доставленное состояние паузы матча (SHELL-9, NTR-20);
@@ -199,7 +204,16 @@ export class RemoteHost implements PresentationProducer {
 
   private onTick(envelope: TickEnvelope): void {
     const buffer = this.buffer;
-    if (buffer === null) return; // тик до handshake — некому применять
+    if (buffer === null) {
+      // Тик до handshake — применять некому. Буфер при этом ВОЗВРАЩАЕТСЯ тем же
+      // transfer'ом (SHELL-3): он уже отчуждён у воркера, и выход без возврата
+      // навсегда укорачивал бы пул канала — при пуле из двух буферов вдвое.
+      // Остальное содержимое конверта здесь и правда теряется: без handshake
+      // нет ни раскладки видов, ни словаря статов, и класть хвост таблицы видов
+      // в `kindTable` значило бы разъехаться с ней навсегда.
+      this.requirePort().post({ t: 'ret', buffer: envelope.buffer }, [envelope.buffer]);
+      return;
+    }
     for (const kind of envelope.kinds) this.kindTable.push(kind);
     this.expiredEvents += envelope.expiredEvents;
 
@@ -207,7 +221,15 @@ export class RemoteHost implements PresentationProducer {
     // Публикация потоком тиков: если состояние наполнял документный источник,
     // его набор гасится здесь же — объект не попадёт в кадр дважды (REND-11).
     // Гашение и `syncTick` идут до возврата буфера, как и раньше.
-    buffer.apply(readTick(envelope.buffer, envelope.events, this.kindTable, this.statNames));
+    //
+    // Число вытесненных с прошлой доставки событий едет в доставленное
+    // состояние (SHELL-4): собственный счётчик хоста суммарен за сессию, а
+    // потребителю нужна величина ЭТОЙ доставки — иначе «событий не было» и
+    // «события были и не доехали» для него неразличимы.
+    buffer.apply(
+      readTick(envelope.buffer, envelope.events, this.kindTable, this.statNames),
+      envelope.expiredEvents,
+    );
     this.presentation.publish(this, buffer.view);
 
     this.requirePort().post({ t: 'ret', buffer: envelope.buffer }, [envelope.buffer]);

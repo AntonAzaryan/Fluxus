@@ -13,6 +13,7 @@
  * точки (NPC-6). Ни одной аллокации на агента в тике из этого состава не
  * следует по построению.
  */
+import { numberedFieldIndex } from '../../ecs/worldSchema.js';
 import { NO_ENTITY, type ComponentSchema, type FieldType } from '../../types.js';
 
 export const NPC_AGENT_COMPONENT = 'NpcAgent';
@@ -51,13 +52,19 @@ export const NPC_WAVE_DONE = -1;
  */
 export const NPC_WAVE_UNARMED = -1;
 
-/** Имена полей слота threat-таблицы по правилу имён нумерованных полей (SER-6). */
+/**
+ * Имена полей слота threat-таблицы по правилу имён нумерованных полей (SER-6):
+ * номер дополняется нулями слева общей функцией ядра, а не склейкой. При
+ * четырёх слотах ширина равна единице, и имена сегодня те же — но поднятая до
+ * 11 константа `NPC_THREAT_SLOTS` без этого правила дала бы порядок
+ * `source0, source1, source10, source2, …`, то есть сломанный формат снапшота.
+ */
 export function threatSourceField(index: number): string {
-  return `source${index}`;
+  return `source${numberedFieldIndex(index, NPC_THREAT_SLOTS)}`;
 }
 
 export function threatValueField(index: number): string {
-  return `value${index}`;
+  return `value${numberedFieldIndex(index, NPC_THREAT_SLOTS)}`;
 }
 
 function threatSchema(): ComponentSchema {

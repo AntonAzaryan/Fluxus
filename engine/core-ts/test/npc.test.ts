@@ -860,6 +860,29 @@ describe('NPC-6: движение — политика над навигацио
     expect(h.field(creep, 'Position', 'y')).toBeGreaterThan(0);
   });
 
+  /**
+   * NPC-6: собственных пределов на длину маршрута платформа не объявляет, и
+   * индекс точек их не вводит. Прежняя формула ключа «маршрут × 4096 + точка»
+   * вводила: точка 5000 маршрута 0 и точка 904 маршрута 1 давали один и тот же
+   * ключ 5000, то есть маршрут длиннее страйда молча переписывал соседний.
+   */
+  it('точка за пределами прежнего страйда не перезаписывает точку соседнего маршрута', () => {
+    const h = harness({ behaviors: [walker() as never], bindings: BINDINGS });
+    const far = h.place('Point', { Position: { x: F(5), y: 0 }, Waypoint: { route: 0, index: 5000 } });
+    const near = h.place('Point', { Position: { x: 0, y: F(5) }, Waypoint: { route: 1, index: 904 } });
+    expect(far).not.toBe(near);
+
+    // Каждый крип идёт к СВОЕЙ точке: коллизия ключей увела бы обоих к одной.
+    const long = h.place('Creep', { Position: { x: 0, y: 0 }, NpcRoute: { route: 0, index: 5000 } });
+    const other = h.place('Creep', { Position: { x: 0, y: 0 }, NpcRoute: { route: 1, index: 904 } });
+    for (let i = 0; i < 4; i++) h.step();
+
+    expect(h.field(long, 'Position', 'x')).toBeGreaterThan(0);
+    expect(h.field(long, 'Position', 'y')).toBe(0);
+    expect(h.field(other, 'Position', 'y')).toBeGreaterThan(0);
+    expect(h.field(other, 'Position', 'x')).toBe(0);
+  });
+
   it('скученные крипы расходятся, стоимость шага не растёт квадратично', () => {
     const h = harness({
       behaviors: [chaser({ separationWeight: ONE, ranges: { sense: F(20), attack: F(1), arrive: F(1), separation: F(3) } }) as never],
@@ -1598,6 +1621,8 @@ const ABILITY_SCENE: Partial<SceneDef> = {
       id: 'probe',
       trigger: { event: { type: 'NeverAsked', as: 'ask' } },
       phases: [{ id: 'hold', trigger: 'auto' }],
+      // Блок эффектов обязателен (ABIL-2); пробе он не нужен и потому пуст.
+      effects: [],
     },
   ] as unknown as NonNullable<SceneDef['abilities']>,
 };

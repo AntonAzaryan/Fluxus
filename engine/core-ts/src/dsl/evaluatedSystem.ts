@@ -15,7 +15,7 @@
 import { execute, actionNames, requiredArgs, systemError, type Action } from './actions.js';
 import { arityError, signatureOf, type Expression, type OpSignature } from './expr.js';
 import { componentSchema, prefabOf } from '../ecs/world.js';
-import type { System, SystemContext, WorldState } from '../types.js';
+import { POSITION_COMPONENT, type System, type SystemContext, type WorldState } from '../types.js';
 
 /** JSON-описание системы. `query` — сахар над действием `forEach` (SYS-1). */
 export interface SystemDef {
@@ -239,11 +239,26 @@ function checkActionArg(key: string, value: unknown, ctx: ActionArgScope): void 
     case 'bindings':
       checkFields(value, world, scope, at, component);
       break;
+    // ACT-5: упорядочивание идёт до позиции сущности, и правило это общее с
+    // фильтром `withinRadius` (QUERY-1). Сцена, не объявившая компонента
+    // позиции, ответы двух потребителей развела бы: запрос не пропустил бы
+    // никого (`ecs/query.ts`), а упорядочивание сочло бы всех стоящими в начале
+    // координат. Это дефект КОНФИГУРАЦИИ, и место ему на регистрации системы
+    // (SYS-3), а не в тихом расхождении посреди матча.
+    case 'nearestTo':
+      checkExpression(value, world, scope, at);
+      if (componentSchema(world, POSITION_COMPONENT) === undefined) {
+        fail(
+          at,
+          `упорядочивание по расстоянию считает до позиции сущности (ACT-5, QUERY-1), ` +
+            `а компонент "${POSITION_COMPONENT}" сцена не объявляет`,
+        );
+      }
+      break;
     case 'entity':
     case 'cond':
     case 'bound':
     case 'value':
-    case 'nearestTo':
     case 'limit':
     case 'at':
     case 'radius':
@@ -254,9 +269,11 @@ function checkActionArg(key: string, value: unknown, ctx: ActionArgScope): void 
     case 'easing':
     case 'ignoreTimeScale':
     case 'id':
-      // Аргументы-выражения: шесть общих позиций плюс `at`/`radius` у
-      // carveFloor, числа addTween (`def`, `from`, `to`, `duration`,
-      // `easing`, `ignoreTimeScale`) и `id` модификаторов. Исполнитель
+      // Аргументы-выражения: общие позиции плюс `at`/`radius` у carveFloor,
+      // числа addTween (`def`, `from`, `to`, `duration`, `easing`,
+      // `ignoreTimeScale`) и `id` модификаторов. Тем же выражением проверяется
+      // и `nearestTo` веткой выше — у неё сверх этого есть своя проверка
+      // конфигурации (ACT-5). Исполнитель
       // вычисляет их все одним `evaluate` — значит и проверяет их этот же
       // обход (SYS-3): опечатка в редко исполняемой ветке обязана упасть на
       // регистрации, а не на первом срабатывании.
