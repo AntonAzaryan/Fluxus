@@ -42,6 +42,13 @@ function maskOf(state: WorldState, names: readonly string[]): Uint32Array | 'unk
 }
 
 export function query(state: WorldState, spec: QuerySpec): Float64Array {
+  // Маски разрешаются ДО выделения результата: запрос по компоненту, которого в
+  // мире нет вообще, пуст заведомо, и буфер размером в мир под него — та самая
+  // аллокация на тик, которой этот путь избегает.
+  const allMask = spec.all ? maskOf(state, spec.all) : undefined;
+  if (allMask === 'unknown') return EMPTY;
+  const anyMask = spec.any ? maskOf(state, spec.any) : undefined;
+  if (anyMask === 'unknown') return EMPTY;
   // Слоты обходятся напрямую, без материализации массива живых сущностей на
   // каждый запрос (запросы зовутся системами каждый тик — это была бы лишняя
   // аллокация размером в мир). Порядок QUERY-2 сохраняется по построению, а id
@@ -49,7 +56,17 @@ export function query(state: WorldState, spec: QuerySpec): Float64Array {
   const result = new Float64Array(entityIndexOf(state).aliveCount);
   // Ёмкость результата — число живых, то есть заведомо не меньше числа
   // совпавших: усечения на этом пути не бывает, и `count` здесь всегда полный.
-  const count = collect(state, spec, result, undefined);
+  const count = collectMatches(
+    state,
+    spec,
+    componentMasks(state),
+    entityIndexOf(state),
+    allMask,
+    anyMask,
+    notMaskOf(state, spec),
+    result,
+    undefined,
+  );
   if (count === 0) return EMPTY;
   return count === result.length ? result : result.subarray(0, count);
 }
@@ -67,27 +84,10 @@ export function queryInto(
   ids: Float64Array,
   indices: Int32Array,
 ): number {
-  return collect(state, spec, ids, indices);
-}
-
-/**
- * Разрешение имён спецификации в маски-фильтры и обход слотов — ОДНО тело на
- * оба входа: расходиться отбору или порядку (QUERY-2) у них не на чем.
- */
-function collect(
-  state: WorldState,
-  spec: QuerySpec,
-  ids: Float64Array,
-  indices: Int32Array | undefined,
-): number {
   const allMask = spec.all ? maskOf(state, spec.all) : undefined;
-  // Требуется компонент, которого нет в мире вообще — результат заведомо пуст.
   if (allMask === 'unknown') return 0;
   const anyMask = spec.any ? maskOf(state, spec.any) : undefined;
   if (anyMask === 'unknown') return 0;
-  // Запрет по несуществующему компоненту никого не отсеивает — фильтр опускаем.
-  const notMaskRaw = spec.not ? maskOf(state, spec.not) : undefined;
-  const notMask = notMaskRaw === 'unknown' ? undefined : notMaskRaw;
   return collectMatches(
     state,
     spec,
@@ -95,10 +95,21 @@ function collect(
     entityIndexOf(state),
     allMask,
     anyMask,
-    notMask,
+    notMaskOf(state, spec),
     ids,
     indices,
   );
+}
+
+/**
+ * Маска запрета. Запрет по несуществующему компоненту никого не отсеивает —
+ * фильтр опускается; в отличие от `all`/`any`, неизвестное имя здесь не делает
+ * результат пустым. Обход слотов у обоих входов (`query`, `queryInto`) — одно
+ * тело `collectMatches`: расходиться отбору или порядку (QUERY-2) не на чем.
+ */
+function notMaskOf(state: WorldState, spec: QuerySpec): Uint32Array | undefined {
+  const raw = spec.not ? maskOf(state, spec.not) : undefined;
+  return raw === 'unknown' ? undefined : raw;
 }
 
 /**

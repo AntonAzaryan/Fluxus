@@ -386,3 +386,20 @@ describe('наблюдаемость (OBS-1..3)', () => {
     expect(result.state.mode).toBe('Running');
   });
 });
+
+describe('поверхность симуляции (TICK-3)', () => {
+  it('собранная симуляция не публикует буфер команд — мутатора мира вне тика снаружи нет', () => {
+    const built = buildSimulation({ scene: { components: SCHEMAS }, seed: WORLD_SEED }, { where: 'тест' });
+    tick(built.sim, built.state);
+    // Буфер заведён первым тиком, но живёт в приватной таблице тика, а не полем
+    // `Simulation`: `flush` применяет команды к миру вне тика, и опубликованный
+    // буфер был бы side channel'ом мимо Command Buffer тика (TICK-3, DET-7).
+    // Проверка по значениям, а не по именам: эталон `api-surface` стережёт
+    // экспорты `index.ts`, а не форму объекта, который сборка раздаёт наружу.
+    expect(Object.keys(built.sim)).not.toContain('commands');
+    for (const value of Object.values(built.sim)) {
+      const flush = (value as { readonly flush?: unknown }).flush;
+      expect(typeof flush).not.toBe('function');
+    }
+  });
+});
