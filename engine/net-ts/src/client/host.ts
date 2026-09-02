@@ -57,7 +57,12 @@ export class ClientHost {
         this.client.receive(this.codec.decode(bytes), this.now());
       } catch (error) {
         const detail = error instanceof ProtocolError ? error.message : String(error);
-        this.client.receive({ type: 'End', reason: 'server-stopped', tick: 0 }, this.now());
+        // Исход НАЗЫВАЕТСЯ своим именем (NTR-4): сломанный кадр — это
+        // `protocol-error`, а не выдуманное «матч окончен, сервер остановлен».
+        // Разница несущая (см. `ClientCloseReason`): после конца матча сборке
+        // возвращаться некуда, а сбой протокола — это сломанный канал, и
+        // подменённый исход предлагал бы игроку не то действие.
+        this.client.onProtocolError(detail);
         this.transport.close(detail);
       }
       this.flush();

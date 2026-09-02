@@ -57,6 +57,41 @@ describe('пять пропущенных тиков (HUD-5)', () => {
   });
 });
 
+describe('вытеснение событий наблюдаемо (SHELL-4, HUD-5)', () => {
+  /** Стенд с биндингом на число вытесненных событий доставки. */
+  function gapBench(): { widget: () => CaptureWidget; runtime: ReturnType<typeof makeRuntime>['runtime'] } {
+    const created: CaptureWidget[] = [];
+    const registry = new HudRegistry();
+    registry.registerWidget(captureKind('statusPanel', created));
+    registry.registerSelector('missedEvents', (state) => state.expiredEvents);
+    const { runtime } = makeRuntime(registry);
+    runtime.apply({
+      entries: [{ widget: 'statusPanel', zone: 'top-left', bindings: { gap: 'missedEvents' } }],
+    });
+    return { widget: () => created[0]!, runtime };
+  }
+
+  it('число вытесненных с прошлой доставки событий видно селектору', () => {
+    const { widget, runtime } = gapBench();
+    // Вкладка была свёрнута: оболочка вытеснила 300 событий границей глубины
+    // аккумулятора и сказала об этом ТОЙ ЖЕ доставкой (SHELL-4).
+    runtime.subsystem.syncTick(makeView({ tick: 120, events: [], expiredEvents: 300 }));
+
+    expect(widget().updates).toHaveLength(1);
+    expect(widget().updates[0]!.values.gap).toBe(300);
+  });
+
+  it('ноль — это «ничего не вытеснено», а не «неизвестно»', () => {
+    const { widget, runtime } = gapBench();
+    runtime.subsystem.syncTick(makeView({ tick: 120, expiredEvents: 300 }));
+    // Следующая доставка ничего не потеряла: разрыв показывать не на чем, и
+    // прежнее число НЕ залипает — величина принадлежит доставке.
+    runtime.subsystem.syncTick(makeView({ tick: 121 }));
+
+    expect(widget().updates.map((update) => update.values.gap)).toEqual([300, 0]);
+  });
+});
+
 describe('перемотка (HUD-5)', () => {
   it('признак разрыва доходит до виджетов снапом', () => {
     const { widget, runtime } = bench();

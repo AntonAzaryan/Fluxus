@@ -2524,8 +2524,9 @@ export class MatchServer {
     controller.seekTo(tick);
     this.config.trace?.mark({ mark: 'replayEnd', epoch: this.currentEpoch, tick });
     // Ветвь, которую перемотка стёрла, уходит из истории здесь же: живые тики
-    // новой эпохи пойдут по тем же номерам, и без обрезки в буфере оказались бы
-    // два снапшота одного тика — см. `BranchHistory`.
+    // новой эпохи пойдут по тем же номерам, а снапшоты стёртой остались бы в
+    // буфере с тиками выше точки восстановления, занимая его ёмкость и называя
+    // собой границы истории, — см. `BranchHistory`.
     this.history?.dropAfter(this.state.tick);
     this.adoptFramesOf(this.state.tick);
     this.broadcastSnapshots();

@@ -29,6 +29,7 @@ export function makeView(partial: Partial<HudDeliveredState> = {}): HudDelivered
     entities: new Map(),
     statNames: [],
     events: [],
+    expiredEvents: 0,
     floorBits: null,
     floorChangedCells: [],
     ...partial,

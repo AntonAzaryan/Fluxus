@@ -12,8 +12,22 @@ import {
   type ClientMessage,
   type ServerMessage,
 } from '../src/protocol/messages.js';
+import { contentPack } from '../src/content/pack.js';
+import { ClientHost } from '../src/client/host.js';
+import { MatchClient } from '../src/client/matchClient.js';
+import { loopbackPair } from '../src/transport/loopback.js';
 import { loadScene, world as worldApi } from '@fluxus/core';
-import { BUILD_ID, duelConfig, duelScene, harness, hello, inputMessage, wireInput } from './fixtures.js';
+import {
+  BUILD_ID,
+  duelConfig,
+  duelScene,
+  harness,
+  hello,
+  inputMessage,
+  settle,
+  versionOf,
+  wireInput,
+} from './fixtures.js';
 
 const serializers = [msgpackSerializer, jsonSerializer];
 
@@ -210,6 +224,31 @@ describe('разбор входящего', () => {
     ).toThrow(ProtocolError);
   });
 
+  it('незнакомая причина отказа отвергается разбором, а не доезжает своей (NTR-4)', () => {
+    expect(() => parseServerMessage({ type: 'Reject', reason: 'because-i-said-so', detail: '' })).toThrow(
+      ProtocolError,
+    );
+    // Отказ называет поле и перечень: чинить документ сборки по слову
+    // «неверное сообщение» не работа.
+    expect(() => parseServerMessage({ type: 'Reject', reason: 'because-i-said-so' })).toThrow(
+      /Reject: поле "reason"/,
+    );
+    // Значение перечня проходит и остаётся собой.
+    const parsed = parseServerMessage({ type: 'Reject', reason: 'slot-barred', detail: 'админ' });
+    expect(parsed).toEqual({ type: 'Reject', reason: 'slot-barred', detail: 'админ' });
+  });
+
+  it('незнакомая причина конца матча отвергается разбором (NTR-4)', () => {
+    expect(() => parseServerMessage({ type: 'End', reason: 'meteor', tick: 9 })).toThrow(
+      /End: поле "reason"/,
+    );
+    expect(parseServerMessage({ type: 'End', reason: 'player-silent', tick: 9 })).toEqual({
+      type: 'End',
+      reason: 'player-silent',
+      tick: 9,
+    });
+  });
+
   it('точка с провода становится полем `target` кадра ядра (TICK-2)', () => {
     const frame = toInputFrame({ ...wireInput(4, 2), targetX: 65536, targetY: -131072 }, 'p2', 4);
     expect(frame.target).toEqual({ x: 65536, y: -131072 });
@@ -334,6 +373,30 @@ describe('состояние соединения', () => {
     server.connect(1);
     server.protocolError(1, 'protocol-error', 'тест');
     expect(server.metrics.rejectedMessages).toBe(1);
+  });
+
+  it('клиент, не разобравший кадр сервера, называет исход `protocol-error`, а не конец матча (NTR-4)', async () => {
+    const scene = duelScene();
+    const client = new MatchClient({
+      playerId: 'p1',
+      version: versionOf(scene),
+      content: contentPack({ duel: scene }),
+    });
+    const [serverEnd, clientEnd] = loopbackPair();
+    const host = new ClientHost(client, clientEnd, { now: () => 0 });
+    host.start();
+    // Кадр разбирается сериализатором и не разбирается протоколом: набор
+    // сообщений закрыт (NTR-4), и это ровно та ошибка, которую подменяли
+    // искусственным `End`.
+    serverEnd.send(msgpackSerializer.encode({ type: 'Cheat', damage: 50 }));
+    await settle();
+
+    expect(client.phase).toBe('closed');
+    // Сломанный канал — не законченный матч: сборка вправе предложить разное
+    // (см. `ClientCloseReason`), и «матч окончен» здесь было бы неправдой.
+    expect(client.closeReason).toBe('protocol-error');
+    expect(client.closeDetail).toContain('Cheat');
+    expect(clientEnd.isClosed).toBe(true);
   });
 
   it('версия предъявляется парой и обе половины сверяются', () => {
