@@ -31,7 +31,7 @@ export type {
   TickView,
 } from './types.js';
 
-// Пресеты качества (`render-quality` QUAL-1..3): контракт объявления ручек
+// Пресеты качества (capability `render-quality`): контракт объявления ручек
 // подсистемой (расширение REND-8), реестр, собираемый из деклараций, и
 // контроллер, раздающий значения документа пресета. Имён пресетов пакет не
 // знает — их приносит приложение игры.
@@ -130,7 +130,7 @@ export type { FlightPhaseSource, StatSource } from './statSources.js';
 export { ViewBuffer } from './viewBuffer.js';
 export type { FrameTiming, ViewBufferConfig } from './viewBuffer.js';
 
-// Камера (camera CAM-1..8): rig режимов и вход кадрирования, слой эффектов,
+// Камера (capability camera): rig режимов и вход кадрирования, слой эффектов,
 // диспетчер по манифесту, общее применение позы к THREE-камере.
 export { CameraRig, DEFAULT_CAMERA_CONFIG } from './camera/rig.js';
 export type {
@@ -299,7 +299,7 @@ export type { WaterMaterialInput } from './water/material.js';
 
 // Подсистема освещения сцены (REND-8): источники света арены и теневые карты
 // из секции `lighting` парного документа (PRES-2). Свет всех потребителей
-// рендера — отсюда: своего они больше не заводят (`editor` ED-22).
+// рендера — отсюда: своего они больше не заводят (`editor` ED-1).
 export { LightingSubsystem } from './subsystems/lighting.js';
 export type { LightingOptions } from './subsystems/lighting.js';
 // Локальные источники инстансов (REND-33): пул подсистемы освещения, его ручка
