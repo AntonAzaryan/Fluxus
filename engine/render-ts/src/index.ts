@@ -299,7 +299,7 @@ export type { WaterMaterialInput } from './water/material.js';
 
 // Подсистема освещения сцены (REND-8): источники света арены и теневые карты
 // из секции `lighting` парного документа (PRES-2). Свет всех потребителей
-// рендера — отсюда: своего они больше не заводят (`editor` ED-22).
+// рендера — отсюда: своего они больше не заводят (`editor` ED-1).
 export { LightingSubsystem } from './subsystems/lighting.js';
 export type { LightingOptions } from './subsystems/lighting.js';
 // Локальные источники инстансов (REND-33): пул подсистемы освещения, его ручка
