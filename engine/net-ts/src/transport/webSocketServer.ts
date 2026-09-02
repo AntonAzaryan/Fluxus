@@ -10,6 +10,7 @@ import {
   BaseTransport,
   RTT_PENDING,
   type Transport,
+  type TransportBacklog,
   type TransportRtt,
   type TransportServer,
 } from './transport.js';
@@ -81,6 +82,16 @@ class WsTransport extends BaseTransport {
   send(bytes: Uint8Array): void {
     if (this.isClosed || this.socket.readyState !== this.socket.OPEN) return;
     this.socket.send(bytes);
+  }
+
+  /**
+   * Задолженность отправки (NTR-22) — `bufferedAmount` сокета: байты, принятые
+   * `send`, но ещё не переданные сокету ОС. Это ровно та очередь, которую хост в
+   * силах не удлинять; заполненный буфер ОС проявится здесь же, когда ОС
+   * перестанет принимать.
+   */
+  override backlog(): TransportBacklog {
+    return { kind: 'measured', bytes: this.socket.bufferedAmount };
   }
 
   protected doClose(): void {

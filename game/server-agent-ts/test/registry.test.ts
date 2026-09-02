@@ -174,6 +174,9 @@ describe('дрейф статуса стенда называется, а не �
     // null, статус `connecting` как «отчёта ещё не было»), а сам дрейф назван.
     const entry = spied.registry.entry(started.id);
     expect(entry?.slots.every((slot) => slot.status === 'connecting')).toBe(true);
+    // Счётчики слота до первого отчёта — нули, а не отсутствие поля: перечень
+    // слотов есть ростер (NTR-6), и вид менеджера читает его целиком (NTR-22).
+    expect(entry?.slots.every((slot) => slot.snapshotsSkipped === 0)).toBe(true);
 
     // Незнакомый статус называется ОДИН раз, а не заливает канал каждым отчётом.
     for (let i = 0; i < 4; i++) {

@@ -19,12 +19,18 @@
  * остаются про хендшейк и разрыв.
  */
 import { XorShift128Stream, seedStateFromName } from '@fluxus/core';
-import { MatchHost } from '../../src/server/host.js';
+import { MatchHost, type MatchHostOptions } from '../../src/server/host.js';
 import { MatchServer, type MatchConfig } from '../../src/server/matchServer.js';
 import { LoopbackHub } from '../../src/transport/loopback.js';
 import { mergeTransportServers } from '../../src/transport/merged.js';
 import type { InputSource } from '../../src/client/host.js';
 import { connectClient, duelConfig, STEP, type Clock, type ConnectedClient } from '../fixtures.js';
+
+/** Замирание канала: раз в `every` шагов доставка останавливается на `steps` шагов. */
+interface ChannelStall {
+  readonly every: number;
+  readonly steps: number;
+}
 
 /** Профиль канала — данные, а не код: он же сидирует поток случайности. */
 export interface ChannelProfile {
@@ -36,6 +42,25 @@ export interface ChannelProfile {
   readonly jitterSteps: number;
   /** Доля теряемых сообщений в тысячных: `0` — канал без потерь. */
   readonly lossPerMille: number;
+  /**
+   * Пропускная способность, байт за шаг; нет поля — не ограничена. Сообщение
+   * занимает канал на `bytes / bytesPerStep` шагов, отправленное позже ждёт
+   * освобождения; байты сообщений, ещё не начавших передачу, — задолженность
+   * канала (NTR-22), которую лупбэк отдаёт как `backlog`.
+   */
+  readonly bytesPerStep?: number;
+  /**
+   * Доставка как у потока (TCP, WebSocket): сообщение не обгоняет отправленное
+   * раньше, джиттер меняет задержку, а не порядок. Нет поля — канал вправе
+   * переставлять (NTR-2), как датаграммный.
+   */
+  readonly ordered?: boolean;
+  /**
+   * Замирание: доставка останавливается на `steps` шагов раз в `every`, и всё
+   * накопленное уезжает залпом. Так потеря пакета выглядит с TCP/WebSocket — не
+   * дырой, а паузой и всплеском.
+   */
+  readonly stall?: ChannelStall;
 }
 
 /** Одна доставка в журнале канала: чем и доказывается воспроизводимость. */
@@ -52,6 +77,12 @@ interface Pending {
   readonly deliver: () => void;
 }
 
+/** Сообщение в очереди сериализации узкого канала: когда начнёт передачу и сколько весит. */
+interface Queued {
+  readonly departAt: number;
+  readonly bytes: number;
+}
+
 /**
  * Канал: планировщик для `loopbackPair`/`LoopbackHub` плюс явный шаг.
  *
@@ -64,6 +95,12 @@ export class VirtualChannel {
   private readonly rng: XorShift128Stream;
   private readonly pending: Pending[] = [];
   private readonly log: ChannelDelivery[] = [];
+  /** Очередь сериализации узкого канала: сообщения, ещё не начавшие передачу. */
+  private readonly queued: Queued[] = [];
+  /** До какого шага канал занят передачей уже принятого. */
+  private busyUntil = 0;
+  /** Шаг доставки последнего запланированного сообщения — порог для `ordered`. */
+  private lastAt = 0;
   private now = 0;
   private order = 0;
 
@@ -73,7 +110,7 @@ export class VirtualChannel {
   }
 
   /** Планировщик доставки: то, что уезжает в `LoopbackOptions.schedule`. */
-  schedule(deliver: () => void): void {
+  schedule(deliver: () => void, bytes = 0): void {
     // Оба знака случайности тянутся ВСЕГДА и в одном порядке — даже когда
     // профиль их не использует: позиция потока не должна зависеть от того,
     // какие ручки в профиле ненулевые.
@@ -84,9 +121,41 @@ export class VirtualChannel {
       this.log.push({ sentAt: this.now, deliveredAt: -1 });
       return;
     }
-    const at = this.now + Math.max(1, this.profile.delaySteps + jitter);
+    // Узкий канал: сообщение ждёт, пока канал освободится от принятого раньше,
+    // и занимает его на время своей передачи. Задолженность — то, что ждёт.
+    // Доезжает сообщение, когда передан его последний байт: ожидание очереди
+    // плюс собственная передача, и только потом дорога.
+    let wire = 0;
+    const width = this.profile.bytesPerStep;
+    if (width !== undefined) {
+      const departAt = Math.max(this.now, this.busyUntil);
+      this.busyUntil = departAt + bytes / width;
+      wire = this.busyUntil - this.now;
+      this.queued.push({ departAt, bytes });
+    }
+    let at = this.now + Math.max(1, Math.ceil(wire + this.profile.delaySteps + jitter));
+    // Поток не обгоняет сам себя: доставка не раньше предыдущей.
+    if (this.profile.ordered === true) at = Math.max(at, this.lastAt);
+    this.lastAt = at;
     this.log.push({ sentAt: this.now, deliveredAt: at });
     this.pending.push({ at, order, deliver });
+  }
+
+  /**
+   * Задолженность отправки, байты (NTR-22): сообщения, принятые каналом, но ещё
+   * не начавшие передачу. У канала без ограничения ширины — всегда ноль:
+   * очередь видна, просто пуста.
+   */
+  get backlog(): number {
+    let bytes = 0;
+    for (const entry of this.queued) if (entry.departAt > this.now) bytes += entry.bytes;
+    return bytes;
+  }
+
+  /** Канал замер: внутри окна замирания доставка стоит, накопленное едет залпом после. */
+  private stalled(): boolean {
+    const stall = this.profile.stall;
+    return stall !== undefined && this.now % stall.every < stall.steps && this.now >= stall.every;
   }
 
   /**
@@ -97,6 +166,12 @@ export class VirtualChannel {
    */
   step(): void {
     this.now++;
+    // Очередь сериализации чистится от начавшего передачу: задолженность — это
+    // ждущие, а не всё, что канал когда-либо принял.
+    for (let i = this.queued.length - 1; i >= 0; i--) {
+      if (this.queued[i]!.departAt <= this.now) this.queued.splice(i, 1);
+    }
+    if (this.stalled()) return;
     const due = this.pending.filter((entry) => entry.at <= this.now);
     if (due.length === 0) return;
     for (const entry of due) this.pending.splice(this.pending.indexOf(entry), 1);
@@ -224,6 +299,12 @@ export interface ChannelMatchOptions {
   /** Источник ввода клиента по его номеру; `undefined` — клиент молчит. */
   readonly input?: (index: number) => InputSource | undefined;
   /**
+   * Настройки сборки хоста матча — сюда попадает порог обратного давления
+   * рассылки (`maxQueuedSnapshots`, NTR-22). Часы хостом берутся из общего
+   * `clock` эмулятора и подмене отсюда не подлежат.
+   */
+  readonly host?: Omit<MatchHostOptions, 'now'>;
+  /**
    * Часы клиента быстрее серверных: раз в столько шагов клиент делает ЛИШНИЙ
    * шаг. `undefined` — часы идут в ногу.
    *
@@ -285,15 +366,22 @@ export function channelMatch(options: ChannelMatchOptions): ChannelMatch {
   const hubs = channels.map((channel, index) => {
     const down = downlinks[index]!;
     return new LoopbackHub({
-      schedule: (deliver) => { channel.schedule(deliver); },
-      scheduleBack: (deliver) => { down.schedule(deliver); },
+      schedule: (deliver, bytes) => { channel.schedule(deliver, bytes); },
+      scheduleBack: (deliver, bytes) => { down.schedule(deliver, bytes); },
+      // Задолженность направления — та самая очередь канала (NTR-22): её и
+      // читает хост, решая, пропускать ли снапшот этому соединению.
+      backlog: () => channel.backlog,
+      backlogBack: () => down.backlog,
     });
   });
   const clock: Clock = { ms: 0 };
   const server = new MatchServer(config);
   // Хост поднимается ДО клиентов: `LoopbackHub.connect` отдаёт серверный конец
   // подписчику сразу, и подписчиком обязан быть уже собранный хост.
-  const host = new MatchHost(server, mergeTransportServers(...hubs), { now: () => clock.ms });
+  const host = new MatchHost(server, mergeTransportServers(...hubs), {
+    ...options.host,
+    now: () => clock.ms,
+  });
   const clients = config.players.map((playerId, index) => {
     const input = options.input?.(index);
     return connectClient(hubs[index]!, playerId, clock, config.scene, {

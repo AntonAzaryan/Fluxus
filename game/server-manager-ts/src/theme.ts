@@ -67,7 +67,7 @@ body { margin: 0; background: var(--mg-canvas); color: var(--mg-text);
 .mg-slot__status { min-width: 96px; color: var(--mg-muted); }
 .mg-slot--active .mg-slot__status { color: var(--mg-accent-bright); }
 .mg-slot--removed .mg-slot__status, .mg-slot--rejected .mg-slot__status { color: var(--mg-faint); }
-.mg-slot__rtt, .mg-slot__response, .mg-metrics { color: var(--mg-muted); font-family: ui-monospace, monospace; }
+.mg-slot__rtt, .mg-slot__response, .mg-slot__snapshots, .mg-metrics { color: var(--mg-muted); font-family: ui-monospace, monospace; }
 .mg-action { background: var(--mg-raised); border: 1px solid var(--mg-border); border-radius: 3px;
   color: var(--mg-text); cursor: pointer; font: inherit; padding: 2px 10px; }
 .mg-action:disabled { opacity: 0.38; cursor: default; }

@@ -98,6 +98,9 @@ const slot = (index) => ({
   predicted: 0,
   late: 0,
   snapshotBytes: 1024,
+  // Снапшоты, не ушедшие из-за очереди отправки (NTR-22): ненулевые, чтобы
+  // проверялась передача величины, а не нуля по умолчанию.
+  snapshotsSkipped: 2,
 });
 
 const report = () => {

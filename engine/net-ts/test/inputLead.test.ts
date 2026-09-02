@@ -29,6 +29,7 @@ import {
   TUNNEL_JITTER,
   WALK,
   type ChannelMatch,
+  type ChannelProfile,
 } from './support/channel.js';
 
 /**
@@ -143,6 +144,36 @@ function feedSlow(control: LeadController, from: number, ticks: number, skipEver
     seq++;
   }
 }
+
+/**
+ * Профили с разбросом — с доставкой ПОТОКОМ (`ordered`, design D5).
+ *
+ * Джиттер на неупорядоченном канале переставляет сообщения одной рассылки, и
+ * хендшейк от этого рвётся в зависимости от сида: снапшот или `Start`,
+ * обогнавший `Welcome`, — `protocol-error` по NTR-5. Настоящий несущий канал
+ * матча — WebSocket, то есть поток: разброс меняет задержку, а не порядок.
+ * Предмет проверок ниже — длина канала и её разброс, а не переупорядочивание
+ * (оно живёт в тестах NTR-2, и они остаются на неупорядоченных профилях).
+ *
+ * Имя профиля сидирует поток джиттера (`channel.ts`), поэтому последовательность
+ * задержек у варианта СВОЯ, а не та же, что у исходного профиля. Границы
+ * проверок ниже эту смену пережили без правки — они и написаны про поведение
+ * контроллера, а не про конкретный сид.
+ */
+const TUNNEL_JITTER_ORDERED: ChannelProfile = {
+  ...TUNNEL_JITTER,
+  name: 'tunnel-jitter-ordered',
+  ordered: true,
+};
+
+/** Профиль edge-туннеля при темпе демо-арены, потоком: разброс два тика на плечо. */
+const EDGE_JITTER_ORDERED: ChannelProfile = {
+  name: 'edge-jitter-ordered',
+  delaySteps: 7,
+  jitterSteps: 2,
+  lossPerMille: 0,
+  ordered: true,
+};
 
 /** Матч «сосед рядом с сервером плюс второй за длинной дорогой». */
 function tunnelMatch(profile = TUNNEL, overrides = {}): ChannelMatch {
@@ -457,8 +488,12 @@ describe('разметка ввода адаптивным запасом (NTR-7
   });
 
   it('на джиттере запас держится в одном тике: разброс порогов не набирает', () => {
-    const match = tunnelMatch(TUNNEL_JITTER);
+    const match = tunnelMatch(TUNNEL_JITTER_ORDERED);
     match.run(400);
+    // Клиент за каналом действительно В МАТЧЕ: на потоке хендшейк проходит
+    // целиком (NTR-5), и всё, что проверяется дальше, — про запас, а не про
+    // вход, оборвавшийся на обгоне.
+    expect(match.clients[1]!.client.phase).toBe('playing');
     const settled = match.clients[1]!.client.metrics.inputLead!;
     expect(settled).toBeGreaterThan(match.server.pacing.inputDelay);
     const before = slotOf(match, 1);
@@ -825,11 +860,12 @@ describe('разметка ввода адаптивным запасом (NTR-7
     // сходился к наименьшему значению, при котором серии редко длиннее допуска.
     const match = channelMatch({
       config: duelConfig({ tickRate: 60, snapshotRate: 30, inputDelay: 2, inputWindow: 30 }),
-      profiles: [LAN, { name: 'edge-jitter', delaySteps: 7, jitterSteps: 2, lossPerMille: 0 }],
+      profiles: [LAN, EDGE_JITTER_ORDERED],
       input: () => WALK,
     });
     match.run(600);
     const client = match.clients[1]!.client;
+    expect(client.phase).toBe('playing');
     const settled = client.metrics.inputLead!;
     expect(settled).toBeGreaterThan(match.server.pacing.inputDelay);
 
@@ -863,6 +899,97 @@ describe('разметка ввода адаптивным запасом (NTR-7
     for (const cost of probeCosts) expect(cost).toBeLessThanOrEqual(12);
     // Запас держится в полосе шириной в тик: значение и проба на тик ниже.
     expect(Math.abs(lead - settled)).toBeLessThanOrEqual(1);
+  });
+
+  /**
+   * Замирание — то, как потеря пакета выглядит с потоковым транспортом: не дыра,
+   * а пауза и всплеск. Канал в остальном без плеча и потоковый; `steps` — длина
+   * замирания, `every` — период. Период шире обратного пути НАМЕРЕННО: подъём
+   * идёт сразу на период рассылки, а спуск — по тику за окно стабильности
+   * (design D2), и замирания чаще этого мерили бы темп спуска против их частоты.
+   */
+  const stalling = (steps: number): ChannelProfile => ({
+    name: `lan-stall-${String(steps)}`,
+    delaySteps: 0,
+    jitterSteps: 0,
+    lossPerMille: 0,
+    ordered: true,
+    stall: { every: 600, steps },
+  });
+
+  it('долгое замирание канала запас не двигает: кадры залпа опоздали не из-за запаса (design D5)', () => {
+    // Замирание длиннее допуска свежести наблюдения (`slack`): подтверждений нет
+    // дольше допуска, и первый снапшот после оживления начинает наблюдение
+    // заново. Кадры, ушедшие в замолчавший канал, доедут залпом на уже
+    // исполненные тики и отбросятся как ОПОЗДАВШИЕ, а не как вышедшие за окно
+    // (NTR-11), — но сигналом они не станут: никакой запас короче самого
+    // замирания их бы не спас, а подъём на каждом замирании при спуске по тику
+    // за окно был бы храповиком до потолка.
+    const match = channelMatch({
+      config: channelConfig(),
+      profiles: [LAN, stalling(12)],
+      input: () => WALK,
+    });
+    const client = match.clients[1]!.client;
+    const floor = match.server.pacing.inputDelay;
+
+    match.run(600);
+    expect(client.phase).toBe('playing');
+    expect(client.metrics.inputLead).toBe(floor);
+    expect(match.server.metrics.slots[1]!.late).toBe(0);
+
+    // Пять замираний по 0,6 с — и ни одного подъёма.
+    let peak = 0;
+    for (let i = 0; i < 2400; i++) {
+      match.step();
+      peak = Math.max(peak, client.metrics.inputLead!);
+    }
+    expect(peak).toBe(floor);
+    const slot = match.server.metrics.slots[1]!;
+    expect(slot.late).toBeGreaterThan(0);
+    expect(slot.outOfWindow).toBe(0);
+    // После каждого залпа управление возвращается: кадры, отправленные в ожившую
+    // связь, доезжают к своим тикам.
+    expect(slot.applied).toBeGreaterThan(2600);
+    expect(match.server.phase).toBe('running');
+  });
+
+  it('короткое замирание запас поднимает и отпускает — храповика нет (design D5)', () => {
+    // Замирание короче допуска свежести неотличимо от удлинившейся дороги, и
+    // запас его покрыл бы: залп опоздавших кадров — сигнал (NTR-7). Проверяется
+    // другое — что канал, СНОВА исправный, запас отпускает, а следующие
+    // замирания не поднимают его выше первого.
+    const match = channelMatch({
+      config: channelConfig(),
+      profiles: [LAN, stalling(4)],
+      input: () => WALK,
+    });
+    const client = match.clients[1]!.client;
+    const floor = match.server.pacing.inputDelay;
+
+    match.run(600);
+    expect(client.phase).toBe('playing');
+    expect(client.metrics.inputLead).toBe(floor);
+
+    match.run(20);
+    const raised = client.metrics.inputLead!;
+    expect(raised).toBeGreaterThan(floor);
+    expect(match.server.metrics.slots[1]!.late).toBeGreaterThan(0);
+    expect(match.server.metrics.slots[1]!.outOfWindow).toBe(0);
+
+    // Канал снова исправен — запас спускается обратно за три окна стабильности.
+    match.run(3 * SETTLE_WINDOW);
+    expect(client.metrics.inputLead).toBe(floor);
+
+    // Ещё три замирания: каждое поднимает не выше первого и каждое отпускает.
+    let peak = 0;
+    for (let i = 0; i < 2080; i++) {
+      match.step();
+      peak = Math.max(peak, client.metrics.inputLead!);
+    }
+    expect(peak).toBeLessThanOrEqual(raised);
+    expect(client.metrics.inputLead).toBe(floor);
+    expect(match.server.phase).toBe('running');
   });
 
   it('запас публикуется в счётчиках клиента рядом с откликом (NTR-11)', () => {

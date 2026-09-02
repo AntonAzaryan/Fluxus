@@ -12,15 +12,24 @@
  * персонального снапшота в отправку, — а также размер снапшотов по каждому
  * соединению отдельно. Мерить это в `MatchServer` было бы нельзя: цикл и
  * рассылка живут ЗДЕСЬ, а сервер остаётся чистым тиком без часов.
+ *
+ * И здесь же принимается решение об обратном давлении рассылки состояний
+ * (NTR-22): персональный снапшот соединению, задолженность отправки которого
+ * переросла порог, не кодируется и не уходит вовсе. Решение принадлежит хосту, а
+ * не транспорту и не серверу матча: транспорт сообщений не различает (NTR-2), а
+ * сервер сокетов не видит (NTR-3).
  */
 import type { Serializer } from '@fluxus/core';
 import { serverCodec, DEFAULT_SERIALIZER, type Codec } from '../protocol/codec.js';
 import { ProtocolError, type ClientMessage, type ServerMessage } from '../protocol/messages.js';
 import {
+  transportBacklog,
   transportRtt,
+  BACKLOG_UNSUPPORTED,
   RTT_UNSUPPORTED,
   type ConnectionId,
   type Transport,
+  type TransportBacklog,
   type TransportRtt,
   type TransportServer,
 } from '../transport/transport.js';
@@ -35,6 +44,17 @@ import type { MatchServer, Outgoing } from './matchServer.js';
  */
 const CONNECTION_RETENTION = 256;
 
+/**
+ * Сколько персональных снапшотов вправе ждать в очереди отправки соединения,
+ * пока хост не начнёт их пропускать (NTR-22, решение D2).
+ *
+ * Умолчание — не константа поведения, а величина сборки (`MatchHostOptions.
+ * maxQueuedSnapshots`): порог — предмет замера, как `tickRate` и `inputWindow`.
+ * Два — потому что очередь длиннее двух рассылок означает канал, отставший
+ * больше чем на два периода рассылки, и следующая рассылка только удлинит хвост.
+ */
+const DEFAULT_MAX_QUEUED_SNAPSHOTS = 2;
+
 export interface MatchHostOptions {
   readonly serializer?: Serializer;
   /**
@@ -43,6 +63,17 @@ export interface MatchHostOptions {
    * проверяться тестом без ожидания реального времени.
    */
   readonly now?: () => number;
+  /**
+   * Порог обратного давления рассылки состояний (NTR-22): сколько персональных
+   * снапшотов вправе ждать в очереди отправки соединения. Умолчание —
+   * `DEFAULT_MAX_QUEUED_SNAPSHOTS`; `Infinity` выключает пропуск целиком.
+   *
+   * Единица — снапшоты, а не байты и не миллисекунды: величина не зависит от
+   * машины и следует за размером снапшота, который у каждого соединения свой
+   * (фильтр видимости, NTR-3). Порог в байтах пришлось бы подбирать под сцену,
+   * порог в миллисекундах — под скорость канала, которой хост не знает.
+   */
+  readonly maxQueuedSnapshots?: number;
 }
 
 /**
@@ -56,8 +87,20 @@ export interface ConnectionMetrics {
   /** Байты всех сообщений соединения: снапшоты, поток событий и служебное. */
   readonly bytes: number;
   readonly snapshots: number;
+  /**
+   * Снапшоты, НЕ отправленные этому соединению из-за его очереди (NTR-22): «канал
+   * узкий» — третий ответ на вопрос «дорога, сервер или канал» рядом с кругом и
+   * длительностью тика (NTR-11).
+   */
+  readonly snapshotsSkipped: number;
   /** Круг несущего канала либо названное его отсутствие (решение D7). */
   readonly rtt: TransportRtt;
+  /**
+   * Задолженность отправки несущего канала либо названное её отсутствие
+   * (NTR-22): та самая очередь, по которой принято решение о пропуске. Ноль —
+   * пустая очередь здорового канала, и с «очереди не видно» его путать нельзя.
+   */
+  readonly backlog: TransportBacklog;
   /**
    * СЕРВЕРНАЯ половина отклика (NTR-11), мс: от прихода кадра ввода до
    * ближайшего персонального снапшота этому соединению. `undefined` — замера ещё
@@ -95,6 +138,14 @@ interface ConnectionBytes {
   snapshotBytes: number;
   bytes: number;
   snapshots: number;
+  /** Снапшоты, пропущенные рассылкой из-за очереди отправки (NTR-22). */
+  snapshotsSkipped: number;
+  /**
+   * Размер ПОСЛЕДНЕГО ушедшего этому соединению снапшота, байты; `0` — снапшотов
+   * ещё не было. Им и меряется очередь (NTR-22): порог назван в снапшотах, а
+   * размер снапшота у каждого соединения свой.
+   */
+  lastSnapshotBytes: number;
   /** Отметка прихода кадра ввода, ждущая ближайшего снапшота; `-1` — не ждёт. */
   inputAt: number;
   /** Последняя измеренная серверная половина отклика, мс; `-1` — замеров не было. */
@@ -111,6 +162,8 @@ export class MatchHost {
   private timer: PacedTimer | undefined;
 
   private readonly now: () => number;
+  /** Порог обратного давления рассылки (NTR-22); `Infinity` — пропуска нет. */
+  private readonly maxQueuedSnapshots: number;
   private readonly tickRing = new DurationRing();
   private readonly broadcastRing = new DurationRing();
   /** Отметка конца последнего исполненного тика; `-1` — рассылать нечего. */
@@ -135,6 +188,7 @@ export class MatchHost {
     this.transports = transports;
     this.codec = serverCodec(options.serializer ?? DEFAULT_SERIALIZER);
     this.now = options.now ?? ((): number => performance.now());
+    this.maxQueuedSnapshots = options.maxQueuedSnapshots ?? DEFAULT_MAX_QUEUED_SNAPSHOTS;
     this.transports.onConnection((transport) => { this.attach(transport); });
   }
 
@@ -176,6 +230,8 @@ export class MatchHost {
       snapshotBytes: 0,
       bytes: 0,
       snapshots: 0,
+      snapshotsSkipped: 0,
+      lastSnapshotBytes: 0,
       inputAt: -1,
       responseMs: -1,
     };
@@ -217,19 +273,33 @@ export class MatchHost {
   }
 
   /**
-   * Отправка одного исходящего своему соединению вместе с его учётом (NTR-11).
-   * Возвращает отметку времени переданного персонального снапшота либо `-1`,
-   * если исходящее снапшотом не было.
+   * Отправка одного исходящего своему соединению вместе с его учётом (NTR-11) —
+   * либо ПРОПУСК персонального снапшота, если очередь соединения переросла порог
+   * (NTR-22, см. `skipsSnapshot`).
+   *
+   * Возвращает отметку времени переданного персонального снапшота либо `-1` —
+   * когда исходящее снапшотом не было ЛИБО снапшот пропущен: broadcast lag мерит
+   * передачу последнего УШЕДШЕГО снапшота, а пропущенный не уходил.
    */
   private sendOutgoing(outgoing: Outgoing, transport: Transport): number {
+    const counted = this.countedOf(outgoing.to);
+    const isSnapshot = outgoing.message.type === 'Snapshot';
+    // Решение о пропуске принимается ДО кодирования: пропущенный снапшот не
+    // сериализуется вовсе — иначе узкий канал стоил бы серверу той же работы,
+    // что широкий (NTR-22).
+    if (isSnapshot && this.skipsSnapshot(transport, counted)) {
+      counted.snapshotsSkipped++;
+      // Ни байтов, ни счётчика снапшотов, ни отставания рассылки: пропущенный
+      // снапшот не уходил, а broadcast lag мерит передачу ПОСЛЕДНЕГО ушедшего.
+      return -1;
+    }
     const bytes = this.codec.encode(outgoing.message);
     this.server.metrics.bytesSent += bytes.byteLength;
-    const counted = this.countedOf(outgoing.to);
     counted.bytes += bytes.byteLength;
-    const isSnapshot = outgoing.message.type === 'Snapshot';
     if (isSnapshot) {
       counted.snapshotBytes += bytes.byteLength;
       counted.snapshots++;
+      counted.lastSnapshotBytes = bytes.byteLength;
     }
     transport.send(bytes);
     // Отметка берётся ПОСЛЕ передачи в отправку: broadcast lag — это время до
@@ -250,6 +320,31 @@ export class MatchHost {
       transport.close(outgoing.message.type === 'Reject' ? outgoing.message.reason : 'match-ended');
     }
     return snapshotAt;
+  }
+
+  /**
+   * Обратное давление рассылки состояний (NTR-22): пропустить ли очередной
+   * персональный снапшот этому соединению.
+   *
+   * Основание пропуска — самодостаточность снапшота (NTR-2, NTR-10): состояние
+   * несёт свой тик, и следующее заменяет пропущенное целиком, тогда как очередь,
+   * растущая без предела, означает канал, который поток состояний не тянет.
+   * Пропускается ТОЛЬКО `Snapshot` (решение D3): хендшейк доставляется надёжно
+   * (NTR-5), `Events` избыточен сам (NTR-15) и мал, `Pause` и `End` единичны и
+   * решающи.
+   */
+  private skipsSnapshot(transport: Transport, counted: ConnectionBytes): boolean {
+    // Первый снапшот соединению не пропускается никогда: пока размер снапшота
+    // ИМЕННО ЭТОМУ соединению неизвестен, мерить очередь нечем, а клиент без
+    // первого состояния не начинает вовсе (NTR-22).
+    if (counted.lastSnapshotBytes === 0) return false;
+    // Порог — величина сборки, и `Infinity` выключает политику целиком.
+    if (this.maxQueuedSnapshots === Number.POSITIVE_INFINITY) return false;
+    const backlog = transportBacklog(transport);
+    // Очередь несущим каналом не показана: пропуск по неизвестной очереди был бы
+    // пропуском по догадке (NTR-22).
+    if (backlog.kind !== 'measured') return false;
+    return backlog.bytes >= this.maxQueuedSnapshots * counted.lastSnapshotBytes;
   }
 
   /**
@@ -332,9 +427,14 @@ export class MatchHost {
       snapshotBytes: counted.snapshotBytes,
       bytes: counted.bytes,
       snapshots: counted.snapshots,
+      snapshotsSkipped: counted.snapshotsSkipped,
       // Круга у закрытого соединения нет и быть не может — отсутствие
       // называется явно, а не нулём (NTR-11).
       rtt: transport === undefined ? RTT_UNSUPPORTED : transportRtt(transport),
+      // Очереди у закрытого соединения нет по той же причине и с тем же
+      // правилом явного отсутствия (NTR-22): нулём её изобразить нельзя — ноль
+      // означал бы здоровый пустой канал.
+      backlog: transport === undefined ? BACKLOG_UNSUPPORTED : transportBacklog(transport),
       responseMs: counted.responseMs < 0 ? undefined : counted.responseMs,
     };
   }

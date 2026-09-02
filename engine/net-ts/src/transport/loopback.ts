@@ -11,7 +11,20 @@
  * 2. Байты копируются. Настоящий сокет сериализует их и отдаёт другой буфер;
  *    без копии тест не заметил бы, что кто-то держит ссылку на чужой массив.
  */
-import { BaseTransport, type Transport, type TransportServer } from './transport.js';
+import {
+  BaseTransport,
+  BACKLOG_UNSUPPORTED,
+  type Transport,
+  type TransportBacklog,
+  type TransportServer,
+} from './transport.js';
+
+/**
+ * Планировщик доставки. Второй аргумент — размер сообщения в байтах: каналу с
+ * ограниченной шириной он нужен, чтобы посчитать, сколько шагов сообщение
+ * занимает канал; планировщик без такой модели его игнорирует.
+ */
+export type LoopbackSchedule = (deliver: () => void, bytes: number) => void;
 
 export interface LoopbackOptions {
   /**
@@ -19,7 +32,7 @@ export interface LoopbackOptions {
    * задачи. Подмена нужна для искусственной задержки: `(deliver) =>
    * setTimeout(deliver, 40)` даёт канал с плечом, не трогая ни сервер, ни клиента.
    */
-  readonly schedule?: (deliver: () => void) => void;
+  readonly schedule?: LoopbackSchedule;
   /**
    * Планировщик доставки ОТ слушающей стороны к подключившейся. По умолчанию
    * тот же, что и в другую сторону: канал симметричен, пока не сказано иное.
@@ -29,20 +42,31 @@ export interface LoopbackOptions {
    * симметричная поломка, и по счётчикам NTR-11 это разные картины. Симметричный
    * канал такую разницу выразить не может вовсе.
    */
-  readonly scheduleBack?: (deliver: () => void) => void;
+  readonly scheduleBack?: LoopbackSchedule;
+  /**
+   * Задолженность отправки ОТ подключившейся стороны, байты (NTR-22): у самого
+   * лупбэка очереди нет, она есть у канала, который планирует доставку, и он же
+   * знает, сколько байт ещё не начали передачу. Без хука транспорт сообщает
+   * отсутствие очереди — как всякий канал, который её не показывает.
+   */
+  readonly backlog?: () => number;
+  /** Задолженность отправки ОТ слушающей стороны; по умолчанию — та же, что `backlog`. */
+  readonly backlogBack?: () => number;
 }
 
-const microtask = (deliver: () => void): void => {
+const microtask: LoopbackSchedule = (deliver) => {
   queueMicrotask(deliver);
 };
 
 class LoopbackTransport extends BaseTransport {
   peer: LoopbackTransport | undefined;
-  private readonly schedule: (deliver: () => void) => void;
+  private readonly schedule: LoopbackSchedule;
+  private readonly queued: (() => number) | undefined;
 
   constructor(options: LoopbackOptions) {
     super();
     this.schedule = options.schedule ?? microtask;
+    this.queued = options.backlog;
   }
 
   send(bytes: Uint8Array): void {
@@ -52,7 +76,11 @@ class LoopbackTransport extends BaseTransport {
     this.schedule(() => {
       if (peer === undefined || peer.isClosed) return;
       peer.receiveFromPeer(copy);
-    });
+    }, copy.byteLength);
+  }
+
+  override backlog(): TransportBacklog {
+    return this.queued === undefined ? BACKLOG_UNSUPPORTED : { kind: 'measured', bytes: this.queued() };
   }
 
   protected doClose(reason?: string): void {
@@ -60,7 +88,7 @@ class LoopbackTransport extends BaseTransport {
     if (peer === undefined) return;
     // Через планировщик, как и сообщения: закрытие — такое же событие канала, и
     // мгновенный разрыв прямо в `close()` дал бы порядок, которого в сети нет.
-    this.schedule(() => { peer.closedByPeer(reason); });
+    this.schedule(() => { peer.closedByPeer(reason); }, 0);
   }
 
   private receiveFromPeer(bytes: Uint8Array): void {
@@ -74,8 +102,12 @@ class LoopbackTransport extends BaseTransport {
  * `scheduleBack` достаётся первому.
  */
 export function loopbackPair(options: LoopbackOptions = {}): readonly [Transport, Transport] {
-  const back = options.scheduleBack;
-  const a = new LoopbackTransport(back === undefined ? options : { schedule: back });
+  const back = options.scheduleBack ?? options.schedule;
+  const queuedBack = options.backlogBack ?? options.backlog;
+  const a = new LoopbackTransport({
+    ...(back === undefined ? {} : { schedule: back }),
+    ...(queuedBack === undefined ? {} : { backlog: queuedBack }),
+  });
   const b = new LoopbackTransport(options);
   a.peer = b;
   b.peer = a;

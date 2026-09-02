@@ -40,6 +40,9 @@ const report = () => {
       predicted: 0,
       late: 0,
       snapshotBytes: 4096,
+      // Пропуски по очереди отправки (NTR-22): ненулевые, чтобы вид менеджера
+      // проверялся на величине, а не на нуле, который он показал бы и без поля.
+      snapshotsSkipped: 3,
     })),
     metrics: state.subscribed
       ? {

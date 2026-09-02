@@ -92,6 +92,11 @@ describe('счётчики хоста на живом матче (NTR-11)', () =
       expect(connection.bytes).toBeGreaterThanOrEqual(connection.snapshotBytes);
       // Лупбэк круг мерить не умеет и говорит это явно, а не нулём (NTR-11).
       expect(connection.rtt).toEqual({ kind: 'unsupported' });
+      // И очередь отправки — тоже: у лупбэка без планировщика сборки её нет, а
+      // ноль означал бы здоровый пустой канал (NTR-22).
+      expect(connection.backlog).toEqual({ kind: 'unsupported' });
+      // Канал очереди не показывает — пропускать нечего и не по чему.
+      expect(connection.snapshotsSkipped).toBe(0);
       // Серверная половина отклика измерена: кадры ввода приходили, снапшоты
       // уходили. Часы двигает тест, поэтому величина детерминирована.
       expect(connection.responseMs).toBe(0);
@@ -149,6 +154,9 @@ describe('счётчики хоста на живом матче (NTR-11)', () =
     // ровно тогда, когда админ пришёл разбираться.
     expect(gone?.bytes).toBeGreaterThan(0);
     expect(gone?.rtt).toEqual({ kind: 'unsupported' });
+    // Очереди у закрытого соединения нет по той же причине, что и круга:
+    // отсутствие называется явно, а не нулём (NTR-22).
+    expect(gone?.backlog).toEqual({ kind: 'unsupported' });
     await host.stop();
   });
 });

@@ -43,6 +43,8 @@ export interface StandSlotReport {
   readonly predicted: number;
   readonly late: number;
   readonly snapshotBytes: number;
+  /** Снапшоты, пропущенные рассылкой из-за очереди отправки соединения (NTR-22). */
+  readonly snapshotsSkipped: number;
 }
 
 /** Счётчики матча и процесса (NTR-11, решение D9); собираются только по подписке. */

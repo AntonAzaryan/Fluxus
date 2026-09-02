@@ -42,6 +42,23 @@ export const RTT_UNSUPPORTED: TransportRtt = { kind: 'unsupported' };
 /** Канал круг мерит, но первый замер ещё не завершился. */
 export const RTT_PENDING: TransportRtt = { kind: 'pending' };
 
+/**
+ * Задолженность отправки несущего канала (NTR-22, NTR-11): байты, принятые
+ * `send`, но ещё не переданные каналу, — либо названное отсутствие.
+ *
+ * Отсутствие названо по тому же основанию, что у круга: ноль — пустая очередь
+ * здорового канала, и «очереди не видно» с ним путать нельзя — хост по
+ * неизвестной очереди не пропускает ничего (NTR-22). `pending` здесь нет
+ * намеренно: очередь либо видна каналу, либо нет, «первого замера ещё не было»
+ * у неё не бывает.
+ */
+export type TransportBacklog =
+  | { readonly kind: 'measured'; readonly bytes: number }
+  | { readonly kind: 'unsupported' };
+
+/** Несущий канал очередь отправки не показывает: лупбэк без планировщика сборки, порт воркера. */
+export const BACKLOG_UNSUPPORTED: TransportBacklog = { kind: 'unsupported' };
+
 export interface Transport {
   send(bytes: Uint8Array): void;
   close(reason?: string): void;
@@ -60,6 +77,13 @@ export interface Transport {
    * набор закрыт), а метрика отклика от него не зависит (NTR-11).
    */
   readonly rtt?: () => TransportRtt;
+  /**
+   * Задолженность отправки несущего канала (NTR-22) — вторая необязательная
+   * наблюдаемая того же вида, что круг: транспорт без поля говорит то же, что
+   * `unsupported` (см. `transportBacklog`). По ней хост решает, пропускать ли
+   * очередной снапшот соединению; сообщением протокола она не является (NTR-4).
+   */
+  readonly backlog?: () => TransportBacklog;
 }
 
 /**
@@ -69,6 +93,11 @@ export interface Transport {
  */
 export function transportRtt(transport: Transport): TransportRtt {
   return transport.rtt?.() ?? RTT_UNSUPPORTED;
+}
+
+/** Задолженность отправки одним выражением — по тому же правилу, что круг (NTR-22). */
+export function transportBacklog(transport: Transport): TransportBacklog {
+  return transport.backlog?.() ?? BACKLOG_UNSUPPORTED;
 }
 
 export interface TransportServer {
@@ -110,6 +139,15 @@ export abstract class BaseTransport implements Transport {
    */
   rtt(): TransportRtt {
     return RTT_UNSUPPORTED;
+  }
+
+  /**
+   * Задолженность отправки (NTR-22). Умолчание — названное отсутствие, как у
+   * круга; реализация, у которой очередь видна (WebSocket — `bufferedAmount`,
+   * лупбэк с планировщиком сборки), метод переопределяет.
+   */
+  backlog(): TransportBacklog {
+    return BACKLOG_UNSUPPORTED;
   }
 
   close(reason?: string): void {

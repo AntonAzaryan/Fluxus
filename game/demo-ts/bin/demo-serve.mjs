@@ -650,7 +650,14 @@ async function runMatch(number) {
       if (connection === undefined) return undefined;
       const metrics = host.connectionMetrics(connection);
       if (metrics === undefined) return undefined;
-      return { snapshotBytes: metrics.snapshotBytes, rtt: metrics.rtt, responseMs: metrics.responseMs };
+      return {
+        snapshotBytes: metrics.snapshotBytes,
+        // Снапшоты, не ушедшие из-за очереди отправки (NTR-22): узкий канал
+        // виден админу этим счётчиком при здоровых круге и длительности тика.
+        snapshotsSkipped: metrics.snapshotsSkipped,
+        rtt: metrics.rtt,
+        responseMs: metrics.responseMs,
+      };
     },
     metrics: () => {
       const summary = host.report();
@@ -706,6 +713,17 @@ async function runMatch(number) {
 
   });
 
+  /**
+   * Снапшоты, не отправленные слоту из-за очереди отправки его соединения
+   * (NTR-22). Тире — живого соединения у слота нет: пропускать было нечего, и
+   * ноль тут соврал бы про здоровый канал.
+   */
+  const skippedOf = (slot) => {
+    const connection = server.slotLease(slot).connection;
+    if (connection === undefined) return '—';
+    return host.connectionMetrics(connection)?.snapshotsSkipped ?? '—';
+  };
+
   // Отчёт стенда — ЛИБО человеку, либо агенту, но не оба сразу: прогресс-строка
   // пишется без перевода строки (`\r`), и управляющая линия, приклеенная к её
   // хвосту, перестала бы читаться агентом как линия (риск дизайна «лог и
@@ -716,10 +734,10 @@ async function runMatch(number) {
       return;
     }
     const slots = server.metrics.slots
-      .map((slot, i) => `${match.players[i]}: ${slot.applied}/${slot.predicted}/${slot.late}`)
+      .map((slot, i) => `${match.players[i]}: ${slot.applied}/${slot.predicted}/${slot.late}/${skippedOf(i)}`)
       .join('  ');
     process.stdout.write(
-      `\rматч #${number} тик ${server.tick} [${server.phase}]  применено/предсказано/опоздало → ${slots}  ` +
+      `\rматч #${number} тик ${server.tick} [${server.phase}]  применено/предсказано/опоздало/пропущено → ${slots}  ` +
         `снапшотов ${server.metrics.snapshotsSent}, ${(server.metrics.bytesSent / 1024).toFixed(1)} КиБ   `,
     );
   }, 1000);
