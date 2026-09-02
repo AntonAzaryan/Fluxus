@@ -14,6 +14,15 @@
  * сравнивает МАТЧИ, а не задержки канала, поэтому контрольный ассерт сверяет
  * счётчики предсказанных кадров между прогонами — опоздай ввод в одном из них,
  * различие было бы названо счётчиком, а не выглядело бы загадочным диффом лога.
+ *
+ * Старт матча паузой не ждётся — ждётся ПО УСЛОВИЮ (`untilPlaying`). Над
+ * сокетом `Start` едет отдельной poll-фазой цикла событий, а просроченный
+ * таймер срабатывает в фазе timers раньше неё: под нагрузкой всего сьюта клиент
+ * делал первый шаг ещё не в `playing`, ввод на нём не уходил, и прогон над
+ * сокетом отличался от внутрипроцессного одним кадром — счётчик предсказанных
+ * называл `[5, 5]` против `[4, 4]`. Внутри цикла тот же порядок фаз безопасен:
+ * кадр потребляется через `inputDelay` итераций после отправки, и poll-фаза
+ * между ними наступает всегда.
  */
 import { describe, expect, it } from 'vitest';
 import { runScenario, snapshotToPlain, type InputFrame } from '@fluxus/core';
@@ -23,6 +32,7 @@ import {
   WebSocketRendezvous,
   contentPack,
   joinMatch,
+  type JoinedMatch,
   type MatchConfig,
   type Rendezvous,
 } from '@fluxus/net';
@@ -32,6 +42,25 @@ const TICKS = 24;
 
 /** Реальная пауза: сокету, в отличие от loopback, микротасков `settle()` мало. */
 const pause = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
+
+/** Предел ожидания старта: не темп матча, а страховка от зависшего теста. */
+const START_TIMEOUT_MS = 2000;
+
+/**
+ * Ждать, пока каждый клиент не получит `Start` и не перейдёт в `playing`.
+ * Условие вместо паузы: пауза измеряла бы не доставку, а совпадение фаз цикла
+ * событий (см. шапку), и под нагрузкой это совпадение не гарантировано.
+ */
+async function untilPlaying(clients: readonly JoinedMatch[]): Promise<void> {
+  const deadline = Date.now() + START_TIMEOUT_MS;
+  while (!clients.every((joined) => joined.client.phase === 'playing')) {
+    if (Date.now() > deadline) {
+      const phases = clients.map((joined) => joined.client.phase).join(', ');
+      throw new Error(`Start не доехал до клиентов за ${START_TIMEOUT_MS} мс: фазы ${phases}`);
+    }
+    await pause(1);
+  }
+}
 
 function clientOptions(playerId: string, config: MatchConfig) {
   const pack = contentPack({ duel: config.scene });
@@ -68,7 +97,7 @@ async function playDedicated(rendezvous: Rendezvous, config: MatchConfig): Promi
     client: clientOptions('p2', config),
     clientHost: { now: () => clock.ms, input: fuzzInput(config.seed, 'parity-p2', TICKS + 64) },
   });
-  await pause(5);
+  await untilPlaying([a, b]);
 
   for (let i = 0; i < TICKS; i++) {
     clock.ms += 1000 / TICK_RATE;
