@@ -31,6 +31,12 @@
  *   доставки): та же форма, стадия `extract`. Записанные матчи стадию эту
  *   меряют, но осью не являются — их состав фиксирован, и линейность экстракции
  *   по сущности видна только вторым размером.
+ * - На проводе сервера (PERF-12) — секция `wire` тех же `match-*.cost.json`, ПО
+ *   СЛОТУ: байты и число ушедших слоту персональных снапшотов приезжают отчётом
+ *   хоста (`netcode-transport` NTR-11), состав доставленного — применёнными
+ *   снапшотами и потоком событий клиента. Запись прогоняется тем же
+ *   loopback-стендом, которым она и записана (`MATCH_RECORDINGS`), а осью
+ *   провода служит число соединений одного матча — `wire-clients.cost.json`.
  *
  * Значения машинно-независимы по конструкции: ни времени, ни случайности, ни
  * GPU в них нет (PERF-3). Реальное время стережёт `bench.test.ts` — и только на
@@ -68,6 +74,7 @@ import {
   DSL_SCALE,
   NAV_PATH,
   NPC_STRESS,
+  WIRE_CLIENTS,
   abilityStressSizes,
   dslScaleSizes,
   loadNavPath,
@@ -82,9 +89,14 @@ import {
   npcStressSizes,
   playExtraction,
   playRecording,
+  playWire,
+  playWireClients,
   syntheticTick,
+  wireClientsSizes,
+  wireEventsSizes,
   type AxisSize,
   type BenchPresetName,
+  type WireRun,
 } from './benchLoad.js';
 
 const UPDATE = process.env.UPDATE_COST === '1';
@@ -221,6 +233,50 @@ function measureMatch(name: string): unknown {
   return { tick, extract, ...presets };
 }
 
+// ------------------------------------------------ стоимость провода (PERF-12)
+
+/**
+ * Секция `wire` документа записи: величины ПО СЛОТУ, ключи по алфавиту.
+ *
+ * По слоту, а не суммой (PERF-12): снапшоты слотов различаются фильтром
+ * видимости (NET-12), и рост одного слота при неизменном другом обязан быть
+ * отдельной строкой диффа — в сумме он утонул бы.
+ */
+function wireSection(run: WireRun): Record<string, StageCost> {
+  const section: Record<string, StageCost> = {};
+  for (const slot of Object.keys(run.slots).sort()) section[slot] = sorted(run.slots[slot]!);
+  return section;
+}
+
+/** Величины одного слота прогона; отсутствующий слот — отказ, а не пустая секция. */
+function wireSlot(run: WireRun, player: string): StageCost {
+  const cost = run.slots[player];
+  if (cost === undefined) throw new Error(`эталон провода: слота "${player}" в прогоне нет`);
+  return sorted(cost);
+}
+
+/** Сумма по всем слотам прогона — то, чем меряется ось числа клиентов (PERF-6). */
+function wireTotal(run: WireRun): StageCost {
+  const total: StageCost = {};
+  for (const cost of Object.values(run.slots)) {
+    for (const [name, value] of Object.entries(cost)) total[name] = (total[name] ?? 0) + value;
+  }
+  return sorted(total);
+}
+
+/**
+ * Полный документ записи: стадии конвейера (PERF-2) плюс секция провода
+ * (PERF-12). Провод приезжает отдельным прогоном ЖИВОГО матча, а не тем же
+ * прогоном записи, которым считаются стадии: байты провода снимаются на стороне
+ * хоста (NTR-11), а хост есть только у матча — прогон записи сетевого слоя не
+ * поднимает вовсе.
+ */
+async function measureMatchDocument(name: string): Promise<unknown> {
+  const stages = measureMatch(name) as Record<string, unknown>;
+  const wire = await playWire(name);
+  return { ...stages, wire: wireSection(wire) };
+}
+
 // -------------------------------------------------- оси масштабирования (PERF-6)
 //
 // Сами оси — общие данные двух гейтов (`benchAxes.ts`): гейт памяти (PERF-8)
@@ -316,8 +372,8 @@ describe('PERF-4: голден-гейт стоимости на записанн
   });
 
   for (const match of RECORDED_MATCHES) {
-    it(`${match}: счётчики стадий совпадают с эталоном`, () => {
-      checkGolden(`${match}.cost.json`, measureMatch(match));
+    it(`${match}: счётчики стадий совпадают с эталоном`, async () => {
+      checkGolden(`${match}.cost.json`, await measureMatchDocument(match));
     });
   }
 
@@ -721,16 +777,20 @@ function measureExtractSize(size: AxisSize): StageCost {
  * диффе одинаково у любой оси.
  *
  * Стадия у такой оси ОДНА и названа именем секции: у нагрузок симуляции это
- * `tick` (ни клиента, ни кадра у них нет), у нагрузки экстракции — `extract`.
- * Эталон в общем гейте затем, чтобы удорожание краснело диффом на ревью, а не
- * обнаруживалось на плейтесте; принятие удорожания — та же явная регенерация
- * `npm run golden:cost`.
+ * `tick` (ни клиента, ни кадра у них нет), у нагрузки экстракции — `extract`, у
+ * оси числа клиентов — `wire` (PERF-12). Эталон в общем гейте затем, чтобы
+ * удорожание краснело диффом на ревью, а не обнаруживалось на плейтесте;
+ * принятие удорожания — та же явная регенерация `npm run golden:cost`.
+ *
+ * Размер оси параметризован, а не назван `AxisSize`, потому что нагрузка оси
+ * описывается не всегда документом прогона: у оси провода размер — конфиг
+ * матча. Общее у всех размеров одно — величина оси, и ровно её тип и требует.
  */
-function axisDocument(
+function axisDocument<Size extends { readonly magnitude: number }>(
   axis: string,
-  stage: 'tick' | 'extract',
-  sizes: { readonly small: AxisSize; readonly large: AxisSize },
-  measure: (size: AxisSize) => StageCost,
+  stage: 'tick' | 'extract' | 'wire',
+  sizes: { readonly small: Size; readonly large: Size },
+  measure: (size: Size) => unknown,
 ): unknown {
   return {
     axis,
@@ -1158,11 +1218,285 @@ describe('PERF-2, PERF-6: эталон стоимости экстракции �
   });
 });
 
-describe('PERF-3: счётчики машинно-независимы', () => {
-  it('повторный прогон в одном процессе даёт побитово тот же документ', () => {
+// ------------------------------------------- провод сервера (PERF-12, PERF-6)
+
+/**
+ * Слот, чьи величины лежат в документе оси рядом с суммой. Именованной
+ * константой, а не литералом по месту: тот же слот читают проверки роста, и
+ * «сумма и слот» обязаны говорить об одном и том же соединении.
+ *
+ * Это слот ПЕРВОЙ команды нагрузки. Второй в документе нет намеренно: слоты
+ * одной команды у нагрузки совпадают до байта (это утверждает тест), а обе
+ * команды разом видны суммой — по слоту на каждую документ раздувал бы вдвое,
+ * ничего не добавляя к диффу.
+ */
+const AXIS_SLOT = 'p1';
+
+/**
+ * Документ оси «число соединений одного матча» (PERF-6, PERF-12): по размеру —
+ * сумма по всем слотам и тот же набор величин по слоту `p1`.
+ *
+ * Двумя наборами, а не одним: сумма отвечает на вопрос оси (растёт ли провод
+ * быстрее числа клиентов), слот — на вопрос «за чей счёт». Работа на слот
+ * растёт населённостью мира, а не числом слотов, и расхождение этих двух строк
+ * в диффе и есть то самое «клиенты × сущности», которое PERF-6 велит читать
+ * отношением L/S.
+ *
+ * Размеры меряются ДО построения документа: прогон провода асинхронен
+ * (loopback доставляет через микрозадачи, NTR-2), а форма документа у всех осей
+ * одна и синхронна — второй формы ради одной оси не заводится.
+ */
+async function measureWireClients(): Promise<unknown> {
+  const sizes = wireClientsSizes();
+  const runs = new Map<number, WireRun>();
+  for (const size of [sizes.small, sizes.large]) runs.set(size.magnitude, await playWireClients(size));
+  return axisDocument('clients', 'wire', sizes, (size) => {
+    const run = runs.get(size.magnitude)!;
+    return { [AXIS_SLOT]: wireSlot(run, AXIS_SLOT), total: wireTotal(run) };
+  });
+}
+
+/** Документ оси провода, разобранный на части, — вход проверок роста. */
+interface WireAxisDocument {
+  readonly axis: string;
+  readonly small: number;
+  readonly large: number;
+  readonly cost: {
+    readonly small: { readonly wire: Record<string, StageCost> };
+    readonly large: { readonly wire: Record<string, StageCost> };
+  };
+}
+
+describe('PERF-12: эталон стоимости провода на записанных матчах (CLI-10)', () => {
+  it('NTR-22: пропусков рассылки на loopback-стенде нет ни у одного соединения', async () => {
+    // Пропуск на стенде без очереди — дефект стенда, а не стоимость (PERF-12):
+    // потому это утверждение теста, а не поле эталона. Попади оно в эталон —
+    // пропуски принимались бы регенерацией наравне с байтами.
     for (const match of RECORDED_MATCHES) {
-      const first = measureMatch(match);
-      const second = measureMatch(match);
+      const run = await playWire(match);
+      for (const [slot, skipped] of Object.entries(run.skipped)) {
+        expect(skipped, `${match}/${slot}: пропущенные снапшоты`).toBe(0);
+      }
+    }
+  });
+
+  it('провод не мёртвый: снапшот на тик каждому слоту, и доставленное непусто', async () => {
+    for (const match of RECORDED_MATCHES) {
+      const def = loadRecording(match);
+      const { sink, total } = tickCostCollector();
+      playRecording(def, { diagnostics: sink });
+      const run = await playWire(match);
+      // Слотов у записи столько же, сколько игроков: молчаливо выродившийся до
+      // одного слота стенд дал бы эталон вдвое дешевле — и зелёный.
+      expect(Object.keys(run.slots).sort()).toEqual([...(def.players ?? [])].sort());
+      for (const [slot, cost] of Object.entries(run.slots)) {
+        const where = `${match}/${slot}`;
+        // Темп рассылки записей — снапшот на тик (`duelConfig`): равенство
+        // числа снапшотов числу тиков и есть проверка, что провод работал весь
+        // прогон, а не первые кадры.
+        expect(cost.snapshots, `${where}: снапшоты`).toBe(def.ticks);
+        // Две половины секции сходятся: сколько хост отправил (NTR-11), столько
+        // клиент и применил. Без этой строки состав доставленного в эталоне мог
+        // бы относиться к другому числу снапшотов, чем байты рядом с ним.
+        expect(run.applied[slot], `${where}: применённые снапшоты`).toBe(cost.snapshots);
+        expect(cost.snapshotBytes, `${where}: байты снапшотов`).toBeGreaterThan(0);
+        expect(cost.entitiesDelivered, `${where}: сущности`).toBeGreaterThan(0);
+        // Хендшейк (NTR-4) ушёл каждому соединению: ноль означал бы, что матч
+        // не начинался вовсе.
+        expect(cost.bytesOther, `${where}: байты помимо снапшотов`).toBeGreaterThan(0);
+        // Ноль доставленных фактов — не молчание стенда, а свойство записи:
+        // сцена дуэли событий не порождает вовсе, и это видно СВОДКОЙ ТИКА
+        // рядом. Начни запись их порождать — ноль здесь станет красным.
+        expect(cost.eventsDelivered > 0, `${where}: факты`).toBe(total.eventsEmitted! > 0);
+      }
+    }
+  });
+
+  it('PERF-12: доставленные факты — весь поток за прогон, а не хвост очереди', async () => {
+    // Записи набора событий не порождают вовсе, и счётчик фактов на них
+    // законно нулевой — то есть зелёный одинаково и когда он верен, и когда
+    // сломан. Отдельная нагрузка с публикацией на каждого героя каждый тик и
+    // существует затем, чтобы величина хоть раз была проверена НЕНУЛЕВОЙ.
+    //
+    // Считать факты по концу прогона нельзя: очередь фактов сливает каждый шаг
+    // клиентского хоста (NTR-15), и в ней остаются лишь пачки последнего шага.
+    // Равенство «доставлено = опубликовано» — проверка ровно этого: сойтись оно
+    // может только у счётчика, снимаемого по ходу матча.
+    const { publishing, silent } = wireEventsSizes();
+    const { sink, total } = tickCostCollector();
+    const run = await playWireClients(publishing, sink);
+    const quiet = await playWireClients(silent);
+    expect(total.eventsEmitted).toBeGreaterThan(0);
+    for (const [slot, cost] of Object.entries(run.slots)) {
+      // Тумана на сцене нет: каждый опубликованный факт видим обоим слотам
+      // (NET-13), и потому доставленное слоту равно опубликованному целиком.
+      expect(cost.eventsDelivered, `${slot}: факты`).toBe(total.eventsEmitted);
+      // Молчащий близнец нагрузки фактов не доставляет ни одного.
+      expect(wireSlot(quiet, slot).eventsDelivered, `${slot}: молчащая нагрузка`).toBe(0);
+      // Байты потока видны РАЗНОСТЬЮ, а не порогом: `bytesOther` несёт ещё и
+      // хендшейк, и «больше нуля» у него верно и без единого факта. Строгое
+      // превосходство над молчащим близнецом и означает, что поток на проводе.
+      expect(cost.bytesOther, `${slot}: байты потока`).toBeGreaterThan(
+        wireSlot(quiet, slot).bytesOther!,
+      );
+    }
+  });
+});
+
+describe('PERF-6, PERF-12: эталон стоимости провода на двух размерах числа клиентов', () => {
+  it('счётчики провода совпадают с эталоном', async () => {
+    checkGolden(`${WIRE_CLIENTS}.cost.json`, await measureWireClients());
+  });
+
+  it('PERF-6: всё, кроме расстановки героев по слотам, у размеров совпадает', () => {
+    const { small, large } = wireClientsSizes();
+
+    // Что именно эта проверка утверждает: размеры различаются числом слотов и
+    // порождённой им расстановкой — по герою на слот, — и БОЛЬШЕ ничем. Мир при
+    // этом населённостью не фиксирован и фиксирован быть не может: слот без
+    // своей сущности — не слот (NET-15, ему нечего показать в собственном
+    // снапшоте), и «число клиентов при неизменном населении» осью не бывает.
+    // Ровно поэтому сумма провода и растёт произведением, а не числом слотов.
+    //
+    // Сцена без расстановки — компоненты, prefab'ы, системы, ёмкость — совпадает
+    // целиком: ось не вправе двигать ни одну ДРУГУЮ величину.
+    expect({ ...small.config.scene, initial: [] }).toEqual({ ...large.config.scene, initial: [] });
+    // Темп рассылки, буфер задержки ввода и seed — те же: иначе отношение L/S
+    // мерило бы частоту снапшотов или длину прогона под видом числа клиентов.
+    expect(large.config.seed).toBe(small.config.seed);
+    expect(large.config.tickRate).toBe(small.config.tickRate);
+    expect(large.config.snapshotRate).toBe(small.config.snapshotRate);
+    expect(large.config.inputDelay).toBe(small.config.inputDelay);
+
+    // Расстановка равна величине оси: игроков, команд и героев ровно столько
+    // же, сколько соединений, — по одному на слот, ни одного лишнего.
+    for (const size of [small, large]) {
+      expect(size.config.players, `${size.magnitude}: игроки`).toHaveLength(size.magnitude);
+      expect(size.config.teams, `${size.magnitude}: команды`).toHaveLength(size.magnitude);
+      expect(size.config.initial, `${size.magnitude}: расстановка`).toHaveLength(size.magnitude);
+    }
+    // Малый размер — ПРЕФИКС большого запись в запись: ни имена игроков, ни
+    // позиции героев, ни раскладка команд у размеров не разъезжаются.
+    expect(large.config.players.slice(0, small.magnitude)).toEqual(small.config.players);
+    expect(large.config.teams!.slice(0, small.magnitude)).toEqual(small.config.teams);
+    expect(large.config.initial!.slice(0, small.magnitude)).toEqual(small.config.initial);
+  });
+
+  it('нагрузка не мёртвая: слоты команды симметричны, и величины провода непусты', async () => {
+    const sizes = wireClientsSizes();
+    for (const size of [sizes.small, sizes.large]) {
+      const run = await playWireClients(size);
+      expect(Object.keys(run.slots), `${size.magnitude}: слоты`).toHaveLength(size.magnitude);
+      const first = wireSlot(run, AXIS_SLOT);
+      expect(first.snapshotBytes, `${size.magnitude}: байты`).toBeGreaterThan(0);
+      expect(first.entitiesDelivered, `${size.magnitude}: сущности`).toBeGreaterThan(0);
+      for (const [slot, skipped] of Object.entries(run.skipped)) {
+        expect(skipped, `${size.magnitude}/${slot}: пропущенные снапшоты (NTR-22)`).toBe(0);
+      }
+      // Симметрия у нагрузки ПО КОМАНДЕ, а не по всем слотам: линии команд
+      // стоят напротив друг друга, и место в линии на видимость не влияет —
+      // свою команду сущность видит всегда (FOW-3), чужая за радиусом обзора.
+      // Расхождение слотов ОДНОЙ команды означало бы, что работа на слот стала
+      // зависеть от номера слота, то есть ось перестала двигать одну величину;
+      // расхождение команд между собой законно и ожидаемо — их снапшоты режет
+      // фильтр по разным точкам обзора (NET-12).
+      const teams = new Map<number, string[]>();
+      for (const [index, player] of size.config.players.entries()) {
+        const team = index % 2;
+        teams.set(team, [...(teams.get(team) ?? []), player]);
+      }
+      for (const [team, players] of teams) {
+        const head = wireSlot(run, players[0]!);
+        for (const player of players) {
+          expect(wireSlot(run, player), `${size.magnitude}/команда ${team}/${player}`).toEqual(head);
+        }
+      }
+    }
+  });
+
+  it('PERF-12: фильтр видимости ДЕЙСТВИТЕЛЬНО вырезает — слоту едет не весь мир', async () => {
+    // Без этой проверки ось мерила бы фильтр, которому нечего резать: на сцене
+    // без масок персональный снапшот равен полному миру, сценарий PERF-12
+    // «Фильтр перестал вырезать невидимое» становится пустым, а разложение по
+    // слотам — одним числом, записанным дважды.
+    //
+    // Населённость мира приезжает записью тика (`TICK_FOOTPRINT`, PERF-8), а не
+    // пересчётом расстановки в тесте: сравнивать доставленное надо с тем, что
+    // в мире ДЕЙСТВИТЕЛЬНО было, включая носителей сцены (TERR-6, ARENA-1).
+    for (const size of [wireClientsSizes().small, wireClientsSizes().large]) {
+      let alive = 0;
+      const sink: DiagnosticsSink = {
+        trace: 'systems',
+        record: (entry) => {
+          if (entry.code !== 'TICK_FOOTPRINT') return;
+          alive = Math.max(alive, Number(entry.data?.entitiesAlive ?? 0));
+        },
+      };
+      const run = await playWireClients(size, sink);
+      expect(alive, `${size.magnitude}: населённость мира`).toBeGreaterThan(size.magnitude);
+      for (const [slot, cost] of Object.entries(run.slots)) {
+        expect(
+          cost.entitiesDelivered,
+          `${size.magnitude}/${slot}: доставлено против полного мира`,
+        ).toBeLessThan(cost.snapshots * alive);
+      }
+    }
+  });
+
+  it('PERF-6: суммарный провод растёт БЫСТРЕЕ числа клиентов', async () => {
+    const document = (await measureWireClients()) as WireAxisDocument;
+    const small = document.cost.small.wire;
+    const large = document.cost.large.wire;
+    const clients = document.large / document.small;
+
+    // Прогон один по длине: снапшотов слоту поровну на обоих размерах — иначе
+    // отношение L/S мерило бы длину матча, а не число соединений.
+    expect(large[AXIS_SLOT]!.snapshots).toBe(small[AXIS_SLOT]!.snapshots);
+    expect(clients).toBeGreaterThan(1);
+    // Ради ЭТОЙ строки ось и заведена (PERF-6, сценарий «Провод растёт быстрее
+    // числа клиентов»): каждый добавленный клиент и сам получает снапшот, и
+    // попадает в снапшоты своей команды, поэтому суммарные величины растут
+    // произведением «клиенты × сущности», а не числом клиентов. По одному
+    // размеру этого не видно вовсе.
+    expect(large.total!.entitiesDelivered).toBeGreaterThan(
+      clients * small.total!.entitiesDelivered!,
+    );
+    expect(large.total!.snapshotBytes).toBeGreaterThan(clients * small.total!.snapshotBytes!);
+    // И медленнее квадрата. У сущностей строгое «<» держит ПОСТОЯННЫЙ член:
+    // носители сцены — террейн (TERR-6) и арена (ARENA-1) — едут каждому слоту в
+    // каждом снапшоте независимо от населённости, и с ними сумма N·(C + N/2)
+    // растёт медленнее N². Фильтр видимости (NET-12), вырезающий слоту чужую
+    // команду, сам по себе на границу не влияет — при C = 0 «половина прироста»
+    // даёт ровно N², — он лишь расширяет запас. Рост между линейным и
+    // квадратичным и есть то, что эталон обязан показывать числом.
+    expect(large.total!.entitiesDelivered).toBeLessThan(
+      clients * clients * small.total!.entitiesDelivered!,
+    );
+    // У байтов постоянный член свой: помимо носителей сцены у кадра есть часть,
+    // не зависящая от населённости вовсе, — номер тика, схема идентификаторов,
+    // машина состояний (NET-18).
+    expect(large.total!.snapshotBytes).toBeLessThan(clients * clients * small.total!.snapshotBytes!);
+    // А работа НА СЛОТ растёт населённостью мира, а не числом слотов: строка
+    // слота рядом с суммой и отличает «клиенты × сущности» от квадратичности
+    // внутри одного слота — там её нет и быть не должно.
+    expect(large[AXIS_SLOT]!.entitiesDelivered).toBeGreaterThan(
+      small[AXIS_SLOT]!.entitiesDelivered!,
+    );
+    expect(large[AXIS_SLOT]!.entitiesDelivered).toBeLessThan(
+      clients * small[AXIS_SLOT]!.entitiesDelivered!,
+    );
+  });
+});
+
+describe('PERF-3: счётчики машинно-независимы', () => {
+  it('повторный прогон в одном процессе даёт побитово тот же документ', async () => {
+    // Документ целиком, вместе с секцией провода (PERF-12): байты персональных
+    // снапшотов воспроизводимы ровно потому, что фильтр — чистая функция
+    // состояния и точки обзора, а кодек — чистая функция сообщения; ни времени,
+    // ни транспорта в них нет.
+    for (const match of RECORDED_MATCHES) {
+      const first = await measureMatchDocument(match);
+      const second = await measureMatchDocument(match);
       expect(second).toEqual(first);
       expect(canonical(second)).toBe(canonical(first));
     }
@@ -1184,5 +1518,11 @@ describe('PERF-3: счётчики машинно-независимы', () => {
     const first = measureNpcStress();
     expect(measureNpcStress()).toEqual(first);
     expect(canonical(measureNpcStress())).toBe(canonical(first));
+  });
+
+  it('ось числа клиентов повторяется так же (PERF-12) — на обоих размерах', async () => {
+    const first = await measureWireClients();
+    expect(await measureWireClients()).toEqual(first);
+    expect(canonical(await measureWireClients())).toBe(canonical(first));
   });
 });

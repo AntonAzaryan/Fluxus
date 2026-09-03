@@ -27,5 +27,10 @@
 
 - `engine/integration-ts/test/benchLoad.ts` — прогон записи через loopback-стенд (`playMatch` с теми же генераторами ввода, что `matchGolden.test.ts`) со сбором `HostReport.connections` и размеров доставленных снапшотов; сцена с N героями и N клиентами для оси `clients`.
 - `engine/integration-ts/test/cost.test.ts` — секция `wire` в `match-*.cost.json` по слотам, документ `wire-clients.cost.json` (два размера).
-- `engine/tests/golden/match-*.cost.json` — новая секция; `wire-clients.cost.json` — новый документ.
+- `engine/integration-ts/test/footprint.test.ts` — та же ось в линейке памяти (PERF-8): пики `TICK_FOOTPRINT` мира сервера на тех же двух размерах.
+- `engine/tests/golden/match-*.cost.json` — новая секция; `wire-clients.cost.json` и `wire-clients.footprint.json` — новые документы.
 - Документация: CLAUDE.md (абзац о `*.cost.json`), `docs/architecture.md`.
+
+### Побочная правка PERF-6: снятая ссылка на CONT-4
+
+Абзац PERF-6 «нагрузка оси — фикстура движка, а не контент» пришёл в эту дельту вместе с осью JSON-систем (change `dsl-cost-axis`) и нёс якорь-ссылку на CONT-4 капабилити `game-content`. Якорь снят: `spec-graph check` держит границу механизма и политики правилом `content-boundary` — спека движка ссылаться на `game-content` MUST NOT, — и с якорем гейт репозитория красный. Альтернатива у правила есть: принятое ребро в `scripts/spec-graph.layers.json` с обоснованием. Она не взята намеренно — предложение вправе снять ссылку, но не вправе ослабить границу ради собственного удобства, а фраза сохраняет смысл целиком и без якоря: «фикстура движка, а не контент: эталон движка краснеет от правки движка, а не от перенастройки числа дизайнером».

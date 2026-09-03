@@ -141,5 +141,21 @@
       "syncTickSubsystems": 128,
       "terrainChunksMarked": 32
     }
+  },
+  "wire": {
+    "p1": {
+      "bytesOther": 851,
+      "entitiesDelivered": 64,
+      "eventsDelivered": 0,
+      "snapshotBytes": 7588,
+      "snapshots": 16
+    },
+    "p2": {
+      "bytesOther": 851,
+      "entitiesDelivered": 64,
+      "eventsDelivered": 0,
+      "snapshotBytes": 7588,
+      "snapshots": 16
+    }
   }
 }

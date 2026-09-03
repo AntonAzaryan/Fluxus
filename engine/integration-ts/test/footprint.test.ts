@@ -11,9 +11,13 @@
  *   владельцу и виду и величинами состояния. Секции `tick` и `history` — по
  *   одной: симуляция пресета не знает (QUAL-2), и равенство между прогонами
  *   двух пресетов здесь проверяется, а не предполагается.
- * - На осях PERF-6 — те же шесть документов, что у стоимости: `scaling`
+ * - На осях PERF-6 — те же семь документов, что у стоимости: `scaling`
  *   (величины рендера на двух размерах каждой оси), `npc-stress`, `nav-path`,
- *   `ability-stress`, `dsl-scale` и `extract` (величины ядра на двух размерах).
+ *   `ability-stress`, `dsl-scale`, `extract` и `wire-clients` (величины ядра на
+ *   двух размерах). Ось числа клиентов держит эталон памяти по той же норме,
+ *   что и остальные (PERF-8: величины снимаются на ТЕХ ЖЕ нагрузках и по тем же
+ *   осям, что счётчики стоимости): провода как состояния не существует, но мир
+ *   сервера под N соединениями — существует, и растёт он вместе с осью.
  *
  * ## Почему отдельный документ, а не секция в `*.cost.json`
  *
@@ -48,6 +52,7 @@ import {
   NAV_PATH,
   NPC_STRESS,
   RECORDED_MATCHES,
+  WIRE_CLIENTS,
   abilityStressSizes,
   benchGrid,
   dslScaleSizes,
@@ -58,9 +63,12 @@ import {
   npcStressSizes,
   playExtraction,
   playRecording,
+  playWireClients,
   syntheticTick,
+  wireClientsSizes,
   type AxisSize,
   type BenchPresetName,
+  type WireSize,
 } from './benchLoad.js';
 import { SCALING_AXES, SCALING_EXTENT, benchFor, type ScalingSize } from './benchAxes.js';
 
@@ -298,10 +306,10 @@ function measureExtractSize(size: AxisSize): StateFootprint {
  * читается диффом одинаково у любой оси, и второй формы документа в репозитории
  * не заводится.
  */
-function axisDocument(
+function axisDocument<Size extends { readonly magnitude: number }>(
   axis: string,
-  sizes: { readonly small: AxisSize; readonly large: AxisSize },
-  measure: (size: AxisSize) => StateFootprint,
+  sizes: { readonly small: Size; readonly large: Size },
+  measure: (size: Size) => StateFootprint,
 ): unknown {
   return {
     axis,
@@ -350,6 +358,33 @@ function measureAbilityStress(): unknown {
  */
 function measureDslScale(): unknown {
   return axisDocument('dslEntities', dslScaleSizes(), measureTickSize);
+}
+
+/**
+ * Величины памяти на оси числа клиентов (PERF-6, PERF-8, PERF-12): та же
+ * нагрузка 2/8, на которой снимается стоимость провода, и тот же сток
+ * диагностики — только сток здесь уезжает СЕРВЕРНОМУ миру матча (`MatchConfig.
+ * trace`, DI-5), потому что тикает он.
+ *
+ * Провод состояния не держит и своей памяти не имеет — но мир, из которого он
+ * режет персональные снапшоты, держит: каждый слот приходит со своим героем, и
+ * населённость растёт вместе с осью. Ось стоимости без эталона памяти рядом
+ * была бы дырой ровно того размера, который PERF-8 закрывает нормой «величины
+ * снимаются на тех же нагрузках и по тем же осям, что счётчики стоимости».
+ *
+ * Размеры меряются ДО построения документа: прогон матча асинхронен (loopback
+ * доставляет через микрозадачи, NTR-2), а форма документа у всех осей одна и
+ * синхронна — второй формы ради одной оси не заводится.
+ */
+async function measureWireClients(): Promise<unknown> {
+  const sizes = wireClientsSizes();
+  const peaks = new Map<number, StateFootprint>();
+  for (const size of [sizes.small, sizes.large]) {
+    const { sink, total } = tickFootprintCollector();
+    await playWireClients(size, sink);
+    peaks.set(size.magnitude, sorted(total));
+  }
+  return axisDocument('clients', sizes, (size: WireSize) => peaks.get(size.magnitude)!);
 }
 
 // --------------------------------------------------------------- сверка эталона
@@ -457,6 +492,10 @@ describe('PERF-6: оси масштабирования — величины п�
     checkGolden('extract.footprint.json', measureExtract());
   });
 
+  it(`${WIRE_CLIENTS}.footprint.json: величины мира матча совпадают с эталоном`, async () => {
+    checkGolden(`${WIRE_CLIENTS}.footprint.json`, await measureWireClients());
+  });
+
   it('число сущностей: записи приёма доставки растут ровно отношением оси', () => {
     const axis = SCALING_AXES.find((item) => item.axis === 'entities')!;
     const small = measureScalingSize(axis.small) as { state: StateFootprint };
@@ -518,6 +557,27 @@ describe('PERF-6: оси масштабирования — величины п�
     expect(extract.footprint.small.tick.entitiesAlive).toBe(extract.small);
     expect(extract.footprint.large.tick.entitiesAlive).toBe(extract.large);
   });
+
+  it('ось числа клиентов: населённость растёт слотами, ёмкость мира — нет (PERF-12)', async () => {
+    const wire = (await measureWireClients()) as AxisDocument;
+    // Слот приходит со своим героем, и населённость мира сервера растёт РОВНО
+    // приростом оси — та самая вторая половина «клиенты × сущности», из-за
+    // которой суммарный провод растёт быстрее числа клиентов (PERF-6).
+    //
+    // Равенством величине оси населённость при этом не является, и это не
+    // огрех: сцена с туманом несёт носителей карты пола (TERR-6) и арены
+    // (ARENA-1) — обычные сущности мира, которых от числа слотов не прибавится.
+    // Проверяется поэтому ПРИРОСТ, а не уровень.
+    expect(wire.footprint.large.tick.entitiesAlive - wire.footprint.small.tick.entitiesAlive).toBe(
+      wire.large - wire.small,
+    );
+    expect(wire.footprint.small.tick.entitiesAlive).toBeGreaterThan(wire.small);
+    // Ёмкость хранилища задана сценой и у размеров ОДНА (PERF-8): подобранная
+    // под размер, она двигалась бы вместе с осью и мерила бы вторую величину.
+    expect(wire.footprint.large.tick.worldBytes).toBe(wire.footprint.small.tick.worldBytes);
+    // Тиков у размеров поровну: пик — это пик прогона, а не его длины.
+    expect(wire.footprint.large.tick.ticks).toBe(wire.footprint.small.tick.ticks);
+  });
 });
 
 describe('PERF-8: величины машинно-независимы', () => {
@@ -526,6 +586,11 @@ describe('PERF-8: величины машинно-независимы', () => {
       const first = measureMatch(match);
       expect(canonical(measureMatch(match))).toBe(canonical(first));
     }
+  });
+
+  it('ось числа клиентов повторяется так же (PERF-12) — на обоих размерах', async () => {
+    const first = canonical(await measureWireClients());
+    expect(canonical(await measureWireClients())).toBe(first);
   });
 
   it('оси повторяются так же', () => {

@@ -60,6 +60,7 @@ import {
   createTerrainGrid,
   fixed,
   tick,
+  world as coreWorld,
   type Action,
   type DiagnosticsSink,
   type EntityId,
@@ -76,6 +77,7 @@ import type {
   PresentationPostprocess,
   PresentationWater,
 } from '@fluxus/assets';
+import type { MatchConfig, MatchTrace, PresentedState } from '@fluxus/net';
 import {
   Extractor,
   FogSubsystem,
@@ -108,20 +110,103 @@ import {
   benchCurvature,
   benchManifest,
 } from './benchContent.js';
-import { PositionsSubsystem, TICK_RATE } from './fixtures.js';
+import {
+  PositionsSubsystem,
+  TICK_RATE,
+  connectClient,
+  duelConfig,
+  duelScene,
+  fogScene,
+  fuzzInput,
+  harness,
+  playMatch,
+  propScene,
+  settle,
+  walkRight,
+  type ConnectedClient,
+  type Harness,
+  type MatchStepObserver,
+  type PlayedMatch,
+} from './fixtures.js';
 
 /** Эталоны стоимости лежат рядом с парами матчей — там же, где вся golden-культура. */
 export const GOLDEN_DIR = join(dirname(fileURLToPath(import.meta.url)), '..', '..', 'tests', 'golden');
 
+/** Файл канонического лога записи (CLI-2, CLI-10): пара golden-набора зовётся именем записи. */
+export function recordingFile(name: string): string {
+  return `${name}.scenario.json`;
+}
+
+/**
+ * ОПРЕДЕЛЕНИЕ записанного матча (CLI-10): имя пары golden-набора и живой прогон,
+ * которым эта пара снимается, — генератор ввода, число тиков и конфиг вместе.
+ *
+ * Определение лежит здесь, а не в тесте записи, потому что стендов у записи
+ * ДВА: `matchGolden.test.ts` снимает ею канонический лог, а гейт стоимости
+ * провода (`performance-budget` PERF-12) прогоняет ту же запись ради байтов
+ * персональных снапшотов. Разойдись они генератором ввода или числом тиков —
+ * эталон провода мерил бы матч, которого в golden-наборе нет, и обе стороны
+ * при этом остались бы зелёными.
+ */
+export interface MatchRecording {
+  /** Имя записи — оно же имя пары файлов golden-набора. */
+  readonly name: string;
+  /** Живой прогон записи на loopback-стенде; наблюдатель итераций — по надобности. */
+  readonly play: (onStep?: MatchStepObserver) => Promise<PlayedMatch>;
+}
+
+/** Длина и seed фазз-записи: ввод предвычисляется с запасом на подстановку кадров. */
+const FUZZ_TICKS = 60;
+const FUZZ_SEED = 977;
+
+export const MATCH_RECORDINGS: readonly MatchRecording[] = [
+  {
+    // Движение одного игрока при молчащем втором: виден и ввод, и подстановка
+    // predicted-кадров молчащего слота (TICK-2) в каноническом логе.
+    name: 'match-walk',
+    play: (onStep) => playMatch(24, { a: walkRight(16) }, duelConfig({ name: 'match-walk' }), onStep),
+  },
+  {
+    // Seeded-фазз обоих слотов: пространство сценариев шире рукописного.
+    name: 'match-fuzz',
+    play: (onStep) =>
+      playMatch(
+        FUZZ_TICKS,
+        {
+          a: fuzzInput(FUZZ_SEED, 'record-p1', FUZZ_TICKS + 64),
+          b: fuzzInput(FUZZ_SEED, 'record-p2', FUZZ_TICKS + 64),
+        },
+        duelConfig({ name: 'match-fuzz', seed: FUZZ_SEED }),
+        onStep,
+      ),
+  },
+  {
+    // Сцена с непустой расстановкой (SER-7, SER-8): реквизит сцены занимает
+    // первые ID, герои матча идут за ним. Забытая в прологе `buildMatchWorld`
+    // расстановка сцены краснеет здесь и в паре ядра к этому сценарию (NTR-8).
+    name: 'match-props',
+    play: (onStep) =>
+      playMatch(16, { a: walkRight(12) }, duelConfig({ name: 'match-props', scene: propScene() }), onStep),
+  },
+];
+
 /**
  * Записанные матчи бенча — ровно те записи, что стережёт `matchGolden.test.ts`
- * (CLI-10). Список здесь именами, а не сценариями: нагрузка гейта стоимости
- * обязана быть той же самой записью, а не похожим на неё свежим матчем.
+ * (CLI-10). Список ВЫВОДИТСЯ из определений выше, а не выписывается рядом:
+ * нагрузка гейта стоимости обязана быть той же самой записью, а не похожим на
+ * неё свежим матчем.
  */
-export const RECORDED_MATCHES = ['match-walk', 'match-fuzz', 'match-props'] as const;
+export const RECORDED_MATCHES: readonly string[] = MATCH_RECORDINGS.map((recording) => recording.name);
+
+/** Определение записи по имени; неизвестное имя — отказ, а не молчаливый пропуск. */
+function recordingOf(name: string): MatchRecording {
+  const recording = MATCH_RECORDINGS.find((entry) => entry.name === name);
+  if (recording === undefined) throw new Error(`запись матча "${name}" не объявлена в MATCH_RECORDINGS`);
+  return recording;
+}
 
 export function loadRecording(name: string): ScenarioDef {
-  return JSON.parse(readFileSync(join(GOLDEN_DIR, `${name}.scenario.json`), 'utf8')) as ScenarioDef;
+  return JSON.parse(readFileSync(join(GOLDEN_DIR, recordingFile(name)), 'utf8')) as ScenarioDef;
 }
 
 /**
@@ -1775,4 +1860,367 @@ function dslSize(entities: number): AxisSize {
  */
 export function dslScaleSizes(): { readonly small: AxisSize; readonly large: AxisSize } {
   return { small: dslSize(64), large: dslSize(256) };
+}
+
+// --------------------------------------------- стоимость провода (PERF-12)
+//
+// Провод сервера — персональный снапшот каждому соединению после фильтра
+// видимости (`netcode` NET-12) и кодека (`netcode-transport` NTR-13). Стенд
+// здесь ОДИН на две нагрузки: записанные матчи (CLI-10) прогоняются тем же
+// `playMatch`, которым они и записаны, а ось числа клиентов поднимает такой же
+// loopback-матч на N соединений. Байты берутся из отчёта хоста (NTR-11), а не
+// повторным кодированием снапшота в тесте: второй кодек мерил бы себя (PERF-12).
+
+/** Имя документа оси провода. */
+export const WIRE_CLIENTS = 'wire-clients';
+
+/**
+ * Стоимость провода ОДНОГО слота (PERF-12). Источников у величин два:
+ * `snapshotBytes`, `snapshots` и `bytesOther` считает хост по соединению
+ * (NTR-11), `entitiesDelivered` и `eventsDelivered` — состав того, что клиент
+ * слота действительно принял. Поля перечислены по алфавиту — тем же порядком,
+ * каким они лягут в эталон.
+ *
+ * Наследование от плоского набора именованных счётчиков — то же, что у сводки
+ * тика: секция эталона обязана подставляться туда же, куда подставляются
+ * счётчики стадий, и проходить общую сортировку ключей.
+ */
+interface WireSlotCost extends Record<string, number> {
+  /**
+   * Байты соединения ПОМИМО персональных снапшотов: поток событий (NTR-15) и
+   * хендшейк (NTR-4). Хендшейк отчётом не выделяется и потому назван честно —
+   * это не «байты событий», а «байты всего остального»; он константен, и рост
+   * этой строки при неизменном числе соединений означает поток событий.
+   */
+  readonly bytesOther: number;
+  /** Сущности, попавшие в применённые слотом снапшоты, — размер выхода фильтра (NET-12). */
+  readonly entitiesDelivered: number;
+  /**
+   * Факты, доставленные слоту (NET-13, NTR-15). Считаются по потоку `Events`, а
+   * не по шине внутри снапшота: презентационная поверхность клиента шины не
+   * отдаёт вовсе (`PresentedState`), и единственный источник фактов для
+   * потребителя — этот поток.
+   */
+  readonly eventsDelivered: number;
+  /** Байты ушедших слоту персональных снапшотов (NTR-11). */
+  readonly snapshotBytes: number;
+  /** Число ушедших слоту персональных снапшотов (NTR-11). */
+  readonly snapshots: number;
+}
+
+/** Прогон провода: секции эталона по слоту и наблюдения стенда рядом с ними. */
+export interface WireRun {
+  /** Ключ — идентификатор игрока конфига матча (`p1`, `p2`, …). */
+  readonly slots: Readonly<Record<string, WireSlotCost>>;
+  /**
+   * Пропуски рассылки по слоту (NTR-22). В эталоне их нет и быть не должно:
+   * пропуск на стенде без очереди — дефект стенда, а не стоимость (PERF-12), и
+   * утверждает это тест.
+   */
+  readonly skipped: Readonly<Record<string, number>>;
+  /**
+   * Применённых слотом снапшотов — половина эталона, снятая на КЛИЕНТЕ, рядом с
+   * половиной, снятой на хосте (`snapshots`). Полем эталона не является: это
+   * сверка двух источников, а не стоимость.
+   */
+  readonly applied: Readonly<Record<string, number>>;
+}
+
+/**
+ * Состав ДОСТАВЛЕННОГО по слотам (PERF-12), считаемый по ходу матча.
+ *
+ * По ходу, а не по концу, и это не удобство, а единственная возможность —
+ * причём у обеих величин по своей причине. Снапшоты: буфер интерполяции держит
+ * последние, а не все (NET-3), и сумма после прогона складывалась бы из того,
+ * что уцелело. Факты: очередь фактов сливает КАЖДЫЙ шаг клиентского хоста
+ * (`ClientHost.step` → `takeEvents`, NTR-15), и к концу прогона в ней лежат
+ * только пачки последнего шага — «доставлено» пришлось бы считать по хвосту.
+ *
+ * Замер стоит между доставкой и следующим сливом: обе величины снимаются в
+ * конце итерации, когда доставка этого тика осела, а слив следующей итерации
+ * ещё не случился. Каждая пачка поэтому считается ровно один раз, повторы окон
+ * рассылки клиент отбрасывает сам курсором (NTR-15).
+ *
+ * Применённым считается снапшот, которого на прошлой итерации в `latest` не
+ * было: `latest` — ссылка на принятый кадр, и смена ссылки есть факт доставки.
+ */
+class DeliveredComposition {
+  private readonly last: (PresentedState | undefined)[];
+  private readonly entities: number[];
+  private readonly events: number[];
+  private readonly applied: number[];
+
+  constructor(slots: number) {
+    this.last = Array.from({ length: slots }, () => undefined);
+    this.entities = Array.from({ length: slots }, () => 0);
+    this.events = Array.from({ length: slots }, () => 0);
+    this.applied = Array.from({ length: slots }, () => 0);
+  }
+
+  /** Досчитывает слоты по итогу ИТЕРАЦИИ матча — доставка этого тика уже осела. */
+  observe(clients: readonly ConnectedClient[]): void {
+    for (const [slot, connected] of clients.entries()) {
+      // Факты считаются НЕЗАВИСИМО от смены состояния: единица потока — факт, а
+      // не кадр (NTR-15), и пачка вправе приехать к тику, состояние которого
+      // клиент уже держит.
+      for (const batch of connected.client.pendingEvents) {
+        this.events[slot] = this.events[slot]! + batch.events.length;
+      }
+      const latest = connected.client.latest;
+      if (latest === undefined || latest === this.last[slot]) continue;
+      this.last[slot] = latest;
+      this.applied[slot] = this.applied[slot]! + 1;
+      this.entities[slot] = this.entities[slot]! + coreWorld.listAlive(latest.world).length;
+    }
+  }
+
+  entitiesOf(slot: number): number {
+    return this.entities[slot]!;
+  }
+
+  eventsOf(slot: number): number {
+    return this.events[slot]!;
+  }
+
+  /** Применённых слотом снапшотов — вторая половина сверки с отчётом хоста. */
+  appliedOf(slot: number): number {
+    return this.applied[slot]!;
+  }
+}
+
+/**
+ * Сводит прогон в секции эталона: наблюдаемые хоста по соединению слота
+ * (NTR-11) плюс состав доставленного. Соединение слота берётся у сервера
+ * (`slotLease`), а не порядком подключения: слот назначается по имени игрока
+ * (`config.players.indexOf`), и порядок — не свойство провода.
+ */
+function wireRun(match: Harness, delivered: DeliveredComposition): WireRun {
+  const report = match.host.report();
+  const byConnection = new Map(report.connections.map((metrics) => [metrics.id, metrics]));
+  const slots: Record<string, WireSlotCost> = {};
+  const skipped: Record<string, number> = {};
+  const applied: Record<string, number> = {};
+  match.config.players.forEach((player, slot) => {
+    const connection = match.server.slotLease(slot).connection;
+    const metrics = connection === undefined ? undefined : byConnection.get(connection);
+    // Слот без живого соединения означает, что матч развалился на стенде:
+    // считать по нему нечего, и молчаливый ноль был бы эталоном пустоты.
+    if (metrics === undefined) {
+      throw new Error(`стенд провода: слот ${slot} ("${player}") не занят соединением к концу прогона`);
+    }
+    // Две половины секции приезжают с РАЗНЫХ сторон провода: байты и число
+    // ушедших снапшотов — с хоста (NTR-11), состав доставленного — с клиента.
+    // Сойтись они обязаны на общей величине: сколько хост отправил, столько
+    // клиент и применил. Расхождение означает, что одна из половин мерит не тот
+    // прогон, и состав доставленного в эталоне относится к другим байтам.
+    const applications = delivered.appliedOf(slot);
+    if (applications !== metrics.snapshots) {
+      throw new Error(
+        `стенд провода: слот ${slot} ("${player}") применил ${applications} снапшотов, ` +
+          `а хост отправил ${metrics.snapshots} (NTR-11)`,
+      );
+    }
+    slots[player] = {
+      bytesOther: metrics.bytes - metrics.snapshotBytes,
+      entitiesDelivered: delivered.entitiesOf(slot),
+      eventsDelivered: delivered.eventsOf(slot),
+      snapshotBytes: metrics.snapshotBytes,
+      snapshots: metrics.snapshots,
+    };
+    skipped[player] = metrics.snapshotsSkipped;
+    applied[player] = applications;
+  });
+  return { slots, skipped, applied };
+}
+
+/**
+ * Стоимость провода на ЗАПИСАННОМ матче (PERF-12): та же запись, тот же стенд,
+ * что у `matchGolden.test.ts`, — определение одно (`MATCH_RECORDINGS`).
+ */
+export async function playWire(name: string): Promise<WireRun> {
+  const recording = recordingOf(name);
+  // Слотов у стенда записи ровно два: `playMatch` поднимает клиентов `a` и `b`.
+  const delivered = new DeliveredComposition(2);
+  const match = await recording.play(({ a, b }) => {
+    delivered.observe([a, b]);
+  });
+  return wireRun(match, delivered);
+}
+
+// ------------------------------------- ось числа клиентов (PERF-6, PERF-12)
+
+/** Длина прогона оси — та же, что у записи `match-walk`: провод меряется, а не история. */
+const WIRE_TICKS = 24;
+/** Ввод оси — тот же непрерывный шаг вправо, одинаковый всем слотам. */
+const WIRE_WALK_UNTIL = 16;
+/**
+ * Ёмкость сцены оси: с запасом над большим размером и носителями сцены.
+ * Одна и та же у обоих размеров — иначе ось двигала бы заодно ёмкость мира,
+ * то есть вторую величину.
+ */
+const WIRE_CAPACITY = 32;
+/**
+ * Расстояние между линиями команд. БОЛЬШЕ радиуса обзора сцены (`fogScene`
+ * выдаёт герою `Vision` радиуса 1) — и это условие нагрузки, а не оформление:
+ * чужая команда обязана оставаться в тумане на ОБОИХ размерах, иначе фильтр
+ * ничего не вырезает и его отказ (сценарий PERF-12 «Фильтр перестал вырезать
+ * невидимое») эталон провода пройдёт зелёным.
+ */
+const WIRE_TEAM_GAP = 4;
+/**
+ * Шаг вдоль линии команды. На видимость он не влияет вовсе — свою команду
+ * сущность видит всегда (FOW-3, NET-15), — и нужен только затем, чтобы герои
+ * стояли врозь, а не друг в друге.
+ */
+const WIRE_ROW_STEP = 1;
+
+/** Один размер оси провода: число соединений матча и конфиг этого числа. */
+export interface WireSize {
+  /** Величина оси — число клиентов; героев в мире столько же (слот приходит со своим). */
+  readonly magnitude: number;
+  readonly config: MatchConfig;
+}
+
+/**
+ * Место героя слота: две линии команд напротив друг друга, по линии на команду,
+ * шаг вдоль линии — по номеру пары. Позиция есть чистая функция НОМЕРА СЛОТА,
+ * поэтому меньший размер оси — префикс большего запись в запись, и геометрия
+ * между размерами не разъезжается.
+ */
+function wireHeroAt(slot: number): { readonly x: number; readonly y: number } {
+  return {
+    x: fixed.fromInt((slot % 2) * WIRE_TEAM_GAP),
+    y: fixed.fromInt(Math.floor(slot / 2) * WIRE_ROW_STEP),
+  };
+}
+
+/**
+ * Конфиг матча на N слотов: арена дуэли С ТУМАНОМ (`fogScene`), N героев двумя
+ * линиями команд и N игроков, команды через одну. Всё, кроме числа слотов и
+ * порождённой им расстановки, совпадает у размеров запись в запись.
+ *
+ * Туман здесь — предмет замера, а не декорация: провод есть персональный
+ * снапшот ПОСЛЕ фильтра видимости (NET-12), и на сцене без масок фильтру нечего
+ * вырезать — он оставляет всем один и тот же мир, а эталон по слотам мерит одно
+ * число, записанное дважды. С туманом каждый слот получает свою команду и не
+ * получает чужую: линии стоят дальше радиуса обзора друг от друга, и снапшот
+ * слота ровно вдвое беднее мира.
+ */
+function wireClientsConfig(clients: number): MatchConfig {
+  return duelConfig({
+    name: `${WIRE_CLIENTS}-${clients}`,
+    scene: { ...fogScene(), capacity: WIRE_CAPACITY },
+    players: Array.from({ length: clients }, (_unused, slot) => `p${slot + 1}`),
+    // Точка зрения слота (NET-12) названа конфигом и обязана совпасть с командой
+    // его сущности в мире — иначе сборка матча откажет до первого тика.
+    teams: Array.from({ length: clients }, (_unused, slot) => slot % 2),
+    initial: Array.from({ length: clients }, (_unused, slot) => ({
+      prefab: 'Hero',
+      overrides: { Player: { slot }, Team: { id: slot % 2 }, Position: wireHeroAt(slot) },
+    })),
+  });
+}
+
+/**
+ * Два размера оси «число соединений одного матча» (PERF-6, PERF-12). Разрыв
+ * вчетверо, оба числа — в пределах продуктовых «до 10 игроков»: суммарные байты
+ * растут произведением «клиенты × сущности», и отношение L/S суммы против L/S
+ * оси (4) и есть то, ради чего ось заведена.
+ */
+export function wireClientsSizes(): { readonly small: WireSize; readonly large: WireSize } {
+  return {
+    small: { magnitude: 2, config: wireClientsConfig(2) },
+    large: { magnitude: 8, config: wireClientsConfig(8) },
+  };
+}
+
+/**
+ * Сток диагностики — СЕРВЕРНОМУ миру матча (DI-5): величины занятой памяти
+ * (PERF-8) и сводка стоимости тика снимаются с той стороны, которая тикает.
+ * Отметки ветви истории (DIAG-9) стенду не нужны — перемотки у него нет, — а
+ * отказов записи не бывает: сток тестовый, в файл не пишет.
+ */
+function benchTrace(sink: DiagnosticsSink): MatchTrace {
+  return { sink, mark: () => {}, failure: undefined };
+}
+
+/**
+ * Система-публикатор нагрузки фактов: событие на каждого героя каждый тик.
+ * Единственное, чем «говорящая» нагрузка отличается от «молчащей».
+ */
+const WIRE_PING_SYSTEM: SystemDef = {
+  name: 'Ping',
+  order: 20,
+  query: { all: ['Player'] },
+  as: 'e',
+  do: [{ emitEvent: { type: 'WirePing', data: { entity: { var: 'e' } } } }],
+};
+
+function wireEventsConfig(name: string, systems: readonly SystemDef[]): WireSize {
+  const scene = duelScene();
+  return {
+    magnitude: 2,
+    config: duelConfig({
+      name: `${WIRE_CLIENTS}-${name}`,
+      scene: { ...scene, systems: [...(scene.systems ?? []), ...systems] },
+    }),
+  };
+}
+
+/**
+ * ПАРА нагрузок провода, различающихся ровно публикацией фактов: дуэль на двух
+ * слотах с системой, публикующей событие на каждого героя каждый тик, и та же
+ * дуэль без неё.
+ *
+ * Заведена не ради эталона, а ради проверки счётчика `eventsDelivered`: на
+ * записанных матчах он законно ноль (события их сцены не порождают вовсе), и
+ * величина, которую ни одна нагрузка не двигает, зелёная одинаково и когда она
+ * верна, и когда сломана. Парой, а не одной нагрузкой, потому что байты потока
+ * фактов видны только РАЗНОСТЬЮ: `bytesOther` несёт ещё и хендшейк, и «больше
+ * нуля» у него верно и без единого факта.
+ *
+ * Тумана на этих сценах нет намеренно — в отличие от оси, где он предмет
+ * замера: здесь предмет — счёт фактов, и без фильтра событий (NET-13) каждый
+ * опубликованный факт видим обоим слотам, поэтому «доставлено» обязано сойтись
+ * с «опубликовано» точным равенством, а не неравенством.
+ */
+export function wireEventsSizes(): { readonly publishing: WireSize; readonly silent: WireSize } {
+  return {
+    publishing: wireEventsConfig('events', [WIRE_PING_SYSTEM]),
+    silent: wireEventsConfig('silent', []),
+  };
+}
+
+/**
+ * Прогон оси: loopback-матч на N клиентов с одинаковым вводом. Моста рендера у
+ * него нет намеренно — меряется провод, а не кадр, и восьмой презентационный
+ * тракт добавил бы к прогону работу, к проводу не относящуюся.
+ *
+ * Сток диагностики необязателен ровно по образцу прогона записи: гейту
+ * стоимости провода он не нужен (величины приезжают отчётом хоста), гейту
+ * памяти нужен — пики мира приезжают записью тика (PERF-8).
+ */
+export async function playWireClients(size: WireSize, diagnostics?: DiagnosticsSink): Promise<WireRun> {
+  const config =
+    diagnostics === undefined ? size.config : { ...size.config, trace: benchTrace(diagnostics) };
+  const build = {
+    ...(config.physics !== undefined ? { physics: config.physics } : {}),
+    ...(config.visibility !== undefined ? { visibility: config.visibility } : {}),
+  };
+  const fixture = harness(config);
+  const clients = config.players.map((player) =>
+    connectClient(fixture.hub, player, fixture.clock, config.scene, walkRight(WIRE_WALK_UNTIL), build),
+  );
+  const delivered = new DeliveredComposition(clients.length);
+  await settle();
+
+  for (let i = 0; i < WIRE_TICKS; i++) {
+    fixture.clock.ms += 1000 / TICK_RATE;
+    for (const connected of clients) connected.host.step();
+    await settle();
+    fixture.host.step();
+    await settle();
+    delivered.observe(clients);
+  }
+  return wireRun(fixture, delivered);
 }
