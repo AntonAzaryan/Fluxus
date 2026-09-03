@@ -9,7 +9,7 @@
  * должно: разошедшиеся тексты находок читаются автором как разные форматы.
  */
 import type { VisualTier } from './manifest.js';
-import { closedKeys, isFiniteNumber, isRecord, typeName } from './validation.js';
+import { HEX_COLOR_RE, closedKeys, isFiniteNumber, isRecord, typeName } from './validation.js';
 
 /** Запись «строка → строка» с непустыми значениями. */
 export function validateStringMap(v: unknown, path: string, what: string, errors: string[]): void {
@@ -91,4 +91,97 @@ export function validateLodThresholds(v: unknown, path: string, errors: string[]
     }
     previous = value;
   });
+}
+
+/** Поля `tint` записи — они же перечень допустимых ключей блока (ASSET-18). */
+const TINT_FIELDS = ['materials', 'byEvent'] as const;
+/** Поля одной вспышки тинта (ASSET-18). */
+const TINT_FLASH_FIELDS = ['color', 'strength', 'seconds'] as const;
+
+/**
+ * `tint` записи (ASSET-18, `rendering` REND-40): маска команд-цвета индексами
+ * материалов и таблица вспышек по событиям.
+ *
+ * Индексы проверяются на целость и неотрицательность, но НЕ на существование
+ * материала с таким номером: манифест валидируется без моделей (ASSET-4), и
+ * модель вправе доехать позже либо не доехать вовсе. Несуществующий индекс —
+ * находка рендера в момент разрешения записи, а не документа.
+ */
+export function validateVisualTint(v: unknown, path: string, errors: string[]): void {
+  if (!isRecord(v)) {
+    errors.push(`${path}: ожидался объект { materials?, byEvent? }, получено ${typeName(v)}`);
+    return;
+  }
+  closedKeys(v, path, TINT_FIELDS, errors);
+  if ('materials' in v) validateTintMask(v.materials, `${path}.materials`, errors);
+  if ('byEvent' in v) validateTintFlashes(v.byEvent, `${path}.byEvent`, errors);
+}
+
+/** Маска команд-цвета: индексы материалов модели (ASSET-18). */
+function validateTintMask(v: unknown, path: string, errors: string[]): void {
+  if (!Array.isArray(v)) {
+    errors.push(`${path}: ожидался массив индексов материалов модели, получено ${typeName(v)}`);
+    return;
+  }
+  v.forEach((value, i) => {
+    if (!isFiniteNumber(value) || value < 0 || !Number.isInteger(value)) {
+      errors.push(
+        `${path}[${i}]: ожидался неотрицательный целый индекс материала, получено ${typeName(value)}`,
+      );
+    }
+  });
+}
+
+/** Таблица «событие → вспышка» блока тинта (ASSET-18). */
+function validateTintFlashes(v: unknown, path: string, errors: string[]): void {
+  if (!isRecord(v)) {
+    errors.push(`${path}: ожидался объект «событие → вспышка», получено ${typeName(v)}`);
+    return;
+  }
+  for (const [event, flash] of Object.entries(v)) {
+    validateTintFlash(flash, `${path}.${event}`, errors);
+  }
+}
+
+function validateTintFlash(v: unknown, path: string, errors: string[]): void {
+  if (!isRecord(v)) {
+    errors.push(`${path}: ожидался объект { color, strength?, seconds }, получено ${typeName(v)}`);
+    return;
+  }
+  closedKeys(v, path, TINT_FLASH_FIELDS, errors);
+  if (typeof v.color !== 'string' || !HEX_COLOR_RE.test(v.color)) {
+    errors.push(
+      `${path}.color: обязательное поле — цвет формы "#rrggbb", получено ${typeName(v.color)}`,
+    );
+  }
+  if ('strength' in v && (!isFiniteNumber(v.strength) || v.strength < 0 || v.strength > 1)) {
+    errors.push(`${path}.strength: ожидалось число в [0..1], получено ${typeName(v.strength)}`);
+  }
+  if (!isFiniteNumber(v.seconds) || v.seconds <= 0) {
+    errors.push(
+      `${path}.seconds: обязательное поле — длительность вспышки в секундах больше нуля, получено ${typeName(v.seconds)}`,
+    );
+  }
+}
+
+/**
+ * `dissolve` записи (`rendering` REND-4): задержка и длительность растворения
+ * трупа. Длительность обязательна и положительна — блок с нулевой
+ * длительностью означал бы «раствориться мгновенно», а это не растворение, и
+ * писать его так автор не должен.
+ */
+export function validateVisualDissolve(v: unknown, path: string, errors: string[]): void {
+  if (!isRecord(v)) {
+    errors.push(`${path}: ожидался объект { delay?, duration }, получено ${typeName(v)}`);
+    return;
+  }
+  closedKeys(v, path, ['delay', 'duration'], errors);
+  if ('delay' in v && (!isFiniteNumber(v.delay) || v.delay < 0)) {
+    errors.push(`${path}.delay: ожидалось неотрицательное число секунд`);
+  }
+  if (!isFiniteNumber(v.duration) || v.duration <= 0) {
+    errors.push(
+      `${path}.duration: обязательное поле — длительность растворения в секундах больше нуля, получено ${typeName(v.duration)}`,
+    );
+  }
 }

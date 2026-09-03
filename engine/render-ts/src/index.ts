@@ -214,6 +214,8 @@ export { ModelsSubsystem, type ModelsOptions } from './subsystems/models.js';
 export type { ModelsPrewarm } from './subsystems/models/prewarm.js';
 export type { NodePose } from './subsystems/models/nodePose.js';
 export { ANIMATION_STATES, type InstancePose, type ModelInstanceView } from './subsystems/models/instanceRecord.js';
+// Канал тинта инстанса (REND-40): вход порта «цвет на сущность».
+export type { InstanceTintInput } from './subsystems/models/instanceTint.js';
 
 // Подсистема тумана войны (FOW-7, FOW-9, FOW-10): маска видимости команды
 // игрока, конфигурация картинки данными и полноэкранный пост-проход затемнения.

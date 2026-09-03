@@ -43,6 +43,7 @@ import type { VatMaterial } from '../../model/vatMaterial.js';
 import type { NormalizedModel } from '@fluxus/assets';
 import type { TiltVector } from '../../model/surfaceAlign.js';
 import type { SurfaceNormal } from '../../visualSurface.js';
+import type { InstanceTint, ResolvedFlash } from './instanceTint.js';
 
 /**
  * Видимая поза инстанса (REND-3): преобразование, которым он нарисован в этом
@@ -91,6 +92,13 @@ export interface ModelInstanceView {
   readonly pose: InstancePose;
   /** Габариты в осях инстанса; null — нарисованного нет, попадать не во что. */
   readonly bounds: ModelBounds | null;
+  /**
+   * Авторская высота мирового якоря над позой (ASSET-6, REND-41); `null` —
+   * запись её не называет, и якорь берёт верх габаритов. Отдаётся сырым числом
+   * записи, а не готовой точкой: чей якорь и на какой высоте — политика
+   * потребителя (REND-41), рендер лишь доносит до него авторское число.
+   */
+  readonly anchorHeight: number | null;
 }
 
 /**
@@ -543,6 +551,40 @@ export interface InstanceRecord {
    */
   seatZ: number;
   readonly seatNormal: SurfaceNormal;
+  /**
+   * Канал тинта инстанса (REND-40): база порта, вспышка события и их сведение.
+   * Объект заводится вместе с записью и переиспользуется — кадр переписывает в
+   * нём числа (REND-26).
+   */
+  readonly tint: InstanceTint;
+  /**
+   * Маска команд-цвета — индексы материалов модели (ASSET-18); `null` — тинт на
+   * весь инстанс. Раскладывается из записи манифеста в точке её приёма
+   * (`applyEntryParams`), а не в кадре.
+   */
+  tintMask: readonly number[] | null;
+  /** Таблица «событие → вспышка» записи (ASSET-18); null — вспышек у записи нет. */
+  tintFlashes: ReadonlyMap<string, ResolvedFlash> | null;
+  /**
+   * Доля целостности трупа [0, 1] (REND-4): единица — инстанс цел, ноль —
+   * растворился. Отдельно от `fade`, потому что каналов ДВА и они независимы:
+   * `fade` говорит «сущность ушла из обзора» (FOW-8), растворение — «труп
+   * убран из кадра»; труп вправе уйти в туман посреди растворения, и умножение
+   * долей — единственное, что честно рисует оба.
+   */
+  dissolve: number;
+  /** Секунды до начала растворения; счёт идёт от фиксации смерти (REND-4). */
+  dissolveHeld: number;
+  /**
+   * Растворение доиграно и построенное из ассета снято: сущность в доставке
+   * ещё есть (сцена снимает `Dead` своим временем), а в кадре её уже нет.
+   * Возвращается монтированием — возрождением, разрывом непрерывности либо
+   * возвратом из тумана.
+   */
+  dissolved: boolean;
+  /** Задержка и длительность растворения записи (ASSET-6); 0 — записи блока нет. */
+  dissolveDelay: number;
+  dissolveDuration: number;
   /** Публичный вид инстанса; строится лениво и живёт с инстансом (REND-17). */
   publicView: ModelInstanceView | null;
 }
@@ -762,6 +804,7 @@ export function viewOf(record: InstanceRecord): ModelInstanceView {
     get lodLevel(): number { return record.lodLevel; },
     pose,
     get bounds(): ModelBounds | null { return boundsOf(record); },
+    get anchorHeight(): number | null { return record.visual?.anchorHeight ?? null; },
   };
 }
 
@@ -790,7 +833,28 @@ export function rebuildsInstance(
   // таблица анимаций оставила бы декорацию в статическом батче, и её тень
   // запеклась бы в кэшированную карту в позе покоя (REND-8).
   if (decoration && animatedVisual(before) !== animatedVisual(after)) return true;
+  // Маска команд-цвета скомпилирована в материалы батча (REND-40, ASSET-18) —
+  // тем же порядком, что и ярус кастера: правкой построенного её не сменить, и
+  // без пересборки автор увидел бы прежнюю программу до перезагрузки сцены
+  // (ED-15).
+  if (tintMaskToken(before) !== tintMaskToken(after)) return true;
   return !samePartSets(before?.hiddenParts, after?.hiddenParts);
+}
+
+/**
+ * Маска тинта записи как СЛАГАЕМОЕ КЛЮЧА (REND-40, ASSET-18): она входит и в
+ * ключ батча, и в решение о пересборке инстанса, и написана поэтому один раз —
+ * разойдись эти два прочтения, инстанс попал бы в батч, чьи материалы читают
+ * не тот канал, что его собственные.
+ *
+ * Записи без блока и записи с пустой маской дают ОДИН токен намеренно: тинта
+ * нет ни у той, ни у другой, программа материала у них одна, и делить батч им
+ * ничто не мешает.
+ */
+export function tintMaskToken(visual: EntityVisual | undefined): string {
+  const mask = visual?.tint?.materials;
+  if (visual?.tint === undefined) return '';
+  return mask === undefined ? 'all' : [...mask].sort((a, b) => a - b).join(',');
 }
 
 /** Один и тот же набор скрытых частей (ASSET-6); порядок и отсутствие — не различия. */

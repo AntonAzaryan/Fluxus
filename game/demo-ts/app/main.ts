@@ -101,6 +101,7 @@ import {
   TICK_SECONDS,
 } from './sim.js';
 import { createStealthTint, type StealthTint } from './stealthTint.js';
+import { createTeamTint, type TeamTint } from './teamTint.js';
 import { attachBenchProbe, benchRequested, type BenchProbe, type BenchProbeHost } from './benchProbe.js';
 import {
   attachDebugGlobal,
@@ -650,6 +651,13 @@ let spectateEntity: EntityId | null = null;
 let stealthTint: StealthTint | null = null;
 
 /**
+ * Цвет команды на инстансах (REND-40): доставленный стат `team` через документ
+ * палитры этого приложения (`teamTint.ts`). Механизм — порт «цвет на сущность»
+ * рендера, политика — палитра; ни того, ни другого главный поток не трактует.
+ */
+let teamTint: TeamTint | null = null;
+
+/**
  * Имена статов слотов, доставляемых превью (HUD-8). Список тот же, по которому
  * `extractor.ts` объявляет источники: разойдись они — превью читало бы имена,
  * которых в кадре нет, и молча не рисовало бы ничего.
@@ -1071,6 +1079,10 @@ function cameraFrame(dtSec: number): void {
  */
 function presentFrame(now: number): void {
   remote?.frame(now);
+  // Цвет команды — ДО стелса: они пишут разные поля одних материалов (цвет и
+  // непрозрачность), и порядок между ними значения не имеет, но порядок
+  // «сначала кто ты, потом видно ли тебя» читается как надо.
+  teamTint?.update();
   stealthTint?.update();
   // Отладочный слой ведёт себя сам: доставленное состояние и кадровые величины
   // он получает своей точкой у сцены (REND-27) — сразу после подсистем, то есть
@@ -1455,6 +1467,12 @@ async function main(): Promise<void> {
     instanceFor: (entity) => models?.instanceFor(entity) ?? null,
     heroId: () => heroId,
     ...(presentation?.stealth === undefined ? {} : { stealth: presentation.stealth }),
+  });
+  // Цвет команды (REND-40): тот же кадровый вход, что у стелса, и та же
+  // граница — доставленное состояние плюс порт рендера, без канала в мир.
+  teamTint = createTeamTint({
+    entities: () => remote?.view?.entities,
+    setTint: (entity, tint) => models?.setTint(entity, tint) ?? false,
   });
   // Каталог определений сцены — первый шов превью (REND-28, design Decision 11):
   // клиент резолвит сцену локально, и таблица строится ТОЙ ЖЕ

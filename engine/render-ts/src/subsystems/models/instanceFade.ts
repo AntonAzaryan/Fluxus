@@ -39,6 +39,46 @@ export function advanceFade(record: InstanceRecord, settle: number, fadeSeconds:
   }
 }
 
+/**
+ * Ход растворения трупа (`rendering` REND-4): задержка после фиксации смерти,
+ * затем спад целостности до нуля. Модуль часов — по тем же основаниям, что у
+ * угасания: направления у растворения нет, и обратный ход мира не собирает труп
+ * обратно (собирает его снятая фиксация смерти, а не знак `dt`).
+ *
+ * Записи без блока `dissolve` (ASSET-6) канал не касается вовсе: целостность у
+ * неё единица всегда, и труп лежит, пока его не снимет сцена, — прежнее
+ * поведение.
+ */
+export function advanceDissolve(record: InstanceRecord, settle: number): void {
+  if (record.dissolveDuration <= 0 || !record.deathLock) {
+    // Сущность не мертва (либо перестала быть): труп собирается обратно
+    // МГНОВЕННО, а не обратным ходом растворения — возрождение это возвращение
+    // в бой, а не перемотка похорон.
+    record.dissolve = 1;
+    record.dissolveHeld = record.dissolveDelay;
+    return;
+  }
+  if (record.dissolveHeld > 0) {
+    record.dissolveHeld = Math.max(0, record.dissolveHeld - settle);
+    return;
+  }
+  record.dissolve = Math.max(0, record.dissolve - settle / record.dissolveDuration);
+}
+
+/**
+ * Доля, которой инстанс НАРИСОВАН в этом кадре: проявленность обзора (FOW-8) и
+ * целостность трупа (REND-4) — независимые каналы одной прозрачности, и оба
+ * действуют разом. Произведение, а не минимум: труп, растворившийся наполовину
+ * и одновременно ушедший в туман наполовину, обязан быть бледнее каждого из них
+ * по отдельности.
+ *
+ * Один ответ на оба яруса (REND-20): держатель детального яруса красит этой
+ * долей свои fade-копии, батч везёт её пер-инстансным атрибутом альфы.
+ */
+export function drawnFade(record: InstanceRecord): number {
+  return record.fade * record.dissolve;
+}
+
 /** Материалы меша списком — у three они бывают и одиночными, и массивом. */
 function materialsOf(material: THREE.Material | THREE.Material[]): readonly THREE.Material[] {
   return Array.isArray(material) ? material : [material];
@@ -103,7 +143,8 @@ export class FadeClonePool {
    * обзора — тот самый всплеск, ради которого заведён и прогрев (`prewarm`).
    */
   applyToHolder(record: InstanceRecord): void {
-    if (record.fade >= 1) {
+    const fade = drawnFade(record);
+    if (fade >= 1) {
       this.clear(record);
       return;
     }
@@ -115,9 +156,9 @@ export class FadeClonePool {
       // на каждый меш и каждый кадр угасания.
       const material = target.mesh.material;
       if (Array.isArray(material)) {
-        for (const clone of material) applyFadeOpacity(clone, record.fade);
+        for (const clone of material) applyFadeOpacity(clone, fade);
       } else {
-        applyFadeOpacity(material, record.fade);
+        applyFadeOpacity(material, fade);
       }
     }
   }

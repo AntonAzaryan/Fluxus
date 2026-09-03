@@ -10,6 +10,7 @@ import type { BakedDerivatives } from '@fluxus/assets';
 import { VatAnimationBackend } from '../../../model/vatAnimation.js';
 import type { ModelBounds } from '../../../model/build.js';
 import { screenSize } from '../instanceCull.js';
+import { drawnFade } from '../instanceFade.js';
 import {
   applyAnimation,
   type BatchEntry,
@@ -74,7 +75,17 @@ const BATCHED_CARRIER: InstanceCarrier = {
     SCRATCH_SCALE.setScalar(drawScale * entry.normalized);
     SCRATCH_MATRIX.compose(record.pos, record.quat, SCRATCH_SCALE);
     entry.batch.setMatrix(record.slot, SCRATCH_MATRIX);
-    entry.batch.setFade(record.slot, record.fade);
+    entry.batch.setFade(record.slot, drawnFade(record));
+    // Тинт (REND-40) — тем же пер-инстансным путём, что и доля проявленности:
+    // маска команд-цвета скомпилирована в материалы батча (ASSET-18), и запись
+    // отдаёт ему только цвет и силу. Запись без блока тинта канала не имеет —
+    // её материалы его не читают, и писать в атрибут четыре числа на инстанс на
+    // кадр было бы платой ни за что.
+    const mask = record.tintMask;
+    if (mask === null || mask.length > 0) {
+      const tint = record.tint;
+      entry.batch.setTint(record.slot, tint.r, tint.g, tint.b, tint.strength);
+    }
     const vat = record.vat;
     if (vat !== null) {
       entry.batch.setPose(record.slot, vat.rowA, vat.rowB, vat.blend, record.skinIndex);

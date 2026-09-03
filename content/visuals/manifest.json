@@ -46,7 +46,14 @@
         "maneuverArc": 0.25,
         "fallSpeed": 15,
         "fallDepth": 75
-      }
+      },
+      "tint": {
+        "byEvent": {
+          "HeroHit": { "color": "#ff6a4a", "strength": 0.85, "seconds": 0.18 }
+        }
+      },
+      "dissolve": { "delay": 1.2, "duration": 1.6 },
+      "anchorHeight": 2.1
     },
     "Boss": {
       "model": "visuals/models/SkeletonBarbarian.mdx",
@@ -102,7 +109,14 @@
         "maneuverArc": 0.25,
         "fallSpeed": 15,
         "fallDepth": 75
-      }
+      },
+      "tint": {
+        "byEvent": {
+          "HeroHit": { "color": "#ff6a4a", "strength": 0.85, "seconds": 0.18 }
+        }
+      },
+      "dissolve": { "delay": 2.0, "duration": 2.4 },
+      "anchorHeight": 2.4
     },
     "BossMinion": {
       "model": "visuals/models/SkeletonBarbarian.mdx",
@@ -137,7 +151,14 @@
         "maneuverArc": 0.25,
         "fallSpeed": 15,
         "fallDepth": 75
-      }
+      },
+      "tint": {
+        "byEvent": {
+          "HeroHit": { "color": "#ff6a4a", "strength": 0.85, "seconds": 0.18 }
+        }
+      },
+      "dissolve": { "delay": 0.6, "duration": 1.0 },
+      "anchorHeight": 2.1
     }
   },
   "decorations": {
