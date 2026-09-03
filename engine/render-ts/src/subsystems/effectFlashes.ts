@@ -80,6 +80,12 @@ export interface FlashHooks {
   surface(): VisualSurface | null;
   /** Вершины фигуры, переписанные вспышкой, — в счёт кадра владельца (PERF-3). */
   countVertices(vertices: number): void;
+  /**
+   * Видна ли наземная фигура в этом кадре (REND-43): отсечённая вершин не
+   * переписывает. Хуком владельца, потому что пирамида кадра принадлежит
+   * подсистеме — у набора вспышек камеры нет и знать о ней ему нечего.
+   */
+  shapeVisible(record: VisualEffect, x: number, y: number, z: number, scale: number): boolean;
   readonly warnOnce: WarnOnce;
   /** Шаг симуляционного тика — знаменатель возраста события (SHELL-4). */
   readonly tickSeconds: number;
@@ -203,16 +209,32 @@ export class FlashSet {
       node.mesh.scale.setScalar(size);
       return;
     }
-    this.hooks.countVertices(shape.vertices);
-    const surface = this.hooks.surface();
     // Множитель, а не радиус: у полосы и луча размер живёт в длине и ширине, и
     // фаза обязана вести их тем же числом, что радиус круга.
     const own = radiusOf(record);
     const scale = own > 0 ? size / own : 1;
     if (isGroundPrimitive(record.primitive)) {
-      drawGround(shape, record, surface, flash.x, flash.y, flash.yaw, scale, flash.base);
+      if (!this.hooks.shapeVisible(record, flash.x, flash.y, flash.base, scale)) {
+        // За кромкой кадра: вершины не переписываются, а жизнь вспышки идёт
+        // своим ходом — вернувшись в кадр, она продолжится с той же фазы.
+        node.mesh.visible = false;
+        return;
+      }
+      node.mesh.visible = true;
+      this.hooks.countVertices(shape.vertices);
+      drawGround(
+        shape,
+        record,
+        this.hooks.surface(),
+        flash.x,
+        flash.y,
+        flash.yaw,
+        scale,
+        flash.base,
+      );
       return;
     }
+    this.hooks.countVertices(shape.vertices);
     const lift = record.height ?? 0;
     drawBeam(shape, record, flash.x, flash.y, flash.base + lift, flash.x2, flash.y2, flash.base2 + lift);
   }

@@ -186,9 +186,22 @@ export function stepShells(
   delta: number,
   warnOnce: WarnOnce,
   cost: RenderCostCounters | undefined,
+  cull: EmitterCull | undefined,
 ): void {
   for (const shell of shells) {
+    // Эмиттер, которого игрок не видит, кадру не стоит НИЧЕГО (REND-24, QUAL-3): батчи
+    // библиотеки объявлены `frustumCulled = false`, и без этой проверки факел
+    // за кромкой экрана симулировался бы каждый кадр наравне с горящим в поле
+    // зрения. Приостановка не гасит ни одной частицы: экземпляр просто не
+    // шагается, и вернувшись в кадр продолжает с того же места.
+    if (cull !== undefined && !cull(shell)) {
+      if (cost !== undefined) cost.particlesShellsCulled++;
+      continue;
+    }
     if (cost !== undefined) cost.particlesSystemsStepped += shell.instance.systems.length;
     stepInstance(shell.instance, shell.decoration ? delta : delta * shell.view.timeScale, warnOnce);
   }
 }
+
+/** Видна ли оболочка в этом кадре; `undefined` у владельца — отсечения нет. */
+export type EmitterCull = (shell: EmitterShell) => boolean;

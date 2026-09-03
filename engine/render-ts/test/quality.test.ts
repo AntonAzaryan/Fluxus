@@ -864,11 +864,8 @@ describe('terrain.curvatureTessellation — потолок разбиения (R
 // ------------------------------ 2.3: объявления константной стоимости
 
 describe('константная стоимость объявляется явно (QUAL-3)', () => {
-  it('подсистемы эффектов и наложений объявляют её причиной, а ручек не заводят', () => {
-    for (const subsystem of [
-      new EffectsSubsystem({ entities: {} }, { warn: () => {} }),
-      new OverlaySubsystem(),
-    ] as RenderSubsystem[]) {
+  it('подсистема наложений объявляет её причиной, а ручек не заводит', () => {
+    for (const subsystem of [new OverlaySubsystem()] as RenderSubsystem[]) {
       const declaration = subsystem.quality!();
       expect(declaration.subsystem).toBe(subsystem.name);
       expect(declaration.knobs).toEqual([]);
@@ -876,13 +873,26 @@ describe('константная стоимость объявляется яв�
     }
   });
 
+  it('подсистема эффектов завела рычаг вместо константности: наземная фигура растёт с контентом', () => {
+    // Пока эффекты были сферами, их стоимость и правда была константной. С
+    // наземной фигурой (REND-43) она растёт с поперечником зоны и дробностью
+    // поля — покадровая работа, растущая с содержимым, а такая по QUAL-3
+    // обязана иметь рычаг, а не объяснение.
+    const declaration = new EffectsSubsystem({ entities: {} }, { warn: () => {} }).quality();
+
+    expect(declaration.constantCost).toBeUndefined();
+    expect(declaration.knobs.map((knob) => knob.name)).toEqual(['effects.shapeDetail']);
+  });
+
   it('реестр сцены игрового клиента собирается из деклараций всех подсистем', () => {
     const knobs = sceneKnobs();
 
     expect(knobs.map((knob) => knob.name).sort()).toEqual([
+      'effects.shapeDetail',
       'fog.maskResolution',
       'models.defaultTier',
       'models.lodThresholdScale',
+      'particles.cullDistance',
       'particles.density',
       'terrain.curvatureTessellation',
       'terrain.textureSlots',
@@ -927,6 +937,24 @@ describe('константная стоимость объявляется яв�
       default: Number.POSITIVE_INFINITY,
       min: 1,
       max: 16,
+      values: undefined,
+    });
+    expect(shape('effects.shapeDetail')).toEqual({
+      semantics: 'ceiling',
+      default: Number.POSITIVE_INFINITY,
+      min: 1,
+      max: 24,
+      values: undefined,
+    });
+
+    // Дальность отсечения эмиттеров — ноль по умолчанию, то есть «предела нет»:
+    // гасить видимый вдали дым — политика игры (QUAL-2), и включает её пресет,
+    // а не код рендера.
+    expect(shape('particles.cullDistance')).toEqual({
+      semantics: 'value',
+      default: 0,
+      min: 0,
+      max: 512,
       values: undefined,
     });
 

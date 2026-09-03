@@ -145,7 +145,55 @@ export function resolveEffectByKind(
   manifest: Pick<VisualManifest, 'effects'>,
   kind: string,
 ): VisualEffect | undefined {
+  return firstEffect(manifest.effects?.byKind?.[kind]);
+}
+
+/**
+ * Список ли значение таблицы (REND-23). Своим предикатом, а не `Array.isArray`
+ * по месту: встроенная проверка сужает `readonly T[]` до `any[]`, и каждый
+ * потребитель платил бы за это приведением.
+ */
+export function isEffectList(entry: VisualEffectEntry): entry is readonly VisualEffect[] {
+  return Array.isArray(entry);
+}
+
+/**
+ * Первая запись значения таблицы; `undefined` — записи нет вовсе (пустой
+ * список). Ею отвечают резолверы «есть ли у источника эффект» — вопрос, на
+ * который список отвечает так же, как одна запись (REND-37).
+ */
+function firstEffect(entry: VisualEffectEntry | undefined): VisualEffect | undefined {
+  if (entry === undefined) return undefined;
+  return isEffectList(entry) ? entry[0] : entry;
+}
+
+/**
+ * ВСЕ изображения источника — то, что рисует подсистема эффектов (REND-23).
+ * Форма значения (одна запись или список) здесь и нормализуется: копии списка
+ * при этом не делается — потребитель обходит его на месте, и аллокаций на
+ * доставку у сведения не появляется (REND-26).
+ */
+export function resolveEffectsByKind(
+  manifest: Pick<VisualManifest, 'effects'>,
+  kind: string,
+): VisualEffectEntry | undefined {
   return manifest.effects?.byKind?.[kind];
+}
+
+/** То же для доставленного состояния сущности. */
+export function resolveEffectsByState(
+  manifest: Pick<VisualManifest, 'effects'>,
+  state: string,
+): VisualEffectEntry | undefined {
+  return manifest.effects?.byState?.[state];
+}
+
+/** То же для типа события тика. */
+export function resolveEffectsByEvent(
+  manifest: Pick<VisualManifest, 'effects'>,
+  event: string,
+): VisualEffectEntry | undefined {
+  return manifest.effects?.byEvent?.[event];
 }
 
 /**
@@ -156,7 +204,7 @@ export function resolveEffectByState(
   manifest: Pick<VisualManifest, 'effects'>,
   state: string,
 ): VisualEffect | undefined {
-  return manifest.effects?.byState?.[state];
+  return firstEffect(manifest.effects?.byState?.[state]);
 }
 
 /** Эффект-вспышка типа события (REND-23, REND-4: реакция на событие — данные). */
@@ -164,7 +212,7 @@ export function resolveEffectByEvent(
   manifest: Pick<VisualManifest, 'effects'>,
   event: string,
 ): VisualEffect | undefined {
-  return manifest.effects?.byEvent?.[event];
+  return firstEffect(manifest.effects?.byEvent?.[event]);
 }
 
 /**
@@ -350,10 +398,12 @@ export function visualKeys(
  * визуальные типы, посередине имена компонент-состояний, справа типы событий, и
  * одноимённые записи значат разное. Это не то же самое, что разделы записей
  * инстансов (ASSET-9), где ключ один и разрешается одной функцией.
+ *
+ * Значением таблицы служит ОДНА запись либо их СПИСОК ({@link VisualEffectEntry}).
  */
 export interface VisualEffectsSection {
-  /** Визуальный тип сущности → эффект-оболочка. */
-  byKind?: Record<string, VisualEffect>;
+  /** Визуальный тип сущности → эффект-оболочка либо их список. */
+  byKind?: Record<string, VisualEffectEntry>;
   /**
    * Имя компоненты-состояния сущности → эффект-оболочка (REND-23: «пока жива
    * сущность И ЕЁ СОСТОЯНИЕ ЕГО ТРЕБУЕТ»). Состояния доезжают битами
@@ -361,10 +411,22 @@ export interface VisualEffectsSection {
    * длящиеся эффекты камеры (ASSET-8, CAM-6): второго способа назвать состояние
    * в манифесте не появляется.
    */
-  byState?: Record<string, VisualEffect>;
-  /** Тип события тика → эффект-вспышка. */
-  byEvent?: Record<string, VisualEffect>;
+  byState?: Record<string, VisualEffectEntry>;
+  /** Тип события тика → эффект-вспышка либо их список. */
+  byEvent?: Record<string, VisualEffectEntry>;
 }
+
+/**
+ * Значение таблицы секции эффектов: ОДНА запись либо их список (REND-23).
+ *
+ * Список — потому что у одного источника изображений бывает несколько: у
+ * снаряда без модели это его шар И его след, у зоны — кольцо границы И заливка
+ * внутри. Одна запись остаётся законной формой и после появления списка:
+ * подавляющее большинство источников рисуется одним изображением, и обязать
+ * автора писать массив из одного элемента значило бы менять формат ради формата
+ * (ASSET-6). Нормализуют форму потребители — резолверы выше, а не документ.
+ */
+export type VisualEffectEntry = VisualEffect | readonly VisualEffect[];
 
 /**
  * Ведение чисел записи ДОСТАВЛЕННЫМ статом сущности (REND-23, `match-hud`

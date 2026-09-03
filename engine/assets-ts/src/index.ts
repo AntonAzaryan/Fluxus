@@ -77,6 +77,7 @@ export type {
   EffectColorAt,
   EffectStatWindow,
   VisualEffect,
+  VisualEffectEntry,
   VisualEffectsSection,
   // секция эмиттеров частиц (ASSET-14, `rendering` REND-24)
   VisualEmitter,
@@ -143,6 +144,10 @@ export {
   resolveEffectByKind,
   resolveEffectByState,
   resolveEffectByEvent,
+  isEffectList,
+  resolveEffectsByKind,
+  resolveEffectsByState,
+  resolveEffectsByEvent,
   resolveParticlesByKind,
   resolveParticlesByState,
   resolveParticlesByEvent,

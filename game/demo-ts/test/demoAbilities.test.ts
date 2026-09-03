@@ -48,7 +48,12 @@ import {
   chargeHeld,
   stateBit,
 } from '../app/sim.js';
-import type { VisualEffectsSection } from '@fluxus/assets';
+import {
+  resolveEffectByEvent,
+  resolveEffectByKind,
+  resolveEffectByState,
+  type VisualEffectsSection,
+} from '@fluxus/assets';
 import { createDemoExtractor } from '../app/extractor.js';
 import { DEMO_SCRUB_EVERY } from '../app/match.js';
 import sceneJson from '../../../content/scenes/duel.scene.json';
@@ -74,6 +79,31 @@ const DUEL = { ...SCENE, initial: [] } as unknown as SceneDef;
 const MANIFEST = manifestJson as unknown as {
   readonly effects: Required<VisualEffectsSection>;
 };
+
+/**
+ * Запись эффекта вида ГЛАЗАМИ РЕНДЕРА: у источника бывает несколько
+ * изображений (REND-23 — шар снаряда и его след), и «первое из них» отвечает
+ * резолвер модуля ассетов, а не индексация JSON здесь.
+ */
+function effectByKind(kind: string) {
+  const record = resolveEffectByKind(MANIFEST, kind);
+  expect(record, `в манифесте нет записи effects.byKind.${kind}`).toBeDefined();
+  return record!;
+}
+
+/** То же для таблицы доставленных состояний. */
+function effectByState(state: string) {
+  const record = resolveEffectByState(MANIFEST, state);
+  expect(record, `в манифесте нет записи effects.byState.${state}`).toBeDefined();
+  return record!;
+}
+
+/** То же для таблицы событий тика. */
+function effectByEvent(event: string) {
+  const record = resolveEffectByEvent(MANIFEST, event);
+  expect(record, `в манифесте нет записи effects.byEvent.${event}`).toBeDefined();
+  return record!;
+}
 const MATCH = matchJson as unknown as {
   readonly seed: number;
   readonly players: readonly string[];
@@ -569,7 +599,7 @@ describe('зеркала балансных чисел сцены', () => {
 
   it('радиус оболочки купола в манифесте — радиус, который считает определение купола', () => {
     const world = Math.floor((HERO_RADIUS * DOME_RADIUS_MUL) / FIXED_ONE) / FIXED_ONE;
-    expect(MANIFEST.effects.byKind.SlowDome!.radius).toBeCloseTo(world, 3);
+    expect(effectByKind('SlowDome').radius).toBeCloseTo(world, 3);
   });
 
   it('числа шара заряда — те же, по которым определение считает выстрел', () => {
@@ -597,9 +627,9 @@ describe('зеркала балансных чисел сцены', () => {
     // Модуля сборки у шара больше нет, и «зеркальность» держится не кодом, а
     // этим тестом: запись манифеста обязана считать ровно то же, что считало
     // определение и считал прежний `chargeBalls.ts`.
-    const record = MANIFEST.effects.byState.Charging!;
-    const base = MANIFEST.effects.byKind.Fireball!;
-    const heavy = MANIFEST.effects.byKind.HeavyFireball!;
+    const record = effectByState('Charging');
+    const base = effectByKind('Fireball');
+    const heavy = effectByKind('HeavyFireball');
     // Внешность шара — снаряда, который улетит при нулевом заряде.
     expect(record.color).toBe(base.color);
     expect(record.radius).toBe(base.radius);
@@ -1484,7 +1514,7 @@ describe('числа способностей: ретюн виден в дифф
     expect(collider.halfY).toBe(FIREBALL_RADIUS);
     // Оболочка эффекта числами симуляции не питается (REND-1) — совпадение
     // размеров держится только этим зеркалом.
-    expect(MANIFEST.effects.byKind.Fireball!.radius).toBeCloseTo(FIREBALL_RADIUS / FIXED_ONE, 3);
+    expect(effectByKind('Fireball').radius).toBeCloseTo(FIREBALL_RADIUS / FIXED_ONE, 3);
   });
 
   it('тяжёлый снаряд бьёт по своей картинке: коллайдер вдвое больше обычного', () => {
@@ -1499,7 +1529,7 @@ describe('числа способностей: ретюн виден в дифф
     expect(collider.halfX).toBe(HEAVY_FIREBALL_RADIUS);
     expect(collider.halfY).toBe(HEAVY_FIREBALL_RADIUS);
     // И то же зеркало в манифесте: нарисованный радиус — тот, которым бьют.
-    expect(MANIFEST.effects.byKind.HeavyFireball!.radius).toBeCloseTo(
+    expect(effectByKind('HeavyFireball').radius).toBeCloseTo(
       HEAVY_FIREBALL_RADIUS / FIXED_ONE,
       2,
     );
@@ -1562,7 +1592,7 @@ describe('числа способностей: ретюн виден в дифф
   it('сфера щита в манифесте — синяя, полупрозрачная и ровно радиуса щита', () => {
     // Оболочка `effects.byState` числами симуляции не питается (REND-1):
     // совпадение нарисованного пузыря с отражающим держится этим зеркалом.
-    const record = MANIFEST.effects.byState.Shielded!;
+    const record = effectByState('Shielded');
     expect(record.radius).toBeCloseTo(SHIELD_RADIUS / FIXED_ONE, 3);
     expect(record.alpha).toBe(0.3);
     expect(record.color).toBe('#4aa3ff');
@@ -1571,7 +1601,7 @@ describe('числа способностей: ретюн виден в дифф
   it('вспышка взрыва заряда в манифесте — радиус самого взрыва из `AbilityConfig`', () => {
     // `ChargeExploded` бьёт площадью, и его вспышка обещает ровно ту площадь:
     // ретюн `overchargeRadius` без манифеста нарисовал бы не тот круг.
-    expect(MANIFEST.effects.byEvent.ChargeExploded!.radiusTo).toBeCloseTo(
+    expect(effectByEvent('ChargeExploded').radiusTo).toBeCloseTo(
       OVERCHARGE_RADIUS / FIXED_ONE,
       3,
     );

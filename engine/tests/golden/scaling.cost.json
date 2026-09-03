@@ -8,6 +8,7 @@
         "small": {
           "frame": {
             "effectsShapeVertices": 0,
+            "effectsShapesCulled": 0,
             "fogDissolveTexels": 4096,
             "fogMaskClearTexels": 4096,
             "fogMaskSmoothTexels": 8192,
@@ -38,6 +39,7 @@
             "modelsCulled": 0,
             "modelsLodSelections": 32,
             "modelsPoseWrites": 32,
+            "particlesShellsCulled": 0,
             "particlesShellsPosed": 16,
             "particlesShotsStepped": 4,
             "particlesSystemsStepped": 20,
@@ -70,6 +72,7 @@
         "large": {
           "frame": {
             "effectsShapeVertices": 0,
+            "effectsShapesCulled": 0,
             "fogDissolveTexels": 4096,
             "fogMaskClearTexels": 4096,
             "fogMaskSmoothTexels": 8192,
@@ -100,6 +103,7 @@
             "modelsCulled": 0,
             "modelsLodSelections": 256,
             "modelsPoseWrites": 256,
+            "particlesShellsCulled": 0,
             "particlesShellsPosed": 128,
             "particlesShotsStepped": 4,
             "particlesSystemsStepped": 132,
@@ -139,6 +143,7 @@
         "small": {
           "frame": {
             "effectsShapeVertices": 0,
+            "effectsShapesCulled": 0,
             "fogDissolveTexels": 4096,
             "fogMaskClearTexels": 4096,
             "fogMaskSmoothTexels": 8192,
@@ -169,6 +174,7 @@
             "modelsCulled": 0,
             "modelsLodSelections": 64,
             "modelsPoseWrites": 64,
+            "particlesShellsCulled": 0,
             "particlesShellsPosed": 32,
             "particlesShotsStepped": 4,
             "particlesSystemsStepped": 36,
@@ -201,6 +207,7 @@
         "large": {
           "frame": {
             "effectsShapeVertices": 0,
+            "effectsShapesCulled": 0,
             "fogDissolveTexels": 4096,
             "fogMaskClearTexels": 4096,
             "fogMaskSmoothTexels": 8192,
@@ -231,6 +238,7 @@
             "modelsCulled": 0,
             "modelsLodSelections": 64,
             "modelsPoseWrites": 64,
+            "particlesShellsCulled": 0,
             "particlesShellsPosed": 32,
             "particlesShotsStepped": 4,
             "particlesSystemsStepped": 36,
@@ -270,6 +278,7 @@
         "small": {
           "frame": {
             "effectsShapeVertices": 0,
+            "effectsShapesCulled": 0,
             "fogDissolveTexels": 4096,
             "fogMaskClearTexels": 4096,
             "fogMaskSmoothTexels": 8192,
@@ -300,6 +309,7 @@
             "modelsCulled": 0,
             "modelsLodSelections": 64,
             "modelsPoseWrites": 64,
+            "particlesShellsCulled": 0,
             "particlesShellsPosed": 32,
             "particlesShotsStepped": 4,
             "particlesSystemsStepped": 36,
@@ -332,6 +342,7 @@
         "large": {
           "frame": {
             "effectsShapeVertices": 0,
+            "effectsShapesCulled": 0,
             "fogDissolveTexels": 4096,
             "fogMaskClearTexels": 4096,
             "fogMaskSmoothTexels": 8192,
@@ -362,6 +373,7 @@
             "modelsCulled": 0,
             "modelsLodSelections": 64,
             "modelsPoseWrites": 64,
+            "particlesShellsCulled": 0,
             "particlesShellsPosed": 32,
             "particlesShotsStepped": 4,
             "particlesSystemsStepped": 36,
@@ -401,6 +413,7 @@
         "small": {
           "frame": {
             "effectsShapeVertices": 0,
+            "effectsShapesCulled": 0,
             "fogDissolveTexels": 4096,
             "fogMaskClearTexels": 4096,
             "fogMaskSmoothTexels": 8192,
@@ -431,6 +444,7 @@
             "modelsCulled": 0,
             "modelsLodSelections": 64,
             "modelsPoseWrites": 64,
+            "particlesShellsCulled": 0,
             "particlesShellsPosed": 32,
             "particlesShotsStepped": 4,
             "particlesSystemsStepped": 36,
@@ -463,6 +477,7 @@
         "large": {
           "frame": {
             "effectsShapeVertices": 0,
+            "effectsShapesCulled": 0,
             "fogDissolveTexels": 16384,
             "fogMaskClearTexels": 16384,
             "fogMaskSmoothTexels": 32768,
@@ -493,6 +508,7 @@
             "modelsCulled": 0,
             "modelsLodSelections": 64,
             "modelsPoseWrites": 64,
+            "particlesShellsCulled": 0,
             "particlesShellsPosed": 32,
             "particlesShotsStepped": 4,
             "particlesSystemsStepped": 36,
@@ -532,6 +548,7 @@
         "small": {
           "frame": {
             "effectsShapeVertices": 0,
+            "effectsShapesCulled": 0,
             "fogDissolveTexels": 4096,
             "fogMaskClearTexels": 4096,
             "fogMaskSmoothTexels": 8192,
@@ -562,6 +579,7 @@
             "modelsCulled": 0,
             "modelsLodSelections": 64,
             "modelsPoseWrites": 64,
+            "particlesShellsCulled": 0,
             "particlesShellsPosed": 32,
             "particlesShotsStepped": 4,
             "particlesSystemsStepped": 36,
@@ -594,6 +612,7 @@
         "large": {
           "frame": {
             "effectsShapeVertices": 0,
+            "effectsShapesCulled": 0,
             "fogDissolveTexels": 4096,
             "fogMaskClearTexels": 4096,
             "fogMaskSmoothTexels": 8192,
@@ -624,6 +643,7 @@
             "modelsCulled": 0,
             "modelsLodSelections": 64,
             "modelsPoseWrites": 64,
+            "particlesShellsCulled": 0,
             "particlesShellsPosed": 32,
             "particlesShotsStepped": 32,
             "particlesSystemsStepped": 64,
@@ -663,6 +683,7 @@
         "small": {
           "frame": {
             "effectsShapeVertices": 0,
+            "effectsShapesCulled": 0,
             "fogDissolveTexels": 4096,
             "fogMaskClearTexels": 4096,
             "fogMaskSmoothTexels": 8192,
@@ -693,6 +714,7 @@
             "modelsCulled": 0,
             "modelsLodSelections": 64,
             "modelsPoseWrites": 64,
+            "particlesShellsCulled": 0,
             "particlesShellsPosed": 32,
             "particlesShotsStepped": 4,
             "particlesSystemsStepped": 36,
@@ -725,6 +747,7 @@
         "large": {
           "frame": {
             "effectsShapeVertices": 0,
+            "effectsShapesCulled": 0,
             "fogDissolveTexels": 4096,
             "fogMaskClearTexels": 4096,
             "fogMaskSmoothTexels": 8192,
@@ -755,6 +778,7 @@
             "modelsCulled": 0,
             "modelsLodSelections": 64,
             "modelsPoseWrites": 64,
+            "particlesShellsCulled": 0,
             "particlesShellsPosed": 32,
             "particlesShotsStepped": 4,
             "particlesSystemsStepped": 36,

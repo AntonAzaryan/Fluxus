@@ -305,31 +305,52 @@ export function syncShellSources<R, I, S extends Shell<R, I>>(
   entities: Iterable<EntityView>,
   stateNames: readonly string[],
   hasState: StateReader,
-  byKind: (kind: string) => R | undefined,
-  byState: (name: string) => R | undefined,
+  byKind: (kind: string) => SourceRecords<R>,
+  byState: (name: string) => SourceRecords<R>,
 ): number {
   let synced = 0;
   set.begin();
   for (const view of entities) {
     // Оболочка визуального типа: живёт, пока жива сущность такого типа.
-    if (view.kind !== null) {
-      const record = byKind(view.kind);
-      if (record !== undefined) {
-        synced++;
-        set.ensure(view, `kind:${view.kind}`, record);
-      }
-    }
+    if (view.kind !== null) synced += ensureRecords(set, view, `kind:${view.kind}`, byKind(view.kind));
     // Оболочка состояния: живёт, пока состояние доставляется (REND-23, REND-24).
     for (const name of stateNames) {
       if (!hasState(view, name)) continue;
-      const record = byState(name);
-      if (record === undefined) continue;
-      synced++;
-      set.ensure(view, `state:${name}`, record);
+      synced += ensureRecords(set, view, `state:${name}`, byState(name));
     }
   }
   set.sweep();
   return synced;
+}
+
+/**
+ * Что источник отдаёт потребителю: ничего, ОДНУ запись либо их СПИСОК (REND-23).
+ * Список — потому что изображений у источника бывает несколько (шар снаряда и
+ * его след); одна запись остаётся законной формой, и оборачивать её в массив на
+ * каждую доставку значило бы аллоцировать пропорционально числу сущностей
+ * (REND-26). Отсюда объединение, а не «всегда массив».
+ */
+export type SourceRecords<R> = R | readonly R[] | undefined;
+
+/**
+ * Оболочки одного источника: у списка каждая запись получает СВОЮ оболочку, и
+ * ключ её несёт номер записи — иначе второе изображение вытеснило бы первое.
+ * Возвращает число сведённых записей — вход счётчика стоимости владельца.
+ */
+function ensureRecords<R, I, S extends Shell<R, I>>(
+  set: ShellSet<R, I, S>,
+  view: EntityView,
+  source: string,
+  records: SourceRecords<R>,
+): number {
+  if (records === undefined) return 0;
+  if (!Array.isArray(records)) {
+    set.ensure(view, source, records as R);
+    return 1;
+  }
+  const list = records as readonly R[];
+  for (let i = 0; i < list.length; i++) set.ensure(view, `${source}#${String(i)}`, list[i]!);
+  return list.length;
 }
 
 // -------------------------------------------------------------- точка события

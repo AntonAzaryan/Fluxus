@@ -279,9 +279,32 @@ function validateEffectNumbers(
   }
 }
 
+/**
+ * Значение таблицы эффектов: одна запись либо СПИСОК записей (REND-23). Список
+ * — потому что у источника бывает несколько изображений: шар снаряда и его
+ * след. Одна запись остаётся законной формой: массив из одного элемента ради
+ * единообразия автор писать не обязан.
+ *
+ * Пустой список отвергается: источник, не рисующий ничего, — почти всегда
+ * недописанная правка, а молчаливо принятый он выглядит как сломанный эффект.
+ */
+function validateEffectEntry(v: unknown, path: string, errors: string[]): void {
+  if (!Array.isArray(v)) {
+    validateEffect(v, path, errors);
+    return;
+  }
+  if (v.length === 0) {
+    errors.push(`${path}: список изображений пуст — источнику нечего рисовать`);
+    return;
+  }
+  v.forEach((record, index) => {
+    validateEffect(record, `${path}[${String(index)}]`, errors);
+  });
+}
+
 /** Секция транзиентных эффектов (REND-23): три таблицы «имя → запись эффекта». */
 export function validateEffects(section: unknown, errors: string[]): void {
-  validateSourceTables(section, 'effects', 'эффект', validateEffect, errors);
+  validateSourceTables(section, 'effects', 'эффект', validateEffectEntry, errors);
 }
 
 /** Поля записи эмиттера (ASSET-14) — они же перечень допустимых ключей. */

@@ -80,8 +80,7 @@ import {
   resolveParticlesByKind,
   resolveParticlesByState,
   resolveVisualEmitter,
-  type AssetState,
-  type ParticleEffectDocument,
+  type AssetService,
   type VisualManifest,
 } from '@fluxus/assets';
 import type { EntityView, QualityDeclaration, QualityValues, RenderContext, RenderEvent, RenderSubsystem, TickView } from '../types.js';
@@ -92,13 +91,14 @@ import {
   ageInstance,
   instanceFinished,
   instanceParticles,
-  ownBatchMaterials,
   restartInstance,
   setInstanceDensity,
   stepInstance,
   type EffectInstance,
 } from '../particleEffects.js';
 import { DyingInstances } from './particleDying.js';
+import { EFFECT_ASSET_KIND, EffectDocuments, shieldBatches } from './particleAssets.js';
+import { CameraCull } from './cameraCull.js';
 import { dropSocketCache, type SocketSource } from '../particleSockets.js';
 import { createWarnOnce, type WarnOnce } from '../warnOnce.js';
 import { effectIdsOf, settleEffects } from './particlePrewarm.js';
@@ -123,9 +123,6 @@ import {
 
 export type { SocketNodePose, SocketPose, SocketSource } from '../particleSockets.js';
 
-/** Вид эмиттерного ассета в реестре загрузчиков (ASSET-14). */
-const EFFECT_ASSET_KIND = 'particle-effect';
-
 /**
  * Шаг тика по умолчанию, секунды — знаменатель возраста события (REND-24,
  * SHELL-4). Величина сборки, а не рендера: подсистеме её называет опция.
@@ -148,6 +145,23 @@ const PARTICLES_DENSITY = 'particles.density';
  * Вчетверо реже документа — заметно дешевле и по-прежнему видимо.
  */
 const PARTICLES_DENSITY_MIN = 0.25;
+
+/**
+ * Ручка предела расстояния до эмиттера (QUAL-1): дальше него оболочка не
+ * шагается. Ноль — предела нет вовсе, и это УМОЛЧАНИЕ: за пирамидой кадра
+ * оболочка приостанавливается и без ручки (информации это не отнимает —
+ * невидимого не видно), а вот далёкий, но ВИДИМЫЙ эмиттер игрок видит, и
+ * решать, можно ли его заморозить, — политика игры, а не механизма (QUAL-2).
+ */
+const PARTICLES_CULL_DISTANCE = 'particles.cullDistance';
+
+/**
+ * Запас вокруг якоря эмиттера при отсечении, мировые единицы. Габаритов у
+ * эмиттера не существует — его частицы разлетаются, куда велит документ, — и
+ * отсечь его по точке значило бы гасить дым, чей источник только что ушёл за
+ * кромку кадра.
+ */
+const EMITTER_CULL_RADIUS = 2;
 
 export interface ParticlesOptions {
   /**
@@ -175,6 +189,14 @@ export interface ParticlesOptions {
    * (SHELL-4). Не задана — {@link DEFAULT_TICK_SECONDS}.
    */
   readonly tickSeconds?: number;
+  /**
+   * Камера кадра — вход отсечения эмиттеров (REND-24, QUAL-3): батчи библиотеки
+   * объявлены `frustumCulled = false`, и без неё факел за кромкой экрана
+   * симулируется наравне с горящим в поле зрения. Опцией, а не контекстом
+   * (REND-8), тем же путём, каким её получает подсистема моделей; сборка без
+   * камеры отсечения не имеет и делает ту же работу, что делала до него.
+   */
+  readonly camera?: THREE.Camera;
   /** Куда писать предупреждения; по умолчанию console.warn. */
   readonly warn?: (message: string) => void;
 }
@@ -192,11 +214,6 @@ export interface ParticlesPrewarm {
    * собирающий не обязан: прогрев тогда сделает меньше, но сделает.
    */
   texturesReady(): Promise<readonly THREE.Texture[]>;
-}
-
-/** Запрошенный эмиттерный ассет; `doc` пуст, пока он едет либо недоступен. */
-interface EffectAsset {
-  doc: ParticleEffectDocument | null;
 }
 
 export class ParticlesSubsystem implements RenderSubsystem {
@@ -240,8 +257,8 @@ export class ParticlesSubsystem implements RenderSubsystem {
    */
   private readonly dying = new DyingInstances();
 
-  /** Документы эффектов по asset id (ASSET-3, ASSET-6). */
-  private readonly assets = new Map<string, EffectAsset>();
+  /** Документы эффектов по asset id (`particleAssets.ts`, ASSET-3, ASSET-6). */
+  private readonly documents: EffectDocuments;
   /** Разворачивание документов и пул экземпляров (`particleEffects.ts`). */
   private readonly pool: ParticleEffectPool;
 
@@ -255,6 +272,21 @@ export class ParticlesSubsystem implements RenderSubsystem {
   private density = 1;
   /** Длительность тика сборки — знаменатель возраста события (SHELL-4). */
   private readonly tickSeconds: number;
+  /** Отсечение кадра по камере (`cameraCull.ts`); без камеры — неактивно. */
+  private readonly cull = new CameraCull();
+  /** Предел расстояния ручки (QUAL-1); 0 — предела нет. */
+  private cullDistance = 0;
+  /** Предикат отсечения оболочки — один на подсистему, без замыканий на кадр. */
+  private readonly visibleShell = (shell: EmitterShell): boolean => {
+    const object = shell.instance.object;
+    return this.cull.visible(
+      object.position.x,
+      object.position.y,
+      object.position.z,
+      EMITTER_CULL_RADIUS,
+      this.cullDistance,
+    );
+  };
 
   /** Резолверы записей таблиц: строятся один раз, а не на каждую доставку. */
   private readonly byKind = (kind: string): EmitterRecord | undefined =>
@@ -267,6 +299,7 @@ export class ParticlesSubsystem implements RenderSubsystem {
     this.options = options;
     this.stateComponents = options.stateComponents ?? [];
     this.warnOnce = createWarnOnce(options.warn);
+    this.documents = new EffectDocuments(this.warnOnce);
     this.hasState = createStateReader(this.stateComponents, (name) => {
       this.warnOnce(
         `state-bit:${name}`,
@@ -396,8 +429,11 @@ export class ParticlesSubsystem implements RenderSubsystem {
     // Шаг ПО-ЭМИТТЕРНО, а не общим `BatchedRenderer.update(dt)`: темп есть
     // свойство сущности (REND-38), и одним числом на сцену его не выразить.
     // Чьи часы у какой оболочки, решает она сама (`stepShells`).
-    stepShells(this.shells.values(), step, this.warnOnce, cost);
-    stepShells(this.decorationShells.values(), step, this.warnOnce, cost);
+    // Отсечение кадра — один раз на вход (REND-24): пирамида и позиция камеры
+    // те же, с которыми кадр и будет нарисован (CAM-1).
+    const cull = this.cull.update(this.options.camera) ? this.visibleShell : undefined;
+    stepShells(this.shells.values(), step, this.warnOnce, cost, cull);
+    stepShells(this.decorationShells.values(), step, this.warnOnce, cost, cull);
     // Выстрел по событию (REND-24 byEvent) — образ момента мира, собственный
     // переход картинки: он идёт общими часами, тем более что сущность-источник
     // вправе не пережить тик своего события (REND-38).
@@ -411,7 +447,7 @@ export class ParticlesSubsystem implements RenderSubsystem {
     for (const batch of this.batchRenderer.batches) batch.update();
     this.collectShots(cost);
     this.dying.collect((instance) => { this.pool.release(instance); }, cost);
-    this.shieldBatches();
+    this.shieldedBatches = shieldBatches(this.batchRenderer, this.shieldedBatches);
   }
 
   /**
@@ -455,7 +491,7 @@ export class ParticlesSubsystem implements RenderSubsystem {
       ctx.assets,
       EFFECT_ASSET_KIND,
       effectIdsOf(this.manifest),
-      (id) => this.document(id) !== null,
+      (id) => this.documents.get(ctx.assets, id) !== null,
       (id) => { this.warmEffect(id); },
     ).then(() => ({
       // Текстуры образцов — вход `initTexture` прогрева: заливка на GPU у
@@ -467,12 +503,46 @@ export class ParticlesSubsystem implements RenderSubsystem {
 
   /** Развёртка, клон и батч эффекта — и сразу в пул, не сыграв ни кадра. */
   private warmEffect(id: string): void {
-    const doc = this.assets.get(id)?.doc ?? null;
+    const doc = this.documents.known(id);
     if (doc === null) return;
     const instance = this.pool.acquire(id, doc, this.group);
     if (instance !== null) this.pool.release(instance);
     // Свежему батчу конвейера луч отключается той же точкой, что в кадре.
-    this.shieldBatches();
+    this.shieldedBatches = shieldBatches(this.batchRenderer, this.shieldedBatches);
+  }
+
+  /**
+   * Правленые на диске эмиттерные ассеты (ED-15, ASSET-14): подсистема забывает
+   * разобранные документы и заводит их заново — тем же ленивым путём, каким
+   * завела в первый раз.
+   *
+   * Зовётся СОБЫТИЕМ пересоздания модуля ассетов авторинга, а не кадром:
+   * редактор выбрасывает кэш ассетов целиком, когда дерево контента изменилось,
+   * и держаться за документ прежнего кэша значило бы показывать автору эффект,
+   * которого на диске уже нет, — тот же дефект ED-15, ради которого существует
+   * переподача манифеста (REND-17). Игровой сборке вход не нужен: дерево под
+   * ней не меняется, и она его не зовёт.
+   *
+   * Живые эмиттеры при этом заводятся ЗАНОВО: экземпляр играет образцом,
+   * разобранным из прежнего документа, и переподать ему новый нечем — это цена
+   * горячей перезагрузки, а не дефект. Порядок здесь тот же, что у сноса
+   * (REND-31): оболочки возвращают экземпляры в пул, и только потом пул
+   * отдаёт их средствами библиотеки.
+   */
+  refreshAssets(): void {
+    this.dropShots();
+    this.shells.clear();
+    this.decorationShells.clear();
+    this.dying.dropAll((instance) => { this.pool.release(instance); });
+    this.pool.dispose();
+    this.shieldedBatches = 0;
+    // Документы забываются вместе с подписками: следующее обращение к записи
+    // запросит ассет у НОВОГО сервиса (ASSET-2), а прежний кэш уже выброшен.
+    this.documents.clear();
+    // И оболочки заводятся заново обычным сведением: правило «какие эмиттеры
+    // существуют» одно, второй его копии для перезагрузки не заводится.
+    if (this.view !== null) this.syncShells(this.view, costSink());
+    if (this.decorations !== null) this.syncDecorations(this.decorations);
   }
 
   /**
@@ -494,6 +564,14 @@ export class ParticlesSubsystem implements RenderSubsystem {
           min: PARTICLES_DENSITY_MIN,
           max: 4,
         },
+        {
+          name: PARTICLES_CULL_DISTANCE,
+          cost: 'покадровый шаг эмиттеров: дальше предела оболочка не симулируется вовсе (REND-24)',
+          semantics: 'value',
+          default: 0,
+          min: 0,
+          max: 512,
+        },
       ],
     };
   }
@@ -504,6 +582,8 @@ export class ParticlesSubsystem implements RenderSubsystem {
    * смены пресета, а не кадром.
    */
   applyQuality(values: QualityValues): void {
+    const distance = values.get(PARTICLES_CULL_DISTANCE);
+    if (typeof distance === 'number') this.cullDistance = distance;
     const density = values.get(PARTICLES_DENSITY);
     if (typeof density !== 'number' || density === this.density) return;
     this.density = density;
@@ -716,12 +796,23 @@ export class ParticlesSubsystem implements RenderSubsystem {
   // ------------------------------------------------------- эффекты и пул
 
   /**
+   * Сервис ассетов кадра. Спрашивается в момент обращения, а не запоминается:
+   * редактор выбрасывает его целиком, когда дерево контента изменилось (ED-15,
+   * ASSET-2), и снимок означал бы чтение выброшенного кэша.
+   */
+  private assetService(): AssetService {
+    const ctx = this.ctx;
+    if (ctx === null) throw new Error('ParticlesSubsystem: init() не вызван (REND-8)');
+    return ctx.assets;
+  }
+
+  /**
    * Экземпляр эффекта, готовый играть; null — ассет ещё не доехал, недоступен
    * или документ не разворачивается (предупреждение один раз и пропуск записи,
    * ASSET-6).
    */
   private acquire(effect: string, cost: RenderCostCounters | undefined): EffectInstance | null {
-    const doc = this.document(effect);
+    const doc = this.documents.get(this.assetService(), effect);
     if (doc === null) return null;
     const instance = this.pool.acquire(effect, doc, this.group);
     // Экземпляр из пула хранит эмиссию прошлого употребления, а свежий клон —
@@ -734,69 +825,6 @@ export class ParticlesSubsystem implements RenderSubsystem {
     return instance;
   }
 
-  /**
-   * Документ эффекта по asset id (ASSET-3): запрашивается один раз на ссылку и
-   * доезжает подпиской — тем же входом, которым подсистема моделей получает
-   * модели (ASSET-6). null — ещё грузится либо недоступен: запись пропускается
-   * молча до отказа и с предупреждением один раз после него (REND-24).
-   */
-  private document(id: string): ParticleEffectDocument | null {
-    const known = this.assets.get(id);
-    if (known !== undefined) return known.doc;
-    const asset: EffectAsset = { doc: null };
-    this.assets.set(id, asset);
-    const ctx = this.ctx;
-    if (ctx === null) throw new Error('ParticlesSubsystem: init() не вызван (REND-8)');
-    // Сам ЗАПРОС тоже способен отказать синхронно — например, когда тот же
-    // адрес уже загружен под другим видом ассета (ASSET-3: ключ реестра — пара
-    // «вид + формат», и модель по адресу эффекта — конфликт видов). Для
-    // подсистемы это такая же негодная ссылка, как отказ загрузки, и ответ на
-    // неё тот же: предупреждение один раз и пропуск записи, а не отказ кадра
-    // (REND-24, ASSET-6) — исключение отсюда роняло бы весь кадровый цикл.
-    try {
-      const handle = ctx.assets.request<ParticleEffectDocument>(EFFECT_ASSET_KIND, id);
-      ctx.assets.subscribe(handle, (state: AssetState<ParticleEffectDocument>) => {
-        if (state.status === 'ready') {
-          asset.doc = state.data;
-        } else if (state.status === 'failed') {
-          this.warnOnce(
-            `effect:${id}`,
-            `render: эмиттерный ассет "${id}" недоступен (${state.reason}) — запись пропущена (REND-24)`,
-          );
-        }
-      });
-    } catch (e) {
-      this.warnOnce(
-        `effect:${id}`,
-        `render: эмиттерный ассет "${id}" не запрашивается (${e instanceof Error ? e.message : String(e)}) — запись пропущена (REND-24)`,
-      );
-    }
-    // Подписка приносит текущее состояние немедленно (ASSET-4): уже загруженный
-    // документ доступен на первом же обращении, а не со следующего кадра.
-    return asset.doc;
-  }
-
-  /**
-   * Луч сцены частиц не видит (REND-15): частица — изображение, а не сущность.
-   * Батчи заводятся по мере появления новых конвейеров отрисовки, поэтому
-   * проверяется их число, а не факт «один раз при инициализации».
-   */
-  private shieldBatches(): void {
-    const batches = this.batchRenderer.batches;
-    if (batches.length === this.shieldedBatches) return;
-    // Обход идёт с НОВЫХ батчей, а не со всех: отключение луча идемпотентно, а
-    // регистрация материалов в учёте (PERF-8) — нет, и повторная считала бы
-    // один и тот же материал дважды.
-    for (let i = this.shieldedBatches; i < batches.length; i++) {
-      const batch = batches[i]!;
-      // eslint-disable-next-line @typescript-eslint/no-empty-function -- пустой raycast и есть «луч меня не видит»
-      batch.raycast = () => {};
-      // Два материала батча строит библиотека, и учёт получает их здесь — по
-      // факту появления батча, как ресурсы разобранного графа (REND-31, PERF-8).
-      ownBatchMaterials(batch);
-    }
-    this.shieldedBatches = batches.length;
-  }
 }
 
 

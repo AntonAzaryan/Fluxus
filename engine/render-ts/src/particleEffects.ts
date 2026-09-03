@@ -296,6 +296,19 @@ export class ParticleEffectPool {
       // вернувшийся в пул, был бы мёртв навсегда, а не готов к следующему
       // употреблению. Значение снимается с ЭКЗЕМПЛЯРА; документ не трогается.
       system.autoDestroy = false;
+      // Флипбук без атласа (REND-24): поведение `FrameOverLife` ведёт кадр
+      // частицы по сетке тайлов текстуры, а сетка 1×1 — ровно один кадр, и
+      // вести по ней нечего. Документ при этом легален и рисуется статичным
+      // спрайтом; молчать значило бы оставить автора эффекта гадать, почему
+      // анимация не идёт. Форму самих чисел атласа проверяет валидация ассета
+      // (ASSET-14), а согласованность их с поведением видна только здесь —
+      // документ уже развёрнут в объекты библиотеки.
+      if (system.uTileCount * system.vTileCount <= 1 && leadsFrame(system)) {
+        this.warnOnce(
+          `flipbook:${id}`,
+          `render: эффект "${id}" ведёт кадр частицы (${FRAME_BEHAVIOR_TYPE}) по атласу 1×1 — анимировать нечего (REND-24)`,
+        );
+      }
       // Регистрации в батче здесь НЕТ: её делает `acquire` — экземпляр
       // регистрируется на время употребления и снимается возвратом в пул.
       systems.push({
@@ -698,6 +711,16 @@ export function ageInstance(instance: EffectInstance, seconds: number, warn: War
     stepInstance(instance, step, warn);
     left -= step;
   }
+}
+
+/** Тип поведения библиотеки, ведущего кадр частицы по атласу тайлов. */
+const FRAME_BEHAVIOR_TYPE = 'FrameOverLife';
+
+/** Ведёт ли система кадр частицы по атласу — потребитель тайлов (REND-24). */
+function leadsFrame(system: ParticleSystem): boolean {
+  return system.behaviors.some(
+    (behavior: { readonly type?: unknown }) => behavior.type === FRAME_BEHAVIOR_TYPE,
+  );
 }
 
 /** Сколько частиц живо у экземпляра сейчас. */

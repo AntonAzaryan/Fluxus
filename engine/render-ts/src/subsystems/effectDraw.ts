@@ -113,9 +113,11 @@ export function planShape(
   surface: VisualSurface | null,
   tile: number,
   tessellation: number,
+  detail: number,
 ): ShapePlan | null {
   const primitive = record.primitive;
-  const steps = (extent: number): number => groundSteps(surface, tile, extent, tessellation);
+  const steps = (extent: number): number =>
+    groundSteps(surface, tile, extent, tessellation, detail);
   if (primitive === PRIMITIVE_DISC || primitive === PRIMITIVE_RING) {
     return { rows: steps(maxRadiusOf(record)) + 1, cols: arcSegments(Math.PI * 2) + 1 };
   }
@@ -192,6 +194,18 @@ export function drawGround(
     return;
   }
   writeRadialGround(shape, surface, x, y, inner, outer, 0, Math.PI * 2, base, lift);
+}
+
+/**
+ * Наибольший поперечник наземной фигуры записи — консервативный радиус её
+ * якоря при отсечении (REND-43). Луч и лента сюда не идут: их второй конец
+ * решается позже позы, и радиуса у них до этого нет.
+ */
+export function groundExtentOf(record: VisualEffect): number {
+  if (record.primitive === PRIMITIVE_LINE) {
+    return Math.max(record.length ?? 0, (record.width ?? 0) / 2);
+  }
+  return maxRadiusOf(record);
 }
 
 /** Луч записи между двумя мировыми точками; ширина — поле записи. */

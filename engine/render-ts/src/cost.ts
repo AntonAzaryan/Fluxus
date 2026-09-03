@@ -476,6 +476,15 @@ export interface RenderCostCounters {
    * внутри систем, а систем от него не убывает.
    */
   particlesSystemsStepped: number;
+  /**
+   * Оболочки-эмиттеры, ПРИОСТАНОВЛЕННЫЕ отсечением камеры в этом кадре
+   * (REND-24, QUAL-3): за пирамидой кадра либо дальше предела ручки
+   * `particles.cullDistance`. Счётчик работы, которой кадр НЕ сделал, — по нему
+   * и видна экономия: `particlesSystemsStepped` падает ровно на системы этих
+   * оболочек. Сборка без камеры отсечения не имеет, и число остаётся нулевым:
+   * приписывать кадру тесты, которых он не делал, нельзя (PERF-3).
+   */
+  particlesShellsCulled: number;
 
   // ------------------------ транзиентные эффекты: работа кадра (REND-23, REND-43)
 
@@ -486,10 +495,19 @@ export interface RenderCostCounters {
    * (REND-9), и телеграф во всю арену стоит кадру иного, чем кольцо под героем.
    *
    * Сфера сюда не входит: у неё разделяемая геометрия и постоянный трансформ —
-   * работа кадра на неё не растёт ни с размером, ни с рельефом (REND-3), и
-   * подсистема по-прежнему объявляет её стоимость константной (QUAL-3).
+   * работа кадра на неё не растёт ни с размером, ни с рельефом (REND-3). Растёт
+   * она у ФИГУРЫ, и потому рычаг у подсистемы именно на дробление фигуры
+   * (`effects.shapeDetail`, QUAL-3), а не на число эффектов.
    */
   effectsShapeVertices: number;
+  /**
+   * Наземные фигуры, ПРОПУЩЕННЫЕ отсечением камеры в этом кадре (REND-43): их
+   * вершины не переписывались и сами они не рисовались. Луч и лента сюда не
+   * идут: второй конец у них решается позже позы, и якоря до этого нет.
+   * Пара к `effectsShapeVertices`: первое число говорит, сколько кадр сделал,
+   * второе — сколько не стал.
+   */
+  effectsShapesCulled: number;
 
   // ------------------------------------------- освещение: работа кадра (REND-8)
 
@@ -700,7 +718,9 @@ export const COST_COUNTER_STAGES: Readonly<Record<keyof RenderCostCounters, Cost
     particlesShellsPosed: 'frame',
     particlesShotsStepped: 'frame',
     particlesSystemsStepped: 'frame',
+    particlesShellsCulled: 'frame',
     effectsShapeVertices: 'frame',
+    effectsShapesCulled: 'frame',
     lightingStaticCasters: 'frame',
     lightingDynamicCasters: 'frame',
     lightingBlobDecals: 'frame',
@@ -769,7 +789,9 @@ export function createCostCounters(): RenderCostCounters {
     particlesShellsPosed: 0,
     particlesShotsStepped: 0,
     particlesSystemsStepped: 0,
+    particlesShellsCulled: 0,
     effectsShapeVertices: 0,
+    effectsShapesCulled: 0,
     lightingStaticCasters: 0,
     lightingDynamicCasters: 0,
     lightingBlobDecals: 0,

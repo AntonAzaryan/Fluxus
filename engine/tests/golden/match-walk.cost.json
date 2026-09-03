@@ -21,6 +21,7 @@
   "performance": {
     "frame": {
       "effectsShapeVertices": 0,
+      "effectsShapesCulled": 0,
       "fogDissolveTexels": 7424,
       "fogMaskClearTexels": 5888,
       "fogMaskSmoothTexels": 11776,
@@ -51,6 +52,7 @@
       "modelsCulled": 0,
       "modelsLodSelections": 48,
       "modelsPoseWrites": 48,
+      "particlesShellsCulled": 0,
       "particlesShellsPosed": 24,
       "particlesShotsStepped": 0,
       "particlesSystemsStepped": 24,
@@ -83,6 +85,7 @@
   "ultra": {
     "frame": {
       "effectsShapeVertices": 0,
+      "effectsShapesCulled": 0,
       "fogDissolveTexels": 29440,
       "fogMaskClearTexels": 23552,
       "fogMaskSmoothTexels": 47104,
@@ -113,6 +116,7 @@
       "modelsCulled": 0,
       "modelsLodSelections": 48,
       "modelsPoseWrites": 48,
+      "particlesShellsCulled": 0,
       "particlesShellsPosed": 24,
       "particlesShotsStepped": 0,
       "particlesSystemsStepped": 24,

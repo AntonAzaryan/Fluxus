@@ -44,10 +44,13 @@ const BURST = 'vfx/burst.effect.json';
 /** Огонь с подчинённым эмиттером искр и документ с `autoDestroy` (design D6). */
 const SUB = 'vfx/sub-emitter.effect.json';
 const SELF_DESTRUCT = 'vfx/self-destruct.effect.json';
+/** Флипбук: атлас кадров 4×2 и поведение, ведущее кадр по жизни частицы. */
+const FLIPBOOK = 'vfx/flipbook.effect.json';
 const torchDoc = fixture('torch.effect.json');
 const burstDoc = fixture('burst.effect.json');
 const subDoc = fixture('sub-emitter.effect.json');
 const selfDestructDoc = fixture('self-destruct.effect.json');
+const flipbookDoc = fixture('flipbook.effect.json');
 
 /** Порядок состояний сборки — он же словарь битов `EntityView.states` (CAM-6). */
 const STATE_COMPONENTS = ['Falling', 'Poisoned'];
@@ -88,6 +91,7 @@ function makeRig(options: RigOptions = {}) {
     assets.resolve('particle-effect', BURST, burstDoc);
     assets.resolve('particle-effect', SUB, subDoc);
     assets.resolve('particle-effect', SELF_DESTRUCT, selfDestructDoc);
+    assets.resolve('particle-effect', FLIPBOOK, flipbookDoc);
   }
   const scene = new THREE.Scene();
   const ctx: RenderContext = { scene, assets: assets.service, config: { heightStep: 0.5 } };
@@ -1320,5 +1324,127 @@ describe('ParticlesSubsystem: сокет через прямую позу узл
     subsystem.updateFrame(0.016, 1);
     expect(subsystem.emitterFor(1)).not.toBeNull();
     expect(warnings.filter((m) => m.includes('socket') || m.includes('сокет'))).toHaveLength(1);
+  });
+});
+
+// ------------------------------- флипбук: атлас кадров (REND-24, ASSET-14)
+
+describe('Флипбук: сетка тайлов документа доезжает до батча (REND-24)', () => {
+  const FLIP_MANIFEST: VisualManifest = {
+    entities: {},
+    particles: { byKind: { Flame: { effect: FLIPBOOK } } },
+  };
+
+  /** Батчи библиотеки: подсистема кладёт их корень в сцену своим `init`. */
+  function batchesOf(scene: THREE.Scene): BatchedRenderer {
+    return scene.getObjectByName('particle-batches') as BatchedRenderer;
+  }
+
+  it('атлас 4×2 и смешивание тайлов — настройки конвейера отрисовки', () => {
+    // Конвейер батча собирается ИЗ ДОКУМЕНТА: атлас — часть ключа конвейера, и
+    // потеряйся он по дороге, частица рисовалась бы целой текстурой вместо
+    // кадра. Проверяется поэтому батч, а не поля системы.
+    const { subsystem, scene } = makeRig({ manifest: FLIP_MANIFEST });
+    subsystem.syncTick(makeTickView([makeEntityView(1, { kind: 'Flame' })]));
+    subsystem.updateFrame(0.1, 1);
+
+    const batch = batchesOf(scene).batches[0]!;
+    expect(batch.settings.uTileCount).toBe(4);
+    expect(batch.settings.vTileCount).toBe(2);
+    expect(batch.settings.blendTiles).toBe(true);
+  });
+
+  it('прогрев заводит конвейер флипбука до первого кадра (REND-24)', async () => {
+    const { subsystem, scene } = makeRig({ manifest: FLIP_MANIFEST });
+    await subsystem.prewarm();
+
+    // Батч с атласом уже есть, а играть ничего не начало: программа шейдера
+    // компилируется тёплой сценой, а не кадром первого появления эмиттера.
+    expect(batchesOf(scene).batches[0]!.settings.uTileCount).toBe(4);
+    expect(subsystem.pooledCount).toBe(1);
+    expect(subsystem.activeCount).toBe(0);
+    expect(subsystem.particleCount).toBe(0);
+  });
+
+  it('поведение кадра над атласом 1×1 — предупреждение один раз, а не отказ', () => {
+    // Документ легален: анимировать по сетке из одной клетки нечего, и рендер
+    // рисует статичный спрайт. Молчать значило бы оставить автора эффекта
+    // гадать, почему анимация не идёт (REND-24).
+    const flat = structuredClone(flipbookDoc) as unknown as {
+      object: { children: { ps: Record<string, unknown> }[] };
+    };
+    flat.object.children[0]!.ps.uTileCount = 1;
+    flat.object.children[0]!.ps.vTileCount = 1;
+    const { subsystem, assets, warnings } = makeRig({
+      manifest: { entities: {}, particles: { byKind: { Flame: { effect: 'vfx/flat.effect.json' } } } },
+      missing: true,
+    });
+    assets.resolve('particle-effect', 'vfx/flat.effect.json', flat);
+
+    // Две сущности — два экземпляра, то есть две развёртки: предупреждение
+    // всё равно одно.
+    subsystem.syncTick(
+      makeTickView([
+        makeEntityView(1, { kind: 'Flame' }),
+        makeEntityView(2, { kind: 'Flame' }),
+      ]),
+    );
+
+    expect(subsystem.activeCount).toBe(2);
+    expect(warnings.filter((m) => m.includes('атласу 1×1'))).toHaveLength(1);
+  });
+});
+
+// ------------------------------ горячая перезагрузка документов (ED-15)
+
+describe('Правленые эмиттерные ассеты доезжают до кадра (ED-15, ASSET-14)', () => {
+  const HOT: VisualManifest = {
+    entities: {},
+    particles: { byKind: { Flame: { effect: TORCH } } },
+  };
+
+  function batchesOf(scene: THREE.Scene): BatchedRenderer {
+    return scene.getObjectByName('particle-batches') as BatchedRenderer;
+  }
+
+  it('refreshAssets переразбирает документ и заводит живые эмиттеры заново', () => {
+    const { subsystem, scene, assets } = makeRig({ manifest: HOT });
+    subsystem.syncTick(makeTickView([makeEntityView(1, { kind: 'Flame' })]));
+    frames(subsystem, 2);
+    expect(subsystem.activeCount).toBe(1);
+    expect(batchesOf(scene).batches[0]!.settings.uTileCount).toBe(1);
+
+    // Дерево контента правлено из-под редактора: по тому же адресу теперь
+    // другой документ, а кэш ассетов выброшен целиком (`assetModule.ts`).
+    assets.resolve('particle-effect', TORCH, flipbookDoc);
+    subsystem.refreshAssets();
+    frames(subsystem, 1);
+
+    // Оболочка та же — сущность из доставленного состояния никуда не делась
+    // (REND-24), — а играет она уже правленым документом.
+    expect(subsystem.activeCount).toBe(1);
+    expect(batchesOf(scene).batches[0]!.settings.uTileCount).toBe(4);
+    // Конвейер прежнего документа снесён вместе с пулом, а не оставлен рядом
+    // (REND-31): иначе каждая правка стоила бы кадру ещё одного батча.
+    expect(batchesOf(scene).batches).toHaveLength(1);
+  });
+
+  it('ассет запрашивается заново: прежний кэш редактор уже выбросил (ASSET-2)', () => {
+    const { subsystem, assets } = makeRig({ manifest: HOT });
+    subsystem.syncTick(makeTickView([makeEntityView(1, { kind: 'Flame' })]));
+    const before = assets.requests.filter((request) => request.id === TORCH).length;
+    expect(before).toBe(1);
+
+    subsystem.refreshAssets();
+
+    expect(assets.requests.filter((request) => request.id === TORCH)).toHaveLength(2);
+  });
+
+  it('без доставленного состояния перезагрузка ничего не заводит', () => {
+    // Правка дерева — не доставка: оболочек, которых не было, она не создаёт.
+    const { subsystem } = makeRig({ manifest: HOT });
+    subsystem.refreshAssets();
+    expect(subsystem.activeCount).toBe(0);
+    expect(subsystem.pooledCount).toBe(0);
   });
 });

@@ -59,6 +59,8 @@ export interface ShapeContext {
   /** Сторона клетки в мировых единицах; 0 — сетки нет, дробление по единицам. */
   readonly tile: number;
   readonly tessellation: number;
+  /** Потолок дробления от пресета качества (QUAL-1); без ручки — потолок кода. */
+  readonly detail: number;
 }
 
 export class EffectNodePool {
@@ -109,7 +111,7 @@ export class EffectNodePool {
       return null;
     }
     const plan = isShapePrimitive(primitive)
-      ? planShape(record, ctx.surface, ctx.tile, ctx.tessellation)
+      ? planShape(record, ctx.surface, ctx.tile, ctx.tessellation, ctx.detail)
       : null;
     const key = plan === null ? primitive : `${primitive}|${String(plan.rows)}x${String(plan.cols)}`;
     let bucket = this.free.get(key);
