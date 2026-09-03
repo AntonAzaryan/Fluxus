@@ -281,6 +281,25 @@ export class LightingCycle {
   }
 
   /**
+   * Значения ТЕКУЩЕГО положения круга заново, не двигая часов (REND-32).
+   * Нужны ровно в одном случае: применение секции или потолка пресета положило
+   * на источники СТАТИЧЕСКУЮ часть конфигурации, а фазы круга при этом не
+   * изменились — часы идти заново не должны, но и оставлять на источниках
+   * статику нельзя: установившаяся фаза кадром значений не отдаёт вовсе
+   * (`step` вернёт `null`), и сцена так и осталась бы покрашенной мимо круга.
+   *
+   * `null` — цикла нет: круг пуст, и ставить нечего.
+   */
+  resample(): LightingCycleSample | null {
+    const phases = this.phases;
+    const phase = phases[this.index];
+    if (phase === undefined) return null;
+    if (!this.transition) return this.settle(phase);
+    const next = phases[this.index + 1 === phases.length ? 0 : this.index + 1]!;
+    return this.blend(phase, next, this.fade);
+  }
+
+  /**
    * Кадр цикла по presentation-часам. Возвращает значения, которые надо
    * поставить на источники, либо `null` — цикла нет вовсе или фаза
    * установившаяся и значения на источниках уже её (два сравнения, design D2).

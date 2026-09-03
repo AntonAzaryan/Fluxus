@@ -269,13 +269,22 @@ describe('локальный свет и тени (REND-33, REND-30)', () => {
 // ------------------------------------------------------- отбор под потолком
 
 describe('носителей больше потолка (REND-33, QUAL-1)', () => {
-  /** Пять факелов в ряд: потолок пресета выберет из них ближайшие к взгляду. */
+  /**
+   * Пять факелов в ряд: потолок пресета выберет из них ближайшие к взгляду.
+   *
+   * Шаг ряда НЕРОВНЫЙ намеренно. Ровный ряд симметричен относительно центра
+   * арены, а точка взгляда без камеры — этот самый центр: оценки пар факелов
+   * тогда совпадают ТОЧНО, и последний отобранный оказывается ровно на границе
+   * отбора — там, где рампа затухания обращает его в ноль (см. её тесты ниже).
+   * Здесь предмет другой — сколько источников горит под потолком, — и ровный
+   * шаг проверял бы вместо него вырожденный случай границы.
+   */
   const row: readonly EntityView[] = [
     placed(1, 'Torch', 0, 0),
     placed(2, 'Torch', 2, 0),
     placed(3, 'Torch', 4, 0),
-    placed(4, 'Torch', 6, 0),
-    placed(5, 'Torch', 8, 0),
+    placed(4, 'Torch', 6.5, 0),
+    placed(5, 'Torch', 8.5, 0),
   ];
 
   /** Позиции горящих источников по возрастанию — их и сравниваем между прогонами. */
@@ -325,7 +334,7 @@ describe('носителей больше потолка (REND-33, QUAL-1)', () 
     const rig = makeRig({ preset: { [LIGHTING_MAX_LOCAL_LIGHTS]: 2 }, camera });
     rig.stage.publishDecorations(decorations([...row]));
     frames(rig);
-    expect(litAt(rig)).toEqual([6, 8]);
+    expect(litAt(rig)).toEqual([6.5, 8.5]);
 
     // Та же сцена без камеры: точка взгляда — центр арены (4, 4), и отбор
     // остаётся определённым, просто другим.
@@ -363,6 +372,99 @@ describe('носителей больше потолка (REND-33, QUAL-1)', () 
     );
     frames(rig);
     expect(rig.lighting.localLights.activeCount).toBe(DEFAULT_MAX_LOCAL_LIGHTS);
+  });
+});
+
+// -------------------------------------------- рампа затухания у границы отбора
+
+describe('источник у границы отбора не переключается скачком (REND-33)', () => {
+  /**
+   * Камера над точкой пола: точка взгляда — пересечение её направления с полом
+   * (design D3), и двигая её, тест двигает отбор.
+   */
+  function looking(at: number): THREE.Camera {
+    const camera = new THREE.PerspectiveCamera();
+    camera.position.set(at, 0, 10);
+    camera.lookAt(at, 0, 0);
+    return camera;
+  }
+
+  /** Носители у камеры: два соперника рядом и третий заведомо дальше. */
+  function rivals(): EntityView[] {
+    return [placed(1, 'Torch', 0, 0), placed(2, 'Torch', 3, 0), placed(3, 'Torch', 4, 0)];
+  }
+
+  /** Интенсивность источника НАД носителем: слоты кадром переставляются. */
+  function litNear(rig: Rig, x: number): number {
+    const found = localLights(rig.scene).find((light) => Math.abs(light.position.x - x) < 1e-6);
+    return found?.intensity ?? 0;
+  }
+
+  it('носитель у самой границы горит вполсилы, а не в полную', () => {
+    // Потолок два, носителей три: третий отвергнут, и второй отобранный стоит от
+    // границы отбора ближе ширины рампы — гореть авторской силой он не вправе,
+    // иначе следующий кадр панорамы погасил бы его скачком.
+    const rig = makeRig({ preset: { [LIGHTING_MAX_LOCAL_LIGHTS]: 2 }, camera: looking(1.6) });
+    rig.stage.publishDecorations(decorations(rivals()));
+    frames(rig);
+
+    expect(rig.lighting.localLights.activeCount).toBe(2);
+    const dimmed = litNear(rig, 0);
+    expect(dimmed).toBeGreaterThan(0);
+    expect(dimmed).toBeLessThan(TORCH_LIGHT.intensity);
+    // Отвергнутый не светит вовсе — рампа границы этого не меняет (REND-33).
+    expect(litNear(rig, 4)).toBe(0);
+  });
+
+  it('малый сдвиг камеры не включает и не выключает источник скачком', () => {
+    // Камера проходит точку, где носители меняются местами в рейтинге. Без
+    // рампы это выглядело бы как мгновенная замена одного факела другим в
+    // полную силу; с рампой обмен идёт около нуля, и ни один кадр перехода не
+    // двигает свет больше, чем на малую долю авторской интенсивности.
+    const views = rivals();
+    let previous: number[] | null = null;
+    for (const at of [1.9, 1.95, 2.0, 2.05, 2.1]) {
+      const rig = makeRig({ preset: { [LIGHTING_MAX_LOCAL_LIGHTS]: 2 }, camera: looking(at) });
+      rig.stage.publishDecorations(decorations(views));
+      frames(rig);
+      const now = [litNear(rig, 0), litNear(rig, 3), litNear(rig, 4)];
+      if (previous !== null) {
+        for (let i = 0; i < now.length; i++) {
+          const jump = Math.abs(now[i]! - previous[i]!);
+          expect(jump, `сдвиг камеры к ${at}, носитель ${i}`).toBeLessThan(
+            TORCH_LIGHT.intensity * 0.1,
+          );
+        }
+      }
+      previous = now;
+    }
+    // Обмен действительно состоялся: на другом конце прохода горит уже другой
+    // сосед — иначе тест проверял бы неподвижную картинку.
+    expect(previous![2]).toBeGreaterThan(0);
+  });
+
+  it('носителей не больше потолка — рампы нет: свет авторской силы', () => {
+    // Гаснуть некому, границы отбора не существует, и ни один источник не
+    // обязан платить за неё яркостью.
+    const rig = makeRig({ preset: { [LIGHTING_MAX_LOCAL_LIGHTS]: 4 }, camera: looking(1.6) });
+    rig.stage.publishDecorations(decorations(rivals()));
+    frames(rig);
+
+    expect(rig.lighting.localLights.activeCount).toBe(3);
+    for (const light of burning(rig.scene)) {
+      expect(light.intensity).toBe(TORCH_LIGHT.intensity);
+    }
+  });
+
+  it('повтор того же кадра даёт те же числа: памяти о прошлом кадре у рампы нет', () => {
+    const rig = makeRig({ preset: { [LIGHTING_MAX_LOCAL_LIGHTS]: 2 }, camera: looking(1.6) });
+    rig.stage.publishDecorations(decorations(rivals()));
+    frames(rig);
+    const first = localLights(rig.scene).map((light) => light.intensity);
+
+    frames(rig, 3);
+
+    expect(localLights(rig.scene).map((light) => light.intensity)).toEqual(first);
   });
 });
 

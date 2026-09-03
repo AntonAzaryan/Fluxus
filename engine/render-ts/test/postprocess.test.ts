@@ -14,8 +14,10 @@ import { describe, expect, it, vi } from 'vitest';
 import type { ColorLut, PresentationPostprocess } from '@fluxus/assets';
 import {
   BLOOM_LEVELS,
+  DEFAULT_ANTIALIAS_SAMPLES,
   DEFAULT_POSTPROCESS_CONFIG,
   FogSubsystem,
+  POSTPROCESS_ANTIALIAS,
   POSTPROCESS_BLOOM,
   POSTPROCESS_BLOOM_RESOLUTION,
   POSTPROCESS_LUT,
@@ -328,6 +330,62 @@ describe('QUAL-1: ручки пост-обработки режут только
 
     expect(JSON.stringify(section)).toBe(frozen);
   });
+
+  // --------------------------------- сглаживание рёбер (ручка `antialias`)
+
+  it('цель сцены мультисэмплится: кадр с цепочкой сглажен так же, как без неё', () => {
+    // `antialias: true` рендерера мультисэмплит ДЕФОЛТНЫЙ фреймбуфер, а
+    // включённая цепочка рисует сцену в свою цель: без сэмплов на ней сцена с
+    // пост-обработкой рисовалась бы каждым кадром без сглаживания вовсе.
+    const { post } = subsystem(TONE_ONLY);
+    post.render(new PostRendererSpy(), camera());
+
+    expect(DEFAULT_ANTIALIAS_SAMPLES).toBe(4);
+    expect(post.passes.scene?.samples).toBe(DEFAULT_ANTIALIAS_SAMPLES);
+    // Текстура глубины при этом жива: её читает маскирующий проход тумана
+    // (FOW-7), и three сводит многосэмпловую глубину в неё блитом.
+    expect(post.passes.scene?.depthTexture).not.toBeNull();
+    expect(post.passes.scene?.resolveDepthBuffer).toBe(true);
+  });
+
+  it('ручка `postprocess.antialias` снимает сэмплы, и цель заводится заново', () => {
+    const post = withPreset(TONE_ONLY, { [POSTPROCESS_ANTIALIAS]: 0 });
+    post.render(new PostRendererSpy(), camera());
+
+    expect(post.passes.scene?.samples).toBe(0);
+  });
+
+  it('смена значения ручки в рантайме пересоздаёт цель сцены (ED-15)', () => {
+    const ctx = makeRenderContext();
+    const stage = new PresentationStage(ctx);
+    const post = new PostprocessSubsystem({ config: TONE_ONLY });
+    stage.register(post);
+    const controller = new QualityController(stage);
+    post.render(new PostRendererSpy(), camera());
+    const before = post.passes.scene;
+    expect(before?.samples).toBe(DEFAULT_ANTIALIAS_SAMPLES);
+
+    controller.apply({ [POSTPROCESS_ANTIALIAS]: 2 });
+    post.render(new PostRendererSpy(), camera());
+
+    // Мультисэмплинг — свойство самой цели: другое число сэмплов означает
+    // другую цель, а прежняя отдана (REND-31).
+    expect(post.passes.scene).not.toBe(before);
+    expect(post.passes.scene?.samples).toBe(2);
+  });
+
+  it('перечень значений ручки закрыт: 0, 2, 4 — и ничего между ними', () => {
+    const ctx = makeRenderContext();
+    const stage = new PresentationStage(ctx);
+    stage.register(new PostprocessSubsystem());
+    const knob = new QualityController(stage).knobs.find(
+      (entry) => entry.name === POSTPROCESS_ANTIALIAS,
+    );
+
+    expect(knob?.semantics).toBe('value');
+    expect(knob?.default).toBe(DEFAULT_ANTIALIAS_SAMPLES);
+    expect(knob?.values).toEqual([0, 2, 4]);
+  });
 });
 
 // ------------------------------------------------ 2.2: правка в рантайме
@@ -443,6 +501,133 @@ describe('REND-34: без расширения half-float цепочка идё�
 
     expect(post.passes.hdr).toBe(true);
     expect(post.passes.scene?.texture.type).toBe(THREE.HalfFloatType);
+  });
+
+  it('половинной точности ДОСТАТОЧНО: EXT_color_buffer_half_float держит путь полным', () => {
+    // Цель цепочки — RGBA16F, и рисуемой её делает именно это расширение.
+    // Требовать более широкое `EXT_color_buffer_float` значило бы уводить в LDR
+    // устройства, на которых запас яркости есть, — то есть ровно слабые.
+    const said: string[] = [];
+    const { post } = subsystem(TONE_AND_BLOOM, (message) => {
+      said.push(message);
+    });
+    const renderer = new PostRendererSpy(true);
+    Object.assign(renderer, {
+      extensions: { has: (name: string) => name === 'EXT_color_buffer_half_float' },
+    });
+
+    post.render(renderer, camera());
+
+    expect(post.passes.hdr).toBe(true);
+    expect(post.passes.scene?.texture.type).toBe(THREE.HalfFloatType);
+    expect(said).toEqual([]);
+  });
+
+  it('в LDR порог bloom прижат ниже единицы: иначе свечения нет вовсе, и молча', () => {
+    // Умолчание секции — порог 1, «светится то, что ярче белого». В байтовой
+    // цели ярче единицы не бывает ничего, и авторский порог не пропускал бы в
+    // пирамиду ни одного текселя: bloom не терял бы диапазон, а не работал бы.
+    const said: string[] = [];
+    const { post } = subsystem({ bloom: { enabled: true } }, (message) => {
+      said.push(message);
+    });
+    expect(post.config.bloomThreshold).toBe(1);
+
+    post.render(new PostRendererSpy(false), camera());
+
+    const threshold = post.passes.threshold?.uniforms.uThreshold?.value as number;
+    expect(threshold).toBeLessThan(1);
+    expect(threshold).toBe(0.8);
+    // Деградация названа вслух, а не оставлена на догадку.
+    expect(said[0]).toContain('0.8');
+
+    // Правка соседнего поля секции не возвращает порог наверх: действующее
+    // число считается одним кодом и в момент создания материала, и при правке.
+    post.applyConfig({ bloom: { enabled: true, strength: 0.9 } });
+    expect(post.passes.threshold?.uniforms.uThreshold?.value).toBe(0.8);
+  });
+
+  it('в HDR порог остаётся авторским: прижимает его именно фолбэк', () => {
+    const { post } = subsystem({ bloom: { enabled: true } });
+    post.render(new PostRendererSpy(true), camera());
+
+    expect(post.passes.threshold?.uniforms.uThreshold?.value).toBe(1);
+  });
+});
+
+// --------------------------- 2.5: точность выхода сведения (вход маски FOW-7)
+
+describe('REND-34: цель выхода сведения хранит кадр без квантования', () => {
+  it('в HDR выход half-float, как и цель сцены', () => {
+    const { post } = subsystem(TONE_ONLY);
+
+    post.renderToTexture(new PostRendererSpy(), camera());
+
+    expect(post.passes.output?.texture.type).toBe(THREE.HalfFloatType);
+  });
+
+  it('в LDR выход байтовый, но в sRGB: линейный байт схлопывал бы тени', () => {
+    // Байтовая цель БЕЗ цветового пространства хранит тонемапленный кадр
+    // ЛИНЕЙНО: 1/255 линейного — это ~13/255 sRGB, то есть тринадцать нижних
+    // уровней дисплея в одном. Маска тумана умножает этот кадр на свою величину
+    // и кодирует sRGB уже на канвасе (FOW-7), поэтому затемнённое большинство
+    // арены строилось бы из квантованного источника. Объявленное sRGB заставляет
+    // three выделить SRGB8_ALPHA8 — кодирование и декодирование делает сам GL.
+    const { post } = subsystem(TONE_ONLY);
+
+    post.renderToTexture(new PostRendererSpy(false), camera());
+
+    expect(post.passes.output?.texture.type).toBe(THREE.UnsignedByteType);
+    expect(post.passes.output?.texture.colorSpace).toBe(THREE.SRGBColorSpace);
+  });
+});
+
+// ------------------------------- 2.6: экспозиция без оператора сведения
+
+describe('REND-34: экспозиция действует и при операторе `none`', () => {
+  it('цепочка со свечением и без оператора: экспозиция — голое умножение', () => {
+    // Проход сведения на такой сцене существует (его завёл bloom), и молча
+    // терять в нём авторское число секции нельзя: одно и то же поле работало бы
+    // при пяти операторах и ничего не значило при шестом.
+    const { post } = subsystem({
+      toneMapping: { operator: 'none', exposure: 1.5 },
+      bloom: { enabled: true },
+    });
+    post.render(new PostRendererSpy(), camera());
+
+    const defines = post.passes.resolve?.defines as Record<string, string>;
+    expect(defines.POST_TONE_MAPPING).toBeUndefined();
+    expect(defines.POST_EXPOSURE).toBe('');
+    expect(post.passes.resolve?.uniforms.toneMappingExposure?.value).toBe(1.5);
+    // Множитель стоит там же, где вызов оператора: ПОСЛЕ сложения со свечением.
+    const glow = RESOLVE_FRAGMENT.indexOf('uStrength * glow');
+    const exposure = RESOLVE_FRAGMENT.indexOf('color *= toneMappingExposure');
+    expect(exposure).toBeGreaterThan(glow);
+  });
+
+  it('правка числа идёт униформой, а не пересборкой материала (ED-15)', () => {
+    const { post } = subsystem({
+      toneMapping: { operator: 'none', exposure: 1.5 },
+      bloom: { enabled: true },
+    });
+    post.render(new PostRendererSpy(), camera());
+    const material = post.passes.resolve;
+
+    post.applyConfig({ toneMapping: { operator: 'none', exposure: 0.5 }, bloom: { enabled: true } });
+
+    expect(post.passes.resolve).toBe(material);
+    expect(post.passes.resolve?.uniforms.toneMappingExposure?.value).toBe(0.5);
+  });
+
+  it('сцена без секции по-прежнему рисуется без единого прохода: экспозиция его не заводит', () => {
+    const { post, ctx } = subsystem({ toneMapping: { operator: 'none', exposure: 2 } });
+    const renderer = new PostRendererSpy();
+
+    post.render(renderer, camera());
+
+    expect(post.active).toBe(false);
+    expect(renderer.rendered).toEqual([ctx.scene]);
+    expect(post.passes.resolve).toBeNull();
   });
 });
 

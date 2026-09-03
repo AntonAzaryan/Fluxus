@@ -338,3 +338,46 @@ export function resolveLightingConfig(section?: PresentationLighting): LightingR
     staticShare: shadows?.staticShare ?? fallback.staticShare,
   };
 }
+
+/**
+ * Равны ли две уже РАЗОБРАННЫЕ конфигурации как данные — вход идемпотентности
+ * применения (REND-32, `subsystems/lighting.ts`). Сравнивается разобранная
+ * форма, а не авторская секция: у документа поле бывает не написано, написано
+ * умолчанием и написано в другом порядке ключей, а разбор приводит все три к
+ * одному значению — и «та же секция» перестаёт зависеть от того, как её собрал
+ * редактор.
+ *
+ * Обход общий и рекурсивный, а не перечень полей: перечень отстал бы от
+ * структуры при первом же новом поле конфигурации, и отстал бы молча —
+ * применение просто перестало бы замечать его правку.
+ */
+function sameData(a: unknown, b: unknown): boolean {
+  if (a === b) return true;
+  if (Array.isArray(a) || Array.isArray(b)) {
+    if (!Array.isArray(a) || !Array.isArray(b) || a.length !== b.length) return false;
+    return a.every((item, index) => sameData(item, b[index]));
+  }
+  if (typeof a !== 'object' || typeof b !== 'object' || a === null || b === null) return false;
+  const left = a as Record<string, unknown>;
+  const right = b as Record<string, unknown>;
+  const keys = Object.keys(left);
+  if (keys.length !== Object.keys(right).length) return false;
+  return keys.every((key) => sameData(left[key], right[key]));
+}
+
+/** Две действующие конфигурации света совпадают значением поля в поле. */
+export function sameLightingConfig(a: LightingRenderConfig, b: LightingRenderConfig): boolean {
+  return sameData(a, b);
+}
+
+/**
+ * Два действующих цикла совпадают: та же длина перехода и те же фазы в том же
+ * порядке. `undefined` совпадает только с `undefined` — «цикла нет» такое же
+ * состояние круга, как и любое другое (REND-32).
+ */
+export function sameLightingCycle(
+  a: LightingCycleConfig | undefined,
+  b: LightingCycleConfig | undefined,
+): boolean {
+  return sameData(a, b);
+}

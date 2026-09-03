@@ -152,6 +152,16 @@ float bloomWeight(float factor) {
 #include <tonemapping_pars_fragment>
 #endif
 
+// Экспозиция БЕЗ оператора (REND-34): при операторе none формулы сведения в
+// проходе нет, но авторское число секции обязано действовать — иначе одно и то
+// же поле работало бы при одних операторах и молча ничего не значило при
+// другом. Униформа названа так же, как в чанке three (toneMappingExposure):
+// смысл у неё тот же — множитель яркости перед выводом, — и правится она одним
+// кодом на оба случая (pushUniforms).
+#ifdef POST_EXPOSURE
+uniform float toneMappingExposure;
+#endif
+
 #ifdef POST_LUT
 uniform sampler3D tLut;
 uniform float uLutSize;
@@ -201,6 +211,13 @@ void main() {
 
   #ifdef POST_TONE_MAPPING
   color = POST_TONE_MAPPING(color);
+  #endif
+
+  // Место то же, что у оператора: чанк three умножает на экспозицию ВНУТРИ
+  // формулы, то есть после сложения со свечением, — и голое умножение стоит
+  // там же, иначе два способа записать «ярче» разошлись бы порядком.
+  #ifdef POST_EXPOSURE
+  color *= toneMappingExposure;
   #endif
 
   // LUT — ПОСЛЕ сведения яркости и ДО кодирования цветового пространства
@@ -318,6 +335,12 @@ export function createResolveMaterial(config: {
   const defines: Record<string, string> = {};
   if (operator !== null) {
     defines.POST_TONE_MAPPING = operator;
+    uniforms.toneMappingExposure = { value: config.exposure };
+  } else {
+    // Оператора нет — экспозиция всё равно действует, голым умножением
+    // (REND-34): проход сведения на этой сцене существует (его завёл bloom либо
+    // таблица цвета), и молча терять авторское число в нём нельзя.
+    defines.POST_EXPOSURE = '';
     uniforms.toneMappingExposure = { value: config.exposure };
   }
   if (config.bloom) {

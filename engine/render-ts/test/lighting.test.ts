@@ -423,6 +423,23 @@ describe('полусферная подсветка и контровой ист
     expect(directionalLights(rig.scene).length).toBe(1);
   });
 
+  it('ось «небо → земля» подсветки смотрит по вертикали сцены, а не по +Y three', () => {
+    // Направления у полусферного источника нет отдельным полем: three берёт ось
+    // из его МИРОВОЙ ПОЗИЦИИ (`WebGLLights`). Конструктор ставит туда
+    // `DEFAULT_UP` = (0, 1, 0), а сцена Z-up (REND-1) — на умолчании three
+    // «небом» красились бы стены, обращённые к +Y, а пол получал бы смесь
+    // тонов поровну, то есть ровно обратное сценарию REND-29.
+    const rig = makeRig({ hemisphere: { skyColor: '#88aaff', groundColor: '#6b5a3a' } });
+    rig.scene.updateMatrixWorld(true);
+
+    const axis = new THREE.Vector3();
+    hemisphereLights(rig.scene)[0]!.getWorldPosition(axis).normalize();
+
+    expect(axis.x).toBeCloseTo(0, 6);
+    expect(axis.y).toBeCloseTo(0, 6);
+    expect(axis.z).toBeCloseTo(1, 6);
+  });
+
   it('контровой источник — второй направленный, теней не отбрасывает и вне реестра кастеров', () => {
     const rig = makeRig({
       rim: { color: '#ffe8c0', intensity: 0.8, direction: { x: -6, y: 10, z: 4 } },
@@ -1036,6 +1053,180 @@ describe('режимы теней и кэш статики (design D2)', () => {
   });
 });
 
+// ------------------- подтверждение перерисовки кэша статики (REND-30)
+
+describe('перерисовка кэша статики подтверждается кадром, а не решением', () => {
+  /**
+   * Теневой проход three глазами подсистемы: карту строит он сам первым
+   * проходом, и он же снимает `needsUpdate` у источника, чью карту нарисовал.
+   * Ровно это подсистема и читает обратно — другого признака «кадр состоялся»
+   * у неё нет.
+   */
+  function drawShadows(rig: Rig): void {
+    for (const light of [rig.lighting.lights.sun, rig.lighting.lights.sunDynamic]) {
+      if (!light.castShadow) continue;
+      light.shadow.map ??= new THREE.WebGLRenderTarget(1, 1);
+      light.shadow.needsUpdate = false;
+    }
+  }
+
+  /** Сцена `hybrid` с обоими ярусами: чередование карт тут наблюдаемо. */
+  function hybridRig(): Rig {
+    const rig = makeRig({ shadows: { mode: 'hybrid' } });
+    rig.stage.publish(PRODUCER, makeTickView([makeEntityView(1, { kind: 'Rock' })]));
+    rig.stage.publishDecorations(decorations([makeEntityView(2, { kind: 'Rock' })]));
+    return rig;
+  }
+
+  it('нарисованный кадр перерисовку подтверждает: заказ не повторяется', () => {
+    const rig = hybridRig();
+    rig.stage.frame(0.016, 0);
+    drawShadows(rig);
+    const baked = rig.lighting.staticRebuilds;
+    expect(baked).toBe(1);
+
+    for (let frame = 0; frame < 6; frame++) {
+      rig.stage.frame(0.016, 0);
+      drawShadows(rig);
+    }
+
+    // Кэш событиен: событий не было — перерисовок тоже (REND-30).
+    expect(rig.lighting.staticRebuilds).toBe(baked);
+  });
+
+  it('ПРОПУЩЕННЫЙ потребителем кадр перерисовку не подтверждает (drawFailure)', () => {
+    // Вьюпорт редактора пропускает кадр при отказе отрисовки (`drawFailure`), а
+    // теневой проход three снимает `needsUpdate` только нарисовав карту. Считай
+    // подсистема заказ исполненным, следующая фаза сняла бы флаг сама — и кэш
+    // статики остался бы устаревшим до следующего события инвалидации, которого
+    // может не быть вовсе.
+    const rig = hybridRig();
+    rig.stage.frame(0.016, 0); // перерисовка кэша
+    drawShadows(rig);
+    rig.stage.frame(0.016, 0); // ворота REND-30 отдают следующий кадр динамике
+    drawShadows(rig);
+    const baked = rig.lighting.staticRebuilds;
+
+    // Событие инвалидации: заказ на перерисовку выдан следующим кадром…
+    rig.lighting.invalidateStatic();
+    rig.stage.frame(0.016, 0);
+    expect(rig.lighting.staticRebuilds).toBe(baked + 1);
+
+    // …а кадр потребитель ПРОПУСТИЛ: флаг источника никто не снял. Ближайший
+    // кадр ворота отдают динамике, а следующий за ним обязан заказать
+    // перерисовку заново — кэш-то остался прежним.
+    rig.stage.frame(0.016, 0);
+    rig.stage.frame(0.016, 0);
+    expect(rig.lighting.staticRebuilds).toBe(baked + 2);
+
+    // Теперь кадр нарисован — и заказ больше не повторяется.
+    drawShadows(rig);
+    rig.stage.frame(0.016, 0);
+    rig.stage.frame(0.016, 0);
+    expect(rig.lighting.staticRebuilds).toBe(baked + 2);
+  });
+
+  it('прогон без рендерера вовсе перерисовку не переспрашивает (headless)', () => {
+    // Карты нет ни у кого: теневого прохода в прогоне не бывает, и «флаг не
+    // снят» здесь значит «рисовать некому», а не «кадр пропущен». Иначе
+    // подсистема заказывала бы перерисовку каждый второй кадр до конца прогона
+    // — и эталон стоимости (PERF-3) считал бы работу, которой нет.
+    const rig = hybridRig();
+    for (let frame = 0; frame < 8; frame++) rig.stage.frame(0.016, 0);
+
+    expect(rig.lighting.lights.sun.shadow.map).toBeNull();
+    expect(rig.lighting.staticRebuilds).toBe(1);
+  });
+});
+
+// ------------------------------- идемпотентность применения (ED-15, REND-32)
+
+describe('применение, ничего не изменившее, не делает ничего (ED-15)', () => {
+  /** Сцена с кэшем статики: по перерисовкам и видно лишнее применение. */
+  function bakedRig(config: PresentationLighting): Rig {
+    const rig = makeRig(config);
+    rig.stage.publishDecorations(decorations([makeEntityView(2, { kind: 'Rock' })]));
+    rig.stage.frame(0.016, 0);
+    rig.stage.frame(0.016, 0);
+    return rig;
+  }
+
+  it('`applyConfig` той же секцией кэш статики не устаревает', () => {
+    // Путь редактора: `applyDraft` зовёт `applyConfig(next.lighting)` после
+    // КАЖДОГО `submit()` любого документа — правка имени сущности или числа
+    // в чужой секции доходит сюда неизменной секцией света. Перезапекать кэш
+    // статики на ней значит платить теневым проходом за каждое нажатие клавиши.
+    const rig = bakedRig({ shadows: { mode: 'hybrid' } });
+    const baked = rig.lighting.staticRebuilds;
+
+    // Другой объект с теми же значениями — сравнивается значение, а не ссылка.
+    rig.lighting.applyConfig({ shadows: { mode: 'hybrid' } });
+    rig.stage.frame(0.016, 0);
+    rig.stage.frame(0.016, 0);
+
+    expect(rig.lighting.staticRebuilds).toBe(baked);
+  });
+
+  it('секция, записанная умолчаниями, тоже «та же»: сравнивается разобранная форма', () => {
+    // Автор дописал поле его же умолчанием — кадр от этого не меняется, и
+    // применение обязано увидеть это, а не сравнивать тексты документов.
+    const rig = bakedRig({ shadows: { mode: 'hybrid' } });
+    const baked = rig.lighting.staticRebuilds;
+
+    rig.lighting.applyConfig({
+      ambient: { color: DEFAULT_LIGHTING_CONFIG.ambientColor },
+      shadows: { mode: 'hybrid', mapSize: DEFAULT_LIGHTING_CONFIG.shadowMapSize },
+    });
+    rig.stage.frame(0.016, 0);
+    rig.stage.frame(0.016, 0);
+
+    expect(rig.lighting.staticRebuilds).toBe(baked);
+  });
+
+  it('ПРАВКА секции кэш устаревает — идемпотентность не глушит настоящую правку', () => {
+    const rig = bakedRig({ shadows: { mode: 'hybrid' } });
+    const baked = rig.lighting.staticRebuilds;
+
+    rig.lighting.applyConfig({ ambient: { intensity: 0.1 }, shadows: { mode: 'hybrid' } });
+    rig.stage.frame(0.016, 0);
+
+    expect(rig.lighting.staticRebuilds).toBe(baked + 1);
+  });
+
+  it('`applyQuality` теми же значениями кэш статики не устаревает (QUAL-1)', () => {
+    // Смена пресета в матче — событие, но повторная раздача ТЕХ ЖЕ значений
+    // (поздняя регистрация подсистемы, повтор документа) событием не является.
+    const rig = bakedRig({ shadows: { mode: 'hybrid' } });
+    const values = new Map<string, string | number>([
+      ['lighting.shadowMode', 'hybrid'],
+      ['lighting.shadowMapSize', 1024],
+    ]);
+    rig.lighting.applyQuality(values);
+    rig.stage.frame(0.016, 0);
+    rig.stage.frame(0.016, 0);
+    const baked = rig.lighting.staticRebuilds;
+
+    rig.lighting.applyQuality(values);
+    rig.stage.frame(0.016, 0);
+    rig.stage.frame(0.016, 0);
+
+    expect(rig.lighting.staticRebuilds).toBe(baked);
+    // Потолок при этом действует: идемпотентность — про повтор, а не про отмену.
+    expect(rig.lighting.config.shadowMapSize).toBe(1024);
+  });
+
+  it('потолок, изменивший действующую конфигурацию, применяется как обычно', () => {
+    const rig = bakedRig({ shadows: { mode: 'hybrid' } });
+    const baked = rig.lighting.staticRebuilds;
+
+    rig.lighting.applyQuality(new Map([['lighting.shadowMapSize', 512]]));
+    rig.stage.frame(0.016, 0);
+
+    expect(rig.lighting.config.shadowMapSize).toBe(512);
+    expect(rig.lighting.staticRebuilds).toBe(baked + 1);
+  });
+});
+
 // -------------------------------------------------- цикл времени суток
 
 /**
@@ -1231,22 +1422,60 @@ describe('цикл времени суток — исполнение подси
     expect(rig.lighting.lights.ambient.intensity).toBe(1);
   });
 
-  it('правка секции перезапускает круг с начала первой фазы (ED-15, REND-32)', () => {
+  it('ПРАВКА секции перезапускает круг с начала первой фазы (ED-15, REND-32)', () => {
     const rig = makeRig(cycleSection());
     advance(rig, 12);
     expect(rig.lighting.lights.ambient.intensity).toBe(0);
 
     // Автор правит фазу — облик воспроизводим: круг идёт с начала.
-    rig.lighting.applyConfig(cycleSection());
-    expect(rig.lighting.lights.ambient.intensity).toBe(1);
+    rig.lighting.applyConfig(
+      cycleSection({
+        cycle: {
+          transitionSeconds: 2,
+          phases: [PHASES[0]!, { ...PHASES[1]!, seconds: 12 }],
+        },
+      }),
+    );
 
-    // Тем же швом идут потолок пресета и смена сетки арены (design D2).
+    expect(rig.lighting.lights.ambient.intensity).toBe(1);
+  });
+
+  it('ТА ЖЕ секция круга не трогает: часы идут дальше, статика не перепекается', () => {
+    // В редакторе `applyConfig` зовётся после КАЖДОГО `submit()` любого
+    // документа (ED-15): перезапускай применение круг — на сцене с циклом
+    // каждое нажатие клавиши возвращало бы «утро», а в `hybrid` форсировало бы
+    // перезапекание кэша статики. Правкой это не является: секция та же.
+    const rig = makeRig(cycleSection({ shadows: { mode: 'hybrid' } }));
     advance(rig, 12);
+    const rebuilds = rig.lighting.staticRebuilds;
+    const intensity = rig.lighting.lights.ambient.intensity;
+    expect(intensity).toBe(0); // круг дошёл до второй фазы
+
+    // Та же секция ДРУГИМ объектом: сравнивается значение, а не ссылка.
+    rig.lighting.applyConfig(cycleSection({ shadows: { mode: 'hybrid' } }));
+    advance(rig, 0);
+
+    expect(rig.lighting.lights.ambient.intensity).toBe(intensity);
+    expect(rig.lighting.staticRebuilds).toBe(rebuilds);
+  });
+
+  it('потолок пресета и смена сетки круга не перезапускают (QUAL-1, REND-14)', () => {
+    // Ни то, ни другое не является применением СЕКЦИИ: пресет документа не
+    // трогает ни байтом (QUAL-1), а сетка — вход другой подсистемы. Часы суток
+    // от них идти заново не обязаны, а значения идущей фазы обязаны остаться на
+    // источниках: статическая часть секции их не подменяет.
+    const rig = makeRig(cycleSection());
+    advance(rig, 12);
+    expect(rig.lighting.lights.ambient.intensity).toBe(0);
+
     rig.lighting.applyQuality(new Map([['lighting.shadowMode', 'none']]));
-    expect(rig.lighting.lights.ambient.intensity).toBe(1);
-    advance(rig, 12);
+    expect(rig.lighting.lights.ambient.intensity).toBe(0);
+
     rig.lighting.applyGrid(flatGrid(16));
-    expect(rig.lighting.lights.ambient.intensity).toBe(1);
+    expect(rig.lighting.lights.ambient.intensity).toBe(0);
+    // Наводка при этом пересчитана по новым границам арены: солнце стоит от
+    // центра другой сетки, а не от прежнего.
+    expect(rig.lighting.lights.sun.target.position.x).toBeCloseTo(8, 6);
   });
 
   it('снятая подсекция возвращает статический свет секции', () => {

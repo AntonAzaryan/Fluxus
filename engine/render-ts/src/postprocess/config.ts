@@ -30,7 +30,16 @@ export type ToneMappingOperator = PresentationToneMappingOperator;
 export interface PostprocessRenderConfig {
   /** Оператор сведения яркости; `none` — сведения нет вовсе. */
   readonly operator: ToneMappingOperator;
-  /** Экспозиция, положительная: множитель яркости перед оператором. */
+  /**
+   * Экспозиция, положительная: множитель яркости перед оператором.
+   *
+   * При `operator: 'none'` формулы сведения в проходе нет, а число действует всё
+   * равно — голым умножением в проходе сведения (`passes.ts`, define
+   * `POST_EXPOSURE`). Иначе одно и то же поле работало бы при пяти операторах и
+   * молча ничего не значило при шестом. Прохода при этом экспозиция не заводит:
+   * цепочка активна оператором, bloom'ом либо таблицей цвета, и сцена без них
+   * рисуется без единого лишнего прохода, как и прежде (REND-34).
+   */
   readonly exposure: number;
   /** Включён ли bloom. */
   readonly bloomEnabled: boolean;

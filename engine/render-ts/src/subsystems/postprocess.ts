@@ -43,7 +43,7 @@ import type {
   ScenePostSource,
   TickView,
 } from '../types.js';
-import { PostprocessChain } from '../postprocess/chain.js';
+import { DEFAULT_ANTIALIAS_SAMPLES, PostprocessChain } from '../postprocess/chain.js';
 import {
   resolvePostprocessConfig,
   type PostprocessRenderConfig,
@@ -73,6 +73,25 @@ export const POSTPROCESS_BLOOM_RESOLUTION = 'postprocess.bloomResolution';
  * авторского файла, а не пресета.
  */
 export const POSTPROCESS_LUT = 'postprocess.lut';
+
+/**
+ * `postprocess.antialias` — число сэмплов мультисэмплинга у ЦЕЛИ СЦЕНЫ цепочки
+ * (QUAL-1, QUAL-3). Семантика — ПРЯМОЕ значение, а не потолок над авторским:
+ * авторского числа сэмплов не существует вовсе — сглаживание не свойство сцены,
+ * а свойство того, как эту сцену рисуют (то же основание, что у
+ * `lighting.maxLocalLights` и `models.defaultTier`).
+ *
+ * Ручка нужна потому, что включённая цепочка рисует сцену в СВОЮ цель, а
+ * `antialias: true` рендерера мультисэмплит только дефолтный фреймбуфер: без
+ * неё кадр с пост-обработкой терял бы сглаживание рёбер, которое тот же кадр
+ * без цепочки имеет. Ноль — цель обычная (слабое устройство не платит за
+ * мультисэмплинг ни памятью, ни сведением), 2 и 4 — те кратности, которые
+ * WebGL2 обещает на любом устройстве.
+ */
+export const POSTPROCESS_ANTIALIAS = 'postprocess.antialias';
+
+/** Значения ручки сглаживания: перечень, а не диапазон — сэмплы кратны двум. */
+const ANTIALIAS_SAMPLES: readonly number[] = [0, 2, 4];
 
 /**
  * Нижняя граница потолка разрешения пирамиды: у вершины уже кадра во столько-то
@@ -238,7 +257,7 @@ export class PostprocessSubsystem implements RenderSubsystem, ScenePostSource {
 
   /**
    * Ручки качества подсистемы (QUAL-1, QUAL-3; design D5) — по рычагу на каждую
-   * ось стоимости цепочки, и осей три:
+   * ось стоимости цепочки, и осей четыре:
    *
    * - число и размер проходов bloom — самая дорогая часть: её выключает
    *   `postprocess.bloom`, а разрешение её пирамиды ограничивает
@@ -247,7 +266,11 @@ export class PostprocessSubsystem implements RenderSubsystem, ScenePostSource {
    *   выборка есть у КАЖДОГО пикселя кадра; стоимость её константна
    *   относительно контента сцены (QUAL-3), а не нулевая, и снимает её
    *   `postprocess.lut`. Своей «разрешающей» ручки у таблицы нет: сторона
-   *   решётки — свойство авторского файла, а не пресета.
+   *   решётки — свойство авторского файла, а не пресета;
+   * - сглаживание рёбер — сэмплы ЦЕЛИ СЦЕНЫ: включённая цепочка рисует сцену в
+   *   свою цель, и `antialias: true` рендерера её не касается вовсе. Растеризация
+   *   и память цели растут числом сэмплов, а на смене цели добавляется сведение
+   *   многосэмплового буфера; рычаг — `postprocess.antialias`.
    *
    * Сведение яркости ручки не имеет намеренно: это ОДИН проход постоянной
    * стоимости, и выключать его пресетом значило бы менять облик кадра, а не его
@@ -281,6 +304,13 @@ export class PostprocessSubsystem implements RenderSubsystem, ScenePostSource {
           default: true,
           values: [true, false],
         },
+        {
+          name: POSTPROCESS_ANTIALIAS,
+          cost: 'сэмплы цели сцены: и растеризация, и память цели растут числом сэмплов, а на смене цели добавляется сведение многосэмплового буфера в текстуру (REND-34)',
+          semantics: 'value',
+          default: DEFAULT_ANTIALIAS_SAMPLES,
+          values: ANTIALIAS_SAMPLES,
+        },
       ],
     };
   }
@@ -297,6 +327,10 @@ export class PostprocessSubsystem implements RenderSubsystem, ScenePostSource {
     const resolution = values.get(POSTPROCESS_BLOOM_RESOLUTION);
     this.chain.applyResolutionCeiling(
       typeof resolution === 'number' ? resolution : Number.POSITIVE_INFINITY,
+    );
+    const antialias = values.get(POSTPROCESS_ANTIALIAS);
+    this.chain.applyAntialias(
+      typeof antialias === 'number' ? antialias : DEFAULT_ANTIALIAS_SAMPLES,
     );
     this.applyResolved();
   }

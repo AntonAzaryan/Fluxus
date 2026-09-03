@@ -279,6 +279,7 @@ export { FogDirtyBlocks } from './fog/dirty.js';
 // (FOW-7) — сборка передаёт его подсистеме тумана опцией `post`.
 export {
   PostprocessSubsystem,
+  POSTPROCESS_ANTIALIAS,
   POSTPROCESS_BLOOM,
   POSTPROCESS_BLOOM_RESOLUTION,
   POSTPROCESS_LUT,
@@ -287,6 +288,7 @@ export type { PostprocessOptions } from './subsystems/postprocess.js';
 export { DEFAULT_POSTPROCESS_CONFIG, resolvePostprocessConfig } from './postprocess/config.js';
 export type { PostprocessRenderConfig, ToneMappingOperator } from './postprocess/config.js';
 export { BLOOM_LEVELS } from './postprocess/passes.js';
+export { DEFAULT_ANTIALIAS_SAMPLES } from './postprocess/chain.js';
 
 // Подсистема воды (REND-35, REND-36): тела воды из секции `water` парного
 // документа (PRES-2), глубина — производная единого поля высот (REND-9), рябь —
