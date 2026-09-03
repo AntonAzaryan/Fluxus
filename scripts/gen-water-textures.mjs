@@ -19,12 +19,12 @@
  * Ворли — по модулю периода. Лицензировать нечего: изображение целиком выведено
  * из формул этого файла (см. `content/visuals/textures/CREDITS.md`).
  *
- * Формат PNG пишется прямо здесь (IHDR/IDAT/IEND поверх `zlib`): зависимость
- * ради трёх чанков была бы дороже, чем сами чанки.
+ * Общие кирпичи — генератор чисел, периодические шумы, запись PNG — в
+ * `scripts/lib/texgen.mjs`, одни на все генераторы текстур репозитория.
  */
-import { deflateSync, crc32 } from 'node:zlib';
 import { writeFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
+import { encodePng, periodicValueNoise, periodicWorley, smooth, wrap, xorshift32 } from './lib/texgen.mjs';
 
 const ROOT = fileURLToPath(new URL('..', import.meta.url));
 const OUT_DIR = `${ROOT}content/visuals/textures/`;
@@ -87,73 +87,6 @@ const FOAM_OCTAVES = [
 
 /** Пузырьки (канал B): мелкий Ворли по расстоянию до центра ячейки. */
 const BUBBLES = { cells: 29, radius: 0.55 };
-
-function xorshift32(seed) {
-  let state = seed >>> 0 || 1;
-  return () => {
-    state ^= state << 13;
-    state >>>= 0;
-    state ^= state >>> 17;
-    state ^= state << 5;
-    state >>>= 0;
-    return state / 0x1_0000_0000;
-  };
-}
-
-const smooth = (t) => t * t * (3 - 2 * t);
-const wrap = (i, n) => ((i % n) + n) % n;
-
-/** Периодический value-шум: решётка `cells × cells` со случайными узлами, интерполяция smoothstep. */
-function periodicValueNoise(cells, random) {
-  const lattice = new Float32Array(cells * cells);
-  for (let i = 0; i < lattice.length; i++) lattice[i] = random();
-  return (u, v) => {
-    const x = u * cells;
-    const y = v * cells;
-    const x0 = Math.floor(x);
-    const y0 = Math.floor(y);
-    const fx = smooth(x - x0);
-    const fy = smooth(y - y0);
-    const at = (ix, iy) => lattice[wrap(iy, cells) * cells + wrap(ix, cells)];
-    const top = at(x0, y0) * (1 - fx) + at(x0 + 1, y0) * fx;
-    const bottom = at(x0, y0 + 1) * (1 - fx) + at(x0 + 1, y0 + 1) * fx;
-    return top * (1 - fy) + bottom * fy;
-  };
-}
-
-/** Периодический Ворли: одна точка на ячейку, возвращает `(F1, F2)` в единицах ячейки. */
-function periodicWorley(cells, random) {
-  const points = new Float32Array(cells * cells * 2);
-  for (let i = 0; i < cells * cells; i++) {
-    points[i * 2] = random();
-    points[i * 2 + 1] = random();
-  }
-  return (u, v) => {
-    const x = u * cells;
-    const y = v * cells;
-    const cx = Math.floor(x);
-    const cy = Math.floor(y);
-    let f1 = Number.POSITIVE_INFINITY;
-    let f2 = Number.POSITIVE_INFINITY;
-    for (let dy = -1; dy <= 1; dy++) {
-      for (let dx = -1; dx <= 1; dx++) {
-        const ix = cx + dx;
-        const iy = cy + dy;
-        const index = (wrap(iy, cells) * cells + wrap(ix, cells)) * 2;
-        const px = ix + points[index];
-        const py = iy + points[index + 1];
-        const d = Math.hypot(px - x, py - y);
-        if (d < f1) {
-          f2 = f1;
-          f1 = d;
-        } else if (d < f2) {
-          f2 = d;
-        }
-      }
-    }
-    return [f1, f2];
-  };
-}
 
 function heightField() {
   const random = xorshift32(SEED);
@@ -251,35 +184,6 @@ function foamMap() {
     }
   }
   return pixels;
-}
-
-/** PNG без палитры и чересстрочности: 8 бит, тип цвета 0 (серый) или 2 (RGB). */
-function encodePng(width, height, channels, pixels) {
-  const stride = width * channels;
-  const raw = Buffer.alloc((stride + 1) * height);
-  for (let y = 0; y < height; y++) {
-    raw[y * (stride + 1)] = 0;
-    pixels.copy(raw, y * (stride + 1) + 1, y * stride, (y + 1) * stride);
-  }
-  const chunk = (type, body) => {
-    const length = Buffer.alloc(4);
-    length.writeUInt32BE(body.length, 0);
-    const typed = Buffer.concat([Buffer.from(type, 'ascii'), body]);
-    const crc = Buffer.alloc(4);
-    crc.writeUInt32BE(crc32(typed) >>> 0, 0);
-    return Buffer.concat([length, typed, crc]);
-  };
-  const header = Buffer.alloc(13);
-  header.writeUInt32BE(width, 0);
-  header.writeUInt32BE(height, 4);
-  header[8] = 8;
-  header[9] = channels === 1 ? 0 : 2;
-  return Buffer.concat([
-    Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
-    chunk('IHDR', header),
-    chunk('IDAT', deflateSync(raw, { level: 9 })),
-    chunk('IEND', Buffer.alloc(0)),
-  ]);
 }
 
 const normal = encodePng(SIZE, SIZE, 3, normalMap());
