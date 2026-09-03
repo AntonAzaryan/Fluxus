@@ -820,6 +820,9 @@ export function createSceneStage(options: SceneStageOptions): SceneStage {
       heightStep,
       manifest: cameraConfigFromManifest(visuals.cameraConfig),
       ...(first === null ? {} : { grid: first }),
+      // Та же визуальная поверхность, что у подсистем (REND-9): высота цели
+      // камеры следует полю с кривизной, а не плоским уровням (CAM-2).
+      ...(raised.surface === null ? {} : { surface: raised.surface }),
     });
     // Первый кадр открытой сцены показывает арену целиком (ED-15): просьба
     // кадрировать мгновенно, чтобы перелёта к обзору автор не видел. Позу
