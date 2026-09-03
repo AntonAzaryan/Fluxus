@@ -53,6 +53,7 @@
       }
     },
     "state": {
+      "extractStateBytes": 2368,
       "fogMaskBytes": 768,
       "modelsBatchRecords": 4,
       "modelsBatches": 2,
@@ -101,6 +102,7 @@
       }
     },
     "state": {
+      "extractStateBytes": 2368,
       "fogMaskBytes": 3072,
       "modelsBatchRecords": 4,
       "modelsBatches": 2,

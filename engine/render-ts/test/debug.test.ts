@@ -429,6 +429,23 @@ describe('RDBG-7: дамп кадра', () => {
     expect(JSON.stringify(dump.sections['net.delivery'])).not.toContain('renderDelay');
   });
 
+  it('мировой множитель хода — часовая величина рядом с каденсом (REND-25)', () => {
+    const layer = new RenderDebugLayer(new PresentationStage(makeRenderContext()));
+    layer.register(deliveryDebugSource());
+    layer.setEnabled('net.delivery', true);
+    const view = makeTickView([makeEntityView(1)], { tick: 3, presentationTimeScale: 0.25 });
+    layer.frame(frameState(view));
+
+    expect(layer.dump().clock['net.delivery.presentationTimeScale']).toBeCloseTo(0.25, 9);
+    // Продюсер без множителя (документный набор, REND-11) идёт единицей, а не
+    // нулём: отсутствие настройки — это обычный ход, а не заморозка.
+    const plain = new RenderDebugLayer(new PresentationStage(makeRenderContext()));
+    plain.register(deliveryDebugSource());
+    plain.setEnabled('net.delivery', true);
+    plain.frame(frameState(makeTickView([makeEntityView(1)], { tick: 3 })));
+    expect(plain.dump().clock['net.delivery.presentationTimeScale']).toBe(1);
+  });
+
   it('перечень усекается потолком и помечает усечение', () => {
     const layer = new RenderDebugLayer(new PresentationStage(makeRenderContext()));
     layer.register(deliveryDebugSource({ cap: 3 }));

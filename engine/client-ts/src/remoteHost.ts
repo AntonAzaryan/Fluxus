@@ -102,6 +102,12 @@ export class RemoteHost implements PresentationProducer {
   private statNames: readonly string[] = [];
   private port: ShellPort | null = null;
   private buffer: ViewBuffer | null = null;
+  /**
+   * Мировой множитель хода часов презентации (REND-25). Хранится ЗДЕСЬ, а не
+   * только в буфере: буфер заводится лишь на handshake (SHELL-5), а настройка
+   * смотрящего не имеет права зависеть от того, когда приехало приветствие.
+   */
+  private timeScaleValue = 1;
 
   /** Сетка террейна из handshake; null до него и на сценах без террейна. */
   terrain: TerrainGrid | null = null;
@@ -144,6 +150,28 @@ export class RemoteHost implements PresentationProducer {
   /** Сцена подсистем — общая с документным источником, когда его завёл редактор (REND-11). */
   get stage(): PresentationStage {
     return this.presentation;
+  }
+
+  /**
+   * Мировой множитель хода часов презентации (`rendering` REND-25): slow-motion
+   * реплея, скорость скраба, заморозка фото-режима. До handshake запоминается и
+   * переносится в буфер при его создании.
+   */
+  setTimeScale(scale: number): void {
+    // Та же проверка, что в буфере (`rendering` REND-25: направления множитель
+    // не несёт), повторена здесь намеренно: до handshake буфера нет вовсе, а
+    // отложить отказ до приветствия значило бы принять неверную величину и
+    // бросить потом — из кода, который её не задавал.
+    if (!Number.isFinite(scale) || scale < 0) {
+      throw new Error(`RemoteHost: множитель часов презентации ${scale} — ожидалось число не меньше нуля`);
+    }
+    this.timeScaleValue = scale;
+    this.buffer?.setTimeScale(scale);
+  }
+
+  /** Действующий мировой множитель хода (`rendering` REND-25). */
+  get timeScale(): number {
+    return this.timeScaleValue;
   }
 
   /** Регистрирует подсистему; порядок регистрации = порядок вызовов (REND-8). */
@@ -216,6 +244,7 @@ export class RemoteHost implements PresentationProducer {
         : {}),
       ...(hello.terrain !== null ? { floorBits: new Uint8Array(hello.terrain.floor) } : {}),
       ...(this.config.clock !== undefined ? { clock: this.config.clock } : {}),
+      timeScale: this.timeScaleValue,
     });
     this.config.onReady?.(hello);
   }

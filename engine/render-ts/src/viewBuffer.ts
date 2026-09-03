@@ -10,7 +10,7 @@
  * Мира здесь нет и быть не может: всё, что нужно кадру, обязано приехать
  * в плоской форме (SHELL-1, SHELL-2).
  */
-import type { EntityId, WorldMode } from '@fluxus/core';
+import type { EntityId } from '@fluxus/core';
 import { ENTITY_LEVEL_OVERRIDE, ENTITY_MOVING, STATE_BITS_SHIFT } from './channelLayout.js';
 import type { ExtractedTick } from './extractor.js';
 import type { TickView } from './types.js';
@@ -23,6 +23,7 @@ import {
   type EntityRecord,
 } from './entityRecord.js';
 import { CadenceTracker, DEFAULT_MAX_RENDER_DELAY } from './deliveryCadence.js';
+import { assertTimeScale, frameStep } from './presentationClock.js';
 import { peak } from './footprint.js';
 
 /** Скачок позиции за тик больше этого — телепорт: интерполяция «проехала бы» пол-арены. */
@@ -34,23 +35,6 @@ const DEFAULT_SNAP_DISTANCE = 2;
  * до буфера джиттера» против ошибки округления, а не против дрожания канала.
  */
 const DISPLAY_EPSILON_MS = 1e-3;
-
-/**
- * Ход часов презентации по режиму доставленного мира (REND-25): вперёд в
- * `Running`, стоп в `Paused`, назад в `Rewinding`. Своего «времени перемотки»
- * рендер не заводит — направление есть чистая функция режима, а движение назад
- * приносят сами восстановленные состояния.
- */
-function clockDirection(mode: WorldMode): number {
-  switch (mode) {
-    case 'Running':
-      return 1;
-    case 'Rewinding':
-      return -1;
-    default:
-      return 0;
-  }
-}
 
 const EMPTY_CELLS: readonly number[] = [];
 
@@ -84,6 +68,12 @@ export interface ViewBufferConfig {
   readonly floorBits?: Uint8Array;
   /** Часы в миллисекундах; по умолчанию performance.now — параметр ради тестов. */
   readonly clock?: () => number;
+  /**
+   * Мировой множитель хода часов презентации (REND-25): `0` — заморозка, `1` —
+   * обычный ход, `0.25` — замедленный вчетверо показ. Не задан — единица.
+   * Величина СМОТРЯЩЕГО: в доставке её нет, и на состав кадра она не влияет.
+   */
+  readonly timeScale?: number;
 }
 
 /** Кадровые величины для `updateFrame` подсистем (REND-2). */
@@ -167,6 +157,8 @@ export class ViewBuffer {
    */
   private prevStampMs = 0;
   private currStampMs = 0;
+  /** Мировой множитель хода часов презентации (REND-25); ставится сеттером. */
+  private timeScaleValue = 1;
   /**
    * Штамп доставки, чьё время показа ещё не наступило; null — отложенной нет.
    * Слот один (design D2): пришедшая при занятом слоте доставка продвигает
@@ -200,7 +192,11 @@ export class ViewBuffer {
       floorBits: this.floorBits,
       floorChangedCells: [],
       cadence: this.cadenceTracker.probe,
+      presentationTimeScale: this.timeScaleValue,
     };
+    // Сеттером, а не присваиванием: проверка величины у множителя одна, и
+    // опция сборки обязана проходить её так же, как рантайм-правка.
+    if (config.timeScale !== undefined) this.setTimeScale(config.timeScale);
   }
 
   /**
@@ -272,6 +268,7 @@ export class ViewBuffer {
     view.events = ext.events;
     view.expiredEvents = expiredEvents;
     view.floorChangedCells = floorChanged;
+    view.presentationTimeScale = this.timeScaleValue;
 
     if (tickAdvanced || !this.hasTick) this.lastTickAtMs = now;
     // Первая доставка сессии: пары нет — обе её стороны и есть этот момент.
@@ -284,6 +281,27 @@ export class ViewBuffer {
     // доставку, а не на сущность, и без стока — два сравнения.
     peak('viewRecords', this.records.size);
     peak('viewFacingMemory', this.facingMemory.size);
+  }
+
+  /** Действующий мировой множитель хода часов презентации (REND-25). */
+  get timeScale(): number {
+    return this.timeScaleValue;
+  }
+
+  /**
+   * Мировой множитель хода часов презентации (REND-25): им делаются slow-motion
+   * реплея, скорость скраба и заморозка фото-режима. Умножает ТОЛЬКО ход,
+   * выдаваемый подсистемам; реальное время кадра (`realDt` — часы HUD и дренаж
+   * переходов картинки) и альфа интерполяции (REND-2) ему не подчиняются.
+   *
+   * Направления множитель не несёт — оно принадлежит режиму мира, — поэтому
+   * отрицательное значение это ошибка вызывающего, а не «ход назад». Ноль
+   * законен и тождествен замороженному миру.
+   */
+  setTimeScale(scale: number): void {
+    assertTimeScale(scale, 'ViewBuffer');
+    this.timeScaleValue = scale;
+    this.view.presentationTimeScale = scale;
   }
 
   /**
@@ -323,12 +341,15 @@ export class ViewBuffer {
     // Кламп МОДУЛЯ: после паузы вкладки первый кадр не должен «доигрывать»
     // минуты; знак кламп не трогает — он от режима, а не от часов.
     const magnitude = Math.min(Math.max(dtMs / 1000, 0), 0.25);
-    // Темп обратного хода — отношение наблюдаемых каденсов (REND-25): мир,
-    // скрабящийся вдвое быстрее живого, и клипы отматывает вдвое быстрее.
-    // Кламп по модулю остаётся тем же и после умножения.
-    const dt =
-      Math.min(magnitude * this.cadenceTracker.pace(this.view.mode), 0.25) *
-      clockDirection(this.view.mode);
+    // Шаг подсистем — три множителя одного времени (`presentationClock.ts`):
+    // темп обратного хода по наблюдаемым каденсам, мировой множитель показа и
+    // направление по режиму мира.
+    const dt = frameStep(
+      magnitude,
+      this.cadenceTracker.pace(this.view.mode),
+      this.timeScaleValue,
+      this.view.mode,
+    );
     // Альфа — доля пройденного от штампа `prev` до `curr` по ВРЕМЕНИ ПОКАЗА
     // (design D1). Знаменатель — сглаженный интервал, а не фактический зазор
     // штампов: зазор внёс бы дрожание канала прямо в скорость движения.
@@ -344,6 +365,9 @@ export class ViewBuffer {
             ),
             1,
           );
+    // Наблюдаемая величина показа (RDBG-7) обновляется и здесь: сеттер вправе
+    // сработать между доставками, а отладочный слой читает состояние покадрово.
+    this.view.presentationTimeScale = this.timeScaleValue;
     // ponytail: три числа кадра уезжают новой записью — ОДНОЙ на кадр, а не на
     // инстанс, поэтому давление на GC от неё не растёт ни с числом сущностей,
     // ни с объёмом контента. Переиспользуемая запись сделала бы величины кадра

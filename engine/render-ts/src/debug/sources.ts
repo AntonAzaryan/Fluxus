@@ -162,6 +162,7 @@ export function deliveryDebugSource(
     deliveryIntervalSeconds: 0,
     deliveryJitterSeconds: 0,
     renderDelaySeconds: 0,
+    presentationTimeScale: 1,
   };
   /**
    * Имена статов доставки — СВОЙ массив, а не массив доставки (RDBG-2): проба
@@ -224,6 +225,10 @@ export function deliveryDebugSource(
       clockSection.deliveryIntervalSeconds = cadence?.intervalSeconds ?? 0;
       clockSection.deliveryJitterSeconds = cadence?.jitterSeconds ?? 0;
       clockSection.renderDelaySeconds = cadence?.delaySeconds ?? 0;
+      // Мировой множитель хода (REND-25) — тоже часовая величина: он множит
+      // часы, а тело секции обязано оставаться воспроизводимым. Продюсер без
+      // множителя (документный набор, REND-11) идёт единицей.
+      clockSection.presentationTimeScale = view.presentationTimeScale ?? 1;
       let snapped = 0;
       let spawned = 0;
       rows.begin();

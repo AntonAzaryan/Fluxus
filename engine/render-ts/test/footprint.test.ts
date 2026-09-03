@@ -12,13 +12,26 @@
  */
 import * as THREE from 'three';
 import { describe, expect, it } from 'vitest';
-import { FIXED_ONE, createTerrainGrid, type EntityId } from '@fluxus/core';
+import {
+  FIXED_ONE,
+  createTerrainGrid,
+  fixed,
+  initialState,
+  loadScene,
+  mathApi,
+  tick,
+  worldInitSpawn,
+  type EntityId,
+  type Simulation,
+} from '@fluxus/core';
 import type { VisualManifest } from '@fluxus/assets';
 import {
   FOOTPRINT_RESOURCE_KINDS,
+  Extractor,
   ModelsSubsystem,
   TerrainSubsystem,
   ViewBuffer,
+  kindByTags,
   attachFootprintSink,
   createFootprint,
   footprintLive,
@@ -146,6 +159,77 @@ describe('PERF-8: величины состояния — пик, а не сум
     });
     expect(sink.state.viewRecords).toBe(12);
     expect(sink.state.viewFacingMemory).toBe(12);
+  });
+
+  /**
+   * Стенд воркер-половины доставки: сцена из N стоящих бегунов и экстрактор
+   * над ней. Ёмкость колонок и зеркала — то, что меряет `extractStateBytes`.
+   */
+  function extractStand(entities: number): {
+    extractor: Extractor;
+    step: () => void;
+  } {
+    const scene = loadScene({
+      components: [{ name: 'Position', fields: { x: 'fixed', y: 'fixed' } }],
+      prefabs: [{ name: 'Runner', components: { Position: {} }, tags: ['Runner'] }],
+    });
+    for (let i = 0; i < entities; i++) {
+      worldInitSpawn(scene.world, 'Runner', { Position: { x: fixed.fromFloat(i), y: 0 } });
+    }
+    const sim: Simulation = { systems: scene.systems, worldSeed: 7, math: mathApi };
+    const state = initialState(scene.world, 7);
+    const extractor = new Extractor({ kindOf: kindByTags(['Runner']) });
+    return {
+      extractor,
+      step: () => {
+        extractor.extract(tick(sim, state));
+      },
+    };
+  }
+
+  it('память извлечения растёт сценой, а не тиками (PERF-8)', () => {
+    const small = createFootprint();
+    const large = createFootprint();
+    const steady = createFootprint();
+
+    const few = extractStand(8);
+    withFootprintSink(small, () => { few.step(); });
+    const many = extractStand(256);
+    withFootprintSink(large, () => { many.step(); });
+
+    // Ёмкость воркер-половины — величина СЦЕНЫ: колонки плоской формы и буферы
+    // обхода растут числом сущностей, и эталон это видит.
+    expect(small.state.extractStateBytes).toBeGreaterThan(0);
+    expect(large.state.extractStateBytes).toBeGreaterThan(small.state.extractStateBytes);
+
+    // Стоящая сцена ёмкость не двигает: восемь тиков подряд дают ту же величину,
+    // что первый, — иначе это была бы утечка, а не память состояния.
+    const idle = extractStand(8);
+    withFootprintSink(steady, () => {
+      for (let i = 0; i < 8; i++) idle.step();
+    });
+    expect(steady.state.extractStateBytes).toBe(small.state.extractStateBytes);
+  });
+
+  it('зеркало доставленного кадра входит в величину (SHELL-3, PERF-8)', () => {
+    const before = createFootprint();
+    const after = createFootprint();
+    const rig = extractStand(32);
+
+    // До первой доставки зеркало пусто и ёмкости не имеет.
+    withFootprintSink(before, () => { rig.step(); });
+    // Доставка заводит зеркало: те же строки ложатся в его колонки.
+    rig.extractor.markDelivered();
+    withFootprintSink(after, () => { rig.step(); });
+
+    expect(after.state.extractStateBytes).toBeGreaterThan(before.state.extractStateBytes);
+  });
+
+  it('без стока величина извлечения не считается (PERF-3)', () => {
+    const sink = createFootprint();
+    const rig = extractStand(16);
+    rig.step();
+    expect(sink.state.extractStateBytes).toBe(0);
   });
 
   it('пересборка кэша батчей двигает число батчей и записей (REND-20)', () => {

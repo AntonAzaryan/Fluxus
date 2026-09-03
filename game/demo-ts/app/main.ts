@@ -17,7 +17,7 @@
  * двумя последними доставленными тиками по часам этого потока (SHELL-7).
  */
 import * as THREE from 'three';
-import { ABILITY_STEPS, loadScene, type EntityId, type SceneDef } from '@fluxus/core';
+import { ABILITY_STEPS, loadScene, type EntityId, type SceneDef, type WorldMode } from '@fluxus/core';
 import {
   AssetService,
   createManifestLoader,
@@ -120,6 +120,7 @@ import {
 import { createEdgePanAxes, demoEdgePan } from './cameraInput.js';
 import { createDemoHud, createDemoMinimapSource, demoHudComposition } from './hud.js';
 import { prewarmPresentation } from './prewarm.js';
+import { PresentationScale } from './presentationScale.js';
 import { DEMO_STAND_SERVICE, demoStandHost } from './desktopStand.js';
 import { demoMode, demoServerUrl, localModeUrl, serverModeUrl, type DemoMode } from './mode.js';
 import {
@@ -354,6 +355,26 @@ function groundPoint(clientX: number, clientY: number): { x: number; y: number }
 }
 
 /**
+ * Множитель показа стенда (REND-25) — политика в своём модуле
+ * (`presentationScale.ts`): здесь только порт к хосту доставок и клавиши.
+ */
+const presentationScale = new PresentationScale(() =>
+  remote === null
+    ? null
+    : {
+        get timeScale(): number {
+          return remote?.timeScale ?? 1;
+        },
+        setTimeScale: (scale: number) => {
+          remote?.setTimeScale(scale);
+        },
+        get mode(): WorldMode | null {
+          return remote?.view?.mode ?? null;
+        },
+      },
+);
+
+/**
  * Клавиши камеры и UI (CAM-1): фронты героя (каст, уклон, прыжок, убийство)
  * обрабатывает `KeyboardMouseSource` по биндингам — сюда они не заходят.
  */
@@ -386,6 +407,12 @@ window.addEventListener('keydown', (e) => {
   if (e.code === 'Backslash') stopSpectate();
   // P — снимок кадра без HUD (фото-режим, приложение: спеки у него нет).
   if (e.code === 'KeyP') void capturePhoto();
+  // Мировой множитель часов презентации (REND-25): `-` вдвое медленнее, `=`
+  // вдвое быстрее, `0` — заморозка и возврат. Клавиши свободны от раскладки
+  // героя (`bindings.json`) и Shift не требуют — Shift там уклонение.
+  if (e.code === 'Minus') presentationScale.step(0.5);
+  if (e.code === 'Equal') presentationScale.step(2);
+  if (e.code === 'Digit0') presentationScale.toggleFreeze();
   keys.add(e.code);
 });
 window.addEventListener('keyup', (e) => keys.delete(e.code));

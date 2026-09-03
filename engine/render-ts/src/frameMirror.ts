@@ -23,7 +23,12 @@
  * долгоживущий буфер пути извлечения, который REND-26 разрешает явно.
  */
 import type { EntityId } from '@fluxus/core';
-import { CHANNEL_LAYOUT, channelColumns, type ChannelArrayValue } from './channelLayout.js';
+import {
+  CHANNEL_LAYOUT,
+  channelBytes,
+  channelColumns,
+  type ChannelArrayValue,
+} from './channelLayout.js';
 
 /**
  * Колонки кадра и его разреженная секция статов глазами зеркала — ровно то,
@@ -48,6 +53,16 @@ function same(a: number, b: number): boolean {
   return a === b || (a !== a && b !== b);
 }
 
+/**
+ * Рост буфера идентификаторов (списка исчезнувших) — событие сцены, а не тик
+ * (REND-26). Живёт рядом с зеркалом: список исчезнувших выводится из него.
+ */
+export function grownIds(current: Float64Array, needed: number): Float64Array<ArrayBuffer> {
+  const grown = new Float64Array(Math.max(16, Math.ceil(needed * 1.5)));
+  grown.set(current);
+  return grown;
+}
+
 export class FrameMirror {
   /** Слот сущности в зеркале; отсутствие — сущность приёмнику неизвестна. */
   private readonly slotOf = new Map<EntityId, number>();
@@ -60,6 +75,12 @@ export class FrameMirror {
   private statIndex = new Int32Array(0);
   private statValue = new Float64Array(0);
   private readonly statSize: number;
+  /**
+   * Байты ёмкости зеркала — вход величины памяти извлечения (PERF-8).
+   * Кэшируется ростом, а не считается на извлечении: рост — событие сцены, и
+   * обход колонок на каждый тик был бы работой учёта в горячем пути.
+   */
+  private bytes = 0;
 
   constructor(statSize: number) {
     this.statSize = statSize;
@@ -68,6 +89,11 @@ export class FrameMirror {
   /** Сущностей в зеркале; ноль — приёмнику не известно ничего (полный кадр). */
   get size(): number {
     return this.slotOf.size;
+  }
+
+  /** Байты ёмкости зеркала: колонки плюс разреженная секция статов (PERF-8). */
+  get byteLength(): number {
+    return this.bytes;
   }
 
   /** Идентификаторы, известные приёмнику, — вход поиска исчезнувших. */
@@ -178,5 +204,10 @@ export class FrameMirror {
     statValue.set(this.statValue);
     this.statValue = statValue;
     this.capacity = capacity;
+    this.bytes =
+      channelBytes(this.columns) +
+      this.statCount.byteLength +
+      this.statIndex.byteLength +
+      this.statValue.byteLength;
   }
 }
