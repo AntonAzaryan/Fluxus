@@ -43,6 +43,8 @@ import * as THREE from 'three';
 import { FIXED_ONE, type TerrainGrid } from '@fluxus/core';
 import {
   DEFAULT_CURVATURE_TESSELLATION,
+  UNLIMITED_FRAME_BUDGET,
+  type FrameBudget,
   type QualityDeclaration,
   type QualityValues,
   type RenderContext,
@@ -57,13 +59,14 @@ import {
   type TerrainGeometryData,
 } from './terrainGeometry.js';
 import { TerrainChunkMap } from './terrainChunks.js';
+import {
+  TERRAIN_TESSELLATION,
+  TERRAIN_TEXTURE_SLOTS,
+  terrainQualityDeclaration,
+} from './terrainQuality.js';
 import { toBufferGeometry } from './terrainMesh.js';
 import type { TerrainTileset } from '@fluxus/assets';
-import {
-  TERRAIN_MAX_SLOTS,
-  TerrainTilesetView,
-  type TerrainUvMapping,
-} from './terrainTileset.js';
+import { TerrainTilesetView, type TerrainUvMapping } from './terrainTileset.js';
 import { createTerrainMaterials } from './terrainMaterials.js';
 import { buildSkirtGeometry } from './terrainSkirt.js';
 import type { DebugSource } from '../debug/contract.js';
@@ -71,22 +74,6 @@ import { terrainSurfaceDebugSource } from '../debug/terrainSource.js';
 import type { VisualSurface } from '../visualSurface.js';
 import type { VisualSurfaceSource } from '../surfaceSource.js';
 import { peak } from '../footprint.js';
-
-/**
- * Ручка качества подсистемы (`render-quality` QUAL-1): плотность разбиения
- * клетки с кривизной — ПОТОЛОК над значением конфига рендера (REND-9), а не
- * значение вместо него (design D3).
- */
-const TERRAIN_TESSELLATION = 'terrain.curvatureTessellation';
-
-/**
- * Вторая ручка качества (QUAL-1, QUAL-3): потолок числа СМЕШИВАЕМЫХ слотов
- * покрытия (REND-39). Потолок ниже числа слотов tileset'а сливает его хвост в
- * последний оставшийся слот — выборок в фрагменте становится меньше, арена
- * беднеет покрытиями, но не чернеет; единица означает покрытие первым слотом
- * без смешивания вовсе.
- */
-const TERRAIN_TEXTURE_SLOTS = 'terrain.textureSlots';
 
 // ---------------------------------------------------------------- подсистема
 
@@ -125,6 +112,18 @@ export interface TerrainOptions {
   readonly tileset?: TerrainTileset;
   /** ID карты раскраски клеток (ASSET-15) — производный документ импорта. */
   readonly paintMap?: string;
+  /**
+   * Камера кадра — порядок пересборки помеченных чанков под бюджетом (REND-44,
+   * design D8): ближайший к камере первым, потому что отложенный чанк за
+   * спиной игрока не виден вовсе. Без камеры действует прежний порядок —
+   * сперва помеченные формой, затем полом, — и он остаётся детерминированным:
+   * сборка без камеры (тесты, вьюпорт авторинга, headless) ведёт себя
+   * воспроизводимо, просто не следит за игроком.
+   *
+   * Приходит опцией, а не контекстом (REND-8), по тому же основанию, что у
+   * освещения: контракт подсистем от порядка пересборки не меняется.
+   */
+  readonly camera?: THREE.Camera;
   /** Канал предупреждений; не задан — `console.warn` (недоступное покрытие). */
   readonly warn?: (message: string) => void;
 }
@@ -174,6 +173,15 @@ export class TerrainSubsystem implements RenderSubsystem {
   private skirtMaterial: THREE.MeshStandardMaterial | null = null;
   /** Текстурирование поверхности: tileset, карта раскраски и их подписки. */
   private readonly tileset: TerrainTilesetView;
+  /** Камера кадра — порядок пересборки под бюджетом (REND-44); нет — прежний. */
+  private readonly camera: THREE.Camera | undefined;
+  /**
+   * Бюджетная фаза этого кадра уже прошла (REND-44). Сцена зовёт её перед
+   * `updateFrame`, и тогда пересборка — её дело; подсистема, которую крутят
+   * НАПРЯМУЮ (тесты, вьюпорт, сборка без сцены с бюджетом), фазы не получает
+   * вовсе, и «не позже следующего кадра» (REND-7) держит `updateFrame`.
+   */
+  private budgetedThisFrame = false;
 
   constructor(grid: TerrainGrid, options: TerrainOptions = {}) {
     this.grid = grid;
@@ -184,6 +192,7 @@ export class TerrainSubsystem implements RenderSubsystem {
     this.skirtDepth = options.skirtDepth ?? DEFAULT_SKIRT_DEPTH;
     this.surfaceSource = options.surface;
     this.shadows = options.shadows;
+    this.camera = options.camera;
     this.tileset = new TerrainTilesetView({
       tileset: options.tileset,
       paintMap: options.paintMap,
@@ -349,12 +358,33 @@ export class TerrainSubsystem implements RenderSubsystem {
     }
   }
 
+  /**
+   * Отложимая работа подсистемы (REND-44): пересборка помеченных чанков. Сцена
+   * зовёт эту фазу перед покадровым обновлением, и бюджет решает, сколько
+   * чанков уместится; остальные останутся помеченными до следующего кадра.
+   */
+  updateBudgeted(budget: FrameBudget): void {
+    this.budgetedThisFrame = true;
+    // Снесённая подсистема (REND-31) ничего не строит и ничего не считает.
+    if (this.ctx === null) return;
+    this.flushDirty(costSink(), budget);
+  }
+
   updateFrame(_dt: number, _alpha: number): void {
     // Снесённая подсистема (REND-31) кадром ничего не строит и ничего не считает.
     if (this.ctx === null) return;
     // Пересборка затронутых чанков — не позже следующего кадра (REND-7, ED-15).
     // Кадр стоящей сцены пометок не находит и не платит ничем: счётчики
     // пересборки остаются нулевыми (PERF-2).
+    //
+    // Бюджетная фаза сцены (REND-44) уже сделала эту работу и отложила остаток
+    // ОСОЗНАННО — доделывать его здесь значило бы отменить бюджет. Подсистема
+    // же, которую крутят напрямую, фазы не видит вовсе, и «не позже следующего
+    // кадра» держится здесь, как держалось до бюджета.
+    if (this.budgetedThisFrame) {
+      this.budgetedThisFrame = false;
+      return;
+    }
     this.flushDirty(costSink());
   }
 
@@ -366,30 +396,7 @@ export class TerrainSubsystem implements RenderSubsystem {
    * кадр, и рычаг нужен именно здесь.
    */
   quality(): QualityDeclaration {
-    return {
-      subsystem: this.name,
-      knobs: [
-        {
-          name: TERRAIN_TESSELLATION,
-          cost:
-            'вершины и треугольники визуальной поверхности: клетка с кривизной даёт N×N подклеток, ' +
-            'кромки стенок и юбки обрыва под ней делятся на N пролётов (REND-9, REND-7)',
-          semantics: 'ceiling',
-          // Потолка нет — действует значение конфига рендера (REND-9).
-          default: Number.POSITIVE_INFINITY,
-          min: 1,
-          max: 16,
-        },
-        {
-          name: TERRAIN_TEXTURE_SLOTS,
-          cost: 'выборки текстур покрытия на фрагмент пола: слот — одна выборка (REND-39)',
-          semantics: 'ceiling',
-          default: Number.POSITIVE_INFINITY,
-          min: 1,
-          max: TERRAIN_MAX_SLOTS,
-        },
-      ],
-    };
+    return terrainQualityDeclaration(this.name);
   }
 
   /**
@@ -462,28 +469,56 @@ export class TerrainSubsystem implements RenderSubsystem {
     return countVertices(this.skirtMeshes);
   }
 
-  private flushDirty(cost: RenderCostCounters | undefined): void {
+  /**
+   * Пересборка помеченных чанков под бюджетом кадра (REND-7, REND-44).
+   *
+   * Чанк, помеченный обеими причинами, пересобирается ОДИН раз и считается один
+   * раз: пометок бывает больше пересборок, наоборот — никогда. Пометка «только
+   * пол» стенок не трогает: их меш и его место в реестре теневых кастеров
+   * переживают выбитую клетку (TERR-6, TERR-5).
+   *
+   * Не уместившееся в бюджет ОСТАЁТСЯ ПОМЕЧЕННЫМ и пересобирается следующими
+   * кадрами: работа откладывается, а не теряется (REND-44). Неограниченный
+   * бюджет — прежнее поведение слово в слово: пометки уходят все.
+   */
+  private flushDirty(
+    cost: RenderCostCounters | undefined,
+    budget: FrameBudget = UNLIMITED_FRAME_BUDGET,
+  ): void {
     if (this.chunks.clean) return;
-    // Чанк, помеченный обеими причинами, пересобирается ОДИН раз и считается
-    // один раз: пометок бывает больше пересборок, наоборот — никогда. Пометка
-    // «только пол» стенок не трогает: их меш и его место в реестре теневых
-    // кастеров переживают выбитую клетку (TERR-6, TERR-5).
     let rebuilt = 0;
-    for (const chunk of this.chunks.shape) {
+    for (;;) {
+      const chunk = this.nextChunk();
+      if (chunk < 0) break;
+      if (!budget.hasTime()) {
+        // Остаток остаётся помеченным; отложение считается один раз на проход —
+        // считать его на каждый неначатый чанк значило бы мерить размер
+        // очереди, а не число перерывов (design D7).
+        budget.defer();
+        break;
+      }
       rebuilt++;
-      this.rebuildChunk(chunk, true);
-    }
-    for (const chunk of this.chunks.floor) {
-      if (this.chunks.shape.has(chunk)) continue;
-      rebuilt++;
-      this.rebuildChunk(chunk, false);
+      this.rebuildChunk(chunk, this.chunks.shape.has(chunk));
+      this.chunks.done(chunk);
     }
     if (cost !== undefined) cost.terrainChunksRebuilt += rebuilt;
-    this.chunks.clear();
     // Чанков в сетке (PERF-8): величина растёт площадью арены и мельчанием
     // чанка, а не частотой пересборок — снимается после неё, когда геометрия
     // чанков уже построена.
     peak('terrainChunks', this.chunks.count);
+  }
+
+  /**
+   * Следующий чанк к пересборке (REND-44, design D8): ближайший к камере, если
+   * она есть, — отложенный чанк за спиной игрока не виден вовсе. Без камеры
+   * действует прежний порядок: сперва помеченные формой, затем полом. `-1` —
+   * помеченных не осталось.
+   */
+  private nextChunk(): number {
+    const camera = this.camera;
+    if (camera === undefined) return this.chunks.first();
+    const span = (this.chunkSize * this.grid.tileSize) / FIXED_ONE;
+    return this.chunks.nearest(camera.position.x, camera.position.y, span);
   }
 
   private allocateChunks(): void {

@@ -19,7 +19,6 @@
 import * as THREE from 'three';
 import { FIXED_ONE, type TerrainGrid } from '@fluxus/core';
 import {
-  WATER_MAX_RIPPLE_SOURCES,
   validateWater,
   type AssetState,
   type DecodedImage,
@@ -29,7 +28,9 @@ import { costSink } from '../cost.js';
 import { textureFromImage } from '../model/skins.js';
 import { levelFieldSampler } from '../visualSurface.js';
 import type { VisualSurfaceSource } from '../surfaceSource.js';
+import { UNLIMITED_FRAME_BUDGET } from '../types.js';
 import type {
+  FrameBudget,
   QualityDeclaration,
   QualityValues,
   RenderContext,
@@ -37,6 +38,15 @@ import type {
   TickView,
 } from '../types.js';
 import { WaterBodyView, type WaterBodyLimits } from '../water/body.js';
+import {
+  MAX_DEPTH_TEXELS_PER_CELL,
+  MAX_DETAIL_LAYERS,
+  MAX_RIPPLE_SOURCES,
+  WATER_DEPTH_TEXELS_PER_CELL,
+  WATER_DETAIL_LAYERS,
+  WATER_RIPPLE_SOURCES,
+  waterQualityDeclaration,
+} from './waterQuality.js';
 import {
   DEFAULT_WATER_DEPTH_TEXELS_PER_CELL,
   resolveWaterConfig,
@@ -46,26 +56,10 @@ import {
 import type { WaterFieldSampler } from '../water/depth.js';
 import { waterRegionsOf } from '../water/region.js';
 
-/**
- * Ручки качества подсистемы (`render-quality` QUAL-1, QUAL-3; design D7) — все
- * три ПОТОЛКИ с семантикой `min(авторское, потолок)`: пресет вправе удешевить
- * воду, но MUST NOT поднять её выше авторской и MUST NOT тронуть документ сцены.
- */
-export const WATER_RIPPLE_SOURCES = 'water.rippleSources';
-export const WATER_DETAIL_LAYERS = 'water.detailLayers';
-export const WATER_DEPTH_TEXELS_PER_CELL = 'water.depthTexelsPerCell';
+// Имена ручек объявлены рядом с их декларацией (`waterQuality.ts`), а видны
+// по-прежнему отсюда: публичная поверхность подсистемы от переноса не меняется.
+export { WATER_DEPTH_TEXELS_PER_CELL, WATER_DETAIL_LAYERS, WATER_RIPPLE_SOURCES };
 
-/**
- * Верхняя граница потолка источников — предел uniform-векторов (REND-36, D5).
- * Число берётся у формата секции (`@fluxus/assets`), а не набирается здесь
- * заново: тем же числом валидация ограничивает АВТОРСКОЕ значение, и разойдись
- * они — потолок пресета и предел документа стали бы двумя разными правилами.
- */
-const MAX_RIPPLE_SOURCES = WATER_MAX_RIPPLE_SOURCES;
-/** Выше четырёх слоёв деталь перестаёт читаться, а фрагмент дорожает линейно. */
-const MAX_DETAIL_LAYERS = 4;
-/** Шестнадцать текселей на клетку — предел, за которым берег уже не уточняется. */
-const MAX_DEPTH_TEXELS_PER_CELL = 16;
 /** Запрошенная анизотропия текстур детали; фактическую зажимает потолок устройства. */
 const WATER_DETAIL_ANISOTROPY = 8;
 
@@ -123,6 +117,12 @@ export class WaterSubsystem implements RenderSubsystem {
   private readonly unsubscribes = new Map<string, () => void>();
   /** ID, о недоступности которых уже сказано: предупреждение одно на причину. */
   private readonly warned = new Set<string>();
+  /**
+   * Бюджетная фаза этого кадра уже прошла (REND-44) — та же развилка, что у
+   * террейна: сцена с бюджетом перезаполняет глубину фазой, прямой драйв
+   * подсистемы (тесты, вьюпорт) — покадровым обновлением, как было до бюджета.
+   */
+  private budgetedThisFrame = false;
 
   constructor(options: WaterOptions) {
     this.grid = options.grid;
@@ -208,18 +208,34 @@ export class WaterSubsystem implements RenderSubsystem {
    * презентации и источники ряби. Сцена без воды не платит ничем — счётчики
    * остаются нулевыми (PERF-2).
    */
+  /**
+   * Отложимая работа подсистемы (REND-44): перезаполнение глубинных текстур
+   * помеченных тел. Часы презентации и источники ряби сюда не входят — они
+   * кадровые, и фазы может не случиться вовсе (design D2).
+   */
+  updateBudgeted(budget: FrameBudget): void {
+    this.budgetedThisFrame = true;
+    if (this.bodies.length === 0) return;
+    const cost = costSink();
+    const texels = this.refill(budget);
+    if (cost !== undefined) cost.waterDepthTexels += texels;
+  }
+
   updateFrame(dt: number, alpha: number): void {
     if (this.bodies.length === 0) return;
     this.clock += dt;
     // Сток читается один раз на кадр (PERF-3): дальше только сложения в
     // захваченную переменную.
     const cost = costSink();
-    const field = this.field();
+    // Бюджетная фаза сцены (REND-44) уже перезаполнила, сколько уместилось, и
+    // остаток отложила осознанно; без фазы работа делается здесь целиком —
+    // «не позже следующего кадра» (REND-35) держится и без сцены с бюджетом.
     let texels = 0;
+    if (this.budgetedThisFrame) this.budgetedThisFrame = false;
+    else texels = this.refill(UNLIMITED_FRAME_BUDGET);
     let sources = 0;
     let quads = 0;
     for (const body of this.bodies) {
-      texels += body.flush(field, this.floor);
       sources += body.updateFrame(this.clock, this.view, alpha, dt);
       quads += body.quads;
     }
@@ -228,6 +244,35 @@ export class WaterSubsystem implements RenderSubsystem {
     cost.waterQuads += quads;
     cost.waterRippleSources += sources;
     cost.waterDepthTexels += texels;
+  }
+
+  /**
+   * Перезаполнение помеченных тел под бюджетом (REND-44, REND-35). Выборка поля
+   * берётся ТОЛЬКО когда есть что заполнять: устоявшаяся сцена не платит за
+   * перезаполнение ничем, включая замыкание сэмплера (REND-26).
+   *
+   * Отложение считается один раз на проход, а не на тело: величина меряет
+   * перерывы, а не длину очереди (design D7).
+   */
+  private refill(budget: FrameBudget): number {
+    let texels = 0;
+    let field: WaterFieldSampler | null = null;
+    for (const body of this.bodies) {
+      if (!body.needsRefill()) continue;
+      // Выборка поля берётся ЛЕНИВО: устоявшаяся сцена не платит за неё вовсе.
+      field ??= this.field();
+      // Бюджет спрашивает САМО тело — порция здесь полоса клеток, а не тело
+      // целиком (design D9); спроси мы его тут, гарантия прогресса бюджета
+      // (первая порция прохода начинается всегда) тратилась бы на вопрос «можно
+      // ли начать», и при малом потолке не заполнялось бы ни одной полосы.
+      texels += body.flush(field, this.floor, budget);
+      // Тело недозаполнено: бюджет кончился на его полосах.
+      if (body.needsRefill()) {
+        budget.defer();
+        return texels;
+      }
+    }
+    return texels;
   }
 
   /**
@@ -310,35 +355,7 @@ export class WaterSubsystem implements RenderSubsystem {
    *   её КВАДРАТОМ, и платит за них перезаполнение поля (REND-35).
    */
   quality(): QualityDeclaration {
-    return {
-      subsystem: this.name,
-      knobs: [
-        {
-          name: WATER_RIPPLE_SOURCES,
-          cost: 'источники ряби: каждое кольцо считается на каждом фрагменте воды (REND-36)',
-          semantics: 'ceiling',
-          default: Number.POSITIVE_INFINITY,
-          min: 0,
-          max: MAX_RIPPLE_SOURCES,
-        },
-        {
-          name: WATER_DETAIL_LAYERS,
-          cost: 'слои детали поверхности: семплы карты нормалей либо октавы шума на фрагмент (REND-35)',
-          semantics: 'ceiling',
-          default: Number.POSITIVE_INFINITY,
-          min: 1,
-          max: MAX_DETAIL_LAYERS,
-        },
-        {
-          name: WATER_DEPTH_TEXELS_PER_CELL,
-          cost: 'тексели глубинных текстур тел: работа перезаполнения растёт квадратом плотности (REND-35)',
-          semantics: 'ceiling',
-          default: Number.POSITIVE_INFINITY,
-          min: 1,
-          max: MAX_DEPTH_TEXELS_PER_CELL,
-        },
-      ],
-    };
+    return waterQualityDeclaration(this.name);
   }
 
   /**

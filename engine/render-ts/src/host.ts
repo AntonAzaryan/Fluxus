@@ -48,7 +48,15 @@ export class RenderHost implements TickObserver, PresentationProducer {
   private readonly buffer: ViewBuffer;
 
   constructor(context: RenderContext, config: RenderHostConfig) {
-    this.presentation = config.stage ?? new PresentationStage(context);
+    // Бюджет кадра (REND-44) достаётся только СВОЕЙ сцене: переданную опцией
+    // сцену настроил её владелец (редактор), и второй потолок над ней был бы
+    // двумя владельцами одной величины.
+    this.presentation =
+      config.stage ??
+      new PresentationStage(context, {
+        ...(config.frameBudgetMs !== undefined ? { frameBudgetMs: config.frameBudgetMs } : {}),
+        ...(config.clock !== undefined ? { clock: config.clock } : {}),
+      });
     // Конфиг хоста РАСШИРЯЕТ конфиг сборки (`RenderHostConfig`), поэтому едет
     // в неё целиком: пересказ полей по одному был бы вторым их списком.
     this.extractor = new Extractor(config);

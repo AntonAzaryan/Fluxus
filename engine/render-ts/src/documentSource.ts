@@ -93,6 +93,14 @@ export interface DocumentInstance {
 export interface DocumentSourceOptions {
   /** Часы в миллисекундах; по умолчанию performance.now — параметр ради тестов. */
   readonly clock?: () => number;
+  /**
+   * Бюджет кадра документного источника в миллисекундах (REND-44). Умолчание —
+   * НЕОГРАНИЧЕННЫЙ, и это норма, а не удобство: правка автора обязана быть
+   * видна в том же кадре (`editor` ED-15), а откладывать пересборку под кистью
+   * значило бы показывать мазок с опозданием. Величина здесь потому, что
+   * сцену документный источник делит с превью (ED-9), у которого бюджет свой.
+   */
+  readonly frameBudgetMs?: number;
 }
 
 export class DocumentSource implements PresentationProducer {
@@ -103,6 +111,8 @@ export class DocumentSource implements PresentationProducer {
 
   private readonly stage: PresentationStage;
   private readonly clock: () => number;
+  /** Бюджет кадров ЭТОГО продюсера (REND-44); умолчание — не ограничен. */
+  private readonly budgetMs: number;
   /**
    * Сущности набора и их сведение — общий механизм (REND-3); контейнер
    * инстансов тот же, что видят подсистемы в `view.entities`.
@@ -123,6 +133,7 @@ export class DocumentSource implements PresentationProducer {
   constructor(stage: PresentationStage, options: DocumentSourceOptions = {}) {
     this.stage = stage;
     this.clock = options.clock ?? (() => performance.now());
+    this.budgetMs = options.frameBudgetMs ?? Number.POSITIVE_INFINITY;
     this.state = {
       tick: 0,
       mode: 'Running',
@@ -204,7 +215,7 @@ export class DocumentSource implements PresentationProducer {
     // Тот же кламп dt, что у потока тиков: после паузы вкладки первый кадр не
     // должен «доигрывать» минуты сглаживаний.
     const dt = Math.min(Math.max(dtMs / 1000, 0), 0.25);
-    this.stage.frame(dt, 1);
+    this.stage.frame(dt, 1, Math.abs(dt), this.budgetMs);
   }
 
 }

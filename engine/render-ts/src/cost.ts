@@ -326,6 +326,18 @@ export interface RenderCostCounters {
   frameSubsystems: number;
   /** Инстансы, тронутые кадром: живые сущности последней доставки × подсистемы. */
   frameInstances: number;
+  /**
+   * Отложения порций тяжёлой работы бюджетом кадра (REND-44): чанк террейна,
+   * полоса глубины воды — каждая порция, не начатая из-за исчерпанного бюджета,
+   * считается здесь один раз.
+   *
+   * На прогоне с НЕОГРАНИЧЕННЫМ бюджетом величина нулевая, и таковы все
+   * эталонные прогоны: нарезка по времени машинно-зависима, а эталон обязан
+   * совпадать побитово на разных машинах (PERF-3). Отложенная работа сама
+   * считается своими счётчиками и в том кадре, в котором случилась, — сумма за
+   * прогон от нарезки не меняется.
+   */
+  frameBudgetDeferrals: number;
   /** Проходы рендерера, заказанные подсистемой тумана: прямой и пост (design D2). */
   fogRenderPasses: number;
   /**
@@ -631,6 +643,7 @@ export const COST_COUNTER_STAGES: Readonly<Record<keyof RenderCostCounters, Cost
     terrainChunksMarked: 'syncTick',
     frameCalls: 'frame',
     frameSubsystems: 'frame',
+    frameBudgetDeferrals: 'frame',
     frameInstances: 'frame',
     fogRenderPasses: 'frame',
     // Весь растр маски — стадия кадра (change `fog-mask-budgeted-rebuild`,
@@ -713,6 +726,7 @@ export function createCostCounters(): RenderCostCounters {
     terrainChunksMarked: 0,
     frameCalls: 0,
     frameSubsystems: 0,
+    frameBudgetDeferrals: 0,
     frameInstances: 0,
     fogRenderPasses: 0,
     fogDissolveTexels: 0,
