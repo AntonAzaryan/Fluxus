@@ -172,6 +172,33 @@ export function applyShadowBias(light: THREE.DirectionalLight, mapSize: number):
   light.shadow.bias = -((texel * DEPTH_BIAS_TEXELS) / (camera.far - camera.near));
 }
 
+/**
+ * Пирамида теневой камеры источника в переданную копию (REND-30, REND-21): по
+ * ней владелец объектов решает судьбу инстанса, ушедшего за край кадра, — тень
+ * его обязана остаться, если он попадает в теневую пирамиду.
+ *
+ * Пирамида считается ЗДЕСЬ, а не берётся у прошедшего теневого прохода: до
+ * первого прохода её у three ещё нет, а решение об отсечении принимается
+ * раньше — в кадре владельца инстансов. Матрицы источника при этом обновляются
+ * его же способом (`LightShadow.updateMatrices`), чтобы пирамида была ровно та,
+ * из которой рисуется карта.
+ *
+ * Копия, а не внутренняя пирамида three: та переписывается его же теневым
+ * проходом на каждом кадре, и отданная наружу ссылка на неё менялась бы под
+ * читателем. Копию переиспользует вызывающий (REND-26).
+ */
+export function shadowFrustumOf(
+  light: THREE.DirectionalLight,
+  out: THREE.Frustum,
+): THREE.Frustum {
+  // Мировые матрицы источника и его цели — вход `updateMatrices`: позиции им
+  // ставит наводка (`aimDirectional`), а матрицы обновляются здесь.
+  light.updateMatrixWorld();
+  light.target.updateMatrixWorld();
+  light.shadow.updateMatrices(light);
+  return out.copy(light.shadow.getFrustum());
+}
+
 /** Значение ручки — режим теней; иначе потолка нет (QUAL-1). */
 export function isShadowMode(value: unknown): value is ShadowMode {
   return (

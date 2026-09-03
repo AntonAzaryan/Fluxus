@@ -51,41 +51,10 @@ export type {
   QualityValues,
 } from './types.js';
 
-// Отладочный режим рендера (`render-debug` RDBG-1..8): реестр источников рядом
-// со списком подсистем (REND-27), закрытый словарь примитивов рисования и
-// машинно-читаемый дамп кадра. Выключен по умолчанию и выключенным не стоит
-// ничего; в счётчики стоимости не входит вовсе (RDBG-8).
-export { RenderDebugLayer } from './debug/layer.js';
-export type { DebugSourceInfo, RenderDebugLayerOptions } from './debug/layer.js';
-export { DEBUG_DUMP_VERSION } from './debug/dump.js';
-export type { DebugDump } from './debug/dump.js';
-export { DebugRows } from './debug/contract.js';
-export type {
-  DebugColor,
-  DebugDraw,
-  DebugFrameState,
-  DebugList,
-  DebugPose,
-  DebugProbe,
-  DebugRaster,
-  DebugSource,
-  DebugWorldMode,
-} from './debug/contract.js';
-// Источники движка, которыми не владеет подсистема: их регистрирует сборка.
-export {
-  costCountersDebugSource,
-  deliveryDebugSource,
-  memoryDebugSource,
-  programsDebugSource,
-} from './debug/sources.js';
-export type { DebugCostProbe, DebugDeliveryProbe, DebugDeliveryRow, DebugMemoryProbe } from './debug/sources.js';
-export type { DebugProgramsProbe, DebugSnapReason, DeliverySourceOptions } from './debug/sources.js';
-export type { MemoryInfoRenderer, ProgramCountRenderer } from './debug/sources.js';
-export type { DebugFogProbe } from './debug/fogSource.js';
-export type { DebugCellRow, DebugTerrainProbe } from './debug/terrainSource.js';
-export type { DebugInstanceRow, DebugModelsProbe } from './debug/modelsSource.js';
-export type { DebugAbilityPreviewProbe, DebugPreviewState } from './debug/abilityPreviewSource.js';
-export type { DebugLightingProbe, DebugLightingState } from './debug/lightingSource.js';
+// Отладочный режим рендера (`render-debug` RDBG-1..8) — своим барьером
+// (`debug/index.ts`): реестр источников рядом со списком подсистем (REND-27),
+// закрытый словарь примитивов рисования и машинно-читаемый дамп кадра.
+export * from './debug/index.js';
 
 // Счётчики стоимости рендера (`performance-budget` PERF-3): инжектируемый сток
 // объёма работы, тегированный стадией конвейера (PERF-2). Без подключённого
@@ -170,16 +139,16 @@ export { clampIndex, cornerLevels, createVisualSurface, levelFieldSampler } from
 export type { HeightSampler, MutableVisualSurface, SurfaceNormal, VisualSurface } from './visualSurface.js';
 export { VisualSurfaceSource } from './surfaceSource.js';
 export type { SurfaceChangeListener, VisualSurfaceSourceOptions } from './surfaceSource.js';
-export { tiltTarget, smoothTilt, orientFromTiltYaw } from './model/surfaceAlign.js';
-export type { TiltVector } from './model/surfaceAlign.js';
 // Walkable-вклад поля высот (REND-9): реестр walkable-инстансов у источника
 // поверхности; кормит его подсистема моделей данными записи (REND-18).
 export { WalkableSurfaceRegistry } from './walkableSurface.js';
 export type { TerrainFormSampler, WalkableField, WalkablePlacement } from './walkableSurface.js';
 
-// Вертикальное смещение инстанса: дуга прыжка и снижение при провале (REND-12).
-export { jumpArc, jumpBase, maneuverEnds, advanceFall } from './model/verticalOffset.js';
-export type { ManeuverEnds } from './model/verticalOffset.js';
+// Построение инстансов из нормализованных данных ассета (REND-3..6, REND-20) —
+// своим барьером (`model/index.ts`): посадка на поверхность и вертикальное
+// смещение (REND-9, REND-12), сборка инстанса, анимационный контроллер,
+// батчевый ярус, bone-контроль и скины.
+export * from './model/index.js';
 
 // Подсистема террейна (REND-7, REND-9) и её чистые генераторы геометрии.
 export { TerrainSubsystem } from './subsystems/terrain.js';
@@ -403,63 +372,6 @@ export type {
   OverlayItem,
   OverlayOptions,
 } from './subsystems/overlayItems.js';
-
-// Построение инстансов из нормализованных данных ассета (THREE-половина mdxModel).
-export {
-  buildBones,
-  buildClips,
-  buildSharedModel,
-  createModelInstance,
-  geometryFromMesh,
-  modelBounds,
-} from './model/build.js';
-export type {
-  InstanceOptions,
-  ModelBounds,
-  ModelInstance,
-  SharedMeshData,
-  SharedModelData,
-  SkeletonBuild,
-} from './model/build.js';
-
-// Анимационный контроллер (REND-4): одна машина состояний, два носителя
-// воспроизведения — микшер детального яруса и скаляры батчевого (REND-20).
-export { AnimationController, MixerAnimationBackend, resolveClip } from './model/animation.js';
-export type {
-  AnimationBackend,
-  AnimationControllerOptions,
-  AnimationMapping,
-  ClipResolution,
-  NamedClip,
-} from './model/animation.js';
-export { VatAnimationBackend } from './model/vatAnimation.js';
-
-// Батчевый ярус (REND-20): батч инстансов, VAT-материал и набор вариантов скина.
-export { ModelBatch, batchLevels } from './model/batch.js';
-export type { BatchPartSource, ModelBatchOptions } from './model/batch.js';
-export {
-  VAT_MAP_KINDS,
-  createSkinPlaceholder,
-  createVatMaterial,
-  createVatTexture,
-  materialMapKinds,
-} from './model/vatMaterial.js';
-export type { VatMapKind, VatMaterial, VatMaterialUniforms } from './model/vatMaterial.js';
-export {
-  BASE_SKIN_VARIANT,
-  BatchSkinLoader,
-  skinArrayTexture,
-  skinVariantNames,
-  variantSources,
-} from './model/batchSkins.js';
-
-// Bone-контроль (REND-5).
-export { BoneControlState, clampYaw, smoothYaw, stepYaw, wrapAngle } from './model/boneControl.js';
-export type { BoneControlDef, BoneLookup } from './model/boneControl.js';
-
-// Скины (REND-6).
-export { applySkin, createSkinTextureCache, skinTextureSources, textureFromImage } from './model/skins.js';
-export type { SkinApplication, SkinTextureCache, SkinTextureSource } from './model/skins.js';
 
 // Типы контракта ассетов, которыми оперирует публичный API рендера.
 export type {

@@ -465,8 +465,9 @@ describe('PERF-4: голден-гейт стоимости на записанн
     // источников, REND-33), туман, террейн (две ручки — плотность разбиения
     // кривизны и потолок числа смешиваемых слотов текстурирования, REND-39),
     // вода (три ручки — источники ряби, слои детали и плотность выборки
-    // глубины, REND-35), модели (две ручки), частицы (две — множитель плотности
-    // и предел расстояния отсечения). Подсистема
+    // глубины, REND-35), модели (две ручки), транзиентные эффекты (одна —
+    // потолок дробления наземных фигур, REND-43), частицы (две — множитель
+    // плотности и предел расстояния отсечения). Подсистема
     // позиций ручек не имеет и в реестре не появляется — реестр собирается из
     // того, что подсистемы объявили, а не из состава документа.
     expect(bench.quality.knobs.map((knob) => knob.name)).toEqual([
@@ -485,6 +486,7 @@ describe('PERF-4: голден-гейт стоимости на записанн
       'water.depthTexelsPerCell',
       'models.lodThresholdScale',
       'models.defaultTier',
+      'effects.shapeDetail',
       'particles.density',
       // Предел расстояния отсечения эмиттеров (REND-24): вторая ручка частиц,
       // объявленная той же декларацией. Умолчание — «предела нет», и документы
@@ -518,14 +520,21 @@ describe('PERF-4: голден-гейт стоимости на записанн
  * ОБЪЯВЛЕНИЯ пакета (`COST_COUNTER_STAGES`), а не выписывается здесь: новый
  * счётчик подсистемы обязан попасть под эти проверки сам, без правки теста.
  */
-const SUBSYSTEM_PREFIXES = ['lighting', 'models', 'particles', 'terrain', 'water'] as const;
+const SUBSYSTEM_PREFIXES = [
+  'effects',
+  'lighting',
+  'models',
+  'particles',
+  'terrain',
+  'water',
+] as const;
 
 function countersOf(prefix: string): (keyof RenderCostCounters)[] {
   const names = Object.keys(COST_COUNTER_STAGES) as (keyof RenderCostCounters)[];
   return names.filter((name) => name.startsWith(prefix));
 }
 
-describe('PERF-4: работа освещения, моделей, частиц, террейна и воды видна эталону', () => {
+describe('PERF-4: работа освещения, моделей, эффектов, частиц, террейна и воды видна эталону', () => {
   for (const prefix of SUBSYSTEM_PREFIXES) {
     it(`${prefix}: счётчики объявлены и на записанном матче не мёртвые`, () => {
       const names = countersOf(prefix);
@@ -729,6 +738,40 @@ describe('PERF-6: оси масштабирования бенч-нагрузк�
     // составом сущностей (TERR-6 → REND-7).
     expect(many.terrainChunksRebuilt).toBe(few.terrainChunksRebuilt);
     expect(many.terrainFloorQuads).toBe(few.terrainFloorQuads);
+  });
+
+  it('отсечение: хвост доставки за кадром не платит ни одной подсистеме', () => {
+    // Три отсечения кадра, три подсистемы, одна причина — объекта нет в кадре:
+    // инстансы (REND-21), оболочки эмиттеров (REND-24) и наземные фигуры
+    // (REND-43). Хвост доставки стоит за ареной (`syntheticTick`), и без него
+    // все три счётчика лежали бы нулями — экономию эталон бы не пинял (PERF-4).
+    const axis = AXES.find((item) => item.axis === 'entities')!;
+    const few = measureSize(axis.small);
+    const many = measureSize(axis.large);
+    const ratio = axis.large.magnitude / axis.small.magnitude;
+
+    // Отсечённое есть на ОБОИХ размерах и растёт вместе с доставкой: хвост —
+    // её доля, а отсечение — работа по числу объектов.
+    expect(few.modelsCulled).toBeGreaterThan(0);
+    expect(few.particlesShellsCulled).toBeGreaterThan(0);
+    expect(few.effectsShapesCulled).toBeGreaterThan(0);
+    expect(many.modelsCulled).toBe(ratio * few.modelsCulled);
+    expect(many.particlesShellsCulled).toBe(ratio * few.particlesShellsCulled);
+    expect(many.effectsShapesCulled).toBe(ratio * few.effectsShapesCulled);
+
+    // И это ИМЕННО экономия, а не второй счётчик той же работы: отсечённый
+    // инстанс не выбирает уровня детализации вовсе (REND-21, REND-22), и тест
+    // отсечения каждого инстанса раскладывается на эти два исхода без остатка.
+    for (const run of [few, many]) {
+      expect(run.modelsCullTests).toBe(run.modelsCulled + run.modelsLodSelections);
+    }
+
+    // Оболочка эмиттера и наземная фигура есть у РАЗНЫХ видов манифеста
+    // (`benchContent.ts`), и хвост доставки несёт оба: отсечённых оболочек
+    // ровно столько же, сколько отсечённых фигур.
+    expect(many.effectsShapesCulled).toBe(many.particlesShellsCulled);
+    // Обе половины хвоста вместе — отсечённые инстансы: модель есть у каждого.
+    expect(many.modelsCulled).toBe(many.particlesShellsCulled + many.effectsShapesCulled);
   });
 
   it('число событий эффекта: выстрелы кратны ему, оболочки типов — нет', () => {
