@@ -92,9 +92,98 @@ export function textureFromImage(image: DecodedImage, map: TextureTarget['map'])
   return texture;
 }
 
-/** Живое применение скина: держит подписки и созданные им текстуры до `dispose`. */
+/** Живое применение скина: держит подписки и взятые им текстуры до `dispose`. */
 export interface SkinApplication {
   dispose(): void;
+}
+
+/**
+ * Кэш GPU-текстур скинов ОДНОГО ассета (REND-3, REND-6) с учётом ссылок.
+ *
+ * Пиксели приезжают из модуля ассетов уже разделяемыми (ASSET-2, ASSET-5): у
+ * десяти инстансов одного вида это ОДИН объект `DecodedImage`. GPU-текстура же
+ * до сих пор строилась на каждое употребление слота каждого инстанса — те же
+ * пиксели заливались в видеопамять по разу на инстанс, и десять юнитов в кадре
+ * стоили десяти копий одной картинки. Кэш ключуется парой «пиксели ×
+ * цветовое пространство»: пространство в ключе потому, что карта нормалей
+ * линейна, а базовый цвет и эмиссия — sRGB (`textureFromImage`), и одну
+ * текстуру им делить нельзя.
+ *
+ * Учёт ссылок, а не «живёт вечно»: скин инстанса сменяется (REND-6), запись
+ * манифеста переподаётся (REND-17), и текстура, которую больше не держит ни
+ * одно применение, обязана уйти — иначе кэш стал бы утечкой на длинной сессии
+ * правки. Кэш принадлежит разделяемой записи ассета и отдаётся вместе с ней.
+ */
+export interface SkinTextureCache {
+  /** Текстура пикселей под нужное цветовое пространство; ссылка занята. */
+  acquire(image: DecodedImage, map: TextureTarget['map']): THREE.Texture;
+  /** Ссылка отпущена; последняя освобождает текстуру. Чужая текстура — no-op. */
+  release(texture: THREE.Texture): void;
+  /** Отдать всё, что кэш ещё держит (REND-31): зовётся со сносом ассета. */
+  dispose(): void;
+}
+
+/** Одна кэшированная текстура и число живых ссылок на неё. */
+interface CachedSkinTexture {
+  readonly texture: THREE.Texture;
+  readonly image: DecodedImage;
+  readonly linear: boolean;
+  refs: number;
+}
+
+/** Обе текстуры одних пикселей: у цветовой и линейной свои (см. `SkinTextureCache`). */
+interface CachedSkinPair {
+  srgb: CachedSkinTexture | null;
+  linear: CachedSkinTexture | null;
+}
+
+export function createSkinTextureCache(): SkinTextureCache {
+  const byImage = new Map<DecodedImage, CachedSkinPair>();
+  // Обратная адресация для `release`: применение знает текстуру, а не пиксели,
+  // из которых она построена.
+  const byTexture = new Map<THREE.Texture, CachedSkinTexture>();
+
+  const forget = (entry: CachedSkinTexture): void => {
+    byTexture.delete(entry.texture);
+    const pair = byImage.get(entry.image);
+    if (pair === undefined) return;
+    if (entry.linear) pair.linear = null;
+    else pair.srgb = null;
+    if (pair.srgb === null && pair.linear === null) byImage.delete(entry.image);
+  };
+
+  return {
+    acquire(image, map) {
+      const linear = map === 'normal';
+      let pair = byImage.get(image);
+      if (pair === undefined) {
+        pair = { srgb: null, linear: null };
+        byImage.set(image, pair);
+      }
+      let entry = linear ? pair.linear : pair.srgb;
+      if (entry === null) {
+        entry = { texture: textureFromImage(image, map), image, linear, refs: 0 };
+        byTexture.set(entry.texture, entry);
+        if (linear) pair.linear = entry;
+        else pair.srgb = entry;
+      }
+      entry.refs += 1;
+      return entry.texture;
+    },
+    release(texture) {
+      const entry = byTexture.get(texture);
+      if (entry === undefined) return;
+      entry.refs -= 1;
+      if (entry.refs > 0) return;
+      forget(entry);
+      entry.texture.dispose();
+    },
+    dispose() {
+      for (const texture of byTexture.keys()) texture.dispose();
+      byTexture.clear();
+      byImage.clear();
+    },
+  };
 }
 
 /**
@@ -125,17 +214,29 @@ export function applySkin(
   textureTargets: ReadonlyMap<number, readonly TextureTarget[]>,
   sources: ReadonlyMap<number, SkinTextureSource>,
   assets: AssetService,
+  cache?: SkinTextureCache,
 ): SkinApplication {
   const unsubscribes: (() => void)[] = [];
-  // Текстуры, СОЗДАННЫЕ этим применением: только их оно и освобождает. Ключ —
-  // место употребления, поэтому повторная постановка (ассет доехал вторым
-  // состоянием) освобождает свою же прежнюю, а не чужую.
+  // Текстуры, ВЗЯТЫЕ этим применением: только их оно и отпускает. Ключ — место
+  // употребления, поэтому повторная постановка (ассет доехал вторым состоянием)
+  // отпускает свою же прежнюю, а не чужую. Без кэша ассета взятие — это
+  // создание, а возврат — освобождение: применение владеет текстурой в одиночку.
   const created = new Map<TextureTarget, THREE.Texture>();
+  const acquire = (image: DecodedImage, map: TextureTarget['map']): THREE.Texture =>
+    cache === undefined ? textureFromImage(image, map) : cache.acquire(image, map);
+  const release = (texture: THREE.Texture): void => {
+    if (cache === undefined) texture.dispose();
+    else cache.release(texture);
+  };
   let disposed = false;
 
   const put = (target: TextureTarget, texture: THREE.Texture): void => {
-    created.get(target)?.dispose();
+    const previous = created.get(target);
+    // Сперва учёт новой ссылки, потом возврат прежней: под кэшем это может быть
+    // ОДНА И ТА ЖЕ текстура (ассет доехал повторно теми же пикселями), и
+    // обратный порядок отпустил бы её до нуля ссылок и освободил под собой.
     created.set(target, texture);
+    if (previous !== undefined) release(previous);
     assignTexture(target, texture);
   };
 
@@ -143,17 +244,18 @@ export function applySkin(
     const targets = textureTargets.get(slot);
     if (targets === undefined || targets.length === 0) continue; // слот никем не используется
 
-    // Своя THREE-текстура на каждое употребление слота: разделяемое здесь —
-    // пиксели ассета, а GPU-объект принадлежит применению (REND-3).
+    // Пиксели ассета разделяются (ASSET-2), GPU-текстура — тоже, пока кэш
+    // ассета их держит (REND-3): своя копия на каждое употребление слота
+    // заливала бы одну картинку в видеопамять по разу на инстанс (REND-31).
     if (source.kind === 'image') {
-      for (const target of targets) put(target, textureFromImage(source.image, target.map));
+      for (const target of targets) put(target, acquire(source.image, target.map));
       continue;
     }
 
     const handle = assets.request<DecodedImage>('texture', source.path);
     const applyState = (state: AssetState<DecodedImage>): void => {
       if (disposed || state.status !== 'ready') return;
-      for (const target of targets) put(target, textureFromImage(state.data, target.map));
+      for (const target of targets) put(target, acquire(state.data, target.map));
     };
     // subscribe сам зовёт колбэк с текущим состоянием — отдельный вызов
     // applyState здесь означал бы повторную загрузку уже готовой текстуры.
@@ -164,7 +266,7 @@ export function applySkin(
     dispose(): void {
       disposed = true;
       for (const unsubscribe of unsubscribes) unsubscribe();
-      for (const texture of created.values()) texture.dispose();
+      for (const texture of created.values()) release(texture);
       created.clear();
     },
   };

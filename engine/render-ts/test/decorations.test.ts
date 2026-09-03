@@ -8,7 +8,7 @@
  * связка «набор → подсистема → кадр», а не внутренности набора. Второго пути
  * отрисовки не должно быть, и способ это увидеть — общий с REND-11 путь.
  */
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import * as THREE from 'three';
 import {
   FIXED_ONE,
@@ -42,6 +42,7 @@ import {
   type RenderContext,
   type ViewportPoint,
 } from '../src/index.js';
+import { KeyedInstanceSet, type KeyedInstance } from '../src/keyedInstanceSet.js';
 import { makeAssets, makeModel, type AssetsStub } from './fixtures.js';
 
 const MODEL_ID = 'models/rock.mdx';
@@ -465,3 +466,200 @@ function findOutline(scene: THREE.Scene): THREE.Object3D | null {
   });
   return found;
 }
+
+/**
+ * Переподача набора декораций приходит на КАЖДУЮ правку документа (ED-15), а
+ * работа поодаль от неё дорогая: перезапекание кэшированной карты статических
+ * теней (REND-8) и перестройка walkable-вклада поля высот (REND-9). Платить ими
+ * за правку, размещения не касающуюся, нельзя.
+ */
+describe('цена переподачи набора декораций (REND-18 → REND-8, REND-9)', () => {
+  /** Запись без анимаций — статический ярус кастера; с ними — динамический (design D3). */
+  function costManifest(): VisualManifest {
+    return {
+      entities: {},
+      decorations: {
+        Stone: { model: MODEL_ID, scale: 1, skins: { grey: {}, mossy: {} } },
+        Torch: { model: GRASS_ID, scale: 1, animations: { states: { idle: 'Stand' } } },
+      },
+    };
+  }
+
+  interface CostRig {
+    readonly decorations: DecorationSet;
+    readonly assets: AssetsStub;
+    readonly surface: VisualSurfaceSource;
+    /** Сколько раз кэшированная карта статики объявлена устаревшей. */
+    invalidations(): number;
+    walkableCalls(): number;
+  }
+
+  function makeCostRig(): CostRig {
+    const assets = makeAssets();
+    const ctx: RenderContext = {
+      scene: new THREE.Scene(),
+      assets: assets.service,
+      config: { heightStep: 0.5 },
+    };
+    let invalidations = 0;
+    const surface = new VisualSurfaceSource(
+      createTerrainGrid({
+        width: 4,
+        height: 4,
+        tileSize: FIXED_ONE,
+        levels: Array.from({ length: 4 }, () => '0000'),
+        flags: Array.from({ length: 4 }, () => '....'),
+      }),
+    );
+    const walkable = vi.spyOn(surface, 'setWalkable');
+    const models = new ModelsSubsystem(costManifest(), {
+      surface,
+      warn: () => {},
+      shadows: {
+        setCaster: () => {},
+        dropCaster: () => {},
+        invalidateStatic: () => { invalidations++; },
+      },
+    });
+    const stage = new PresentationStage(ctx).register(models);
+    return {
+      decorations: new DecorationSet(stage),
+      assets,
+      surface,
+      invalidations: () => invalidations,
+      walkableCalls: () => walkable.mock.calls.length,
+    };
+  }
+
+  const stone = (partial: Partial<DecorationInstance> = {}): DecorationInstance => ({
+    key: 'stone',
+    kind: 'Stone',
+    x: 1,
+    y: 1,
+    ...partial,
+  });
+
+  it('тот же набор второй раз не перезапекает статику и не трогает реестр поля', () => {
+    const rig = makeCostRig();
+    rig.decorations.apply([stone({ walkable: true })]);
+    rig.assets.resolve('model', MODEL_ID, makeModel());
+    const invalidated = rig.invalidations();
+    const registered = rig.walkableCalls();
+    expect(invalidated).toBeGreaterThan(0); // появление статики — переезд
+    expect(registered).toBeGreaterThan(0);
+
+    // Редактор отдаёт документ ЦЕЛИКОМ на каждую правку (REND-17, ED-15), в том
+    // числе на правку, этой декорации не касавшуюся вовсе.
+    rig.decorations.apply([stone({ walkable: true })]);
+
+    expect(rig.invalidations()).toBe(invalidated);
+    expect(rig.walkableCalls()).toBe(registered);
+  });
+
+  it('сдвиг и разворот статической декорации перезапекают статику', () => {
+    const rig = makeCostRig();
+    rig.decorations.apply([stone()]);
+    rig.assets.resolve('model', MODEL_ID, makeModel());
+    const invalidated = rig.invalidations();
+
+    rig.decorations.apply([stone({ x: 2 })]);
+    expect(rig.invalidations()).toBe(invalidated + 1);
+
+    rig.decorations.apply([stone({ x: 2, yaw: 0.25 })]);
+    expect(rig.invalidations()).toBe(invalidated + 2);
+
+    // Исчезнувшая статика — тоже переезд: её тень запечена в карте.
+    rig.decorations.apply([]);
+    expect(rig.invalidations()).toBe(invalidated + 3);
+  });
+
+  it('правка не-размещающего поля статику не трогает', () => {
+    const rig = makeCostRig();
+    rig.decorations.apply([stone({ skin: 'grey' })]);
+    rig.assets.resolve('model', MODEL_ID, makeModel());
+    const invalidated = rig.invalidations();
+    const registered = rig.walkableCalls();
+
+    // Скин к карте теней и к полю высот отношения не имеет (REND-6).
+    rig.decorations.apply([stone({ skin: 'mossy' })]);
+    expect(rig.invalidations()).toBe(invalidated);
+    expect(rig.walkableCalls()).toBe(registered);
+  });
+
+  it('переехавшая ДИНАМИЧЕСКАЯ декорация кэш статики не устаревает', () => {
+    const rig = makeCostRig();
+    const torch = (x: number): DecorationInstance => ({ key: 'torch', kind: 'Torch', x, y: 0 });
+    rig.decorations.apply([torch(0)]);
+    rig.assets.resolve('model', GRASS_ID, makeModel());
+    const invalidated = rig.invalidations();
+
+    // Анимированная декорация рисуется покадровой картой (design D3): в
+    // кэшированной статике её тени нет, и перезапекать из-за неё нечего.
+    rig.decorations.apply([torch(2)]);
+    expect(rig.invalidations()).toBe(invalidated);
+  });
+
+  it('правка флага walkable доводит поле, но статику не перезапекает', () => {
+    const rig = makeCostRig();
+    rig.decorations.apply([stone()]);
+    rig.assets.resolve('model', MODEL_ID, makeModel());
+    const invalidated = rig.invalidations();
+    const registered = rig.walkableCalls();
+
+    rig.decorations.apply([stone({ walkable: true })]);
+    // Вклад в поле высот появился (REND-9)…
+    expect(rig.walkableCalls()).toBeGreaterThan(registered);
+    // …а силуэт тени не сдвинулся ни на йоту (REND-8).
+    expect(rig.invalidations()).toBe(invalidated);
+  });
+});
+
+/**
+ * Отчёт сведения (REND-3): наборы с дорогими следствиями обязаны уметь спросить
+ * «а изменилось ли вообще что-нибудь».
+ */
+describe('KeyedInstanceSet.apply сообщает об изменении набора', () => {
+  interface Placed extends KeyedInstance {
+    readonly yaw?: number;
+  }
+
+  /** Набор, чей `write` о правках ОТЧИТЫВАЕТСЯ: курс сравнивается по значению. */
+  function reporting(): KeyedInstanceSet<Placed> {
+    return new KeyedInstanceSet<Placed>({
+      owner: 'Стенд',
+      requirement: 'REND-3',
+      write: (view, instance) => {
+        const yaw = instance.yaw ?? 0;
+        if (view.facingYaw === yaw && view.currX === instance.x) return false;
+        view.facingYaw = yaw;
+        view.prevX = view.currX = instance.x;
+        return true;
+      },
+    });
+  }
+
+  it('появление, правка, смена вида и исчезновение — изменения; повтор — нет', () => {
+    const set = reporting();
+    expect(set.apply([{ key: 'a', kind: 'Rock', x: 0, y: 0 }])).toBe(true);
+    expect(set.apply([{ key: 'a', kind: 'Rock', x: 0, y: 0 }])).toBe(false);
+    expect(set.apply([{ key: 'a', kind: 'Rock', x: 0, y: 0, yaw: 1 }])).toBe(true);
+    // Смена вида — пересоздание инстанса под тем же ключом.
+    expect(set.apply([{ key: 'a', kind: 'Grass', x: 0, y: 0, yaw: 1 }])).toBe(true);
+    expect(set.apply([])).toBe(true);
+    expect(set.apply([])).toBe(false);
+  });
+
+  it('набор, чей write молчит, объявляет изменением каждое сведение', () => {
+    const silent = new KeyedInstanceSet<KeyedInstance>({
+      owner: 'Стенд',
+      requirement: 'REND-3',
+      write: () => {},
+    });
+    const instance: KeyedInstance = { key: 'a', kind: 'Rock', x: 0, y: 0 };
+    expect(silent.apply([instance])).toBe(true);
+    // Отчёт консервативен: механизм знает только поля `KeyedInstance`, а что
+    // сделал с инстансом сам набор, знает набор — и молчание нельзя читать как
+    // «ничего не изменилось».
+    expect(silent.apply([instance])).toBe(true);
+  });
+});

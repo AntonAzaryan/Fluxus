@@ -49,6 +49,23 @@ export interface SharedModelData {
 }
 
 /**
+ * Наименьшая высота нормализации: модель нулевой высоты не должна давать
+ * бесконечный масштаб. Живёт здесь же, где нормализация и применяется.
+ */
+const MIN_MODEL_HEIGHT = 1e-3;
+
+/**
+ * Множитель нормализации модели (REND-3): масштаб записи манифеста (ASSET-6),
+ * делённый на высоту модели, — «высота модели → 1 мировая единица × масштаб
+ * записи». Одна формула на весь рендер: её спрашивают обёртка детального
+ * инстанса, инстанс-матрица батча, границы отсечения и walkable-вклад поля
+ * (REND-9), и пятое её написание разошлось бы с первыми четырьмя молча.
+ */
+export function normalizedScale(scale: number | undefined, model: { readonly height: number }): number {
+  return (scale ?? 1) / Math.max(model.height, MIN_MODEL_HEIGHT);
+}
+
+/**
  * Геометрия одной части модели (ASSET-5). Отдельная функция потому, что тем же
  * способом строятся геометрии уровней LOD-цепочки (`assets` ASSET-12, REND-22):
  * уровень — те же части с упрощённой геометрией, и второй сборки они не требуют.
@@ -510,7 +527,6 @@ export function createModelInstance(
   // Масштаб — на обёртке ПОСЛЕ биндинга, чтобы bind-матрицы остались в модельном
   // пространстве (порядок как в прототипе). Модель стоит на своём origin —
   // смещения по z нет (нормализованная высота считается от него).
-  const height = Math.max(shared.model.height, 1e-3);
   // Габариты инстанса — те же канонические границы под тем же множителем:
   // одно число, а не два похожих (REND-15). Из кэша: скан вершин — на ассет,
   // не на инстанс.
@@ -519,7 +535,7 @@ export function createModelInstance(
   // Постановка масштаба и пересчёт габаритов — одна операция, потому что второй
   // ответ на вопрос «какого размера нарисованный инстанс» разошёлся бы с первым.
   const setScale = (scale: number): void => {
-    const normalized = scale / height;
+    const normalized = normalizedScale(scale, shared.model);
     body.scale.setScalar(normalized);
     bounds.minX = canonical.minX * normalized;
     bounds.minY = canonical.minY * normalized;

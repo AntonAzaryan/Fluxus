@@ -41,8 +41,16 @@ export interface KeyedInstanceSetOptions<TInstance extends KeyedInstance> {
   readonly owner: string;
   /** ID требования, которое набор в этом сообщении цитирует. */
   readonly requirement: string;
-  /** Поля инстанса из записи набора — единственное, чем наборы отличаются. */
-  readonly write: (view: EntityView, instance: TInstance) => void;
+  /**
+   * Поля инстанса из записи набора — единственное, чем наборы отличаются.
+   *
+   * Возвращённое ровно `false` означает «запись набора ничего в инстансе не
+   * изменила» и попадает в отчёт `apply`. Любой другой результат — в том числе
+   * `undefined` набора, который об этом не отчитывается вовсе, — читается как
+   * «изменила»: механизм знает только поля `KeyedInstance`, а что сделал с
+   * инстансом сам набор, знает набор, и додумывать за него нельзя.
+   */
+  readonly write: (view: EntityView, instance: TInstance) => unknown;
 }
 
 export class KeyedInstanceSet<TInstance extends KeyedInstance> {
@@ -77,10 +85,19 @@ export class KeyedInstanceSet<TInstance extends KeyedInstance> {
   /**
    * Сводит полный набор с текущим (REND-3). Публикацию результата механизм на
    * себя не берёт: у продюсера и у набора декораций входы сцены разные.
+   *
+   * Возвращает, ИЗМЕНИЛСЯ ли набор: появился или исчез ключ, сменился вид под
+   * ключом либо `write` сообщил о правке полей. Ответ нужен потребителям, у
+   * которых переподача набора влечёт дорогую работу поодаль — перезапекание
+   * кэшированной карты теней (REND-8), перестройку индексов поля (REND-9), — а
+   * приходит она на КАЖДУЮ правку документа (ED-15), включая правки, набора не
+   * касающиеся. Отчёт консервативен: набор, чей `write` о правках молчит,
+   * получает «изменился» на каждое сведение — то же поведение, что и до отчёта.
    */
-  apply(instances: Iterable<TInstance>): void {
+  apply(instances: Iterable<TInstance>): boolean {
     const seen = this.seen;
     seen.clear();
+    let changed = false;
 
     for (const instance of instances) {
       if (seen.has(instance.key)) {
@@ -101,15 +118,19 @@ export class KeyedInstanceSet<TInstance extends KeyedInstance> {
       }
       if (view === undefined) {
         this.options.write(this.create(instance), instance);
+        changed = true;
       } else {
         view.spawned = false;
-        this.options.write(view, instance);
+        changed = this.options.write(view, instance) !== false || changed;
       }
     }
 
     for (const key of this.idByKey.keys()) {
-      if (!seen.has(key)) this.drop(key);
+      if (seen.has(key)) continue;
+      this.drop(key);
+      changed = true;
     }
+    return changed;
   }
 
   /**

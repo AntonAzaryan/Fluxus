@@ -135,6 +135,7 @@ import {
   buildSharedModel,
   createModelInstance,
   cachedModelBounds,
+  normalizedScale,
   type ModelBounds,
   type ModelInstance,
   type SharedModelData,
@@ -153,8 +154,10 @@ import { BoneControlState } from '../model/boneControl.js';
 import { smoothYaw } from '../model/boneControl.js';
 import {
   applySkin,
+  createSkinTextureCache,
   skinTextureSources,
   type SkinApplication,
+  type SkinTextureCache,
   type SkinTextureSource,
 } from '../model/skins.js';
 import { ModelBatch, batchLevels } from '../model/batch.js';
@@ -470,8 +473,6 @@ let skinPlaceholder: THREE.DataArrayTexture | null = null;
  * подсистемам, а не к ним.
  */
 const PLACEHOLDER_OWNER = 'placeholders';
-/** Наименьшая высота нормализации модели — как у `createModelInstance`. */
-const MIN_MODEL_HEIGHT = 1e-3;
 
 /**
  * Закрытый словарь состояний анимации (REND-4). Какие состояния бывают —
@@ -481,6 +482,19 @@ const MIN_MODEL_HEIGHT = 1e-3;
 const STATE_IDLE = 'idle';
 const STATE_MOVE = 'move';
 const STATE_FALL = 'fall';
+
+/**
+ * Что изменилось в размещении decoration-инстанса за сведение (REND-18).
+ * Биты, а не запись: сведение идёт по всем декорациям набора на каждую правку
+ * документа (ED-15), и объект ответа на каждую был бы мусором ровно по их числу.
+ *
+ * Различаются они потому, что следствия у них разные: трансформ устаревает
+ * кэшированную карту статических теней (REND-8), флаг walkable — только вклад
+ * инстанса в поле высот (REND-9). Одним признаком на оба правка флага платила бы
+ * полным перезапеканием статики.
+ */
+const PLACEMENT_MOVED = 1;
+const PLACEMENT_WALKABLE = 2;
 
 /** Манёвр машины локомоушена (LOC-3) → состояние; вне таблицы — idle/move по скорости. */
 const MOTION_STATE: Readonly<Record<number, string>> = {
@@ -513,6 +527,17 @@ export const ANIMATION_STATES: readonly string[] = Object.freeze([
 function animationStateOf(record: InstanceRecord): string {
   if (record.falling) return STATE_FALL;
   return MOTION_STATE[record.view.motion] ?? (record.view.moving ? STATE_MOVE : STATE_IDLE);
+}
+
+/**
+ * Может ли инстанс СНИЖАТЬСЯ при провале (REND-12): запись назвала и скорость,
+ * и глубину (ASSET-6). Запись без них не опускается ни на йоту, и состояния
+ * `fall` у неё нет: провал наблюдаем ровно снижением, а клип падения на
+ * сущности, стоящей на месте, соврал бы о происходящем (REND-4). Событие
+ * провала при этом остаётся событием и разбирается обычным путём (ARENA-5).
+ */
+function descends(record: InstanceRecord): boolean {
+  return record.fallSpeed > 0 && record.fallDepth > 0;
 }
 
 /**
@@ -549,6 +574,13 @@ interface SharedEntry {
    */
   baseSkin: SkinApplication | null;
   /**
+   * GPU-текстуры скинов этого ассета с учётом ссылок (REND-6): десять инстансов
+   * одного скина заливают его пиксели ОДИН раз. Кэш ассета, а не подсистемы:
+   * пиксели разделяются модулем ассетов по идентичности модели (ASSET-2), и
+   * живёт он ровно столько же, сколько разделяемая часть.
+   */
+  readonly skinCache: SkinTextureCache;
+  /**
    * Запечённые производные модели (ASSET-12) — один раз на ассет: VAT-текстура,
    * таблица клипов, консервативные границы, маска видимости частей. null — ещё
    * не спрашивали; `ok: false` — их нет, и запись деградирует в детальный ярус.
@@ -568,7 +600,11 @@ interface SharedEntry {
    * документа, а не длины сессии (REND-31).
    */
   readonly warmAnchors: Map<string, WarmAnchors>;
-  /** Инстансы, ждущие готовности ассета. */
+  /**
+   * Инстансы, ждущие готовности ассета. Обратная ссылка живёт на самой записи
+   * (`InstanceRecord.waitingOn`): снятие инстанса обязано стоить одного
+   * удаления, а не обхода всех разделяемых записей сцены.
+   */
   readonly waiting: Set<InstanceRecord>;
 }
 
@@ -705,6 +741,14 @@ interface InstanceRecord {
   /** Батч записи и слот в нём; null — инстанс не батчевый (REND-20). */
   batch: BatchEntry | null;
   slot: number;
+  /**
+   * Разделяемая запись, готовности которой ждёт инстанс (ASSET-4); null — не
+   * ждёт. Ссылка держится на записи, чтобы снятие инстанса стоило одного
+   * удаления из ОДНОГО множества: инстанс ждёт ровно одну модель, а обход всех
+   * разделяемых записей платил бы числом ассетов сцены за каждый уход юнита в
+   * туман (FOW-8).
+   */
+  waitingOn: SharedEntry | null;
   /** Скалярный бэкенд батчевой записи — источник строк VAT кадра. */
   vat: VatAnimationBackend | null;
   /** Индекс варианта скина в наборе батча (REND-6). */
@@ -775,6 +819,20 @@ interface InstanceRecord {
   falling: boolean;
   fallOffset: number;
   /**
+   * Снимок РАЗМЕЩЕНИЯ decoration-инстанса, сведённого последним (REND-18):
+   * позиция, курс и флаг walkable, которыми запись уже сведена. Снимок нужен
+   * потому, что сравнивать не с чем: набор мутирует ТУ ЖЕ запись `EntityView`,
+   * которую держит инстанс (`keyedInstanceSet.ts`), и прежних значений в ней
+   * уже нет. Начальные NaN делают первое сведение изменением по построению.
+   *
+   * У инстанса presentation-состояния снимок не ведётся вовсе: его размещение
+   * двигается каждым тиком, и спрашивать «сдвинулось ли» не о чем.
+   */
+  placedX: number;
+  placedY: number;
+  placedYaw: number;
+  placedWalkable: boolean;
+  /**
    * Инстанс уже получил позу кадра. До первого `updateFrame` он стоит в мировом
    * нуле, а не там, где сущность: попадание в него было бы попаданием в
    * ненарисованное (REND-15).
@@ -799,13 +857,21 @@ interface InstanceRecord {
    */
   fadingOut: boolean;
   /**
-   * Инстанс ПОЯВИЛСЯ по доставленному состоянию, которое называет сущность
-   * мёртвой (REND-4): гибели этот инстанс не видел, и клип смерти ему ставится
-   * состоянием, а не событием. Снимается только тем, что сущность перестала
-   * быть мёртвой; удачей фиксации — нет, потому что контроллер вправе появиться
-   * позже модели (`assets` ASSET-4) и вправе смениться вместе с ярусом (REND-20).
+   * Сущность инстанса мертва — АВТОРИТЕТ ЗАПИСИ (REND-4). Ставится обоими
+   * источниками правды о смерти: доставленным состоянием (появился уже мёртвым
+   * — гибели этот инстанс не видел) и событием гибели, в том числе когда
+   * рисовать инстанс ещё нечем и контроллера у него нет (`assets` ASSET-4).
+   *
+   * Флаг живёт на записи, а не в контроллере, потому что контроллер —
+   * СЕГОДНЯШНИЙ носитель воспроизведения, а не память инстанса: он вправе
+   * появиться позже модели, смениться вместе с ярусом (REND-20) и пересобраться
+   * переподачей манифеста (REND-17), — а сущность всё это время мертва, и
+   * каждый следующий контроллер обязан встать трупом так же, как встал бы
+   * первый. Снимается тем, что сущность перестала быть мёртвой: снятым маркером
+   * состояния, событием возрождения и разрывом непрерывности (`snapAll`,
+   * REND-2); удачей фиксации — нет.
    */
-  bornDead: boolean;
+  deathLock: boolean;
   /**
    * Меши держателя, чьи материалы на время fade подменены СВОИМИ копиями с
    * прозрачностью (FOW-8): разделяемые с ассетом материалы (REND-3, REND-6)
@@ -1056,6 +1122,10 @@ export class ModelsSubsystem implements RenderSubsystem, InstanceProxySource {
       }
     }
     entry.warmAnchors.clear();
+    // Кэш текстур скинов — после применений, которые их держат: последняя
+    // отпущенная ссылка освобождает текстуру сама, а `dispose` кэша добирает
+    // то, что осталось за применениями, пережившими ассет (REND-31).
+    entry.skinCache.dispose();
     for (const mesh of entry.data?.meshes ?? []) mesh.geometry.dispose();
     // Fade-копии материалов ассета уходят вместе с ними (FOW-8): пул ключуется
     // оригиналом, и без оригинала его записи уже никто не найдёт.
@@ -1085,30 +1155,54 @@ export class ModelsSubsystem implements RenderSubsystem, InstanceProxySource {
     // интерполировать», а не «этот труп ожил». Снимает фиксацию названное
     // сборкой событие возрождения — ниже, общим разбором событий тика.
     if (view.snapAll) {
-      for (const record of this.instances.values()) record.controller?.onSnap();
+      // Фиксация снимается с ЗАПИСИ, а не только с её сегодняшнего контроллера:
+      // иначе следующий контроллер того же инстанса (поздняя модель, смена
+      // яруса, переподача) поднял бы её обратно из авторитета записи.
+      for (const record of this.instances.values()) {
+        record.deathLock = false;
+        record.controller?.onSnap();
+      }
     }
     this.syncPool(ctx, this.instances, view.entities, false, view, cost);
 
     // События тика → one-shot клипы (REND-4); дедуп на потребителе (OBS-5):
     // при rewind/replay и на замороженных тиках события не переигрываются.
-    if (view.freshEvents) {
-      const fallEvent = this.options.fallEvent ?? DEFAULT_FALL_EVENT;
-      for (const event of view.events) {
-        const caster = event.data.entity ?? event.data.source;
-        if (caster === undefined) continue;
-        const record = this.instances.get(caster);
-        if (record === undefined) continue;
-        // Провал (ARENA-5) включает снижение и состояние `fall` (REND-12);
-        // убьёт ли сущность геймплейная система или вернёт на арену —
-        // рендеру неизвестно, и предвосхищать её решение он не пытается.
-        if (event.type === fallEvent) {
-          record.falling = true;
-          record.controller?.setState(STATE_FALL);
-        }
-        record.controller?.handleEvent(event.type);
-      }
-    }
+    if (view.freshEvents) this.applyTickEvents(view);
     this.reportFootprint();
+  }
+
+  /**
+   * События доставки на записях пула (REND-4): провал включает снижение
+   * (REND-12), гибель и возрождение двигают фиксацию смерти на ЗАПИСИ, всё
+   * прочее уходит в контроллер one-shot клипом.
+   */
+  private applyTickEvents(view: TickView): void {
+    const fallEvent = this.options.fallEvent ?? DEFAULT_FALL_EVENT;
+    // Имена событий смерти и возрождения читаются ОДИН раз на доставку: на
+    // каждое событие они всё равно понадобятся, а разрешение умолчания
+    // платится однажды (та же дисциплина, что у читателя состояния смерти).
+    const deathEvent = this.options.deathEvent ?? DEFAULT_DEATH_EVENT;
+    const reviveEvent = this.options.reviveEvent;
+    for (const event of view.events) {
+      const caster = event.data.entity ?? event.data.source;
+      if (caster === undefined) continue;
+      const record = this.instances.get(caster);
+      if (record === undefined) continue;
+      // Авторитет смерти — на записи (REND-4): событие фиксирует её и тогда,
+      // когда контроллера у инстанса нет вовсе (модель ещё едет, ASSET-4), и
+      // тогда фиксацию поставит первый же появившийся контроллер. Событие
+      // возрождения снимает её тем же порядком.
+      if (event.type === deathEvent) record.deathLock = true;
+      else if (event.type === reviveEvent) record.deathLock = false;
+      // Провал (ARENA-5) включает снижение и состояние `fall` (REND-12);
+      // убьёт ли сущность геймплейная система или вернёт на арену —
+      // рендеру неизвестно, и предвосхищать её решение он не пытается.
+      if (event.type === fallEvent && descends(record)) {
+        record.falling = true;
+        record.controller?.setState(STATE_FALL);
+      }
+      record.controller?.handleEvent(event.type);
+    }
   }
 
   /**
@@ -1135,12 +1229,28 @@ export class ModelsSubsystem implements RenderSubsystem, InstanceProxySource {
    * — их у decoration нет, а не «пока никто не прислал».
    */
   syncDecorations(entities: ReadonlyMap<EntityId, EntityView>): void {
-    this.syncPool(this.requireCtx(), this.decorations, entities, true, null, costSink());
+    const movedStatic = this.syncPool(
+      this.requireCtx(),
+      this.decorations,
+      entities,
+      true,
+      null,
+      costSink(),
+    );
     this.reportFootprint();
-    // Набор декораций переподан — статика могла переехать, и кэшированная карта
-    // теней устарела вместе с ней. Вход событийный (REND-18), а не кадровый:
-    // в матче он приходит однажды, в режиме правки — на правку (ED-15).
-    this.options.shadows?.invalidateStatic();
+    // Кэшированная карта статических теней устаревает ровно тогда, когда
+    // СТАТИЧЕСКАЯ декорация (REND-8, design D3) появилась, исчезла или
+    // переехала. Вход событийный (REND-18), а не кадровый: в матче он приходит
+    // однажды, в режиме правки — на каждую правку документа (ED-15), и правок,
+    // размещения не касающихся вовсе (скин, флаг walkable, соседняя запись),
+    // у документа больше, чем переездов. Безусловное перезапекание платило бы
+    // полной картой сцены за правку одного поля.
+    //
+    // Появление и исчезновение корня приёмник видит и сам (`setCaster`,
+    // `dropCaster` помечают статику устаревшей), а вот ПЕРЕЕЗД — нет: корень
+    // тот же объект, сменилось только его преобразование. Ради него сигнал и
+    // остаётся, и потому же он не «на всякий случай».
+    if (movedStatic) this.options.shadows?.invalidateStatic();
   }
 
   /**
@@ -1160,7 +1270,7 @@ export class ModelsSubsystem implements RenderSubsystem, InstanceProxySource {
     decoration: boolean,
     view: TickView | null = null,
     cost?: RenderCostCounters,
-  ): void {
+  ): boolean {
     // Просмотр поданного набора — работа подсистемы на доставке (PERF-3),
     // растущая с числом сущностей и с числом декораций одинаково: путь у обоих
     // пулов один (REND-18). Снятие исчезнувших идёт ниже по пулу и своего поля
@@ -1175,15 +1285,32 @@ export class ModelsSubsystem implements RenderSubsystem, InstanceProxySource {
     // его о смерти нечего. Читатель снимается один раз на доставку — на каждую
     // запись он всё равно позовётся, а ветвление по опции платится однажды.
     const isDeadState = decoration ? null : this.isDeadState;
+    // Сдвинулась ли статика набора (REND-8): у пула сущностей ответ всегда
+    // отрицательный — статических кастеров в нём не бывает по построению
+    // (`casterTierOf`), и сравнение на записи короткое.
+    let movedStatic = false;
     for (const entityView of entities.values()) {
       let record = pool.get(entityView.id);
+      // Тот же идентификатор с ДРУГИМ видом — другой объект, а не правка
+      // прежнего: после разветвления истории (NTR-16) освободившийся id
+      // достаётся новой сущности, и её вид приезжает вместе с ней. Вид задаёт
+      // модель, запись манифеста и ярус (REND-20) — пересобрать их правкой
+      // живой записи нечем, поэтому запись пересоздаётся. То же правило и по
+      // той же причине применяет к документным наборам `KeyedInstanceSet`
+      // (REND-11).
+      if (record !== undefined && record.kind !== entityView.kind) {
+        this.remove(record);
+        pool.delete(entityView.id);
+        record = undefined;
+      }
       if (record === undefined) {
         record = this.createRecord(ctx, entityView, decoration, fadeSeconds > 0, isDeadState, cost);
         pool.set(entityView.id, record);
       }
-      this.syncRecord(record, entityView, decoration, isDeadState);
+      const moved = this.syncRecord(record, entityView, decoration, isDeadState);
+      movedStatic ||= moved && casterTierOf(record) === 'static';
     }
-    this.sweepPool(pool, entities, fadeSeconds, view);
+    return this.sweepPool(pool, entities, fadeSeconds, view) || movedStatic;
   }
 
   /**
@@ -1209,18 +1336,22 @@ export class ModelsSubsystem implements RenderSubsystem, InstanceProxySource {
     cost: RenderCostCounters | undefined,
   ): InstanceRecord {
     const record = this.create(ctx, entityView, decoration, fading);
-    record.bornDead = isDeadState?.(entityView) === true;
+    record.deathLock = isDeadState?.(entityView) === true;
     if (cost !== undefined) cost.modelsInstancesCreated++;
     return record;
   }
 
-  /** Существующая запись пула под доставленное состояние (REND-3, REND-11). */
+  /**
+   * Существующая запись пула под доставленное состояние (REND-3, REND-11).
+   * Возвращает, СДВИНУЛОСЬ ли размещение decoration-инстанса (REND-18): у пула
+   * сущностей ответ всегда `false` — там размещение двигает каждый тик.
+   */
   private syncRecord(
     record: InstanceRecord,
     entityView: EntityView,
     decoration: boolean,
     isDeadState: ((view: EntityView) => boolean) | null,
-  ): void {
+  ): boolean {
     // Сущность снова в доставленном состоянии: начатый fade-out отменяется,
     // проявление доигрывается от текущей доли — объект в кадре не мигает.
     record.fadingOut = false;
@@ -1240,7 +1371,11 @@ export class ModelsSubsystem implements RenderSubsystem, InstanceProxySource {
       record.skinChosen = entityView.skin !== undefined;
       this.assignSkin(record, entityView.skin ?? record.visual?.defaultSkin);
     }
+    // Масштаб — часть размещения (`PLACEMENT_MOVED`): он двигает и картинку, и
+    // след пятна (REND-30), и walkable-вклад поля (REND-9).
+    let change = 0;
     if (entityView.scale !== record.viewScale) {
+      change = PLACEMENT_MOVED;
       record.viewScale = entityView.scale;
       record.scale = entityView.scale ?? 1;
       // След контактного пятна — производная габарита И масштаба (REND-30):
@@ -1251,10 +1386,40 @@ export class ModelsSubsystem implements RenderSubsystem, InstanceProxySource {
     }
     this.applyAnimation(record);
     if (isDeadState !== null) this.syncDeath(record, entityView, isDeadState);
+    if (!decoration) return false;
     // Правка walkable-записи (позиция, курс, масштаб, сам флаг) доводит
     // walkable-вклад поля до нового размещения (REND-9, REND-18); правка
-    // не-walkable полей (скин) реестр не трогает — вклад тот же.
-    if (decoration) this.syncWalkable(record);
+    // не-walkable полей (скин) реестр не трогает — вклад тот же, а размещение
+    // на КАЖДУЮ правку документа (ED-15) стоило бы записи в реестр и обхода
+    // клеток под bbox на каждую декорацию сцены.
+    change |= this.placementChange(record, entityView);
+    if (change !== 0) this.syncWalkable(record);
+    return (change & PLACEMENT_MOVED) !== 0;
+  }
+
+  /**
+   * Что изменилось в размещении decoration-инстанса с прошлого сведения
+   * (REND-18): снимок на записи сравнивается с доставленным и переписывается им.
+   * Возвращает биты `PLACEMENT_*`; ноль — набор переподан, а этой декорации
+   * правка не касалась.
+   */
+  private placementChange(record: InstanceRecord, view: EntityView): number {
+    let change = 0;
+    if (record.placedX !== view.currX || record.placedY !== view.currY) {
+      record.placedX = view.currX;
+      record.placedY = view.currY;
+      change |= PLACEMENT_MOVED;
+    }
+    if (record.placedYaw !== view.facingYaw) {
+      record.placedYaw = view.facingYaw;
+      change |= PLACEMENT_MOVED;
+    }
+    const walkable = view.walkable === true;
+    if (record.placedWalkable !== walkable) {
+      record.placedWalkable = walkable;
+      change |= PLACEMENT_WALKABLE;
+    }
+    return change;
   }
 
   /**
@@ -1270,13 +1435,23 @@ export class ModelsSubsystem implements RenderSubsystem, InstanceProxySource {
     isDeadState: (view: EntityView) => boolean,
   ): void {
     if (isDeadState(entityView)) {
-      // Флаг не гасится удачей: контроллер сменить ярус (REND-20) или
-      // появиться позже вправе, а сущность всё это время мертва — новый
-      // контроллер обязан встать трупом так же, как встал бы первый.
-      if (record.bornDead) record.controller?.enterDeath();
+      // Маркер, о котором запись ЕЩЁ НЕ ЗНАЕТ, фиксации не ставит: сведение
+      // пула идёт до разбора событий тика, и на тике гибели маркер в мире уже
+      // стоит — фиксируй мы по нему, гибель на глазах перестала бы играть клип.
+      // Фиксацию на этом тике поставит событие (`syncTick`), и с ним же встанет
+      // авторитет записи.
+      if (!record.deathLock) return;
+      // Запись мертва — и мёртв обязан быть КАЖДЫЙ её контроллер, а не только
+      // тот, при котором смерть случилась: он вправе появиться позже модели
+      // (ASSET-4) и смениться вместе с ярусом (REND-20). Повторная фиксация
+      // уже мёртвого — no-op по построению (`enterDeath`), и спрашивать о ней
+      // приходится нам, чтобы не ставить её живому контроллеру ОДНОГО кадра
+      // гибели дважды.
+      const controller = record.controller;
+      if (controller !== null && !controller.isDead) controller.enterDeath();
       return;
     }
-    record.bornDead = false;
+    record.deathLock = false;
     record.controller?.releaseDeath();
   }
 
@@ -1291,8 +1466,11 @@ export class ModelsSubsystem implements RenderSubsystem, InstanceProxySource {
     entities: ReadonlyMap<EntityId, EntityView>,
     fadeSeconds: number,
     view: TickView | null,
-  ): void {
+  ): boolean {
     const died = fadeSeconds > 0 && view !== null ? diedIn(view, this.options.deathEvent) : null;
+    // Исчезла ли статическая декорация: её тень запечена в кэшированной карте
+    // (REND-8), и без инвалидации осталась бы на полу после снятия инстанса.
+    let removedStatic = false;
     // `values()` вместо деструктуризации пар: ключ лежит в самой записи, а
     // кортеж на каждую запись пула 30 раз в секунду — мусор на ровном месте
     // (та же дисциплина, что у кадрового пути ниже).
@@ -1303,9 +1481,11 @@ export class ModelsSubsystem implements RenderSubsystem, InstanceProxySource {
         record.fadingOut = true;
         continue;
       }
+      removedStatic ||= record.decoration && casterTierOf(record) === 'static';
       this.remove(record);
       pool.delete(entity);
     }
+    return removedStatic;
   }
 
   // ---------------------------------------------------------- updateFrame
@@ -1435,6 +1615,10 @@ export class ModelsSubsystem implements RenderSubsystem, InstanceProxySource {
       if (!record.visible) cost.modelsCulled++;
     }
     if (record.holder !== null) record.holder.visible = record.visible;
+    // Уровень детализации выбирается только у БАТЧЕВОЙ записи — так велит
+    // REND-22: детальный инстанс рисуется уровнем 0 на любой дистанции, потому
+    // что цену его кадра держат пер-инстансный скелет и материалы (REND-20), а
+    // не геометрия уровня. Это оговорка требования, а не пропуск в коде.
     if (record.batch !== null) {
       record.batch.batch.setVisible(record.slot, record.visible);
       if (record.visible && screen !== null) this.selectLod(record, radius, screen, cost);
@@ -1446,6 +1630,10 @@ export class ModelsSubsystem implements RenderSubsystem, InstanceProxySource {
    * данные записи (ASSET-13), гистерезис — механизм: у порога уровень не
    * дёргается кадр к кадру. Состояние записи переключение не трогает вовсе —
    * меняется только то, в какой набор инстанс-мешей она компактируется.
+   *
+   * Зовётся только для записи в батче: уровни — возможность батчевого яруса
+   * (REND-22, REND-20). Запись, которой цепочка нужна, объявляет батчевый ярус
+   * — ярус выбирают ДАННЫЕ (ASSET-13), а не код рендера.
    */
   private selectLod(
     record: InstanceRecord,
@@ -1517,6 +1705,17 @@ export class ModelsSubsystem implements RenderSubsystem, InstanceProxySource {
   ): void {
     advanceFade(record, settle, fadeSeconds);
     const view = record.view;
+    // Инстанс в fade-out (FOW-8) держит ПОСЛЕДНЕЕ доставленное состояние, и
+    // интерполировать его заново нечем: альфа кадра принадлежит потоку доставок
+    // и сбрасывается каждой следующей — ушедший в туман юнит дрожал бы на длину
+    // своего последнего шага весь fade, ровно та «череда телепортов», которую
+    // REND-2 запрещает. Поза замирает там, где её застало угасание; часы клипа и
+    // доля проявленности идут дальше — угасает картинка, а не время.
+    if (record.fadingOut && record.posed) {
+      record.controller?.update(dt, view.timeScale);
+      this.applyPose(record, settle);
+      return;
+    }
     // Интерполяция между двумя последними тиками; snap-тик рисуется без неё (REND-2).
     const t = view.snap ? 1 : alpha;
     const x = view.prevX + (view.currX - view.prevX) * t;
@@ -1942,9 +2141,9 @@ export class ModelsSubsystem implements RenderSubsystem, InstanceProxySource {
     if (data === null) return null;
     const key = warmAnchorKey(item.sources, data);
     const anchors = item.entry.warmAnchors.get(key)
-      ?? { opaque: this.buildWarmVariant(data, item.sources, false), faded: null };
+      ?? { opaque: this.buildWarmVariant(item.entry, data, item.sources, false), faded: null };
     if (withFaded && anchors.faded === null) {
-      anchors.faded = this.buildWarmVariant(data, item.sources, true);
+      anchors.faded = this.buildWarmVariant(item.entry, data, item.sources, true);
     }
     item.entry.warmAnchors.set(key, anchors);
     return anchors;
@@ -1952,6 +2151,7 @@ export class ModelsSubsystem implements RenderSubsystem, InstanceProxySource {
 
   /** Один вариант якорей: копии материалов модели со скином записи (FOW-8). */
   private buildWarmVariant(
+    entry: SharedEntry,
     data: SharedModelData,
     sources: ReadonlyMap<number, SkinTextureSource>,
     transparent: boolean,
@@ -1979,7 +2179,9 @@ export class ModelsSubsystem implements RenderSubsystem, InstanceProxySource {
       }
       targets.set(slot, remapped);
     }
-    return { materials, skin: applySkin(targets, sources, this.requireCtx().assets) };
+    // Текстуры якорей — те же, что у живых инстансов (REND-6): якорь держит
+    // ссылку в кэше ассета, а не свою копию тех же пикселей.
+    return { materials, skin: applySkin(targets, sources, this.requireCtx().assets, entry.skinCache) };
   }
 
   /**
@@ -2445,6 +2647,11 @@ export class ModelsSubsystem implements RenderSubsystem, InstanceProxySource {
     record.flightArcHeight = offset?.flightArc ?? 0;
     record.fallSpeed = offset?.fallSpeed ?? 0;
     record.fallDepth = offset?.fallDepth ?? 0;
+    // Снижения у записи больше нет — нет и состояния `fall`: переподача
+    // манифеста вправе снять параметры (REND-17), и состояние обязано уйти
+    // вместе с ними, а не держаться до разрыва непрерывности.
+    record.falling &&= descends(record);
+    if (!record.falling) record.fallOffset = 0;
   }
 
   /**
@@ -2457,8 +2664,7 @@ export class ModelsSubsystem implements RenderSubsystem, InstanceProxySource {
     if (entry === null) return;
     entry.thresholds = resolveLodThresholds(record.visual);
     this.syncBatchSkins(entry, record.visual);
-    const normalized =
-      (record.visual?.scale ?? 1) / Math.max(entry.model.height, MIN_MODEL_HEIGHT);
+    const normalized = normalizedScale(record.visual?.scale, entry.model);
     if (normalized === entry.normalized) return;
     entry.normalized = normalized;
     scaleBounds(entry.canonical, normalized, entry.bounds);
@@ -2581,6 +2787,7 @@ export class ModelsSubsystem implements RenderSubsystem, InstanceProxySource {
       model: null,
       batch: null,
       slot: -1,
+      waitingOn: null,
       vat: null,
       skinIndex: 0,
       lodLevel: 0,
@@ -2610,6 +2817,10 @@ export class ModelsSubsystem implements RenderSubsystem, InstanceProxySource {
       fallDepth: 0,
       falling: false,
       fallOffset: 0,
+      placedX: Number.NaN,
+      placedY: Number.NaN,
+      placedYaw: Number.NaN,
+      placedWalkable: false,
       posed: false,
       visible: true,
       // Появление в наборе с включённым fade — короткий fade-in (FOW-8): вышла
@@ -2618,7 +2829,7 @@ export class ModelsSubsystem implements RenderSubsystem, InstanceProxySource {
       fade: fadeIn && !decoration ? 0 : 1,
       fadedTargets: null,
       fadingOut: false,
-      bornDead: false,
+      deathLock: false,
       lightCarrier: null,
       blobCaster: null,
       publicView: null,
@@ -2670,7 +2881,10 @@ export class ModelsSubsystem implements RenderSubsystem, InstanceProxySource {
       return;
     }
     this.makePlaceholder(ctx, record);
-    if (entry.failed === null) entry.waiting.add(record);
+    if (entry.failed === null) {
+      entry.waiting.add(record);
+      record.waitingOn = entry;
+    }
   }
 
   /**
@@ -2872,6 +3086,7 @@ export class ModelsSubsystem implements RenderSubsystem, InstanceProxySource {
       data: null,
       failed: null,
       baseSkin: null,
+      skinCache: createSkinTextureCache(),
       derivatives: null,
       vatTexture: null,
       warnedDerivatives: false,
@@ -2899,7 +3114,10 @@ export class ModelsSubsystem implements RenderSubsystem, InstanceProxySource {
             `render: у модели "${modelId}" нет запечённых производных (${baked.reason}) — детальный ярус (REND-20)`,
           );
         }
-        for (const record of entry.waiting) this.attachModel(record, data);
+        for (const record of entry.waiting) {
+          record.waitingOn = null;
+          this.attachModel(record, data);
+        }
         entry.waiting.clear();
       } else if (state.status === 'failed' && entry.failed !== state.reason) {
         entry.failed = state.reason;
@@ -2987,7 +3205,7 @@ export class ModelsSubsystem implements RenderSubsystem, InstanceProxySource {
     const model = shared?.model ?? this.shared.get(record.visual?.model ?? '')?.data?.model;
     const baked = this.shared.get(record.visual?.model ?? '')?.derivatives;
     if (model === undefined || baked == null) return;
-    const normalized = (record.visual?.scale ?? 1) / Math.max(model.height, MIN_MODEL_HEIGHT);
+    const normalized = normalizedScale(record.visual?.scale, model);
     scaleBounds(boundsFromBaked(baked), normalized, record.cullBounds);
   }
 
@@ -3036,12 +3254,14 @@ export class ModelsSubsystem implements RenderSubsystem, InstanceProxySource {
     if (this.options.deathEvent !== undefined) options.deathEvent = this.options.deathEvent;
     if (this.options.reviveEvent !== undefined) options.reviveEvent = this.options.reviveEvent;
     const controller = new AnimationController(backend, record.visual?.animations ?? {}, options);
-    // Инстанс появился по состоянию, называющему сущность мёртвой (REND-4), а
-    // контроллера тогда ещё не было: модель — разделяемый ассет и вправе ехать
-    // сколько угодно (`assets` ASSET-4). Фиксация ставится ровно тому
-    // контроллеру, который в итоге появился, — иначе труп встал бы живым в тот
-    // самый момент, когда его наконец есть чем нарисовать.
-    if (record.bornDead) controller.enterDeath();
+    // Запись знает, что сущность мертва (REND-4), а контроллера у инстанса до
+    // сих пор не было либо он сменился: модель — разделяемый ассет и вправе
+    // ехать сколько угодно (`assets` ASSET-4), ярус переключает пресет
+    // (REND-20), а переподача манифеста пересобирает инстанс (REND-17).
+    // Фиксация ставится ровно тому контроллеру, который в итоге появился, —
+    // иначе труп встал бы живым в тот самый момент, когда его наконец есть чем
+    // нарисовать, или в тот, когда сменился его носитель.
+    if (record.deathLock) controller.enterDeath();
     return controller;
   }
 
@@ -3112,7 +3332,7 @@ export class ModelsSubsystem implements RenderSubsystem, InstanceProxySource {
 
     const canonical = cachedModelBounds(shared.model, visual?.hiddenParts);
     const canonicalCull = boundsFromBaked(derivatives);
-    const normalized = (visual?.scale ?? 1) / Math.max(shared.model.height, MIN_MODEL_HEIGHT);
+    const normalized = normalizedScale(visual?.scale, shared.model);
     const skinTextures: THREE.DataArrayTexture[] = [];
     const entry: BatchEntry = {
       key,
@@ -3175,6 +3395,7 @@ export class ModelsSubsystem implements RenderSubsystem, InstanceProxySource {
       model.ownTextureTargets(),
       skinTextureSources(entry.data.model, record.visual, record.skin),
       this.requireCtx().assets,
+      entry.skinCache,
     );
   }
 
@@ -3190,6 +3411,7 @@ export class ModelsSubsystem implements RenderSubsystem, InstanceProxySource {
       entry.data.textureTargets,
       skinTextureSources(entry.data.model, undefined, undefined),
       this.requireCtx().assets,
+      entry.skinCache,
     );
   }
 
@@ -3234,7 +3456,7 @@ export class ModelsSubsystem implements RenderSubsystem, InstanceProxySource {
       tiltMaxRad: record.tiltMaxRad,
       // Нормализация — та же, что у `createModelInstance`: высота модели → 1
       // мировая единица × масштаб записи, поверх — масштаб набора (REND-11).
-      scale: (view.scale ?? 1) * ((visual.scale ?? 1) / Math.max(model.height, MIN_MODEL_HEIGHT)),
+      scale: (view.scale ?? 1) * normalizedScale(visual.scale, model),
       model,
       // Скрытые части записи (ASSET-6) не рисуются — и в поле не попадают:
       // индекс реестра обязан совпадать с нарисованным набором частей (REND-9).
@@ -3254,7 +3476,11 @@ export class ModelsSubsystem implements RenderSubsystem, InstanceProxySource {
     // единственной ссылкой, а освобождение материалов инстанса оставило бы
     // выданную копию жить дольше своего оригинала (REND-3, REND-6).
     this.clearHolderFade(record);
-    for (const entry of this.shared.values()) entry.waiting.delete(record);
+    // Ожидание снимается ПО ССЫЛКЕ записи: инстанс ждёт ровно одну модель
+    // (`attachVisual`), и обход всех разделяемых записей стоил бы числом
+    // ассетов сцены на каждое снятие инстанса.
+    record.waitingOn?.waiting.delete(record);
+    record.waitingOn = null;
     // Ярус — свойство НАРИСОВАННОГО (REND-20): пока построенного из ассета у
     // записи нет, рисуется заглушка, и она детальная. Оставить прежний ярус
     // значило бы отдавать наружу (`instanceFor`) ярус, которым в кадре ничего
@@ -3373,6 +3599,44 @@ function batchKey(
   kind: string,
   tier: ShadowCasterTier,
 ): string {
+  if (visual === undefined) return buildBatchKey(undefined, kind, tier);
+  let cache = batchKeys.get(visual);
+  if (cache === undefined) {
+    cache = { static: new Map(), dynamic: new Map() };
+    batchKeys.set(visual, cache);
+  }
+  const byKind = tier === 'static' ? cache.static : cache.dynamic;
+  let key = byKind.get(kind);
+  if (key === undefined) {
+    key = buildBatchKey(visual, kind, tier);
+    byKind.set(kind, key);
+  }
+  return key;
+}
+
+/** Ключи одной записи манифеста по виду — по таблице на ярус кастера. */
+interface BatchKeyCache {
+  readonly static: Map<string, string>;
+  readonly dynamic: Map<string, string>;
+}
+
+/**
+ * Ключи батчей по ЗАПИСИ манифеста (REND-20). Сборка ключа — сортировка набора
+ * скрытых частей и `JSON.stringify`, а спрашивают его на каждом монтировании
+ * инстанса: всплеск открытия обзора (FOW-8) — это по сборке ключа на инстанс.
+ * Запись манифеста между переподачами неизменна (REND-17), поэтому ключ — её
+ * функция, и кэш ключуется самой записью: правленый документ приносит новые
+ * объекты записей (REND-17), а прежние уходят вместе со своими таблицами —
+ * слабая ссылка не держит ни одной из них.
+ */
+const batchKeys = new WeakMap<EntityVisual, BatchKeyCache>();
+
+/** Собственно сборка ключа — вход кэша и единственное место, где она написана. */
+function buildBatchKey(
+  visual: EntityVisual | undefined,
+  kind: string,
+  tier: ShadowCasterTier,
+): string {
   const hidden = [...(visual?.hiddenParts ?? [])].sort((a, b) => a - b).join(',');
   return JSON.stringify([visual?.model ?? '', hidden, kind, tier]);
 }
@@ -3454,8 +3718,15 @@ function poseOfBlob(record: InstanceRecord, out: BlobCasterPose): boolean {
 
 /**
  * Радиус контактного пятна инстанса, мировые единицы (REND-30): половина
- * БОЛЬШЕГО горизонтального габарита вида, взятая из тех же данных, что питают
- * отсечение и выбор уровня детализации (REND-21, REND-22, ASSET-12).
+ * БОЛЬШЕГО горизонтального габарита нарисованного — габаритов BIND-ПОЗЫ
+ * (`boundsOf`), тех же, которыми инстанс виден наружу (REND-3, REND-15).
+ *
+ * Не консервативные границы отсечения (ASSET-12, REND-21): те — объединение
+ * ВСЕХ кадров всех клипов, то есть выпад атаки и распластанная смерть разом, и
+ * пятно по ним раздуто всю жизнь юнита, а не в момент выпада. Отсечению
+ * консервативность нужна (исчезнуть раньше юнита нельзя), пятну — нет: оно
+ * повторяет след стоящего инстанса, и «те же данные, что у отсечения» спутали
+ * бы безопасную границу с габаритом.
  *
  * Горизонтального, а не диагонального: пятно лежит на полу и повторяет след
  * инстанса, а высота модели к следу отношения не имеет — иначе башня отбрасывала
@@ -3463,7 +3734,7 @@ function poseOfBlob(record: InstanceRecord, out: BlobCasterPose): boolean {
  * — радиус нулевой: пятно появится вместе с моделью, а не константой кода.
  */
 function blobRadiusOf(record: InstanceRecord): number {
-  const bounds = cullBoundsOf(record) ?? boundsOf(record);
+  const bounds = boundsOf(record);
   if (bounds === null) return 0;
   const width = Math.max(bounds.maxX - bounds.minX, bounds.maxY - bounds.minY);
   return (width / 2) * Math.abs(record.scale);

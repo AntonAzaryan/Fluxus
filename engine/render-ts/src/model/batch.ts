@@ -326,6 +326,12 @@ export class ModelBatch {
     this.group.removeFromParent();
     for (const level of this.levels) {
       for (const part of level.parts) {
+        // Инстанс-меш отдаёт СВОЁ (REND-31): матрицу инстансов держит он, а не
+        // геометрия (`InstancedMesh.instanceMatrix`), и её буфер уходит только
+        // по его `dispose` — рендерер снимает по этому событию и буфер, и
+        // состояния привязки объекта. Без него батч оставлял бы за собой
+        // 64 байта на слот ёмкости до конца жизни контекста.
+        part.mesh.dispose();
         const geometry = part.mesh.geometry;
         for (const name of Object.keys(geometry.attributes)) {
           if (name !== 'instancePose' && name !== 'instanceFade') geometry.deleteAttribute(name);
@@ -445,7 +451,27 @@ export class ModelBatch {
     };
   }
 
+  /**
+   * Инстанс-буферы уровня под новую ёмкость. Прежние атрибуты отдаются здесь
+   * же (REND-31): three не умеет менять размер уже загруженного буфера
+   * (`WebGLAttributes.update` на несовпадении размера бросает), поэтому рост
+   * ёмкости — это всегда НОВЫЕ атрибуты, а прежние иначе остались бы на GPU
+   * никому не принадлежащими.
+   *
+   * Отдаются они двумя разными путями, потому что владельцы разные. Матрицу
+   * инстансов держит меш, и её буфер снимает `InstancedMesh.dispose` — тем же
+   * событием, что и на сносе батча; подписку рендерер заводит заново первым же
+   * кадром (`WebGLObjects.update`), а поза, скин и уровень записи живут в
+   * слотовых массивах батча и роста не замечают. Позу и долю проявленности
+   * держат геометрии частей, и одного их атрибута three под WebGL не
+   * освобождает вовсе — `BufferAttribute.dispose` действует у WebGPU-рендерера,
+   * и здесь он стоит как объявленная точка освобождения. Под WebGL эти два
+   * буфера (20 байт на слот против 64 у матрицы) уходят с контекстом; менять
+   * ради них геометрию части на новую — платить пересборкой обёртки и скачком
+   * живых геометрий (PERF-8) за удвоение, которых на батч единицы.
+   */
   private regrowLevel(level: BatchLevel, capacity: number): void {
+    for (const part of level.parts) part.mesh.dispose();
     for (const buffers of level.buffers) {
       buffers.matrix = growAttribute(buffers.matrix, capacity, MATRIX_STRIDE);
       buffers.pose = growAttribute(buffers.pose, capacity, POSE_STRIDE);
@@ -545,6 +571,10 @@ function dynamicAttribute(capacity: number, stride: number): THREE.InstancedBuff
   return attribute;
 }
 
+/**
+ * Атрибут большей ёмкости с прежним содержимым; ПРЕЖНИЙ отдаётся (REND-31) —
+ * место употребления у него было одно, и после подмены его не держит никто.
+ */
 function growAttribute(
   attribute: THREE.InstancedBufferAttribute,
   capacity: number,
@@ -553,6 +583,7 @@ function growAttribute(
   const next = dynamicAttribute(capacity, stride);
   (next.array as Float32Array).set(attribute.array);
   next.needsUpdate = true;
+  attribute.dispose();
   return next;
 }
 

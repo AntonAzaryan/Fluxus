@@ -408,9 +408,14 @@ describe('владение уровнями батча (REND-22 → REND-31)', (
     const asset = vi.spyOn(base[0]!.geometry, 'dispose');
     // Обёртка уровня цепочки: у уровня 0 своя, у уровня 1 — вторая по порядку.
     const wrapper = vi.spyOn(batch.meshes[1]!.geometry, 'dispose');
+    // Матрицу инстансов держит МЕШ, а не геометрия: её буфер уходит только по
+    // его `dispose` (`onInstancedMeshDispose` рендерера), и без него батч
+    // оставлял бы за собой 64 байта на слот ёмкости до конца жизни контекста.
+    const meshes = batch.meshes.map((mesh) => vi.spyOn(mesh, 'dispose'));
 
     batch.dispose();
 
+    for (const mesh of meshes) expect(mesh).toHaveBeenCalledTimes(1);
     expect(source).toHaveBeenCalledTimes(1);
     // Порядок несущий: обёртка отпускает атрибуты уровня, и только после этого
     // освобождение геометрии уровня попадает по её собственным буферам.
@@ -419,6 +424,77 @@ describe('владение уровнями батча (REND-22 → REND-31)', (
     );
     // Буферы ассета батч не трогает ни при каком порядке (REND-3).
     expect(asset).not.toHaveBeenCalled();
+  });
+});
+
+describe('рост ёмкости батча отдаёт прежние буферы (REND-31)', () => {
+  /** Ёмкость, с которой батч начинается (`INITIAL_CAPACITY` в `model/batch.ts`). */
+  const INITIAL_CAPACITY = 32;
+
+  function makeBatch(): ModelBatch {
+    const { levels, owned } = batchLevels([assetPart()], [], undefined);
+    return new ModelBatch({
+      materials: [],
+      partVisibility: { parts: [0], wordsPerFrame: 1, mask: new Uint32Array([0xffffffff]) },
+      levels,
+      ownedGeometries: owned,
+    });
+  }
+
+  /**
+   * Инстанс-атрибут части: `getAttribute` объявлен объединением с чересполосным
+   * атрибутом, а батч ставит туда ровно `InstancedBufferAttribute` (`batch.ts`).
+   */
+  function attributeOf(mesh: THREE.InstancedMesh, name: string): THREE.BufferAttribute {
+    return mesh.geometry.getAttribute(name) as THREE.BufferAttribute;
+  }
+
+  it('удвоение ёмкости освобождает подменённые инстанс-атрибуты', () => {
+    const batch = makeBatch();
+    const mesh = batch.meshes[0]!;
+    const matrix = mesh.instanceMatrix;
+    const pose = attributeOf(mesh, 'instancePose');
+    const fade = attributeOf(mesh, 'instanceFade');
+    const released = [
+      vi.spyOn(matrix, 'dispose'),
+      vi.spyOn(pose, 'dispose'),
+      vi.spyOn(fade, 'dispose'),
+    ];
+    // Матрицу освобождает сам меш: у атрибута под WebGL точки освобождения нет,
+    // а `InstancedMesh.dispose` снимает её буфер и состояния привязки.
+    const disposed = vi.spyOn(mesh, 'dispose');
+
+    for (let slot = 0; slot < INITIAL_CAPACITY; slot++) batch.acquire();
+    for (const spy of released) expect(spy).not.toHaveBeenCalled();
+
+    // Слот сверх ёмкости — удвоение: прежние атрибуты подменяются новыми, и
+    // размер загруженного буфера three менять не умеет вовсе.
+    batch.acquire();
+
+    for (const spy of released) expect(spy).toHaveBeenCalledTimes(1);
+    expect(disposed).toHaveBeenCalledTimes(1);
+    expect(mesh.instanceMatrix).not.toBe(matrix);
+    expect(attributeOf(mesh, 'instancePose')).not.toBe(pose);
+    expect(attributeOf(mesh, 'instanceFade')).not.toBe(fade);
+  });
+
+  it('после удвоения батч рисует все свои записи', () => {
+    const batch = makeBatch();
+    const mesh = batch.meshes[0]!;
+    const matrix = new THREE.Matrix4().makeTranslation(1, 2, 3);
+    for (let slot = 0; slot <= INITIAL_CAPACITY; slot++) {
+      batch.setMatrix(batch.acquire(), matrix);
+    }
+
+    batch.flush();
+
+    // Ни одна запись рост ёмкости не потеряла: компактация идёт в НОВЫЕ буферы,
+    // а слоты и их содержимое переезжают как есть (REND-22 требует того же от
+    // переключения уровня).
+    expect(mesh.count).toBe(INITIAL_CAPACITY + 1);
+    const written = mesh.instanceMatrix.array as Float32Array;
+    expect([...written.slice(0, 16)]).toEqual([...matrix.elements]);
+    batch.dispose();
   });
 });
 
