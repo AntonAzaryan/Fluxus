@@ -680,6 +680,19 @@ export function createSceneStage(options: SceneStageOptions): SceneStage {
   /** Кадры чужих продюсеров (REND-11) — превью ED-9; в игровом кадре их нет. */
   const guests = new Set<(now: number) => void>();
   let disposed = false;
+  /**
+   * Пересоздание сервиса ассетов (ASSET-2) → пересборка нарисованного из них
+   * (`rendering` REND-1, REND-31). Дерево изменилось, модуль выбросил кэш
+   * целиком — и подсистема моделей обязана перезапросить свои модели: адрес у
+   * переэкспортированного `.glb` прежний (BLND-12), а байты другие, и без
+   * этого вьюпорт рисовал бы устаревшую модель до переоткрытия сцены (ED-15).
+   *
+   * Решение о том, ЧТО пересобрать, принимает рендер — здесь только момент:
+   * область знает, когда кэш выброшен, и не знает, что из него построено.
+   */
+  const stopAssetWatch = options.assets.onInvalidate(() => {
+    parts?.models.refreshAssets();
+  });
   let lastFrameAt: number | null = null;
   /**
    * Две причины, а не одна: сорвавшееся сведение документов держится до
@@ -1165,6 +1178,7 @@ export function createSceneStage(options: SceneStageOptions): SceneStage {
     },
     dispose() {
       disposed = true;
+      stopAssetWatch();
       // Сессия живёт дольше вьюпорта: снос кадра посреди перетаскивания не имеет
       // права оставить её взаимодействие открытым.
       onWindowBlur();

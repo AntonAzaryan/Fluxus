@@ -32,7 +32,7 @@ import * as THREE from 'three';
 import type { EntityId } from '@fluxus/core';
 import { applyCameraPose } from './camera/apply.js';
 import type { CameraPose } from './camera/rig.js';
-import type { ModelInstanceView } from './subsystems/models.js';
+import type { ModelInstanceView } from './subsystems/models/instanceRecord.js';
 
 /** Прямоугольник кадра: свои размеры знает потребитель, а не рендер (REND-41). */
 export interface ScreenViewport {

@@ -5,7 +5,13 @@
  */
 import { describe, expect, it, vi } from 'vitest';
 import * as THREE from 'three';
-import { ModelsSubsystem, type BlobCaster, type LightingSink, type RenderContext } from '../src/index.js';
+import {
+  ModelsSubsystem,
+  wrapAngle,
+  type BlobCaster,
+  type LightingSink,
+  type RenderContext,
+} from '../src/index.js';
 import { modelDerivatives, type VisualManifest } from '@fluxus/assets';
 import { makeAssets, makeEntityView, makeModel, makeTickView, type AssetsStub } from './fixtures.js';
 
@@ -435,6 +441,66 @@ describe('перёд модели — данные записи манифест
     subsystem.updateFrame(1 / 60, 1);
     expect(subsystem.instanceFor(1)!.pose.yaw).toBeCloseTo(0, 6);
     expect(subsystem.instanceFor(2)!.pose.yaw).toBeCloseTo(Math.PI / 2, 6);
+  });
+});
+
+describe('курс кадра — интерполяция пары доставленных тиков (REND-2)', () => {
+  /**
+   * Стенд без сглаживания доворота (`turnRate: 0` — `smoothYaw` возвращает
+   * цель сразу): сглаживание живёт поверх интерполяции и про неё ничего не
+   * знает, а проверяется здесь именно ЦЕЛЬ кадра. Перёд записи нулевой, чтобы
+   * поправка REND-13 не смешивалась с курсом.
+   */
+  function makeYawRig(): ModelsSubsystem {
+    const assets = makeAssets();
+    const subsystem = new ModelsSubsystem(
+      { entities: { Runner: { model: MODEL_ID, facingDeg: 0 } } },
+      { turnRate: 0 },
+    );
+    subsystem.init({
+      scene: new THREE.Scene(),
+      assets: assets.service,
+      config: { heightStep: 0.5 },
+    });
+    return subsystem;
+  }
+
+  it('на половине альфы курс — середина КРАТЧАЙШЕЙ дуги между доставками', () => {
+    const subsystem = makeYawRig();
+    // Пара курсов лежит по разные стороны от ±π: короткая дуга между 3 и −3
+    // идёт ЧЕРЕЗ π длиной 2π−6 ≈ 0.283, длинная — через ноль длиной 6.
+    const prev = 3;
+    const curr = -3;
+    // Первая доставка схлопывает пару: инстанс встаёт на курс мгновенно.
+    subsystem.syncTick(makeTickView([makeEntityView(1, { prevFacingYaw: prev, facingYaw: prev })]));
+    subsystem.updateFrame(1 / 60, 1);
+    expect(subsystem.instanceFor(1)!.pose.yaw).toBeCloseTo(prev, 6);
+
+    // Вторая доставка развернула сущность; кадр рисуется на половине альфы.
+    subsystem.syncTick(makeTickView([makeEntityView(1, { prevFacingYaw: prev, facingYaw: curr })]));
+    subsystem.updateFrame(1 / 60, 0.5);
+
+    const yaw = subsystem.instanceFor(1)!.pose.yaw;
+    expect(yaw).toBeCloseTo(Math.PI, 6);
+    // Линейная середина пары — ноль: ровно та половина оборота в чужую
+    // сторону, ради которой дуга и заворачивается.
+    const linearMid = (prev + curr) / 2;
+    expect(Math.abs(wrapAngle(yaw - linearMid))).toBeGreaterThan(3);
+    // И это не конец пары: цель кадра — интерполированный курс, а не курс
+    // последнего доставленного тика.
+    expect(Math.abs(wrapAngle(yaw - curr))).toBeGreaterThan(0.1);
+  });
+
+  it('при snap кадр берёт курс последней доставки без интерполяции (REND-2)', () => {
+    const subsystem = makeYawRig();
+    subsystem.syncTick(makeTickView([makeEntityView(1, { prevFacingYaw: 0, facingYaw: 0 })]));
+    subsystem.updateFrame(1 / 60, 1);
+    // Телепорт: пара доставки ещё хранит прежний курс, но рисовать надо новый.
+    subsystem.syncTick(
+      makeTickView([makeEntityView(1, { prevFacingYaw: 0, facingYaw: 1.2, snap: true })]),
+    );
+    subsystem.updateFrame(1 / 60, 0.5);
+    expect(subsystem.instanceFor(1)!.pose.yaw).toBeCloseTo(1.2, 6);
   });
 });
 

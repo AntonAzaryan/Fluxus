@@ -87,39 +87,24 @@
  */
 import * as THREE from 'three';
 import {
-  LOCOMOTION_AIRBORNE,
-  LOCOMOTION_DODGE,
-  LOCOMOTION_ROLL,
   type EntityId,
 } from '@fluxus/core';
 import {
-  modelDerivatives,
-  resolveLodThresholds,
   resolveSurfaceAlign,
   resolveVisual,
   resolveVisualClaim,
-  resolveVisualLight,
-  type AssetState,
-  type BakedDerivatives,
-  type BakedSkinSet,
-  type DecodedImage,
+  type AssetService,
   type EntityVisual,
-  type NormalizedModel,
   type VisualManifest,
   type VisualTier,
 } from '@fluxus/assets';
 import type {
-  BlobCaster,
-  BlobCasterPose,
   EntityView,
-  LightCarrier,
-  LightCarrierPose,
   LightingSink,
   QualityDeclaration,
   QualityValues,
   RenderContext,
   RenderSubsystem,
-  ShadowCasterTier,
   TickView,
 } from '../types.js';
 import { costSink, type RenderCostCounters } from '../cost.js';
@@ -128,136 +113,55 @@ import { createWarnOnce } from '../warnOnce.js';
 import type { DebugSource } from '../debug/contract.js';
 import { modelsInstancesDebugSource, type DebugInstanceRow } from '../debug/modelsSource.js';
 import type { VisualSurfaceSource } from '../surfaceSource.js';
-import type { SurfaceNormal, VisualSurface } from '../visualSurface.js';
+import type { VisualSurface } from '../visualSurface.js';
 import { createPickProxy, type InstanceProxySource, type PickProxy, type PickProxyVisitor } from '../picking.js';
-import { orientFromTiltYaw, smoothTilt, tiltTarget, type TiltVector } from '../model/surfaceAlign.js';
 import {
-  buildSharedModel,
-  createModelInstance,
-  cachedModelBounds,
   normalizedScale,
-  type ModelBounds,
-  type ModelInstance,
   type SharedModelData,
-  type TextureTarget,
 } from '../model/build.js';
-import {
-  advanceFall,
-  jumpArc,
-  jumpBase,
-  maneuverEnds,
-  type ManeuverEnds,
-} from '../model/verticalOffset.js';
-import { AnimationController, MixerAnimationBackend } from '../model/animation.js';
-import { VatAnimationBackend } from '../model/vatAnimation.js';
 import { BoneControlState } from '../model/boneControl.js';
-import { smoothYaw } from '../model/boneControl.js';
 import {
-  applySkin,
-  createSkinTextureCache,
-  skinTextureSources,
-  type SkinApplication,
-  type SkinTextureCache,
-  type SkinTextureSource,
 } from '../model/skins.js';
-import { ModelBatch, batchLevels } from '../model/batch.js';
-import { BatchSkinLoader, skinArrayTexture } from '../model/batchSkins.js';
 import {
-  VAT_MAP_KINDS,
-  createSkinPlaceholder,
-  createVatDepthMaterial,
-  createVatMaterial,
-  createVatTexture,
-  materialMapKinds,
-  type VatMapKind,
-  type VatMaterial,
 } from '../model/vatMaterial.js';
-import { footprintSink, own, peak } from '../footprint.js';
-
-/**
- * Видимая поза инстанса (REND-3): преобразование, которым он нарисован в этом
- * кадре. Числа, а не узел сцены: узел — представление ДЕТАЛЬНОГО яруса, и у
- * батчевой записи (REND-20) его не существует.
- */
-export interface InstancePose {
-  readonly x: number;
-  readonly y: number;
-  readonly z: number;
-  /** Кватернион ориентации `(x, y, z, w)`: курс поверх наклона по поверхности. */
-  readonly qx: number;
-  readonly qy: number;
-  readonly qz: number;
-  readonly qw: number;
-  /** Курс с поправкой переда записи (REND-13), радианы — он же в кватернионе. */
-  readonly yaw: number;
-  /** Масштаб набора инстансов (REND-11); масштаб записи уже внутри `bounds`. */
-  readonly scale: number;
-}
-
-/**
- * Публичный вид инстанса — вход отладки, демо и тестов. Объект СТАБИЛЕН на всё
- * время жизни инстанса: им и наблюдается «инстанс тот же» при переподаче
- * манифеста (REND-17). Узла сцены здесь нет по тем же основаниям, что у
- * `PickProxy` (REND-3): наружу инстанс виден преобразованием и границами.
- */
-export interface ModelInstanceView {
-  readonly entity: EntityId;
-  /** Инстанс — decoration (REND-18), а не сущность presentation-состояния. */
-  readonly decoration: boolean;
-  /**
-   * Ярус, которым инстанс нарисован (REND-20). Не то же самое, что ярус записи:
-   * модель без запечённых производных деградирует в детальный.
-   */
-  readonly tier: VisualTier;
-  /** Модель детального яруса; null — батчевый ярус, она грузится либо записи нет. */
-  readonly model: ModelInstance | null;
-  readonly controller: AnimationController | null;
-  /** В кадре стоит заглушка (ASSET-4), а не модель. */
-  readonly placeholder: boolean;
-  /** Инстанс попал в пирамиду видимости этого кадра (REND-21). */
-  readonly visible: boolean;
-  /** Выбранный уровень детализации (REND-22); 0 — модель как она есть. */
-  readonly lodLevel: number;
-  readonly pose: InstancePose;
-  /** Габариты в осях инстанса; null — нарисованного нет, попадать не во что. */
-  readonly bounds: ModelBounds | null;
-}
-
-/**
- * Результат прогрева подсистемы моделей (`prewarm`): паркуемые корни для
- * компиляции программ тёплой сценой и текстуры для заливки на GPU до первого
- * кадра. `finish()` возвращает прогретое: образцы сносятся, батч-группы
- * отпускаются из тёплой сцены (и, если за время прогрева к батчу успела
- * привязаться живая запись, встают в настоящую); якоря программ остаются жить
- * с ассетом.
- *
- * Ступени ДВЕ, и разделены они по входу, а не по вкусу: `roots` строятся из
- * одних моделей, `anchoredRoots()` — ещё и из текстур скина (REND-6). Ассет
- * вправе стоять в `loading` неограниченно (ASSET-4), и одна застрявшая текстура
- * не должна отменять прогрев батчей, VAT-текстур и образцов, которым она не
- * нужна вовсе.
- */
-export interface ModelsPrewarm {
-  /**
-   * Первая ступень: корни вне сцены — батч-группы и образцы детальных видов.
-   * Ждут только своих МОДЕЛЕЙ. Рисовать их нельзя.
-   */
-  readonly roots: readonly THREE.Object3D[];
-  /** Текстуры прогретых батчей (VAT) — вход `WebGLRenderer.initTexture`. */
-  readonly textures: readonly THREE.Texture[];
-  /**
-   * Вторая ступень: образцы детальных видов под ЯКОРЯМИ программ (FOW-8) —
-   * материалами с текстурами записи, теми же, какими рисует матч. Обещание
-   * разрешается, когда доедут текстуры скина, и собирающий вправе не дожидаться
-   * его вовсе: прогрев тогда сделает меньше, но сделает.
-   *
-   * Каждый вид даёт непрозрачный образец, а вид СУЩНОСТИ — ещё и прозрачный:
-   * угасание (FOW-8) есть только у неё, decoration не угасает никогда (REND-18).
-   * Корни первой ступени сюда не попадают — они уже отданы `roots`.
-   */
-  anchoredRoots(): Promise<readonly THREE.Object3D[]>;
-  finish(): void;
-}
+import { footprintSink, peak } from '../footprint.js';
+import { FadeClonePool, advanceFade } from './models/instanceFade.js';
+import { poseInstance } from './models/instancePose.js';
+import { DEFAULT_CULL_MARGIN, InstanceCuller } from './models/instanceCull.js';
+import { LightingPorts } from './models/lightingPorts.js';
+import { BatchCache } from './models/batchCache.js';
+import { SharedModelCache } from './models/sharedModels.js';
+import {
+  EMITTER_CARRIER,
+  attachPlaceholder,
+  disposePlaceholder,
+} from './models/carrier/placeholder.js';
+import { attachDetailed, rescaleCull } from './models/carrier/detailed.js';
+import { attachBatched } from './models/carrier/batched.js';
+import { releaseHolder, type ControllerOptions } from './models/carrier/support.js';
+import { Prewarmer, type ModelsPrewarm } from './models/prewarm.js';
+import { nodePoseOf, type NodePose } from './models/nodePose.js';
+import {
+  DEFAULT_FACING_RAD,
+  DEG_TO_RAD,
+  NONE_CARRIER,
+  PLACEMENT_MOVED,
+  STATE_FALL,
+  animationStateOf,
+  boundsOf,
+  casterTierOf,
+  declaredTier,
+  descends,
+  placementChange,
+  rebuildsInstance,
+  sameSkinSlots,
+  viewOf,
+  type BatchEntry,
+  type CarrierDeps,
+  type InstanceRecord,
+  type ModelInstanceView,
+  type SharedEntry,
+} from './models/instanceRecord.js';
 
 export interface ModelsOptions {
   /** Тип события смерти — конвенция ядра. */
@@ -352,20 +256,7 @@ export interface ModelsOptions {
 
 const DEFAULT_TURN_RATE = 12;
 const DEFAULT_TILT_RATE = 10;
-/**
- * Половина радиуса габаритов сверх них самих: столько добавляет отсечению
- * консервативности запас по умолчанию (REND-21). Порядок величины взят от
- * размаха обычного клипа — выпад руки с оружием у нормализованной по высоте
- * модели, — а не от вкуса: меньше половины радиуса срезало бы такой клип.
- */
-const DEFAULT_CULL_MARGIN = 0.5;
-/**
- * Ширина зоны нечувствительности выбора уровня (REND-22): порог срабатывает на
- * `±10%` от своего значения, и колебание экранного размера у порога не
- * переключает уровень кадр к кадру. Гистерезис — механизм, а сами пороги —
- * данные записи (ASSET-13); поэтому число здесь одно и относительное.
- */
-const LOD_HYSTERESIS = 0.1;
+
 /**
  * Ручки качества подсистемы (`render-quality` QUAL-1). Множитель порогов LOD —
  * прямое значение поверх ПОРОГОВ ЗАПИСИ (ASSET-13, REND-22): больше единицы —
@@ -375,610 +266,11 @@ const LOD_HYSTERESIS = 0.1;
  */
 const MODELS_LOD_SCALE = 'models.lodThresholdScale';
 const MODELS_DEFAULT_TIER = 'models.defaultTier';
-/**
- * Ярус, которым рисуется запись, НЕ назвавшая его (REND-20, ASSET-13): пресет
- * правит ровно это умолчание. Явный ярус записи и вынужденный детальный у
- * процедурного контроля костей (REND-5) ему не подчиняются: первый — решение
- * автора, второй — требование механизма, и скелет батчевому ярусу взять
- * неоткуда. Со значением `'batched'` функция тождественна `resolveVisualTier`
- * ассетов, и умолчание пресета совпадает с ним же.
- */
-function declaredTier(visual: EntityVisual | undefined, fallback: VisualTier): VisualTier {
-  if (visual?.tier !== undefined) return visual.tier;
-  return visual?.boneControls === undefined ? fallback : 'detailed';
-}
-/**
- * Перёд модели, когда запись манифеста его не называет (REND-13): соглашение
- * первого поддержанного формата — у MDX лицо вдоль `+X`, то есть 0. Так модели,
- * добавленные до появления параметра, не меняют вид.
- */
-const DEFAULT_FACING_RAD = 0;
-const DEG_TO_RAD = Math.PI / 180;
-const PLACEHOLDER_COLOR = 0xd040d0;
-/** Габариты заглушки (ASSET-4) — из них же строится её геометрия. */
-const PLACEHOLDER_WIDTH = 0.4;
-const PLACEHOLDER_HEIGHT = 0.9;
-/**
- * Объём-прокси заглушки (REND-15). Границ модели у неё нет — она сама и есть
- * нарисованное, поэтому прокси производен от её геометрии, а не от размера,
- * назначенного picking'ом отдельно.
- */
-const PLACEHOLDER_BOUNDS: ModelBounds = {
-  minX: -PLACEHOLDER_WIDTH / 2,
-  minY: -PLACEHOLDER_WIDTH / 2,
-  minZ: 0,
-  maxX: PLACEHOLDER_WIDTH / 2,
-  maxY: PLACEHOLDER_WIDTH / 2,
-  maxZ: PLACEHOLDER_HEIGHT,
-};
-/**
- * Объём-прокси вида, который рисуют частицы, — на обе дороги к нему один
- * (REND-37): и на эмиттерный decoration-вид (ASSET-14), и на сущность, чей вид
- * назван записью `particles.byKind` (REND-24). Частиц подсистема моделей не
- * рисует, но ПОПАДАТЬ автор обязан и в них: размещение факела — такая же запись
- * `decorations`, как размещение статуи, а горящая жаровня, мешающая пройти, —
- * такая же сим-сущность, как любая другая; выделять, двигать и удалять их во
- * вьюпорте нужно тем же способом (REND-18, ED-17), и отладочный инспектор
- * спрашивает о них тем же picking'ом (RDBG-1). Источник объёмов-прокси при этом
- * остаётся ОДИН (REND-15): подсистема частиц в picking'е не участвует и
- * участвовать не начинает.
- *
- * Размер фиксированный: у эмиттера нет ни модели, ни границ — облако частиц
- * меняет размер каждый кадр, и производить объём попадания от него значило бы
- * заводить мерцающую цель. Габариты — по заглушке (ASSET-4) в ширину и метр в
- * высоту: столько занимает на арене типовой факел, и в эту величину автор целит.
- */
-const EMITTER_WIDTH = PLACEHOLDER_WIDTH;
-const EMITTER_HEIGHT = 1;
-const EMITTER_BOUNDS: ModelBounds = {
-  minX: -EMITTER_WIDTH / 2,
-  minY: -EMITTER_WIDTH / 2,
-  minZ: 0,
-  maxX: EMITTER_WIDTH / 2,
-  maxY: EMITTER_WIDTH / 2,
-  maxZ: EMITTER_HEIGHT,
-};
+
 /** Конвенция арены ядра (ARENA-5); имя переопределяется опцией. */
 const DEFAULT_FALL_EVENT = 'FellThroughFloor';
 /** Конвенция смерти ядра — та же, что у `AnimationController` (REND-4, FOW-8). */
 const DEFAULT_DEATH_EVENT = 'EntityDied';
-/**
- * Fade-in — доля длительности fade-out (FOW-8, design D7): появление «короткое»
- * по спеке, и отдельного поля конфигурации под него не заводится — половина
- * той же длительности, которой сущность угасает.
- */
-const FADE_IN_RATIO = 0.5;
-
-// Переиспользуемые между кадрами объекты — аллокаций на инстанс на кадр нет.
-const SCRATCH_NORMAL: SurfaceNormal = { x: 0, y: 0, z: 1 };
-const SCRATCH_TILT: TiltVector = { x: 0, y: 0 };
-const SCRATCH_ENDS: ManeuverEnds = { takeoffX: 0, takeoffY: 0, landingX: 0, landingY: 0 };
-const SCRATCH_MATRIX = new THREE.Matrix4();
-const SCRATCH_SCALE = new THREE.Vector3();
-/**
- * Геометрия и материал заглушки — общие на все заглушки процесса: заглушка у
- * них одна и та же (ASSET-4), и пер-инстансного в ней нет ничего. Строятся
- * лениво и не освобождаются вместе с инстансом — иначе следующая заглушка
- * строила бы их заново.
- */
-let placeholderGeometry: THREE.BufferGeometry | null = null;
-let placeholderMaterial: THREE.MeshStandardMaterial | null = null;
-/** Заглушка массива вариантов скина — одна на процесс по тем же основаниям. */
-let skinPlaceholder: THREE.DataArrayTexture | null = null;
-
-/**
- * Владелец заглушек в учёте занятой памяти (PERF-8). Отдельный от подсистемы
- * намеренно: заглушки — процессные синглтоны, они переживают снос сцены по
- * построению, и инвариант «после сноса живых ноль» (PERF-9) относится к
- * подсистемам, а не к ним.
- */
-const PLACEHOLDER_OWNER = 'placeholders';
-
-/**
- * Закрытый словарь состояний анимации (REND-4). Какие состояния бывают —
- * контракт рендера; какой клип на состояние ложится — политика манифеста
- * (ASSET-6), поэтому имён клипов здесь нет и быть не может.
- */
-const STATE_IDLE = 'idle';
-const STATE_MOVE = 'move';
-const STATE_FALL = 'fall';
-
-/**
- * Что изменилось в размещении decoration-инстанса за сведение (REND-18).
- * Биты, а не запись: сведение идёт по всем декорациям набора на каждую правку
- * документа (ED-15), и объект ответа на каждую был бы мусором ровно по их числу.
- *
- * Различаются они потому, что следствия у них разные: трансформ устаревает
- * кэшированную карту статических теней (REND-8), флаг walkable — только вклад
- * инстанса в поле высот (REND-9). Одним признаком на оба правка флага платила бы
- * полным перезапеканием статики.
- */
-const PLACEMENT_MOVED = 1;
-const PLACEMENT_WALKABLE = 2;
-
-/** Манёвр машины локомоушена (LOC-3) → состояние; вне таблицы — idle/move по скорости. */
-const MOTION_STATE: Readonly<Record<number, string>> = {
-  [LOCOMOTION_DODGE]: 'dodge',
-  [LOCOMOTION_ROLL]: 'roll',
-  [LOCOMOTION_AIRBORNE]: 'jump',
-};
-
-/**
- * Тот же закрытый словарь перечнем — для потребителя, которому его надо
- * ПОКАЗАТЬ автору: таблицу «состояние → подстрока имени клипа» записи манифеста
- * правит редактор (`editor` ED-14), а список состояний он обязан брать из кода
- * рендера, а не набирать своим (ED-2 — тем же основанием, каким типы эффектов
- * камеры приходят описанием CAM-9). Перечень ВЫВЕДЕН из таблицы манёвров, а не
- * набран рядом с ней: два списка разошлись бы при первом же новом манёвре.
- */
-export const ANIMATION_STATES: readonly string[] = Object.freeze([
-  STATE_IDLE,
-  STATE_MOVE,
-  ...Object.values(MOTION_STATE),
-  STATE_FALL,
-]);
-
-/**
- * Состояние анимации инстанса (REND-4): снижение при провале — состояние
- * рендера, манёвр — из машины локомоушена мира, всё остальное — по скорости.
- * Окно даблтапа (LOC-4) в таблице манёвров отсутствует намеренно: ввод в нём
- * рулит скоростью штатно, значит и анимация штатная.
- */
-function animationStateOf(record: InstanceRecord): string {
-  if (record.falling) return STATE_FALL;
-  return MOTION_STATE[record.view.motion] ?? (record.view.moving ? STATE_MOVE : STATE_IDLE);
-}
-
-/**
- * Может ли инстанс СНИЖАТЬСЯ при провале (REND-12): запись назвала и скорость,
- * и глубину (ASSET-6). Запись без них не опускается ни на йоту, и состояния
- * `fall` у неё нет: провал наблюдаем ровно снижением, а клип падения на
- * сущности, стоящей на месте, соврал бы о происходящем (REND-4). Событие
- * провала при этом остаётся событием и разбирается обычным путём (ARENA-5).
- */
-function descends(record: InstanceRecord): boolean {
-  return record.fallSpeed > 0 && record.fallDepth > 0;
-}
-
-/**
- * Прыжок в этом кадре (REND-12): манёвр `Airborne` с читаемой фазой. Ветка
- * выбирается по манёвру, а не по флагу override уровня: override носят и
- * снаряды, и проваливающиеся сущности (ARENA-6), и им ступенчатая база уместна.
- */
-function isAirborne(view: EntityView): boolean {
-  return view.motion === LOCOMOTION_AIRBORNE && Number.isFinite(view.currMotionPhase);
-}
-
-/**
- * Высота дуги ЭТОГО манёвра (REND-12): прыжок и наземные манёвры называют свои
- * высоты независимо, и дуга одного вида к другому не применяется. Манёвр, для
- * чьего вида запись высоты не задала, дуги не получает — ноль здесь означает
- * «параметра нет», а не «подставить чужой».
- *
- * Гейт по виду манёвра, а не по одной высоте на всё: фаза манёвра (`REND-12`)
- * конечна и у `Dodge`/`Roll`, поэтому без него уклон ехал бы по прыжковой дуге.
- */
-function arcHeightOf(record: InstanceRecord, motion: number): number {
-  if (motion === LOCOMOTION_AIRBORNE) return record.jumpArcHeight;
-  if (motion === LOCOMOTION_DODGE || motion === LOCOMOTION_ROLL) return record.maneuverArcHeight;
-  return 0;
-}
-
-interface SharedEntry {
-  data: SharedModelData | null;
-  failed: string | null;
-  /**
-   * Текстуры САМОЙ модели на её разделяемых материалах (REND-3): ставятся один
-   * раз на ассет, живут вместе с ним. Инстанс, чей скин ничего не подменяет,
-   * рисуется ими и своей копии материала не заводит (REND-6).
-   */
-  baseSkin: SkinApplication | null;
-  /**
-   * GPU-текстуры скинов этого ассета с учётом ссылок (REND-6): десять инстансов
-   * одного скина заливают его пиксели ОДИН раз. Кэш ассета, а не подсистемы:
-   * пиксели разделяются модулем ассетов по идентичности модели (ASSET-2), и
-   * живёт он ровно столько же, сколько разделяемая часть.
-   */
-  readonly skinCache: SkinTextureCache;
-  /**
-   * Запечённые производные модели (ASSET-12) — один раз на ассет: VAT-текстура,
-   * таблица клипов, консервативные границы, маска видимости частей. null — ещё
-   * не спрашивали; `ok: false` — их нет, и запись деградирует в детальный ярус.
-   */
-  derivatives: BakedDerivatives | null;
-  /** VAT-текстура модели: разделяется всеми её батчами (REND-3). */
-  vatTexture: THREE.DataTexture | null;
-  /** Об отсутствии производных уже предупредили — один раз на модель (REND-20). */
-  warnedDerivatives: boolean;
-  /**
-   * Якоря прогретых программ материалов модели (FOW-8) по НАБОРУ ЗАНЯТЫХ
-   * СЛОТОВ (`warmAnchorKey`); пустая карта — прогрева не было. Ключ не «модель»,
-   * потому что подмена скина вправе занять слот, который сама модель оставила
-   * пустым (`skinTextureSources`): у двух записей одной модели тогда РАЗНЫЕ
-   * ключи программы, и один набор якорей грел бы только одну из них. Верхняя
-   * граница — число различных занятостей в манифесте, то есть функция
-   * документа, а не длины сессии (REND-31).
-   */
-  readonly warmAnchors: Map<string, WarmAnchors>;
-  /**
-   * Инстансы, ждущие готовности ассета. Обратная ссылка живёт на самой записи
-   * (`InstanceRecord.waitingOn`): снятие инстанса обязано стоить одного
-   * удаления, а не обхода всех разделяемых записей сцены.
-   */
-  readonly waiting: Set<InstanceRecord>;
-}
-
-/**
- * Якоря прогретых шейдерных программ модели (FOW-8, `prewarm`): по варианту на
- * то, чем модель вообще рисуют, с текстурами записи — теми же, какими рисует
- * матч.
- *
- * Якорь не рисуется ни одного кадра, и смысл у него ровно один: пока материал
- * жив, `usedTimes` его программы у three не падает до нуля, и программа не
- * удаляется (`WebGLPrograms.releaseProgram`). Освободи прогрев свои материалы
- * по концу — компиляция вернулась бы в первый же кадр, которому эта программа
- * понадобится. Живут якоря столько же, сколько разделяемая часть ассета, и
- * отдаются вместе с ней (`releaseShared`, REND-31).
- */
-interface WarmAnchors {
-  /** Вариант, которым вид рисуется обычно. */
-  readonly opaque: WarmVariant;
-  /**
-   * Вариант с `transparent` — им идёт угасание (FOW-8). null, пока о нём не
-   * спросили: модель, которую рисуют одни декорации, не угасает никогда
-   * (REND-18), и прозрачные якоря с их текстурами были бы у неё мёртвым грузом.
-   */
-  faded: WarmVariant | null;
-}
-
-/** Один вариант якорей: разделяемый материал модели → якорь и его текстуры. */
-interface WarmVariant {
-  readonly materials: ReadonlyMap<THREE.Material, THREE.MeshStandardMaterial>;
-  /** Живое применение скина к якорям варианта: держит их текстуры (REND-6). */
-  readonly skin: SkinApplication;
-}
-
-/**
- * Детальный вид, ждущий второй ступени прогрева (FOW-8): что построить, когда
- * доедут его текстуры скина. Источники слотов посчитаны один раз — ими же
- * ключуется набор якорей и по ним же спрашиваются ожидания.
- */
-interface AnchorPlan {
-  readonly entry: SharedEntry;
-  readonly data: SharedModelData;
-  readonly options: { scale?: number; hiddenParts?: readonly number[] };
-  /** Вид пришёл из раздела decoration манифеста (ASSET-9, REND-18). */
-  readonly decoration: boolean;
-  readonly sources: ReadonlyMap<number, SkinTextureSource>;
-}
-
-/**
- * Накопитель обхода видов манифеста при прогреве: пять списков, которые обход
- * заполняет, — одной записью, чтобы шаг вида не тянул их пятью аргументами.
- */
-interface WarmCollect {
-  readonly roots: THREE.Object3D[];
-  readonly textures: THREE.Texture[];
-  readonly warmBatches: BatchEntry[];
-  readonly warmDetailed: ModelInstance[];
-  readonly plan: AnchorPlan[];
-}
-
-/**
- * Батч записей одной записи манифеста (REND-20): `InstancedMesh`-ы, материалы с
- * VAT-патчем и набор вариантов скина. Ключ включает запись, а не только модель,
- * потому что скины и скрытые части — свойства ЗАПИСИ: две записи на одну модель
- * с разными скинами не могут делить массив вариантов, а число батчей всё равно
- * растёт с числом записей, а не с числом инстансов.
- */
-interface BatchEntry {
-  readonly key: string;
-  readonly batch: ModelBatch;
-  readonly materials: readonly VatMaterial[];
-  /**
-   * Живой набор вариантов скина записи (REND-6). НЕ readonly: варианты — это
-   * таблица `skins` записи, а её переподача манифеста меняет (REND-17), и
-   * пересобрать массив слоёв иначе как заново нечем.
-   */
-  skins: BatchSkinLoader;
-  /**
-   * Таблица скинов, по которой собран текущий набор вариантов. Сравнивается
-   * ПО ЗНАЧЕНИЮ: редактор отдаёт разобранный документ, и после любой правки
-   * все объекты в нём новые (REND-17).
-   */
-  skinTable: EntityVisual['skins'] | undefined;
-  /**
-   * Массивы текстур, поставленные в материалы батча последним набором слоёв.
-   * Принадлежат БАТЧУ, а не ассету (REND-3): пересборка набора освобождает их,
-   * иначе каждая переподача манифеста оставляла бы за собой прежние слои.
-   */
-  readonly skinTextures: THREE.DataArrayTexture[];
-  readonly model: NormalizedModel;
-  /** Границы модели в канонических осях — до нормализации по высоте. */
-  readonly canonical: ModelBounds;
-  /** Консервативные границы по всем клипам (ASSET-12), те же оси. */
-  readonly canonicalCull: ModelBounds;
-  /** Множитель нормализации: масштаб записи, делённый на высоту модели. */
-  normalized: number;
-  /** Габариты записи в осях инстанса — общие на все её записи. */
-  readonly bounds: ModelBounds;
-  /** Границы отсечения записи в тех же осях (REND-21). */
-  readonly cullBounds: ModelBounds;
-  /** Пороги переключения уровней (ASSET-13, REND-22). */
-  thresholds: readonly number[];
-}
-
-interface InstanceRecord {
-  readonly entity: EntityId;
-  readonly kind: string | null;
-  /**
-   * Инстанс — decoration (REND-18), а не сущность presentation-состояния.
-   * Признак нужен снаружи (picking REND-15, подсветка REND-16): нумерация у
-   * двух пулов своя, и одно число значит в них разные инстансы.
-   */
-  readonly decoration: boolean;
-  /** Запись манифеста этого типа; переподача манифеста её меняет (REND-17). */
-  visual: EntityVisual | undefined;
-  view: EntityView;
-  /**
-   * Узел детального яруса и носитель заглушки (ASSET-4); null — записи в сцене
-   * узла нет. У батчевой записи узла не существует (REND-20), и держать пустой
-   * `Group` на каждую значило бы платить обходом сцены за то, чего в ней нет.
-   */
-  holder: THREE.Group | null;
-  placeholder: THREE.Mesh | null;
-  /**
-   * Изображение вида — частицы (REND-24), и обе дороги к нему один и тот же
-   * флаг: ключ разрешился в эмиттерный decoration-вид (ASSET-14) либо вид
-   * назван записью `particles.byKind` (REND-37). Этот пул такому инстансу
-   * ничего не строит и даёт ему только объём-прокси (`EMITTER_BOUNDS`) — чтобы
-   * попадать в нарисованное было чем (REND-15, REND-18).
-   */
-  emitter: boolean;
-  /** Ярус, которым инстанс нарисован (REND-20) — с учётом деградации. */
-  tier: VisualTier;
-  model: ModelInstance | null;
-  /** Батч записи и слот в нём; null — инстанс не батчевый (REND-20). */
-  batch: BatchEntry | null;
-  slot: number;
-  /**
-   * Разделяемая запись, готовности которой ждёт инстанс (ASSET-4); null — не
-   * ждёт. Ссылка держится на записи, чтобы снятие инстанса стоило одного
-   * удаления из ОДНОГО множества: инстанс ждёт ровно одну модель, а обход всех
-   * разделяемых записей платил бы числом ассетов сцены за каждый уход юнита в
-   * туман (FOW-8).
-   */
-  waitingOn: SharedEntry | null;
-  /** Скалярный бэкенд батчевой записи — источник строк VAT кадра. */
-  vat: VatAnimationBackend | null;
-  /** Индекс варианта скина в наборе батча (REND-6). */
-  skinIndex: number;
-  /** Уровень детализации записи (REND-22); у детального яруса всегда 0. */
-  lodLevel: number;
-  /**
-   * Консервативные границы по всем клипам модели (`assets` ASSET-12) в осях
-   * инстанса — вход отсечения (REND-21). У батчевой записи их держит батч
-   * (они общие на запись), у детальной — сам инстанс: масштаб записи у него
-   * свой и переставляется на живом инстансе. null — производных у модели нет,
-   * и отсечение идёт по габаритам bind-позы с запасом.
-   */
-  cullBounds: ModelBounds | null;
-  controller: AnimationController | null;
-  boneControl: BoneControlState | null;
-  skinApp: SkinApplication | null;
-  skin: string | undefined;
-  /**
-   * Скин выбран этому инстансу поимённо — полем набора (REND-11) или сменой
-   * скина (REND-6), — а не взят из `defaultSkin` записи. Переподача манифеста
-   * выбранного не отменяет (REND-17), а невыбранному отдаёт новый умолчательный.
-   */
-  skinChosen: boolean;
-  /**
-   * Скин и масштаб, назначенные presentation-состоянием (REND-11): хранятся,
-   * чтобы отличить «набор поменял поле» от «набор им не правит вовсе». На пути
-   * тика оба всегда `undefined`, поэтому `setSkin` остаётся единственным
-   * источником скина и ничем не перебивается.
-   */
-  viewSkin: string | undefined;
-  viewScale: number | undefined;
-  /**
-   * Видимое преобразование инстанса (REND-3): позиция, ориентация и масштаб
-   * набора. Числа, а не узел сцены, — у батчевой записи узла нет, а посадку,
-   * наклон и курс считает один и тот же `poseAll` для обоих ярусов.
-   */
-  readonly pos: THREE.Vector3;
-  readonly quat: THREE.Quaternion;
-  scale: number;
-  yaw: number;
-  snapPending: boolean;
-  /**
-   * Поправка разворота инстанса, радианы (REND-13): курс сущности плюс она даёт
-   * угол инстанса. Это ПРОТИВОПОЛОЖНОСТЬ переда модели из манифеста — чтобы
-   * лицо, смотрящее под углом `f`, оказалось направлено по курсу, инстанс надо
-   * довернуть на `−f`. Конверсия градусов и смена знака сделаны один раз при
-   * приёме записи, а не в кадре.
-   */
-  facingOffset: number;
-  /** Параметры наклона записи (ASSET-6): factor 0 выключает наклон. */
-  tiltFactor: number;
-  tiltMaxRad: number | null;
-  /** Сглаженный наклон «ось × угол» (REND-10). */
-  readonly tilt: TiltVector;
-  /** Параметры вертикального смещения записи (ASSET-6); нули — смещения нет (REND-12). */
-  jumpArcHeight: number;
-  /** Высота дуги наземного манёвра (`Dodge`/`Roll`) — своя, не доля прыжковой. */
-  maneuverArcHeight: number;
-  /** Высота полётной дуги; применяется только при доставленной фазе полёта. */
-  flightArcHeight: number;
-  fallSpeed: number;
-  fallDepth: number;
-  /**
-   * Снижение при провале — presentation-состояние инстанса: в мире состояния
-   * «падает» нет, есть событие (ARENA-5). Живёт до разрыва непрерывности.
-   */
-  falling: boolean;
-  fallOffset: number;
-  /**
-   * Снимок РАЗМЕЩЕНИЯ decoration-инстанса, сведённого последним (REND-18):
-   * позиция, курс и флаг walkable, которыми запись уже сведена. Снимок нужен
-   * потому, что сравнивать не с чем: набор мутирует ТУ ЖЕ запись `EntityView`,
-   * которую держит инстанс (`keyedInstanceSet.ts`), и прежних значений в ней
-   * уже нет. Начальные NaN делают первое сведение изменением по построению.
-   *
-   * У инстанса presentation-состояния снимок не ведётся вовсе: его размещение
-   * двигается каждым тиком, и спрашивать «сдвинулось ли» не о чем.
-   */
-  placedX: number;
-  placedY: number;
-  placedYaw: number;
-  placedWalkable: boolean;
-  /**
-   * Инстанс уже получил позу кадра. До первого `updateFrame` он стоит в мировом
-   * нуле, а не там, где сущность: попадание в него было бы попаданием в
-   * ненарисованное (REND-15).
-   */
-  posed: boolean;
-  /**
-   * Инстанс попал в пирамиду видимости последнего кадра (REND-21). Без камеры
-   * отсечения нет, и признак остаётся истинным: невидимых в таком кадре не
-   * бывает.
-   */
-  visible: boolean;
-  /**
-   * Доля проявленности инстанса [0, 1] (FOW-8): множитель АЛЬФЫ кадра —
-   * инстанс растворяется прозрачностью, а не стягиванием (стягивание читалось
-   * как «враг уменьшается»). Единица — инстанс как обычно; меньше — fade-in
-   * или fade-out. Масштаба, семантического и видимого, доля не касается.
-   */
-  fade: number;
-  /**
-   * Сущности больше нет в доставленном состоянии, а события смерти не было:
-   * «ушла в туман», инстанс доживает fade-out и убирается по его концу (FOW-8).
-   */
-  fadingOut: boolean;
-  /**
-   * Сущность инстанса мертва — АВТОРИТЕТ ЗАПИСИ (REND-4). Ставится обоими
-   * источниками правды о смерти: доставленным состоянием (появился уже мёртвым
-   * — гибели этот инстанс не видел) и событием гибели, в том числе когда
-   * рисовать инстанс ещё нечем и контроллера у него нет (`assets` ASSET-4).
-   *
-   * Флаг живёт на записи, а не в контроллере, потому что контроллер —
-   * СЕГОДНЯШНИЙ носитель воспроизведения, а не память инстанса: он вправе
-   * появиться позже модели, смениться вместе с ярусом (REND-20) и пересобраться
-   * переподачей манифеста (REND-17), — а сущность всё это время мертва, и
-   * каждый следующий контроллер обязан встать трупом так же, как встал бы
-   * первый. Снимается тем, что сущность перестала быть мёртвой: снятым маркером
-   * состояния, событием возрождения и разрывом непрерывности (`snapAll`,
-   * REND-2); удачей фиксации — нет.
-   */
-  deathLock: boolean;
-  /**
-   * Меши держателя, чьи материалы на время fade подменены СВОИМИ копиями с
-   * прозрачностью (FOW-8): разделяемые с ассетом материалы (REND-3, REND-6)
-   * трогать нельзя. null — fade не идёт, у мешей разделяемые материалы.
-   */
-  fadedTargets: FadeTarget[] | null;
-  /**
-   * Носитель локального света инстанса (REND-33); null — запись вида блока
-   * `light` не несёт (ASSET-16) либо порта света у сборки нет. Объект живёт
-   * вместе с инстансом: числа блока правятся на нём переподачей манифеста
-   * (REND-17), а снимается он вместе с инстансом.
-   */
-  lightCarrier: LightCarrier | null;
-  /**
-   * Носитель контактного пятна инстанса (REND-30, режим `blob`); null — инстанс
-   * не динамический кастер либо порта пятен у сборки нет. Живёт вместе с
-   * инстансом: радиус правится на нём переподачей манифеста (REND-17), а
-   * снимается он вместе с инстансом или со сменой яруса кастера.
-   */
-  blobCaster: BlobCaster | null;
-  /**
-   * Опора кадра под инстансом — высота поверхности и её нормаль в точке
-   * (REND-30, вход `poseOfBlob`). Считается там же, где поза кадра, и только
-   * при живом носителе пятна: инстанс без него за выборку поверхности не платит.
-   *
-   * Отдельно от `pos`, потому что это РАЗНЫЕ величины: в позу входят дуга
-   * манёвра, полёт и снижение при провале (REND-12), а опора — то, над чем
-   * инстанс в этот момент находится. Нормаль — свойство той же точки, и берётся
-   * она тем же правилом, каким сажается сам инстанс: walkable-инстанс — по
-   * террейн-форме, все прочие — по полю целиком (REND-9).
-   */
-  seatZ: number;
-  readonly seatNormal: SurfaceNormal;
-  /** Публичный вид инстанса; строится лениво и живёт с инстансом (REND-17). */
-  publicView: ModelInstanceView | null;
-}
-
-/**
- * Меш держателя и его РАЗДЕЛЯЕМЫЕ материалы, отложенные на время fade (FOW-8).
- * Пока запись жива, в самом меше стоят fade-копии, выданные пулами оригиналов
- * (`borrowFadeClone`); порядок в массиве тот же, что у оригиналов, — по нему
- * копии и возвращаются (`returnFadeTargets`).
- */
-interface FadeTarget {
-  readonly mesh: { material: THREE.Material | THREE.Material[] };
-  readonly original: THREE.Material | THREE.Material[];
-}
-
-/** Материалы меша списком — у three они бывают и одиночными, и массивом. */
-function materialsOf(material: THREE.Material | THREE.Material[]): readonly THREE.Material[] {
-  return Array.isArray(material) ? material : [material];
-}
-
-/**
- * Материал со слотами карт — теми, что `applySkin` заполняет (`assignTexture`) и
- * что входят в ключ программы three занятостью (`mapUv` и соседи). Базовый
- * `Material` их не объявляет: они принадлежат подтипам, а fade-копия работает с
- * любым материалом меша.
- */
-type MappedMaterial = THREE.Material & {
-  map?: THREE.Texture | null;
-  normalMap?: THREE.Texture | null;
-  emissiveMap?: THREE.Texture | null;
-};
-
-/** Альфа кадра на fade-копии: доля проявленности от базовой непрозрачности (FOW-8). */
-function applyFadeOpacity(clone: THREE.Material, fade: number): void {
-  clone.opacity = (clone.userData.fadeBaseOpacity as number) * fade;
-}
-
-/**
- * Ключ набора якорей прогрева (FOW-8) — слоты, которые запись действительно
- * ЗАНИМАЕТ: те, у которых есть источник и есть место употребления в материалах
- * модели. Именно занятость входит в ключ программы three (`mapUv` и соседи), а
- * какая текстура в слоте — нет: две записи с разными скинами одних и тех же
- * слотов делят якоря, а запись, чей скин занял слот, пустой у модели, получает
- * свои (REND-6).
- */
-function warmAnchorKey(
-  sources: ReadonlyMap<number, SkinTextureSource>,
-  data: SharedModelData,
-): string {
-  const occupied: number[] = [];
-  for (const slot of sources.keys()) {
-    if ((data.textureTargets.get(slot)?.length ?? 0) > 0) occupied.push(slot);
-  }
-  occupied.sort((a, b) => a - b);
-  return occupied.join(',');
-}
-
-/**
- * Материалы образца прогрева — якорями своего варианта (FOW-8): компилируется
- * ровно то, чем рисует матч. Меш, материала которого среди якорей нет (модель
- * без материалов рисуется своей заглушкой, `createModelInstance`), остаётся как
- * был — прогревать у него нечего.
- */
-function applyWarmAnchors(
-  instance: ModelInstance,
-  anchors: ReadonlyMap<THREE.Material, THREE.MeshStandardMaterial>,
-): void {
-  for (const mesh of instance.meshes) {
-    const current = mesh.material;
-    if (Array.isArray(current)) continue;
-    const anchor = anchors.get(current);
-    if (anchor !== undefined) mesh.material = anchor;
-  }
-}
 
 export class ModelsSubsystem implements RenderSubsystem, InstanceProxySource {
   readonly name = 'models';
@@ -994,37 +286,26 @@ export class ModelsSubsystem implements RenderSubsystem, InstanceProxySource {
    * гасит `instances` и этого пула не касается.
    */
   private readonly decorations = new Map<EntityId, InstanceRecord>();
-  private readonly shared = new Map<string, SharedEntry>();
+
+  /** Пул прозрачных копий материалов на время угасания (FOW-8). */
+  private readonly fade = new FadeClonePool();
+  /** Отсечение и выбор уровня кадра (REND-21, REND-22) — своё хозяйство. */
+  private readonly culler = new InstanceCuller();
+  /** Порты к подсистеме освещения: ярус кастера, свет записи, пятно (REND-8). */
+  private readonly lighting: LightingPorts;
+  /** Кэш батчей по ключу записи манифеста (REND-20, REND-31). */
+  private readonly batches: BatchCache;
+  /** Кэш разделяемой части ассетов моделей (REND-3). */
+  private readonly shared: SharedModelCache;
   /**
-   * Батчи по ключу записи (REND-20). Живут в кэше наравне с разделяемыми
-   * данными ассета: опустевший батч не рисует ничего (`count` нулевой — draw
-   * call'а нет), а следующий инстанс той же записи не собирает его заново.
+   * Узкий порт носителей яруса к хозяйству подсистемы (REND-20): один объект на
+   * подсистему, а не на инстанс и не на вызов.
    */
-  private readonly batches = new Map<string, BatchEntry>();
-  /**
-   * Пулы fade-копий по ИСХОДНОМУ материалу (FOW-8). Копия отличается от
-   * оригинала одним полем — `transparent`, — но в three r0.185 это бит 17 ключа
-   * программы (`opaque` = `!transparent && NormalBlending && !alphaToCoverage`,
-   * `WebGLPrograms.getProgramCacheKeyBooleans`): у копии ДРУГАЯ программа, и
-   * первый её draw компилирует и линкует шейдер прямо в кадре — десятки
-   * миллисекунд на материал. Освобождать копию по концу эпизода значило бы
-   * ронять `usedTimes` её программы до нуля, а с ним и саму программу
-   * (`releaseProgram`), и платить компиляцию на КАЖДОМ открытии обзора; поэтому
-   * копии не освобождаются, а возвращаются в пул своего оригинала и выдаются
-   * следующему эпизоду.
-   *
-   * Пул — свободный список, а не одна копия на материал: угасают одновременно
-   * несколько инстансов, а `opacity` — свойство материала, и одна копия на всех
-   * означала бы, что доля одного видна на другом. Копия выдаётся на меш-слот и
-   * возвращается концом его эпизода; длина списка ограничена числом
-   * одновременно угасающих, а число ключей — материалами контента плюс своими
-   * материалами живых инстансов (REND-6).
-   *
-   * Копия живёт ровно столько, сколько её оригинал (`disposeFadeClones`):
-   * пережить его она не вправе — ключа, по которому её нашли бы снова, больше
-   * нет, и она осталась бы висеть со своей программой навсегда.
-   */
-  private readonly fadeClones = new Map<THREE.Material, THREE.Material[]>();
+  private readonly carrierDeps: CarrierDeps;
+  /** Опции анимационного контроллера от сборки (REND-4) — те же обоим ярусам. */
+  private readonly controllerOptions: ControllerOptions;
+  /** Прогрев программ и ассетов до первого кадра (FOW-8, REND-31). */
+  private readonly prewarmer: Prewarmer;
   private readonly warnedKinds = new Set<string>();
   /**
    * Несёт ли доставленное состояние сущности маркер смерти (REND-4); null —
@@ -1033,26 +314,55 @@ export class ModelsSubsystem implements RenderSubsystem, InstanceProxySource {
   private readonly isDeadState: ((view: EntityView) => boolean) | null;
   /** Переиспользуемая запись прокси обхода (REND-15): валидна внутри визита. */
   private readonly proxy: PickProxy = createPickProxy();
-  /**
-   * Переиспользуемое хозяйство отсечения (REND-21): пирамида, матрица кадра и
-   * сфера инстанса. Аллокаций на кадр и на инстанс у отсечения нет — иначе оно
-   * платило бы за себя тем же, что экономит.
-   */
-  private readonly frustum = new THREE.Frustum();
-  private readonly frustumMatrix = new THREE.Matrix4();
-  private readonly cullSphere = new THREE.Sphere();
-  private readonly cullCenter = new THREE.Vector3();
-  private readonly cameraPosition = new THREE.Vector3();
-  /** Метрика экранного размера камеры (REND-22) — снимается в неё каждый кадр. */
-  private readonly screenScale: ScreenScale = { tanHalfFov: 0, orthoHeight: 0 };
+
   /** Множитель порогов LOD от пресета качества (QUAL-1, REND-22); 1 — пороги записи. */
   private lodScale = 1;
   /** Ярус записей, не назвавших его (QUAL-1, REND-20) — умолчание кода до пресета. */
   private defaultTier: VisualTier = 'batched';
 
   constructor(manifest: VisualManifest, options: ModelsOptions = {}) {
+    // Порт носителей замыкается на подсистему, а не копирует её поля: контекст
+    // рендера приходит только с `init` (REND-8), а сток, кэши и манифест живут
+    // дольше конструктора.
+    // eslint-disable-next-line @typescript-eslint/no-this-alias -- порт держит саму подсистему
+    const self = this;
     this.manifest = manifest;
     this.options = options;
+    this.lighting = new LightingPorts(options.shadows);
+    this.controllerOptions = {
+      ...(options.crossfade === undefined ? {} : { crossfade: options.crossfade }),
+      ...(options.deathEvent === undefined ? {} : { deathEvent: options.deathEvent }),
+      ...(options.reviveEvent === undefined ? {} : { reviveEvent: options.reviveEvent }),
+    };
+    this.carrierDeps = {
+      get assets(): AssetService { return self.requireCtx().assets; },
+      get scene(): THREE.Scene { return self.requireCtx().scene; },
+      warn: (message) => { self.warn(message); },
+      markCaster: (record) => { self.lighting.markCaster(record); },
+      ensureBaseSkin: (entry) => { self.shared.ensureBaseSkin(entry); },
+      sharedOf: (record) =>
+        record.visual === undefined ? undefined : self.shared.get(record.visual.model),
+      disposeFadeClones: (originals) => { self.fade.disposeClonesOf(originals); },
+      dropCaster: (root) => { self.lighting.dropCaster(root); },
+    };
+    this.prewarmer = new Prewarmer({
+      ctx: () => this.requireCtx(),
+      manifest: () => this.manifest,
+      get shared(): SharedModelCache { return self.shared; },
+      get batches(): BatchCache { return self.batches; },
+      defaultTier: () => this.defaultTier,
+    });
+    this.shared = new SharedModelCache(
+      () => this.requireCtx().assets,
+      (message) => { this.warn(message); },
+      (record, data) => { this.attachModel(record, data); },
+      (originals) => { this.fade.disposeClonesOf(originals); },
+    );
+    this.batches = new BatchCache(
+      () => this.requireCtx().assets,
+      (modelId, derivatives) => this.shared.vatTexture(modelId, derivatives),
+      (entry) => { this.reindexBatchSkins(entry); },
+    );
     this.warn = options.warn ?? ((message) => { console.warn(message); });
     // Читатель бита состояния смерти — тот же общий словарь, которым читают
     // свои состояния оболочки (`shellSupport.ts`, CAM-6). Строится один раз и
@@ -1100,52 +410,13 @@ export class ModelsSubsystem implements RenderSubsystem, InstanceProxySource {
       for (const record of pool.values()) this.remove(record);
       pool.clear();
     }
-    for (const entry of this.batches.values()) this.releaseBatch(entry);
-    this.batches.clear();
-    for (const entry of this.shared.values()) this.releaseShared(entry);
-    this.shared.clear();
+    this.batches.dispose();
+    this.shared.dispose();
     // Пулы, оригинал которых подсистеме НЕ принадлежит, освобождением ассета не
     // закрываются: материал заглушки общий на все инстансы и на все подсистемы
     // (`makePlaceholder`) и переживает снос. Его fade-копии — наши, и держать
     // ими программу дальше сноса нельзя (REND-31).
-    for (const pool of this.fadeClones.values()) {
-      for (const clone of pool) clone.dispose();
-    }
-    this.fadeClones.clear();
-  }
-
-  /**
-   * Освобождает разделяемые данные ассета модели (REND-3): буферы геометрии её
-   * частей, материалы ассета и VAT-текстуру, общую всем его батчам. Разобранный
-   * ассет при этом остаётся в кэше модуля ассетов (ASSET-2) — он не наш, и
-   * следующая сцена читает его оттуда, а не грузит заново.
-   */
-  private releaseShared(entry: SharedEntry): void {
-    entry.baseSkin?.dispose();
-    entry.baseSkin = null;
-    entry.vatTexture?.dispose();
-    entry.vatTexture = null;
-    // Якоря прогрева (FOW-8) — производные тех же материалов и живут с ними:
-    // сперва применение скина (оно владеет их текстурами), затем сами якоря.
-    for (const anchors of entry.warmAnchors.values()) {
-      for (const variant of [anchors.opaque, anchors.faded]) {
-        if (variant === null) continue;
-        variant.skin.dispose();
-        for (const anchor of variant.materials.values()) anchor.dispose();
-      }
-    }
-    entry.warmAnchors.clear();
-    // Кэш текстур скинов — после применений, которые их держат: последняя
-    // отпущенная ссылка освобождает текстуру сама, а `dispose` кэша добирает
-    // то, что осталось за применениями, пережившими ассет (REND-31).
-    entry.skinCache.dispose();
-    for (const mesh of entry.data?.meshes ?? []) mesh.geometry.dispose();
-    // Fade-копии материалов ассета уходят вместе с ними (FOW-8): пул ключуется
-    // оригиналом, и без оригинала его записи уже никто не найдёт.
-    this.disposeFadeClones(entry.data?.materials ?? []);
-    for (const material of entry.data?.materials ?? []) material.dispose();
-    entry.waiting.clear();
-    entry.data = null;
+    this.fade.dispose();
   }
 
   // ------------------------------------------------------------- syncTick
@@ -1230,7 +501,7 @@ export class ModelsSubsystem implements RenderSubsystem, InstanceProxySource {
   private reportFootprint(): void {
     if (footprintSink() === undefined) return;
     peak('modelsInstances', this.instances.size + this.decorations.size);
-    const stats = this.batchStats();
+    const stats = this.batches.stats();
     peak('modelsBatches', stats.batches);
     peak('modelsBatchRecords', stats.records);
   }
@@ -1263,7 +534,7 @@ export class ModelsSubsystem implements RenderSubsystem, InstanceProxySource {
     // `dropCaster` помечают статику устаревшей), а вот ПЕРЕЕЗД — нет: корень
     // тот же объект, сменилось только его преобразование. Ради него сигнал и
     // остаётся, и потому же он не «на всякий случай».
-    if (movedStatic) this.options.shadows?.invalidateStatic();
+    if (movedStatic) this.lighting.invalidateStatic();
   }
 
   /**
@@ -1395,7 +666,7 @@ export class ModelsSubsystem implements RenderSubsystem, InstanceProxySource {
       // правленый масштаб двигает размер пятна тем же кадром, каким двигает
       // саму картинку и walkable-вклад ниже (REND-17, ED-15). Без этого пятно
       // держало бы прежний радиус до пересборки инстанса.
-      this.syncBlobCaster(record);
+      this.lighting.syncBlob(record);
     }
     this.applyAnimation(record);
     if (isDeadState !== null) this.syncDeath(record, entityView, isDeadState);
@@ -1405,34 +676,9 @@ export class ModelsSubsystem implements RenderSubsystem, InstanceProxySource {
     // не-walkable полей (скин) реестр не трогает — вклад тот же, а размещение
     // на КАЖДУЮ правку документа (ED-15) стоило бы записи в реестр и обхода
     // клеток под bbox на каждую декорацию сцены.
-    change |= this.placementChange(record, entityView);
+    change |= placementChange(record, entityView);
     if (change !== 0) this.syncWalkable(record);
     return (change & PLACEMENT_MOVED) !== 0;
-  }
-
-  /**
-   * Что изменилось в размещении decoration-инстанса с прошлого сведения
-   * (REND-18): снимок на записи сравнивается с доставленным и переписывается им.
-   * Возвращает биты `PLACEMENT_*`; ноль — набор переподан, а этой декорации
-   * правка не касалась.
-   */
-  private placementChange(record: InstanceRecord, view: EntityView): number {
-    let change = 0;
-    if (record.placedX !== view.currX || record.placedY !== view.currY) {
-      record.placedX = view.currX;
-      record.placedY = view.currY;
-      change |= PLACEMENT_MOVED;
-    }
-    if (record.placedYaw !== view.facingYaw) {
-      record.placedYaw = view.facingYaw;
-      change |= PLACEMENT_MOVED;
-    }
-    const walkable = view.walkable === true;
-    if (record.placedWalkable !== walkable) {
-      record.placedWalkable = walkable;
-      change |= PLACEMENT_WALKABLE;
-    }
-    return change;
   }
 
   /**
@@ -1541,18 +787,32 @@ export class ModelsSubsystem implements RenderSubsystem, InstanceProxySource {
     // Отсечение — после позы: видимость считается по тому преобразованию,
     // которым инстанс нарисован в ЭТОМ кадре (REND-21). Уровень детализации
     // считается там же — по экранному размеру того же объёма (REND-22).
-    this.cullAll(cost);
+    //
+    // Камеры нет — отсечения не существует вовсе (сборка без неё рисует всё), и
+    // счётчики остаются нулевыми: приписывать кадру тесты, которых он не делал,
+    // нельзя (PERF-3).
+    const camera = this.options.camera;
+    if (camera !== undefined) {
+      this.culler.beginFrame(
+        camera,
+        this.options.cullMargin ?? DEFAULT_CULL_MARGIN,
+        this.lodScale,
+        this.lighting.shadowFrustum(),
+      );
+      this.culler.cullPool(this.instances, cost);
+      this.culler.cullPool(this.decorations, cost);
+    }
 
     // Компактация видимых записей в инстанс-буферы — последним: до неё batch
     // не знает ни позы кадра, ни видимости.
-    for (const entry of this.batches.values()) entry.batch.flush(cost);
+    this.batches.flush(cost);
 
     // Контактные пятна режима `blob` (REND-30) пишутся ЗДЕСЬ, а не в кадре
     // подсистемы освещения: она зарегистрирована раньше владельца инстансов, её
     // кадр идёт первым, и пятна отставали бы от юнитов на кадр. Что писать и
     // писать ли вообще, решает по-прежнему она — здесь только момент, когда
     // позы и видимость кадра уже посчитаны.
-    this.options.shadows?.blobCastersPosed?.();
+    this.lighting.blobCastersPosed();
   }
 
   /**
@@ -1562,123 +822,6 @@ export class ModelsSubsystem implements RenderSubsystem, InstanceProxySource {
    * убирается: picking (REND-15) и сведение (REND-3, REND-18) идут по полному
    * набору, и других наблюдаемых последствий у отсечения нет.
    */
-  private cullAll(cost: RenderCostCounters | undefined): void {
-    const camera = this.options.camera;
-    // Камеры нет — отсечения не существует вовсе (сборка без неё рисует всё), и
-    // счётчики остаются нулевыми: приписывать кадру тесты, которых он не делал,
-    // нельзя (PERF-3).
-    if (camera === undefined) return;
-    // Матрицы камеры — те, с которыми кадр и будет нарисован: позу на неё
-    // сажает сборка до кадра подсистем (CAM-1), второго расчёта здесь нет.
-    camera.updateMatrixWorld();
-    this.frustumMatrix.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse);
-    this.frustum.setFromProjectionMatrix(this.frustumMatrix);
-    this.cameraPosition.setFromMatrixPosition(camera.matrixWorld);
-    const margin = this.options.cullMargin ?? DEFAULT_CULL_MARGIN;
-    const screen = screenScaleOf(camera, this.screenScale);
-    this.cullPool(this.instances, margin, screen, cost);
-    this.cullPool(this.decorations, margin, screen, cost);
-  }
-
-  private cullPool(
-    pool: ReadonlyMap<EntityId, InstanceRecord>,
-    margin: number,
-    screen: ScreenScale | null,
-    cost: RenderCostCounters | undefined,
-  ): void {
-    for (const record of pool.values()) {
-      this.cullRecord(record, margin, screen, cost);
-    }
-  }
-
-  /** Отсечение одной записи: сфера её габаритов против пирамиды кадра (REND-22). */
-  private cullRecord(
-    record: InstanceRecord,
-    margin: number,
-    screen: ScreenScale | null,
-    cost: RenderCostCounters | undefined,
-  ): void {
-    const bounds = cullBoundsOf(record) ?? boundsOf(record);
-    // Рисовать нечего — и отсекать нечего: невизуальная сущность в кадре не
-    // участвует вовсе, а не «участвует невидимой».
-    if (bounds === null || !record.posed) return;
-    const scale = record.scale;
-    // Центр габаритов в осях инстанса → мировые оси тем же преобразованием,
-    // которым инстанс нарисован; радиус — половина диагонали. Запас берётся
-    // ВСЕГДА, а не только к границам bind-позы: консервативность запечённых
-    // границ (ASSET-12) отвечает за позы клипов, но не за то, чего в границах
-    // модели нет вовсе, — оверлеи (REND-16), контроль костей (REND-5) и
-    // погрешность самой сферы у вытянутых моделей.
-    this.cullCenter
-      .set((bounds.minX + bounds.maxX) / 2, (bounds.minY + bounds.maxY) / 2, (bounds.minZ + bounds.maxZ) / 2)
-      .multiplyScalar(scale)
-      .applyQuaternion(record.quat)
-      .add(record.pos);
-    const radius =
-      (Math.hypot(bounds.maxX - bounds.minX, bounds.maxY - bounds.minY, bounds.maxZ - bounds.minZ) / 2) *
-      Math.abs(scale) *
-      (1 + margin);
-    this.cullSphere.center.copy(this.cullCenter);
-    this.cullSphere.radius = radius;
-    record.visible = this.frustum.intersectsSphere(this.cullSphere);
-    // Сток уже в локальной переменной: на инстансе остаётся сравнение и
-    // целочисленное сложение, а не чтение стока (PERF-3).
-    if (cost !== undefined) {
-      cost.modelsCullTests++;
-      if (!record.visible) cost.modelsCulled++;
-    }
-    if (record.holder !== null) record.holder.visible = record.visible;
-    // Уровень детализации выбирается только у БАТЧЕВОЙ записи — так велит
-    // REND-22: детальный инстанс рисуется уровнем 0 на любой дистанции, потому
-    // что цену его кадра держат пер-инстансный скелет и материалы (REND-20), а
-    // не геометрия уровня. Это оговорка требования, а не пропуск в коде.
-    if (record.batch !== null) {
-      record.batch.batch.setVisible(record.slot, record.visible);
-      if (record.visible && screen !== null) this.selectLod(record, radius, screen, cost);
-    }
-  }
-
-  /**
-   * Уровень детализации записи по её экранному размеру (REND-22). Пороги —
-   * данные записи (ASSET-13), гистерезис — механизм: у порога уровень не
-   * дёргается кадр к кадру. Состояние записи переключение не трогает вовсе —
-   * меняется только то, в какой набор инстанс-мешей она компактируется.
-   *
-   * Зовётся только для записи в батче: уровни — возможность батчевого яруса
-   * (REND-22, REND-20). Запись, которой цепочка нужна, объявляет батчевый ярус
-   * — ярус выбирают ДАННЫЕ (ASSET-13), а не код рендера.
-   */
-  private selectLod(
-    record: InstanceRecord,
-    radius: number,
-    screen: ScreenScale,
-    cost: RenderCostCounters | undefined,
-  ): void {
-    const entry = record.batch;
-    if (entry === null) return;
-    const maxLevel = entry.batch.levelCount - 1;
-    if (maxLevel <= 0) return; // модель без цепочки — единственный уровень
-    // Счёт стоит ПОСЛЕ отказов выше: у записи без цепочки уровней работы нет, и
-    // приписывать ей выбор значило бы считать несделанное (PERF-3).
-    if (cost !== undefined) cost.modelsLodSelections++;
-    const size = screenSize(radius, this.cameraPosition.distanceTo(record.pos), screen);
-    const thresholds = entry.thresholds;
-    // Множитель пресета (QUAL-1) сдвигает ПОРОГИ, а не экранный размер: пороги
-    // остаются данными записи (ASSET-13), а пресет говорит, насколько раньше
-    // или позже их читать. Гистерезис при этом свой — он про дрожание у порога,
-    // а не про качество.
-    const scale = this.lodScale;
-    let level = Math.min(record.lodLevel, maxLevel);
-    while (level < maxLevel && size < (thresholds[level] ?? 0) * scale * (1 - LOD_HYSTERESIS)) level += 1;
-    while (
-      level > 0 &&
-      size > (thresholds[level - 1] ?? Number.POSITIVE_INFINITY) * scale * (1 + LOD_HYSTERESIS)
-    ) {
-      level -= 1;
-    }
-    record.lodLevel = level;
-    entry.batch.setLevel(record.slot, level);
-  }
 
   private poseAll(
     pool: ReadonlyMap<EntityId, InstanceRecord>,
@@ -1726,56 +869,10 @@ export class ModelsSubsystem implements RenderSubsystem, InstanceProxySource {
     // доля проявленности идут дальше — угасает картинка, а не время.
     if (record.fadingOut && record.posed) {
       record.controller?.update(dt, view.timeScale);
-      this.applyPose(record, settle);
+      this.applyRecordPose(record, settle);
       return;
     }
-    // Интерполяция между двумя последними тиками; snap-тик рисуется без неё (REND-2).
-    const t = view.snap ? 1 : alpha;
-    const x = view.prevX + (view.currX - view.prevX) * t;
-    const y = view.prevY + (view.currY - view.prevY) * t;
-    // Walkable-инстанс сажается и наклоняется по террейн-форме — без
-    // walkable-вкладов, в том числе чужих: иначе два моста сажались бы друг
-    // на друга по кругу (REND-9). Все прочие читают поле целиком — юнит на
-    // настиле стоит на настиле (REND-10).
-    const walkableSeat = record.decoration && view.walkable === true;
-    const base = baseHeightOf(view, t, x, y, heightStep, surface, walkableSeat);
-    // Вертикальное смещение — чистое представление (REND-12): дуга манёвра
-    // смешивается по тем же двум тикам, что позиция, снижение идёт по кадрам.
-    // Высота КАЖДОГО вклада берётся по виду манёвра ЕГО тика: прыжковая
-    // высота к уклону не переносится, а тик приземления (манёвра уже нет)
-    // доигрывает спуск прошлого тика вместо мгновенного обнуления.
-    const arcPrev = jumpArc(view.prevMotionPhase, arcHeightOf(record, view.prevMotion));
-    const arcCurr = jumpArc(view.currMotionPhase, arcHeightOf(record, view.motion));
-    // Полётная дуга — по фазе полёта плоской формы (REND-12): её приносит
-    // сборка воркера (SHELL-2), и без неё дуги нет независимо от манифеста.
-    const flightArc = jumpArc(view.flightPhase, record.flightArcHeight);
-    if (record.falling) {
-      record.fallOffset = advanceFall(record.fallOffset, record.fallSpeed, record.fallDepth, dt);
-    }
-    record.pos.set(
-      x,
-      y,
-      base + arcPrev + (arcCurr - arcPrev) * t + flightArc + record.fallOffset,
-    );
-    // Опора под инстансом — вход контактного пятна (REND-30): её надо снять
-    // ЗДЕСЬ, где известны и точка кадра, и правило посадки, а не пересчитывать
-    // вторым проходом в `blobCastersPosed`.
-    captureSeat(record, x, y, base, surface, walkableSeat);
-
-    // Курс: цель из данных тика, доворот сглажен по кадрам; при snap —
-    // мгновенно. Поправка на перёд модели — своя у каждой записи (REND-13).
-    const targetYaw = view.facingYaw + record.facingOffset;
-    record.yaw = record.snapPending
-      ? targetYaw
-      : smoothYaw(record.yaw, targetYaw, turnRate, settle);
-
-    poseTilt(record, x, y, surface, walkableSeat, tiltRate, settle);
-    record.snapPending = false;
-    record.posed = true;
-    // Ориентация: сперва курс вокруг вертикали, поверх — наклон в мировых
-    // осях. Композиция общая с walkable-реестром поля (REND-9): трансформ
-    // walkable-поверхности — тот же, каким инстанс нарисован.
-    orientFromTiltYaw(record.tilt, record.yaw, record.quat);
+    poseInstance(record, dt, settle, alpha, heightStep, turnRate, tiltRate, surface);
 
     // Анимационное время — единственное, что берёт ЗНАК: клип идёт вперёд,
     // стоит либо отматывается вместе с миром (REND-25). И единственное, что
@@ -1784,7 +881,18 @@ export class ModelsSubsystem implements RenderSubsystem, InstanceProxySource {
     // Сглаживания выше (доворот, наклон, tier-fade) идут на `settle` — они
     // принадлежат картинке, а не миру, и шкале не подчиняются.
     record.controller?.update(dt, view.timeScale);
-    this.applyPose(record, settle);
+    this.applyRecordPose(record, settle);
+  }
+
+  /**
+   * Видимое преобразование записи — в её носитель (REND-20). Доля
+   * проявленности (FOW-8) идёт мимо: у держателя это подменённые материалы, у
+   * батча — пер-инстансный атрибут альфы, и оба пути ведёт носитель.
+   */
+  private applyRecordPose(record: InstanceRecord, settle: number): void {
+    // Масштаб кадра — семантический `scale` записи (REND-11), без множителей.
+    this.fade.applyToHolder(record);
+    record.carrier.applyPose(record, record.scale, settle, this.warn);
   }
 
   /**
@@ -1792,182 +900,54 @@ export class ModelsSubsystem implements RenderSubsystem, InstanceProxySource {
    * для обоих ярусов (REND-20): узел детального яруса и инстанс-матрица
    * батчевого получают ровно те же числа, а не два похожих расчёта.
    */
-  private applyPose(record: InstanceRecord, settle: number): void {
-    // Fade (FOW-8) — прозрачность, а не масштаб: стягивание читалось как
-    // «враг уменьшается». Доля одна на оба яруса (REND-20): батч несёт её
-    // пер-инстансным атрибутом в альфу (`vatMaterial`), держатель — своими
-    // копиями материалов на время fade (`applyHolderFade`). Масштаб кадра —
-    // семантический `scale` записи (REND-11), без множителей.
-    const drawScale = record.scale;
-    this.applyHolderFade(record);
-    const holder = record.holder;
-    if (holder !== null) {
-      holder.position.copy(record.pos);
-      holder.quaternion.copy(record.quat);
-      holder.scale.setScalar(drawScale);
-    }
-    // Bone-контроль строго после mixer.update и до отрисовки (REND-5).
-    if (record.model !== null && record.boneControl !== null) {
-      record.boneControl.apply(
-        record.model,
-        record.view.aimYaw,
-        record.yaw - record.facingOffset,
-        settle,
-        this.warn,
-      );
-    }
-    const entry = record.batch;
-    if (entry === null) return;
-    // Масштаб записи и нормализация по высоте у батча живут в ИНСТАНС-МАТРИЦЕ:
-    // у детального яруса их несёт обёртка `body` внутри поддерева, здесь
-    // поддерева нет — и множитель тот же самый. Fade едет отдельно (FOW-8).
-    SCRATCH_SCALE.setScalar(drawScale * entry.normalized);
-    SCRATCH_MATRIX.compose(record.pos, record.quat, SCRATCH_SCALE);
-    entry.batch.setMatrix(record.slot, SCRATCH_MATRIX);
-    entry.batch.setFade(record.slot, record.fade);
-    const vat = record.vat;
-    if (vat !== null) {
-      entry.batch.setPose(record.slot, vat.rowA, vat.rowB, vat.blend, record.skinIndex);
-      entry.batch.setFrame(record.slot, vat.visibilityFrame);
-    }
-  }
-
-  /**
-   * Fade держателя (FOW-8) — прозрачностью: материалы мешей разделяются с
-   * ассетом (REND-3) и copy-on-write скинов (REND-6), поэтому на время fade
-   * инстанс получает СВОИ копии с `transparent`, а по концу возвращает
-   * разделяемые. Копии берутся из пула своего оригинала (`fadeClones`) и туда
-   * же уходят: программа шейдера у прозрачной копии ДРУГАЯ, и пересоздавать
-   * копию на каждый эпизод значит компилировать шейдер прямо в кадре открытия
-   * обзора — тот самый всплеск, ради которого заведён и прогрев (`prewarm`).
-   */
-  private applyHolderFade(record: InstanceRecord): void {
-    if (record.fade >= 1) {
-      this.clearHolderFade(record);
-      return;
-    }
-    const holder = record.holder;
-    if (holder === null) return;
-    record.fadedTargets ??= this.lendFadeTargets(holder);
-    for (const target of record.fadedTargets) {
-      // Проход БЕЗ аллокации (REND-26): `materialsOf` заводил бы здесь массив
-      // на каждый меш и каждый кадр угасания.
-      const material = target.mesh.material;
-      if (Array.isArray(material)) {
-        for (const clone of material) applyFadeOpacity(clone, record.fade);
-      } else {
-        applyFadeOpacity(material, record.fade);
-      }
-    }
-  }
-
-  /**
-   * Подменяет материалы мешей поддерева fade-копиями из пулов их оригиналов и
-   * отдаёт записи для возврата (FOW-8).
-   */
-  private lendFadeTargets(root: THREE.Object3D): FadeTarget[] {
-    const targets: FadeTarget[] = [];
-    root.traverse((node) => {
-      // Узкий типизированный проход: `instanceof THREE.Mesh` дал бы Mesh<any>.
-      const mesh = node as Partial<THREE.Mesh> & THREE.Object3D;
-      if (mesh.isMesh !== true || mesh.material === undefined) return;
-      const original = mesh.material;
-      mesh.material = Array.isArray(original)
-        ? original.map((material) => this.borrowFadeClone(material))
-        : this.borrowFadeClone(original);
-      targets.push({ mesh: mesh as FadeTarget['mesh'], original });
-    });
-    return targets;
-  }
-
-  /**
-   * Прозрачная копия оригинала — из его пула либо новая (FOW-8).
-   *
-   * Копия из пула — снимок оригинала на момент ПРОШЛОЙ выдачи, а оригинал
-   * меняется и после неё: текстуры слотов приезжают асинхронно (ASSET-4), и
-   * `ensureBaseSkin`/`applyInstanceSkin` пишут карты в него задним числом — как
-   * и смена скина (REND-6). Поэтому при каждой выдаче копия пересобирается по
-   * оригиналу ЦЕЛИКОМ: иначе первая же копия, взятая в окне загрузки, рисовала
-   * бы модель без текстуры до конца сессии, и рисовала бы её своей программой —
-   * занятость слота карты входит в ключ (`mapUv`), и прогрев такой не грел.
-   */
-  private borrowFadeClone(original: THREE.Material): THREE.Material {
-    const pooled = this.fadeClones.get(original)?.pop();
-    if (pooled === undefined) {
-      // Копия живёт в пуле подсистемы и отдаётся её сносом (`disposeFadeClones`),
-      // поэтому она такой же учтённый ресурс, как созданный через `new` (PERF-8).
-      const fresh = own('material', 'models', original.clone());
-      fresh.transparent = true;
-      // База берётся у ОРИГИНАЛА на каждой выдаче: копия живёт дольше эпизода,
-      // и запомни она свою же (уже умноженную) непрозрачность — следующий
-      // эпизод угасал бы от угасшего.
-      fresh.userData.fadeBaseOpacity = original.opacity;
-      return fresh;
-    }
-    const maps = pooled as MappedMaterial;
-    const wasMap = maps.map ?? null;
-    const wasNormal = maps.normalMap ?? null;
-    const wasEmissive = maps.emissiveMap ?? null;
-    pooled.copy(original);
-    pooled.transparent = true;
-    // `Material.copy` переносит и `userData` оригинала, поэтому база ставится
-    // ПОСЛЕ него, а не до.
-    pooled.userData.fadeBaseOpacity = original.opacity;
-    // Пересборка материала объявляется three, только если карты действительно
-    // сменились: на обычном пути (оригинал с прошлой выдачи не менялся) версия
-    // не растёт, и копия рисуется прогретой программой без пере-поиска.
-    if ((maps.map ?? null) !== wasMap
-      || (maps.normalMap ?? null) !== wasNormal
-      || (maps.emissiveMap ?? null) !== wasEmissive) {
-      pooled.needsUpdate = true;
-    }
-    return pooled;
-  }
-
-  /**
-   * Конец эпизода угасания: разделяемые материалы — обратно мешам, fade-копии —
-   * в пулы своих оригиналов (FOW-8). Копии не освобождаются: они и есть кэш
-   * скомпилированных программ, ради которого пулы заведены.
-   */
-  private clearHolderFade(record: InstanceRecord): void {
-    const targets = record.fadedTargets;
-    if (targets === null) return;
-    record.fadedTargets = null;
-    this.returnFadeTargets(targets);
-  }
-
-  /** Возврат отложенных материалов мешам, а выданных копий — в пулы (FOW-8). */
-  private returnFadeTargets(targets: readonly FadeTarget[]): void {
-    for (const target of targets) {
-      const originals = materialsOf(target.original);
-      const clones = materialsOf(target.mesh.material);
-      target.mesh.material = target.original;
-      for (let i = 0; i < clones.length; i++) {
-        const original = originals[i];
-        const clone = clones[i];
-        if (original === undefined || clone === undefined) continue;
-        const pool = this.fadeClones.get(original);
-        if (pool === undefined) this.fadeClones.set(original, [clone]);
-        else pool.push(clone);
-      }
-    }
-  }
-
-  /**
-   * Освобождает fade-копии перечисленных оригиналов (FOW-8, REND-31): копия
-   * живёт ровно столько, сколько её оригинал — материалы ассета отдаются
-   * `releaseShared`, свои материалы инстанса (REND-6) — вместе с инстансом.
-   */
-  private disposeFadeClones(originals: Iterable<THREE.Material>): void {
-    for (const original of originals) {
-      const pool = this.fadeClones.get(original);
-      if (pool === undefined) continue;
-      for (const clone of pool) clone.dispose();
-      this.fadeClones.delete(original);
-    }
-  }
 
   // ------------------------------------------------------------ публичное
+
+  /**
+   * АССЕТЫ за манифестом сменились (REND-1, REND-31): ре-экспорт `.glb`
+   * (`blender-pipeline` BLND-12), правка текстуры, подмена сервиса ассетов
+   * редактором. Второй несимуляционный вход подсистемы рядом с манифестом —
+   * и он именно вход, а не догадка: кэш разделяемой части ключуется АДРЕСОМ
+   * модели (ASSET-2), адрес при ре-экспорте тот же, и узнать о смене байтов
+   * кэшу неоткуда. Не скажи ему — вьюпорт рисовал бы прежнюю модель до
+   * переоткрытия сцены (ED-15).
+   *
+   * Освобождается всё, что построено из СТАРЫХ данных: батчи (их геометрия,
+   * материалы и VAT производны от модели), разделяемая часть ассетов и то, что
+   * инстансы держат от них. Сами инстансы не пересоздаются — они остаются теми
+   * же объектами набора (REND-11): пересобирается только построенное, а
+   * позиция, скин, фаза клипа и сглаженные величины переживают вход, как и на
+   * переподаче манифеста (REND-17).
+   */
+  refreshAssets(): void {
+    const ctx = this.requireCtx();
+    // Событие правки, а не кадр (ED-15): сток читается один раз, и счётчик
+    // показывает цену — сколько инстансов пересобрано (PERF-3).
+    const cost = costSink();
+    // Порядок несущий: сперва инстансы отпускают построенное (их применения
+    // скина держат текстуры кэша), затем уходят сами кэши, и только потом
+    // инстансы монтируются заново — уже на свежих данных.
+    for (const pool of [this.instances, this.decorations]) {
+      for (const record of pool.values()) this.detachModel(record);
+    }
+    this.batches.dispose();
+    this.shared.dispose();
+    for (const pool of [this.instances, this.decorations]) {
+      for (const record of pool.values()) {
+        if (cost !== undefined) cost.modelsRebuilds++;
+        this.rebuild(ctx, record);
+      }
+    }
+  }
+
+  /**
+   * Прогрев по манифесту до первого кадра (FOW-8, REND-31): что именно
+   * строится и почему — в `models/prewarm.ts`. Подсистема отдаёт прогреву своё
+   * хозяйство и больше в него не вмешивается.
+   */
+  prewarm(): Promise<ModelsPrewarm> {
+    return this.prewarmer.prewarm();
+  }
 
   /**
    * Ручки качества подсистемы (QUAL-1, QUAL-3): стоимость кадра растёт числом
@@ -2081,270 +1061,6 @@ export class ModelsSubsystem implements RenderSubsystem, InstanceProxySource {
    * не доехавшая модель прогрев не держит: её вид смонтируется прежним
    * ленивым путём с заглушкой (ASSET-4).
    */
-  prewarm(): Promise<ModelsPrewarm> {
-    const ctx = this.requireCtx();
-    const waits: Promise<void>[] = [];
-    for (const kind of visualKinds(this.manifest)) {
-      const visual = resolveVisual(this.manifest, kind);
-      if (visual === undefined) continue;
-      const entry = this.ensureShared(ctx, visual.model);
-      if (entry.data !== null || entry.failed !== null) continue;
-      // Ожидание исхода загрузки: подписка приносит текущее состояние
-      // немедленно (ASSET-4), поэтому уже решённый ассет промиса не задержит.
-      const handle = ctx.assets.request<NormalizedModel>('model', visual.model);
-      waits.push(
-        new Promise<void>((resolve) => {
-          ctx.assets.subscribe(handle, (state) => {
-            if (state.status !== 'loading') resolve();
-          });
-        }),
-      );
-    }
-    return Promise.all(waits).then(() => this.collectWarm());
-  }
-
-  /**
-   * Ожидание текстур, которыми будут нарисованы якоря прогрева (FOW-8, REND-6):
-   * слоты модели плюс подмены скина записи, по одному ожиданию на путь. Ждать
-   * их обязан прогрев, а не матч: слот, занятый текстурой, и слот пустой — это
-   * РАЗНЫЕ программы, и прогретая «пустая» матчу не пригодится.
-   *
-   * Спрашиваются ровно те виды, что попали в план якорей, — детальные (у
-   * батчевого угасание идёт пер-инстансным атрибутом альфы в разделяемом
-   * VAT-материале, прозрачном всегда, и якорей ему не нужно). Первая ступень
-   * прогрева этих ожиданий не видит вовсе.
-   */
-  private warmSkinWaits(plan: readonly AnchorPlan[]): Promise<void>[] {
-    const ctx = this.requireCtx();
-    const waits: Promise<void>[] = [];
-    const requested = new Set<string>();
-    for (const item of plan) {
-      for (const source of item.sources.values()) {
-        if (source.kind !== 'path' || requested.has(source.path)) continue;
-        requested.add(source.path);
-        const handle = ctx.assets.request<DecodedImage>('texture', source.path);
-        waits.push(
-          new Promise<void>((resolve) => {
-            ctx.assets.subscribe(handle, (state) => {
-              if (state.status !== 'loading') resolve();
-            });
-          }),
-        );
-      }
-    }
-    return waits;
-  }
-
-  /**
-   * Якоря прогретых программ модели (FOW-8) со скином записи поверх. Набор общий
-   * у записей с одинаковой ЗАНЯТОСТЬЮ СЛОТОВ, а не у всех записей модели: какая
-   * именно текстура стоит в слоте, ключа программы не меняет — меняет его лишь
-   * то, занят слот или пуст, а подмена скина вправе занять слот, пустой у самой
-   * модели (REND-6, `skinTextureSources`).
-   *
-   * Прозрачный вариант строится, только когда о нём спросили (`withFaded`):
-   * угасание есть у видов сущностей, а decoration не угасает никогда (REND-18),
-   * и модели, которую рисуют одни декорации, прозрачные якоря с их текстурами
-   * достались бы мёртвым грузом. Спрошенный позже — достраивается к тому же
-   * набору, а не рядом с ним.
-   *
-   * Якоря не рисуются ни одного кадра и живут до сноса ассета: пока материал
-   * жив, `usedTimes` его программы не падает до нуля, и three её не удаляет.
-   * Это и есть страховка прогрева — эпизод угасания, чья копия почему-либо
-   * освободилась, всё равно найдёт программу в кэше three, а не соберёт её.
-   */
-  private ensureWarmAnchors(item: AnchorPlan, withFaded: boolean): WarmAnchors | null {
-    const data = item.entry.data;
-    if (data === null) return null;
-    const key = warmAnchorKey(item.sources, data);
-    const anchors = item.entry.warmAnchors.get(key)
-      ?? { opaque: this.buildWarmVariant(item.entry, data, item.sources, false), faded: null };
-    if (withFaded && anchors.faded === null) {
-      anchors.faded = this.buildWarmVariant(item.entry, data, item.sources, true);
-    }
-    item.entry.warmAnchors.set(key, anchors);
-    return anchors;
-  }
-
-  /** Один вариант якорей: копии материалов модели со скином записи (FOW-8). */
-  private buildWarmVariant(
-    entry: SharedEntry,
-    data: SharedModelData,
-    sources: ReadonlyMap<number, SkinTextureSource>,
-    transparent: boolean,
-  ): WarmVariant {
-    const materials = new Map<THREE.Material, THREE.MeshStandardMaterial>();
-    for (const material of data.materials) {
-      // Якорь прогрева — копия материала ассета, живущая в записи `warmAnchors`
-      // и отдаваемая `releaseShared` (FOW-8, REND-31): в учёт (PERF-8) она
-      // входит наравне с прочими материалами подсистемы.
-      const anchor = own('material', 'models', material.clone());
-      // Только вверх: непрозрачный вариант оставляет `transparent` записи
-      // ассета (`materialFromAsset` берёт его из `alphaMode`), прозрачный —
-      // поднимает, и ровно это и есть бит `opaque` ключа программы.
-      if (transparent) anchor.transparent = true;
-      materials.set(material, anchor);
-    }
-    // Места употребления слота те же, что у ассета (`collectTextureTargets`),
-    // только материалы другие.
-    const targets = new Map<number, TextureTarget[]>();
-    for (const [slot, places] of data.textureTargets) {
-      const remapped: TextureTarget[] = [];
-      for (const place of places) {
-        const anchor = materials.get(place.material);
-        if (anchor !== undefined) remapped.push({ material: anchor, map: place.map });
-      }
-      targets.set(slot, remapped);
-    }
-    // Текстуры якорей — те же, что у живых инстансов (REND-6): якорь держит
-    // ссылку в кэше ассета, а не свою копию тех же пикселей.
-    return { materials, skin: applySkin(targets, sources, this.requireCtx().assets, entry.skinCache) };
-  }
-
-  /**
-   * Прогрев одного вида манифеста. Ярус решается тем же объявлением, что и у
-   * живой записи (REND-20): батчевый греется группой батча, детальный —
-   * образцом инстанса.
-   */
-  private warmKind(kind: string, out: WarmCollect): void {
-    const visual = resolveVisual(this.manifest, kind);
-    if (visual === undefined) return;
-    const entry = this.shared.get(visual.model);
-    const data = entry?.data ?? null;
-    if (entry === undefined || data === null) return;
-    // Происхождение вида нужно ОБОИМ ярусам: батчевому — как ярус кастера,
-    // детальному — как ответ на вопрос, бывает ли у вида угасание вообще.
-    const decoration = this.manifest.entities[kind] === undefined;
-    const derivatives = entry.derivatives;
-    if (declaredTier(visual, this.defaultTier) === 'batched' && derivatives !== null) {
-      this.warmBatchedKind(visual, kind, data, entry, derivatives, decoration, out);
-      return;
-    }
-    this.warmDetailedKind(visual, data, entry, decoration, out);
-  }
-
-  /** Батчевый ярус вида: группа батча и его VAT-текстура (REND-20). */
-  private warmBatchedKind(
-    visual: EntityVisual,
-    kind: string,
-    data: SharedModelData,
-    entry: SharedEntry,
-    derivatives: BakedDerivatives,
-    decoration: boolean,
-    out: WarmCollect,
-  ): void {
-    // Ярус кастера — та же производная данных, что у живой записи
-    // (`casterTierOf`): вид сущности динамичен всегда, decoration статичен,
-    // пока запись не объявила анимаций.
-    const tier: ShadowCasterTier = decoration && !animatedVisual(visual) ? 'static' : 'dynamic';
-    const key = batchKey(visual, kind, tier);
-    const batchEntry =
-      this.batches.get(key) ?? this.buildBatch(visual, key, data, derivatives);
-    if (entry.vatTexture !== null) out.textures.push(entry.vatTexture);
-    if (batchEntry.batch.group.parent === null) {
-      out.roots.push(batchEntry.batch.group);
-      out.warmBatches.push(batchEntry);
-    }
-  }
-
-  /**
-   * Детальный ярус строится на инстанс — прогревается образец: скелет,
-   * SkinnedMesh-биндинги и программы его материалов, плюс кэш границ.
-   */
-  private warmDetailedKind(
-    visual: EntityVisual,
-    data: SharedModelData,
-    entry: SharedEntry,
-    decoration: boolean,
-    out: WarmCollect,
-  ): void {
-    const options: { scale?: number; hiddenParts?: readonly number[] } = {};
-    if (visual.scale !== undefined) options.scale = visual.scale;
-    if (visual.hiddenParts !== undefined) options.hiddenParts = visual.hiddenParts;
-    const instance = createModelInstance(data, options);
-    out.roots.push(instance.root);
-    out.warmDetailed.push(instance);
-    // Якорям нужны ещё и текстуры скина — они уходят во ВТОРУЮ ступень
-    // (`anchoredRoots`), чтобы застрявшая текстура не отменила эту.
-    out.plan.push({
-      entry,
-      data,
-      options,
-      decoration,
-      sources: skinTextureSources(data.model, visual, visual.defaultSkin),
-    });
-  }
-
-  /** Тёплые корни по доехавшим моделям — низ `prewarm`, после ожидания моделей. */
-  private collectWarm(): ModelsPrewarm {
-    const roots: THREE.Object3D[] = [];
-    const textures: THREE.Texture[] = [];
-    const warmBatches: BatchEntry[] = [];
-    const warmDetailed: ModelInstance[] = [];
-    const plan: AnchorPlan[] = [];
-    const collect: WarmCollect = { roots, textures, warmBatches, warmDetailed, plan };
-    for (const kind of visualKinds(this.manifest)) {
-      this.warmKind(kind, collect);
-    }
-    let finished = false;
-    return {
-      roots,
-      textures,
-      anchoredRoots: async () => {
-        await Promise.all(this.warmSkinWaits(plan));
-        // Пока ждали текстуры, прогрев мог быть уже свёрнут: строить образцы
-        // теперь некому и незачем — сносить их было бы уже нечем.
-        if (finished) return [];
-        const anchored: THREE.Object3D[] = [];
-        for (const item of plan) {
-          const anchors = this.ensureWarmAnchors(item, !item.decoration);
-          if (anchors === null) continue;
-          anchored.push(this.warmAnchoredSample(item, anchors.opaque, warmDetailed));
-          // Прозрачный образец — только виду СУЩНОСТИ (FOW-8): угасание есть у
-          // неё, а decoration не угасает никогда (REND-18) — ни `syncPool`, ни
-          // `poseAll` не дают его записи долю меньше единицы. Прогревать
-          // вариант, которого не нарисует ни один кадр, значит платить за него
-          // компиляцией во время загрузки и держать его материалы всю сессию.
-          if (anchors.faded === null) continue;
-          anchored.push(this.warmAnchoredSample(item, anchors.faded, warmDetailed));
-        }
-        return anchored;
-      },
-      finish: () => {
-        finished = true;
-        // Образцы сносятся, ЯКОРЯ остаются (FOW-8): своих материалов у образца
-        // нет — скин ставился в якоря, а не через copy-on-write инстанса, — и
-        // `dispose` их не трогает. Тем они программы и держат: освободи прогрев
-        // свои материалы здесь, three удалила бы программы вместе с ними, и
-        // компиляция вернулась бы в первый же кадр, которому они нужны.
-        for (const instance of warmDetailed) {
-          instance.root.removeFromParent();
-          instance.dispose();
-        }
-        warmDetailed.length = 0;
-        for (const batchEntry of warmBatches) {
-          const group = batchEntry.batch.group;
-          group.removeFromParent();
-          // Запись, привязавшаяся ЗА ВРЕМЯ прогрева, свою точку входа в сцену
-          // уже пропустила (`attachBatched` видел родителем тёплую сцену):
-          // батч с живыми записями возвращается в сцену здесь.
-          if (batchEntry.batch.count > 0) this.requireCtx().scene.add(group);
-        }
-      },
-    };
-  }
-
-  /** Образец второй ступени под якорями варианта; сносится общим `finish`. */
-  private warmAnchoredSample(
-    item: AnchorPlan,
-    variant: WarmVariant,
-    warmDetailed: ModelInstance[],
-  ): THREE.Object3D {
-    const instance = createModelInstance(item.data, item.options);
-    applyWarmAnchors(instance, variant.materials);
-    warmDetailed.push(instance);
-    return instance.root;
-  }
 
   /**
    * Правленый манифест визуалов целиком (ED-14, ED-15, REND-17). Подсистема
@@ -2377,59 +1093,7 @@ export class ModelsSubsystem implements RenderSubsystem, InstanceProxySource {
     // Переподача — единственная точка, где ключи батчей устаревают, и она же
     // их пересматривает (REND-31): в матче её не зовут ни разу, и кэш батчей
     // ведёт себя ровно как прежде.
-    this.retireBatches();
-  }
-
-  /**
-   * Пересмотр кэша батчей на переподаче манифеста (REND-31): освобождается
-   * батч, ключ которого ТЕКУЩИЙ манифест больше не порождает и в котором не
-   * нарисовано ни одной записи. Ключ производен от авторских данных (модель ×
-   * скрытые части × вид × ярус кастера), и без этого прохода каждая правка
-   * модели или набора рисуемых частей записи оставляла бы за собой буферы
-   * `InstancedMesh` навсегда.
-   *
-   * Достижимое множество считается ПО МАНИФЕСТУ, а не по живым записям: батч
-   * вида, все инстансы которого сейчас сняты, остаётся в кэше — иначе правило
-   * «опустевший батч переживает последнего пользователя» (REND-20) отменялось
-   * бы с другой стороны. Оба яруса кастера берутся без разбора: ярус декорации
-   * производен от наличия анимаций (REND-4), и второго места, где живёт то же
-   * правило, заводить незачем — надмножество ошибается в безопасную сторону,
-   * оставляя лишнее, а не освобождая нужное.
-   */
-  private retireBatches(): void {
-    if (this.batches.size === 0) return;
-    const reachable = new Set<string>();
-    for (const kind of visualKinds(this.manifest)) {
-      const visual = resolveVisual(this.manifest, kind);
-      reachable.add(batchKey(visual, kind, 'static'));
-      reachable.add(batchKey(visual, kind, 'dynamic'));
-    }
-    for (const [key, entry] of this.batches) {
-      // Проверка на непустой батч — страховка вглубь, а не ветка со своим
-      // случаем: сочетание «ключ недостижим, а записи в батче есть» не
-      // построить — всё, из чего сложен ключ, переводит запись в другой батч
-      // через `rebuildsInstance`, а запись, чей вид исчез из манифеста, из
-      // батча уходит вовсе. Проверка стоит потому, что цена ошибки в множестве
-      // достижимых ключей — погашенное нарисованное, а цена страховки — одно
-      // сравнение на запись кэша.
-      if (reachable.has(key) || entry.batch.count > 0) continue;
-      this.releaseBatch(entry);
-      this.batches.delete(key);
-    }
-  }
-
-  /**
-   * Освобождает запись кэша батчей (REND-31): живой набор вариантов скина,
-   * массивы текстур слоёв, которые он поставил в материалы, и сам батч с его
-   * геометриями и материалами. Массивы принадлежат БАТЧУ, а не ассету (REND-3),
-   * поэтому уходят вместе с ним; разделяемые буферы модели не трогаются —
-   * их снимает `ModelBatch.dispose` со своей геометрии и отдаёт кэшу ассетов.
-   */
-  private releaseBatch(entry: BatchEntry): void {
-    entry.skins.dispose();
-    for (const texture of entry.skinTextures) texture.dispose();
-    entry.skinTextures.length = 0;
-    entry.batch.dispose();
+    this.batches.retire(this.manifest);
   }
 
   private resupply(
@@ -2445,7 +1109,7 @@ export class ModelsSubsystem implements RenderSubsystem, InstanceProxySource {
       // Блок света пересматривается раньше решения о пересборке (REND-17,
       // ED-15): свет не строится из разделяемых данных ассета, и появившийся
       // блок зажигает источник живого инстанса, а снятый — гасит.
-      this.syncLightCarrier(record);
+      this.lighting.syncLight(record, this.manifest);
       if (rebuildsInstance(before, record.visual, this.defaultTier, record.decoration)) {
         if (cost !== undefined) cost.modelsRebuilds++;
         this.rebuild(ctx, record);
@@ -2458,14 +1122,14 @@ export class ModelsSubsystem implements RenderSubsystem, InstanceProxySource {
       this.applyEntryParams(record);
       // Масштаб записи — нормализующая обёртка: переставляется на живом инстансе.
       record.model?.setScale(record.visual?.scale ?? 1);
-      this.rescaleDetailedCull(record, null);
-      this.syncBatchEntry(record);
+      rescaleCull(record, this.carrierDeps, null);
+      if (record.batch !== null) this.batches.syncEntry(record.batch, record.visual);
       record.controller?.setMapping(record.visual?.animations ?? {});
       this.syncBoneControls(record);
       this.syncSkin(record, before);
       // Правленая запись двигает и след пятна (REND-30): анимация записи меняет
       // ярус кастера, масштаб и габарит — радиус.
-      this.syncBlobCaster(record);
+      this.lighting.syncBlob(record);
       // Правка записи (масштаб, наклон, перёд) двигает и walkable-поверхность
       // вместе с картинкой (REND-17 → REND-9).
       if (record.decoration) this.syncWalkable(record);
@@ -2505,7 +1169,7 @@ export class ModelsSubsystem implements RenderSubsystem, InstanceProxySource {
    */
   private fillDebugRow(record: InstanceRecord, out: DebugInstanceRow): boolean {
     if (!this.fillProxy(record, out)) return false;
-    out.tier = record.tier;
+    out.tier = record.carrier.tier;
     out.lodLevel = record.lodLevel;
     out.visible = record.visible;
     out.placeholder = record.placeholder !== null;
@@ -2559,18 +1223,12 @@ export class ModelsSubsystem implements RenderSubsystem, InstanceProxySource {
    * манифеста, а не с числом инстансов.
    */
   batchStats(): { readonly batches: number; readonly drawnMeshes: number; readonly records: number } {
-    let drawnMeshes = 0;
-    let records = 0;
-    for (const entry of this.batches.values()) {
-      drawnMeshes += entry.batch.drawnMeshes;
-      records += entry.batch.count;
-    }
-    return { batches: this.batches.size, drawnMeshes, records };
+    return this.batches.stats();
   }
 
   /** Инстанс-меши всех батчей — вход теста компактации (`count` на меш). */
   batchMeshes(): readonly THREE.InstancedMesh[] {
-    return [...this.batches.values()].flatMap((entry) => entry.batch.meshes);
+    return this.batches.meshes();
   }
 
   /**
@@ -2612,6 +1270,22 @@ export class ModelsSubsystem implements RenderSubsystem, InstanceProxySource {
    * пересобирает построенное из ассета, а размещённый объект оставляет на месте
    * (REND-17). Узла сцены он не отдаёт (REND-3).
    */
+  /**
+   * Мировая поза названного узла инстанса (REND-20, REND-24): кость скелета у
+   * детального яруса, выборка из VAT у батчевого — ответ ОДИН, потому что
+   * наблюдаемое поведение ярусов обязано совпадать. `false` — узла с таким
+   * именем у инстанса нет (другое имя, модель ещё едет, вид рисуют частицы).
+   *
+   * Поза пишется в поданную запись: потребитель спрашивает её на эмиттер
+   * каждым кадром (REND-24), и своего объекта у ответа быть не должно.
+   */
+  nodePose(entity: EntityId, node: string, out: NodePose, decoration = false): boolean {
+    const record = (decoration ? this.decorations : this.instances).get(entity);
+    if (record === undefined) return false;
+    const entry = record.visual === undefined ? undefined : this.shared.get(record.visual.model);
+    return nodePoseOf(record, node, entry, out);
+  }
+
   instanceFor(entity: EntityId, decoration = false): ModelInstanceView | null {
     const record = (decoration ? this.decorations : this.instances).get(entity);
     if (record === undefined) return null;
@@ -2626,10 +1300,25 @@ export class ModelsSubsystem implements RenderSubsystem, InstanceProxySource {
     return this.ctx;
   }
 
+  /**
+   * Набор вариантов скина батча пересобран (REND-6, REND-17): сквозные индексы
+   * поехали, и каждой ЖИВОЙ записи этого батча индекс переставляется заново.
+   * Записи знает владелец пулов — кэш батчей их не видит вовсе.
+   */
+  private reindexBatchSkins(entry: BatchEntry): void {
+    for (const pool of [this.instances, this.decorations]) {
+      for (const record of pool.values()) {
+        if (record.batch !== entry) continue;
+        record.skinIndex = entry.skins.indexOf(record.skin);
+        entry.batch.setSkin(record.slot, record.skinIndex);
+      }
+    }
+  }
+
   /** Скин инстанса: у детального — текстуры материалов, у батчевого — индекс (REND-6). */
   private assignSkin(record: InstanceRecord, skin: string | undefined): void {
     record.skin = skin;
-    if (record.model !== null) this.applyInstanceSkin(record, record.model);
+    record.carrier.applySkin(record, this.carrierDeps);
     const entry = record.batch;
     if (entry !== null) {
       // Смена скина батчевой записи — запись ОДНОГО ЧИСЛА: соседние записи
@@ -2671,57 +1360,6 @@ export class ModelsSubsystem implements RenderSubsystem, InstanceProxySource {
     if (!record.falling) record.fallOffset = 0;
   }
 
-  /**
-   * Параметры записи на живом батче (REND-17): масштаб и пороги LOD правятся
-   * на месте — они не строятся из разделяемых данных ассета, и пересобирать
-   * ради них записи батча незачем.
-   */
-  private syncBatchEntry(record: InstanceRecord): void {
-    const entry = record.batch;
-    if (entry === null) return;
-    entry.thresholds = resolveLodThresholds(record.visual);
-    this.syncBatchSkins(entry, record.visual);
-    const normalized = normalizedScale(record.visual?.scale, entry.model);
-    if (normalized === entry.normalized) return;
-    entry.normalized = normalized;
-    scaleBounds(entry.canonical, normalized, entry.bounds);
-    scaleBounds(entry.canonicalCull, normalized, entry.cullBounds);
-  }
-
-  /**
-   * Набор вариантов скина батча после переподачи (REND-17, REND-6). Варианты —
-   * свойство ЗАПИСИ, а не инстанса: новый вариант в таблице сдвигает сквозные
-   * индексы, а правленый путь существующего меняет пиксели слоя, — и то и
-   * другое пересобирает массив слоёв целиком, потому что собран он один раз на
-   * батч (ASSET-12).
-   *
-   * Пересобирается РОВНО набор: позы записей батча, фазы их клипов и сглаженные
-   * наклоны остаются на месте — пересборки инстансов здесь нет (REND-11).
-   * Запись, чья таблица скинов не изменилась, не получает и этого: таблицы
-   * сравниваются по значению, как и всё прочее в переподаче (REND-17).
-   */
-  private syncBatchSkins(entry: BatchEntry, visual: EntityVisual | undefined): void {
-    if (sameSkinTables(entry.skinTable, visual?.skins)) return;
-    entry.skinTable = visual?.skins;
-    entry.skins.dispose();
-    entry.skins = new BatchSkinLoader(
-      entry.model,
-      visual,
-      this.requireCtx().assets,
-      batchSkinListener(entry.model, entry.materials, entry.skinTextures),
-    );
-    // Сквозные индексы вариантов поехали — каждой записи батча заново (REND-6).
-    // Записям, чей скин переподача ещё будет менять, индекс перепишет их
-    // собственный `assignSkin`: он идёт после этого места и по тому же набору.
-    for (const pool of [this.instances, this.decorations]) {
-      for (const record of pool.values()) {
-        if (record.batch !== entry) continue;
-        record.skinIndex = entry.skins.indexOf(record.skin);
-        entry.batch.setSkin(record.slot, record.skinIndex);
-      }
-    }
-  }
-
   /** Параметры контроля костей записи на живом инстансе (REND-5, REND-17). */
   private syncBoneControls(record: InstanceRecord): void {
     // Процедурный контроль костей производен от цели атаки/каста (REND-5), а у
@@ -2749,7 +1387,7 @@ export class ModelsSubsystem implements RenderSubsystem, InstanceProxySource {
       return;
     }
     if (record.model !== null && !sameSkinSlots(before, record.visual, skin)) {
-      this.applyInstanceSkin(record, record.model);
+      record.carrier.applySkin(record, this.carrierDeps);
     }
   }
 
@@ -2800,7 +1438,7 @@ export class ModelsSubsystem implements RenderSubsystem, InstanceProxySource {
       holder: null,
       placeholder: null,
       emitter: false,
-      tier: 'detailed',
+      carrier: NONE_CARRIER,
       model: null,
       batch: null,
       slot: -1,
@@ -2862,10 +1500,10 @@ export class ModelsSubsystem implements RenderSubsystem, InstanceProxySource {
     // Свет — свойство ЗАПИСИ, а не построенного из ассета (REND-33): носитель
     // объявляется здесь же, до готовности модели и независимо от того, рисуют
     // инстанс модель, заглушка (ASSET-4) или частицы (ASSET-14).
-    this.syncLightCarrier(record);
+    this.lighting.syncLight(record, this.manifest);
     // Пятно — свойство ЯРУСА КАСТЕРА (REND-30), и объявляется оно тем же
     // порядком: радиус нулевой, пока габаритов нет, и приезжает вместе с моделью.
-    this.syncBlobCaster(record);
+    this.lighting.syncBlob(record);
     return record;
   }
 
@@ -2896,12 +1534,12 @@ export class ModelsSubsystem implements RenderSubsystem, InstanceProxySource {
     // не строится вовсе: `attachModel` снял бы её тем же вызовом, и пара
     // «создать Group с Mesh, объявить кастера — тут же снести» на каждый
     // инстанс всплеска была бы платой ни за что.
-    const entry = this.ensureShared(ctx, visual.model);
+    const entry = this.shared.ensure(visual.model);
     if (entry.data !== null) {
       this.attachModel(record, entry.data);
       return;
     }
-    this.makePlaceholder(ctx, record);
+    attachPlaceholder(record, this.carrierDeps);
     if (entry.failed === null) {
       entry.waiting.add(record);
       record.waitingOn = entry;
@@ -2924,21 +1562,22 @@ export class ModelsSubsystem implements RenderSubsystem, InstanceProxySource {
     if (kind === null) return;
     const claim = resolveVisualClaim(this.manifest, kind);
     record.emitter = claim === 'particles';
+    if (record.emitter) record.carrier = EMITTER_CARRIER;
     if (claim !== null) {
       // Содержимое держателя меняется — сперва конец эпизода угасания, тем же
       // порядком и по той же причине, что в `attachModel` (FOW-8): fade-копии
       // материалов привязаны к прежним мешам, и снятая отсюда заглушка унесла
       // бы выданную копию с собой.
-      this.clearHolderFade(record);
+      this.fade.clear(record);
       // Узел заводился под заглушку; чужому изображению он не нужен, и пустым
       // в сцене не остаётся — иначе кастер объявлен, а рисовать им нечего.
-      this.disposePlaceholder(record);
-      this.releaseHolder(record);
+      disposePlaceholder(record);
+      releaseHolder(record, this.carrierDeps);
       return;
     }
     if (record.placeholder !== null) return;
     this.warnMissingVisual(kind);
-    this.makePlaceholder(ctx, record);
+    attachPlaceholder(record, this.carrierDeps);
   }
 
   /** Записи о виде в манифесте нет — предупреждение один раз на тип (ASSET-6). */
@@ -2949,206 +1588,10 @@ export class ModelsSubsystem implements RenderSubsystem, InstanceProxySource {
   }
 
   /**
-   * Узел записи в сцене: носитель заглушки и корень детального яруса. Заводится
-   * ЛЕНИВО и снимается, как только оба исчезли: у батчевой записи узла в сцене
-   * нет (REND-20), и пустой `Group` на каждую значил бы обход сцены за то,
-   * чего в ней не рисуется.
-   */
-  private ensureHolder(ctx: RenderContext, record: InstanceRecord): THREE.Group {
-    if (record.holder !== null) return record.holder;
-    const holder = new THREE.Group();
-    holder.name = `${record.decoration ? 'decoration' : 'entity'}:${record.entity}`;
-    holder.position.copy(record.pos);
-    holder.quaternion.copy(record.quat);
-    holder.scale.setScalar(record.scale);
-    ctx.scene.add(holder);
-    record.holder = holder;
-    this.markCaster(record);
-    return holder;
-  }
-
-  private releaseHolder(record: InstanceRecord): void {
-    if (record.holder === null || record.model !== null || record.placeholder !== null) return;
-    this.options.shadows?.dropCaster(record.holder);
-    record.holder.removeFromParent();
-    record.holder = null;
-  }
-
-  /**
    * Корень нарисованного инстанса — приёмнику теней вместе с ярусом (REND-8).
    * Корень, а не каждый меш: флаги расставляет обходом сам приёмник, а сменить
    * их у поддерева, которое ещё только строится, здесь было бы нечем.
    */
-  private markCaster(record: InstanceRecord): void {
-    const sink = this.options.shadows;
-    if (sink === undefined) return;
-    const root = record.batch?.batch.group ?? record.holder;
-    if (root !== null) sink.setCaster(root, casterTierOf(record));
-  }
-
-  /**
-   * Носитель локального света инстанса (REND-33, ASSET-16) — приёмнику света
-   * подсистемы освещения. Свет — свойство ЗАПИСИ вида, поэтому носитель
-   * заводится по её блоку и снимается вместе с ним: и на создании инстанса, и
-   * на переподаче манифеста (REND-17, ED-15).
-   *
-   * Блок разрешается по КЛЮЧУ ВИДА, а не по `record.visual`: свет несёт и
-   * эмиттерная запись (ASSET-14), которую рисует подсистема частиц (REND-24), —
-   * факел арены как раз такой, — а `resolveVisual` эмиттерный вид намеренно не
-   * отдаёт.
-   */
-  private syncLightCarrier(record: InstanceRecord): void {
-    const sink = this.options.shadows;
-    if (sink?.setLightCarrier === undefined) return;
-    const kind = record.kind;
-    const light = kind === null ? null : resolveVisualLight(this.manifest, kind);
-    if (light === null) {
-      this.dropLightCarrier(record);
-      return;
-    }
-    const carrier = record.lightCarrier;
-    if (carrier !== null) {
-      // Правленые числа блока — на ЖИВОМ носителе (REND-17): снятия и повторной
-      // регистрации это не требует, и свет виден не позже следующего кадра.
-      carrier.light = light;
-      return;
-    }
-    const next: LightCarrier = {
-      key: lightCarrierKey(record),
-      light,
-      pose: (out) => poseOfCarrier(record, out),
-    };
-    record.lightCarrier = next;
-    sink.setLightCarrier(next);
-  }
-
-  /** Носитель снят: исчезнувший инстанс либо снятый переподачей блок (REND-33). */
-  private dropLightCarrier(record: InstanceRecord): void {
-    const carrier = record.lightCarrier;
-    if (carrier === null) return;
-    record.lightCarrier = null;
-    this.options.shadows?.dropLightCarrier?.(carrier);
-  }
-
-  /**
-   * Носитель контактного пятна инстанса (REND-30, режим `blob`) — приёмнику
-   * подсистемы освещения. Носителями становятся ровно ДИНАМИЧЕСКИЕ кастеры: в
-   * `blob` статика теней не отбрасывает, и пятна ей не положены.
-   *
-   * Заводится он независимо от действующего режима теней: режим — свойство
-   * секции, которое автор правит в рантайме (ED-15), и держать реестр по режиму
-   * значило бы показывать пятна не раньше, чем пересоздадутся инстансы.
-   * Стоимости у реестра нет — по нему ходит только кадр режима `blob`.
-   *
-   * Радиус — ПРОИЗВОДНАЯ ДАННЫХ (REND-30): горизонтальный габарит записи вида,
-   * тот же источник, что у отсечения и LOD, — поэтому он и пересчитывается
-   * здесь же, на переподаче манифеста (REND-17).
-   */
-  private syncBlobCaster(record: InstanceRecord): void {
-    const sink = this.options.shadows;
-    if (sink?.setBlobCaster === undefined) return;
-    if (casterTierOf(record) !== 'dynamic') {
-      this.dropBlobCaster(record);
-      return;
-    }
-    const existing = record.blobCaster;
-    if (existing !== null) {
-      existing.radius = blobRadiusOf(record);
-      return;
-    }
-    const next: BlobCaster = {
-      radius: blobRadiusOf(record),
-      pose: (out) => poseOfBlob(record, out),
-    };
-    record.blobCaster = next;
-    sink.setBlobCaster(next);
-  }
-
-  /** Пятно снято: исчезнувший инстанс либо инстанс, ставший статикой (REND-30). */
-  private dropBlobCaster(record: InstanceRecord): void {
-    const caster = record.blobCaster;
-    if (caster === null) return;
-    record.blobCaster = null;
-    this.options.shadows?.dropBlobCaster?.(caster);
-  }
-
-  /**
-   * Заглушка инстанса (ASSET-4). Геометрия и материал у всех заглушек ОБЩИЕ:
-   * пер-инстансного в заглушке нет ничего, а своя пара на инстанс — это лишний
-   * буфер и лишний материал на каждую незагруженную модель.
-   */
-  private makePlaceholder(ctx: RenderContext, record: InstanceRecord): void {
-    if (placeholderGeometry === null) {
-      // Владелец — не подсистема, а «заглушки процесса»: пара живёт дольше
-      // любой сцены и любого стенда (ASSET-4), и записывать её на подсистему
-      // значило бы, что после сноса у той остаётся живой ресурс (PERF-9).
-      const geometry = own(
-        'geometry',
-        PLACEHOLDER_OWNER,
-        new THREE.BoxGeometry(PLACEHOLDER_WIDTH, PLACEHOLDER_WIDTH, PLACEHOLDER_HEIGHT),
-      );
-      geometry.translate(0, 0, PLACEHOLDER_HEIGHT / 2); // стоит на земле, а не тонет в ней
-      placeholderGeometry = geometry;
-    }
-    placeholderMaterial ??= own(
-      'material',
-      PLACEHOLDER_OWNER,
-      new THREE.MeshStandardMaterial({ color: PLACEHOLDER_COLOR }),
-    );
-    const mesh = new THREE.Mesh(placeholderGeometry, placeholderMaterial);
-    this.ensureHolder(ctx, record).add(mesh);
-    record.placeholder = mesh;
-  }
-
-  private ensureShared(ctx: RenderContext, modelId: string): SharedEntry {
-    const existing = this.shared.get(modelId);
-    if (existing !== undefined) return existing;
-    const entry: SharedEntry = {
-      data: null,
-      failed: null,
-      baseSkin: null,
-      skinCache: createSkinTextureCache(),
-      derivatives: null,
-      vatTexture: null,
-      warnedDerivatives: false,
-      warmAnchors: new Map(),
-      waiting: new Set(),
-    };
-    this.shared.set(modelId, entry);
-
-    const handle = ctx.assets.request<NormalizedModel>('model', modelId);
-    const onState = (state: AssetState<NormalizedModel>): void => {
-      if (entry.data !== null) return;
-      if (state.status === 'ready') {
-        // Разделяемая часть строится один раз на ассет (REND-3), запечённые
-        // производные — тоже (ASSET-12): десять инстансов не запекают ничего
-        // по десять раз, кэш живёт в модуле ассетов по идентичности модели.
-        const data = buildSharedModel(state.data);
-        entry.data = data;
-        entry.failed = null;
-        const baked = modelDerivatives(state.data);
-        if (baked.ok) {
-          entry.derivatives = baked.derivatives;
-        } else if (!entry.warnedDerivatives) {
-          entry.warnedDerivatives = true;
-          this.warn(
-            `render: у модели "${modelId}" нет запечённых производных (${baked.reason}) — детальный ярус (REND-20)`,
-          );
-        }
-        for (const record of entry.waiting) {
-          record.waitingOn = null;
-          this.attachModel(record, data);
-        }
-        entry.waiting.clear();
-      } else if (state.status === 'failed' && entry.failed !== state.reason) {
-        entry.failed = state.reason;
-        this.warn(`render: модель "${modelId}" не загрузилась: ${state.reason} — остаётся заглушка (ASSET-4)`);
-      }
-    };
-    onState(ctx.assets.state(handle));
-    ctx.assets.subscribe(handle, onState);
-    return entry;
-  }
 
   /**
    * Ярус записи (REND-20, ASSET-13) с учётом деградации: батчевый требует
@@ -3166,274 +1609,59 @@ export class ModelsSubsystem implements RenderSubsystem, InstanceProxySource {
     // Смена содержимого держателя (заглушка → модель): fade-копии материалов
     // привязаны к прежним мешам — вернуть разделяемые, копии — в пулы их
     // оригиналов; идущий fade заново возьмёт их по новому поддереву (FOW-8).
-    this.clearHolderFade(record);
+    this.fade.clear(record);
     const entry = record.visual === undefined ? undefined : this.shared.get(record.visual.model);
     if (entry === undefined) return;
-    record.tier = this.tierOf(record, entry);
-    if (record.tier === 'batched' && entry.derivatives !== null) {
-      this.attachBatched(record, shared, entry.derivatives);
+    const derivatives = entry.derivatives;
+    if (this.tierOf(record, entry) === 'batched' && derivatives !== null) {
+      attachBatched(
+        record,
+        this.carrierDeps,
+        this.batches.ensure(record, shared, derivatives),
+        derivatives,
+        this.controllerOptions,
+      );
     } else {
-      this.attachDetailed(record, shared);
+      attachDetailed(record, this.carrierDeps, shared, this.controllerOptions);
     }
 
     // Ярус нарисованного сменился (заглушка → модель либо → запись батча): его
     // корень объявляется приёмнику теней заново.
-    this.markCaster(record);
+    this.lighting.markCaster(record);
     // Габариты приехали вместе с моделью (ASSET-4, ASSET-12) — след пятна
     // считается по ним, а не по заглушке (REND-30).
-    this.syncBlobCaster(record);
+    this.lighting.syncBlob(record);
 
     // Модель готова — walkable-вклад появляется в поле, и подписчики поверхности
     // узнают о клетках под bbox не позже следующего кадра (ASSET-4 → REND-9).
     if (record.decoration) this.syncWalkable(record);
   }
 
-  /** Детальный ярус: пер-инстансное поддерево со скелетом и микшером (REND-20). */
-  private attachDetailed(record: InstanceRecord, shared: SharedModelData): void {
-    const ctx = this.requireCtx();
-    // Запечённые границы есть и у детальной записи, когда модель их даёт: они
-    // производны от МОДЕЛИ, а не от яруса, и отсечение по ним точнее запаса
-    // (REND-21). Батчевый ярус тут ни при чём — деградировавшая запись тоже их
-    // получает.
-    const baked = this.shared.get(record.visual?.model ?? '')?.derivatives ?? null;
-    record.cullBounds = baked === null ? null : boundsFromBaked(baked);
-    this.rescaleDetailedCull(record, shared);
-    const instanceOptions: { scale?: number; hiddenParts?: readonly number[] } = {};
-    if (record.visual?.scale !== undefined) instanceOptions.scale = record.visual.scale;
-    if (record.visual?.hiddenParts !== undefined) {
-      instanceOptions.hiddenParts = record.visual.hiddenParts;
-    }
-    const model = createModelInstance(shared, instanceOptions);
-    this.ensureHolder(ctx, record).add(model.root);
-    this.disposePlaceholder(record);
-    record.model = model;
-    record.controller = this.makeController(new MixerAnimationBackend(model.mixer, shared.clips), record);
-    this.applyAnimation(record);
-
-    // Контроля костей у decoration нет (REND-5, REND-18): доворачивать нечего.
-    const controls = record.decoration ? undefined : record.visual?.boneControls;
-    record.boneControl = controls === undefined ? null : new BoneControlState(controls);
-
-    this.applyInstanceSkin(record, model);
-  }
-
   /**
-   * Границы отсечения детальной записи под масштабом записи манифеста: тот же
-   * множитель нормализации, каким отмасштабирован сам инстанс (REND-17).
-   */
-  private rescaleDetailedCull(record: InstanceRecord, shared: SharedModelData | null): void {
-    if (record.cullBounds === null) return;
-    const model = shared?.model ?? this.shared.get(record.visual?.model ?? '')?.data?.model;
-    const baked = this.shared.get(record.visual?.model ?? '')?.derivatives;
-    if (model === undefined || baked == null) return;
-    const normalized = normalizedScale(record.visual?.scale, model);
-    scaleBounds(boundsFromBaked(baked), normalized, record.cullBounds);
-  }
-
-  /** Батчевый ярус: запись в разделяемом инстанс-меше (REND-20). */
-  private attachBatched(
-    record: InstanceRecord,
-    shared: SharedModelData,
-    derivatives: BakedDerivatives,
-  ): void {
-    const entry = this.ensureBatch(record, shared, derivatives);
-    record.batch = entry;
-    record.slot = entry.batch.acquire();
-    // Пустой батч из сцены снят: набор без записей не должен оставлять в кадре
-    // ничего (REND-11, REND-18) — даже узла, который ничего не рисует.
-    if (entry.batch.group.parent === null) this.requireCtx().scene.add(entry.batch.group);
-    record.lodLevel = 0;
-    record.skinIndex = entry.skins.indexOf(record.skin);
-    entry.batch.setSkin(record.slot, record.skinIndex);
-    entry.batch.setLevel(record.slot, 0);
-    const vat = new VatAnimationBackend(derivatives.clips, derivatives.fps, derivatives.restFrame);
-    record.vat = vat;
-    record.controller = this.makeController(vat, record);
-    // Контроля костей у батчевой записи нет по построению: запись с ним
-    // получает детальный ярус (REND-5 → REND-20).
-    record.boneControl = null;
-    this.disposePlaceholder(record);
-    this.releaseHolder(record);
-    this.applyAnimation(record);
-  }
-
-  /**
-   * Неразрешённая запись анимации диагностируется в тот же сток, что и
-   * отсутствующая кость (REND-4, REND-5): у подсистемы один адресат жалоб.
-   */
-  private makeController(
-    backend: ConstructorParameters<typeof AnimationController>[0],
-    record: InstanceRecord,
-  ): AnimationController {
-    const options: {
-      crossfade?: number;
-      deathEvent?: string;
-      reviveEvent?: string;
-      warn: (message: string) => void;
-    } = { warn: this.warn };
-    if (this.options.crossfade !== undefined) options.crossfade = this.options.crossfade;
-    if (this.options.deathEvent !== undefined) options.deathEvent = this.options.deathEvent;
-    if (this.options.reviveEvent !== undefined) options.reviveEvent = this.options.reviveEvent;
-    const controller = new AnimationController(backend, record.visual?.animations ?? {}, options);
-    // Запись знает, что сущность мертва (REND-4), а контроллера у инстанса до
-    // сих пор не было либо он сменился: модель — разделяемый ассет и вправе
-    // ехать сколько угодно (`assets` ASSET-4), ярус переключает пресет
-    // (REND-20), а переподача манифеста пересобирает инстанс (REND-17).
-    // Фиксация ставится ровно тому контроллеру, который в итоге появился, —
-    // иначе труп встал бы живым в тот самый момент, когда его наконец есть чем
-    // нарисовать, или в тот, когда сменился его носитель.
-    if (record.deathLock) controller.enterDeath();
-    return controller;
-  }
-
-  /**
-   * Батч записи: `InstancedMesh` на часть каждого уровня, материалы с
-   * VAT-патчем, набор вариантов скина. Ключ — модель, набор скрытых частей и
-   * сама запись: скины и `hiddenParts` — свойства ЗАПИСИ, и делить между
-   * записями их нельзя. Число батчей растёт с числом записей манифеста, а не с
-   * числом инстансов — этого REND-20 и требует.
-   */
-  private ensureBatch(
-    record: InstanceRecord,
-    shared: SharedModelData,
-    derivatives: BakedDerivatives,
-  ): BatchEntry {
-    const visual = record.visual;
-    const key = batchKeyOf(record);
-    const existing = this.batches.get(key);
-    if (existing !== undefined) {
-      // Батч из кэша мог опустеть ЕЩЁ ДО правки скинов записи — например,
-      // когда все инстансы вида ушли из доставки, а следом приехала переподача,
-      // правившая таблицу скинов этой записи: ключ она не меняет, батч из кэша
-      // не уходит (REND-31), а `syncBatchEntry` идёт по ЖИВЫМ записям и пустого
-      // батча не видит вовсе. Поэтому набор вариантов сводится с записью здесь
-      // же — иначе первый же респавн рисовался бы прежними слоями (REND-17).
-      this.syncBatchSkins(existing, visual);
-      return existing;
-    }
-    return this.buildBatch(visual, key, shared, derivatives);
-  }
-
-  /**
-   * Сборка нового батча по слагаемым ключа — общий низ `ensureBatch` и
-   * прогрева (`prewarm`): у прогрева записи-инстанса ещё нет, а батч, VAT и
-   * материалы уже нужны — иначе их создание и компиляцию программ оплатил бы
-   * кадр первого появления вида (FOW-8).
-   */
-  private buildBatch(
-    visual: EntityVisual | undefined,
-    key: string,
-    shared: SharedModelData,
-    derivatives: BakedDerivatives,
-  ): BatchEntry {
-    skinPlaceholder ??= createSkinPlaceholder();
-    const placeholder = skinPlaceholder;
-    const vatTexture = this.ensureVatTexture(visual?.model ?? '', derivatives);
-    const materials = shared.model.materials.map((source, index) =>
-      createVatMaterial(
-        shared.materials[index] ?? own('material', 'models', new THREE.MeshStandardMaterial()),
-        vatTexture,
-        materialMapKinds(source),
-        placeholder,
-      ),
-    );
-
-    // Уровни приходят вместе с владением (REND-31): геометрии цепочки LOD
-    // построены для этого батча и отдаются его сносом, части модели — нет.
-    const { levels, owned } = batchLevels(shared.meshes, derivatives.lod, visual?.hiddenParts);
-    const batch = new ModelBatch({
-      materials,
-      partVisibility: derivatives.partVisibility,
-      levels,
-      ownedGeometries: owned,
-      // Глубина теневого прохода — тем же вершинным преобразованием VAT, что
-      // кадр: иначе тень записи застыла бы в позе покоя (design D4).
-      depthMaterial: createVatDepthMaterial(vatTexture),
-    });
-
-    const canonical = cachedModelBounds(shared.model, visual?.hiddenParts);
-    const canonicalCull = boundsFromBaked(derivatives);
-    const normalized = normalizedScale(visual?.scale, shared.model);
-    const skinTextures: THREE.DataArrayTexture[] = [];
-    const entry: BatchEntry = {
-      key,
-      batch,
-      materials,
-      skins: new BatchSkinLoader(
-        shared.model,
-        visual,
-        this.requireCtx().assets,
-        batchSkinListener(shared.model, materials, skinTextures),
-      ),
-      skinTable: visual?.skins,
-      skinTextures,
-      model: shared.model,
-      canonical,
-      canonicalCull,
-      normalized,
-      bounds: scaleBounds(canonical, normalized, emptyBounds()),
-      cullBounds: scaleBounds(canonicalCull, normalized, emptyBounds()),
-      thresholds: resolveLodThresholds(visual),
-    };
-    this.batches.set(key, entry);
-    return entry;
-  }
-
-  /** VAT-текстура модели — одна на ассет и общая для всех её батчей (REND-3). */
-  private ensureVatTexture(modelId: string, derivatives: BakedDerivatives): THREE.DataTexture {
-    const shared = this.shared.get(modelId);
-    if (shared?.vatTexture != null) return shared.vatTexture;
-    const texture = createVatTexture(derivatives.vat.width, derivatives.vat.height, derivatives.vat.data);
-    if (shared !== undefined) shared.vatTexture = texture;
-    return texture;
-  }
-
-  /**
-   * Скин на ДЕТАЛЬНОМ инстансе (REND-6). Пока выбранный скин ничего не
-   * подменяет, инстанс рисуется РАЗДЕЛЯЕМЫМИ материалами ассета с его же
-   * текстурами: своей копии ему незачем — от ассета он не отличается ничем.
-   * Первая же подмена переводит материалы в собственные (copy-on-write) и
-   * ставит в них полный набор «слот → источник»: соседние инстансы и
-   * разделяемые данные не затронуты.
+   * Снимает с инстанса всё построенное из данных ассета — заглушку, модель или
+   * запись батча, анимационный контроллер, контроль костей и текстуры скина.
+   * Общая часть удаления инстанса и его пересборки под новой записью (REND-17);
+   * разделяемые данные ассета и сам батч остаются в кэше (REND-3).
    *
-   * Обратного пути нет намеренно: инстанс, однажды получивший свои материалы,
-   * их и оставляет — снятие скина применяется к ним же полным набором, а
-   * возврат к разделяемым сэкономил бы один материал ценой ветки, которой не
-   * видно из кадра.
+   * ЧТО именно снимать, знает носитель (REND-20): здесь — только общее у всех
+   * носителей и порядок, в котором это делается.
    */
-  private applyInstanceSkin(record: InstanceRecord, model: ModelInstance): void {
-    const entry = record.visual === undefined ? undefined : this.shared.get(record.visual.model);
-    if (entry?.data === undefined || entry.data === null) return;
-    const overrides = record.skin === undefined ? undefined : record.visual?.skins?.[record.skin];
-    if (!model.ownsMaterials && (overrides === undefined || Object.keys(overrides).length === 0)) {
-      record.skinApp?.dispose();
-      record.skinApp = null;
-      this.ensureBaseSkin(entry);
-      return;
-    }
-    record.skinApp?.dispose();
-    record.skinApp = applySkin(
-      model.ownTextureTargets(),
-      skinTextureSources(entry.data.model, record.visual, record.skin),
-      this.requireCtx().assets,
-      entry.skinCache,
-    );
-  }
-
-  /**
-   * Текстуры САМОЙ модели на её разделяемых материалах — один раз на ассет
-   * (REND-3). Лениво, по первому инстансу, которому скин ничего не подменяет:
-   * модель, все записи которой перекрывают её слоты, своих текстур не грузит
-   * вовсе — они бы никогда не были видны.
-   */
-  private ensureBaseSkin(entry: SharedEntry): void {
-    if (entry.baseSkin !== null || entry.data === null) return;
-    entry.baseSkin = applySkin(
-      entry.data.textureTargets,
-      skinTextureSources(entry.data.model, undefined, undefined),
-      this.requireCtx().assets,
-      entry.skinCache,
-    );
+  private detachModel(record: InstanceRecord): void {
+    // Конец эпизода угасания ПЕРВЫМ делом (FOW-8): пока копии выданы, они
+    // лежат в мешах, а не в пулах, — и снос поддерева ниже унёс бы их вместе с
+    // единственной ссылкой, а освобождение материалов инстанса оставило бы
+    // выданную копию жить дольше своего оригинала (REND-3, REND-6).
+    this.fade.clear(record);
+    // Ожидание снимается ПО ССЫЛКЕ записи: инстанс ждёт ровно одну модель
+    // (`attachVisual`), и обход всех разделяемых записей стоил бы числом
+    // ассетов сцены на каждое снятие инстанса.
+    record.waitingOn?.waiting.delete(record);
+    record.waitingOn = null;
+    // Ярус — свойство НАРИСОВАННОГО (REND-20): пока построенного из ассета у
+    // записи нет, рисовать нечем, и наружу (`instanceFor`) уходит носитель
+    // пустоты. Настоящий проставит `attachModel`, как только сможет.
+    record.carrier.detach(record, this.carrierDeps);
+    record.carrier = NONE_CARRIER;
   }
 
   private remove(record: InstanceRecord): void {
@@ -3442,10 +1670,10 @@ export class ModelsSubsystem implements RenderSubsystem, InstanceProxySource {
     if (record.decoration) this.options.surface?.setWalkable(record.entity, null);
     // Источник снят вместе с инстансом (REND-33): источники прочих инстансов
     // той же записи горят как горели.
-    this.dropLightCarrier(record);
-    this.dropBlobCaster(record);
+    this.lighting.dropLight(record);
+    this.lighting.dropBlob(record);
     this.detachModel(record);
-    if (record.holder !== null) this.options.shadows?.dropCaster(record.holder);
+    if (record.holder !== null) this.lighting.dropCaster(record.holder);
     record.holder?.removeFromParent();
     record.holder = null;
   }
@@ -3485,72 +1713,6 @@ export class ModelsSubsystem implements RenderSubsystem, InstanceProxySource {
     });
   }
 
-  /**
-   * Снимает с инстанса всё построенное из данных ассета — заглушку, модель или
-   * запись батча, анимационный контроллер, контроль костей и текстуры скина.
-   * Общая часть удаления инстанса и его пересборки под новой записью (REND-17);
-   * разделяемые данные ассета и сам батч остаются в кэше (REND-3).
-   */
-  private detachModel(record: InstanceRecord): void {
-    // Конец эпизода угасания ПЕРВЫМ делом (FOW-8): пока копии выданы, они
-    // лежат в мешах, а не в пулах, — и снос поддерева ниже унёс бы их вместе с
-    // единственной ссылкой, а освобождение материалов инстанса оставило бы
-    // выданную копию жить дольше своего оригинала (REND-3, REND-6).
-    this.clearHolderFade(record);
-    // Ожидание снимается ПО ССЫЛКЕ записи: инстанс ждёт ровно одну модель
-    // (`attachVisual`), и обход всех разделяемых записей стоил бы числом
-    // ассетов сцены на каждое снятие инстанса.
-    record.waitingOn?.waiting.delete(record);
-    record.waitingOn = null;
-    // Ярус — свойство НАРИСОВАННОГО (REND-20): пока построенного из ассета у
-    // записи нет, рисуется заглушка, и она детальная. Оставить прежний ярус
-    // значило бы отдавать наружу (`instanceFor`) ярус, которым в кадре ничего
-    // не нарисовано; `attachModel` проставит настоящий, как только сможет.
-    record.tier = 'detailed';
-    this.disposePlaceholder(record);
-    record.skinApp?.dispose();
-    record.skinApp = null;
-    record.controller = null;
-    record.boneControl = null;
-    record.vat = null;
-    record.cullBounds = null;
-    if (record.batch !== null) {
-      const batch = record.batch.batch;
-      batch.release(record.slot);
-      // Опустевший батч уходит из сцены, но остаётся в кэше: разделяемое им
-      // строится один раз на запись (REND-3), а рисовать ему уже нечего.
-      if (batch.count === 0) {
-        this.options.shadows?.dropCaster(batch.group);
-        batch.group.removeFromParent();
-      }
-      record.batch = null;
-      record.slot = -1;
-      record.lodLevel = 0;
-    }
-    if (record.model !== null) {
-      record.model.root.removeFromParent();
-      // Материалы, принадлежащие инстансу (свои копии скина REND-6 и заглушка
-      // модели без материалов), уходят вместе с ним — и их fade-копии тоже
-      // (FOW-8): пул ключуется оригиналом, а оригинала сейчас не станет.
-      // Спрашивается ровно тот список, который инстанс и освободит: `dispose`
-      // идёт по нему же. Разделяемых материалов ассета в нём нет — их пулы
-      // живут с ассетом (REND-3).
-      this.disposeFadeClones(record.model.ownedMaterials);
-      record.model.dispose();
-      record.model = null;
-    }
-  }
-
-  /**
-   * Снимает заглушку с инстанса. Геометрию и материал НЕ освобождает: они общие
-   * на все заглушки (см. `makePlaceholder`), и освобождение здесь погасило бы
-   * заглушки всех остальных инстансов.
-   */
-  private disposePlaceholder(record: InstanceRecord): void {
-    if (record.placeholder === null) return;
-    record.placeholder.removeFromParent();
-    record.placeholder = null;
-  }
 }
 
 // ------------------------------------------------------------ помощники
@@ -3571,624 +1733,4 @@ function diedIn(view: TickView, deathEvent: string | undefined): ReadonlySet<Ent
     died.add(entity);
   }
   return died;
-}
-
-/** Пустая запись габаритов — заполняется `scaleBounds`. */
-function emptyBounds(): ModelBounds {
-  return { minX: 0, minY: 0, minZ: 0, maxX: 0, maxY: 0, maxZ: 0 };
-}
-
-/** Габариты под множителем нормализации; пишет в `out` и его же возвращает. */
-function scaleBounds(source: ModelBounds, factor: number, out: ModelBounds): ModelBounds {
-  out.minX = source.minX * factor;
-  out.minY = source.minY * factor;
-  out.minZ = source.minZ * factor;
-  out.maxX = source.maxX * factor;
-  out.maxY = source.maxY * factor;
-  out.maxZ = source.maxZ * factor;
-  return out;
-}
-
-/** Консервативные границы по клипам (ASSET-12) в форме габаритов рендера. */
-function boundsFromBaked(derivatives: BakedDerivatives): ModelBounds {
-  const { min, max } = derivatives.bounds;
-  return { minX: min[0], minY: min[1], minZ: min[2], maxX: max[0], maxY: max[1], maxZ: max[2] };
-}
-
-/**
- * Ключ батча (REND-20): модель, набор скрытых частей, сама запись манифеста и
- * ярус теневого кастера. Запись входит в ключ потому, что скины батча — её
- * свойство (REND-6): две записи на одну модель делят геометрию, но не массив
- * вариантов. Ярус — потому, что `InstancedMesh` несёт ОДИН набор флагов теней
- * на все свои записи: батч обязан быть однороден по ярусу, иначе статика и
- * динамика попадали бы в одну карту (design D3). Расщепляются на практике
- * только статичные модели с двойным происхождением инстансов — ящик, который и
- * decoration, и prop; цена — +1 draw call на такую модель.
- */
-function batchKeyOf(record: InstanceRecord): string {
-  return batchKey(record.visual, record.kind ?? '', casterTierOf(record));
-}
-
-/**
- * Ключ батча из его слагаемых. Отдельной функцией потому, что то же множество
- * ключей считается и НЕ ПО ЗАПИСЯМ: пересмотр кэша на переподаче (REND-31)
- * спрашивает у манифеста, порождает ли он такой ключ, — и вторая сборка ключа
- * для этого разошлась бы с первой при первой же правке состава ключа.
- */
-function batchKey(
-  visual: EntityVisual | undefined,
-  kind: string,
-  tier: ShadowCasterTier,
-): string {
-  if (visual === undefined) return buildBatchKey(undefined, kind, tier);
-  let cache = batchKeys.get(visual);
-  if (cache === undefined) {
-    cache = { static: new Map(), dynamic: new Map() };
-    batchKeys.set(visual, cache);
-  }
-  const byKind = tier === 'static' ? cache.static : cache.dynamic;
-  let key = byKind.get(kind);
-  if (key === undefined) {
-    key = buildBatchKey(visual, kind, tier);
-    byKind.set(kind, key);
-  }
-  return key;
-}
-
-/** Ключи одной записи манифеста по виду — по таблице на ярус кастера. */
-interface BatchKeyCache {
-  readonly static: Map<string, string>;
-  readonly dynamic: Map<string, string>;
-}
-
-/**
- * Ключи батчей по ЗАПИСИ манифеста (REND-20). Сборка ключа — сортировка набора
- * скрытых частей и `JSON.stringify`, а спрашивают его на каждом монтировании
- * инстанса: всплеск открытия обзора (FOW-8) — это по сборке ключа на инстанс.
- * Запись манифеста между переподачами неизменна (REND-17), поэтому ключ — её
- * функция, и кэш ключуется самой записью: правленый документ приносит новые
- * объекты записей (REND-17), а прежние уходят вместе со своими таблицами —
- * слабая ссылка не держит ни одной из них.
- */
-const batchKeys = new WeakMap<EntityVisual, BatchKeyCache>();
-
-/** Собственно сборка ключа — вход кэша и единственное место, где она написана. */
-function buildBatchKey(
-  visual: EntityVisual | undefined,
-  kind: string,
-  tier: ShadowCasterTier,
-): string {
-  const hidden = [...(visual?.hiddenParts ?? [])].sort((a, b) => a - b).join(',');
-  return JSON.stringify([visual?.model ?? '', hidden, kind, tier]);
-}
-
-/** Ключи обоих разделов манифеста (ASSET-9): пространство имён у них одно. */
-function visualKinds(manifest: VisualManifest): readonly string[] {
-  const entities = Object.keys(manifest.entities);
-  const decorations = manifest.decorations;
-  return decorations === undefined ? entities : [...entities, ...Object.keys(decorations)];
-}
-
-/**
- * Ключ носителя локального света (REND-33, design D3) — тай-брейк отбора
- * активных источников: ключ записи манифеста плюс порядковый номер инстанса в
- * его наборе. Наборы разделены буквой: нумерация у них своя, и одно число
- * значит в них разные инстансы.
- *
- * Что этот ключ обещает, а что нет. Он не зависит ни от кадра, ни от порядка
- * обхода реестра носителей, поэтому повтор ТОГО ЖЕ кадра отбирает те же
- * источники, и перестановка носителей в реестре отбора не двигает. Но
- * «порядковый номер» у двух наборов разного происхождения: у сущности мира это
- * её sim-идентификатор, производный от данных, а у размещения (REND-11,
- * REND-18) — номер, выданный набором инстансов по порядку сведения
- * (`keyedInstanceSet.ts`). Смена вида размещения инстанс ПЕРЕСОЗДАЁТ, то есть
- * за сессию правки номер того же размещения может смениться, и тай-брейк между
- * двумя носителями с в точности равными оценками — перевернуться. Ключа
- * документа у подсистемы для этого нет: сведённый набор приносит ей позы и вид,
- * а не адреса записей (REND-18).
- */
-function lightCarrierKey(record: InstanceRecord): string {
-  return `${record.kind ?? ''}#${record.decoration ? 'd' : 'e'}${record.entity}`;
-}
-
-/**
- * Поза носителя в переиспользуемую запись (REND-33): ТА САМАЯ, которой инстанс
- * нарисован в этом кадре (REND-3), а не второй её расчёт. `false` — позы кадра
- * инстанс ещё не получил: в кадре его нет, и светить неоткуда.
- */
-function poseOfCarrier(record: InstanceRecord, out: LightCarrierPose): boolean {
-  if (!record.posed) return false;
-  out.x = record.pos.x;
-  out.y = record.pos.y;
-  out.z = record.pos.z;
-  out.qx = record.quat.x;
-  out.qy = record.quat.y;
-  out.qz = record.quat.z;
-  out.qw = record.quat.w;
-  return true;
-}
-
-/**
- * Опора контактного пятна инстанса (REND-30) — из ТОГО ЖЕ кадрового расчёта,
- * которым инстанс нарисован (REND-3), а не из второго прохода по поверхности.
- *
- * Отдаётся именно ОПОРА, а не поза: в позу входят дуга прыжка, полётная дуга и
- * снижение при провале (REND-12), и пятно, взятое с `pos.z`, взлетало бы вместе
- * с моделью — ровно в том случае, ради которого пятно и читаемо. По той же
- * причине рядом едет нормаль поверхности: горизонтальный круг на уклоне уходит
- * в грунт (см. `BlobCasterPose`).
- *
- * `false` — пятна в кадре нет, и оснований для этого три:
- *
- * - позы кадра инстанс ещё не получил;
- * - он отсечён пирамидой видимости (REND-21) — в кадре его нет вовсе;
- * - он НЕ ПРОЯВЛЕН ПОЛНОСТЬЮ (`fade < 1`, FOW-8). Последнее — не мелочь:
- *   поддерево инстанса растворяется прозрачностью, а пятно непрозрачности не
- *   имеет вовсе и осталось бы чёрным кругом под пустотой. Условие взято долей
- *   проявленности, а не флагом `fadingOut`, потому что дефект СИММЕТРИЧЕН:
- *   угасание «ушла в туман» и проявление вернувшегося из тумана (FOW-8) — одна
- *   и та же рампа, пройденная в разные стороны, и на обеих модели в кадре
- *   почти нет. REND-30 требует, чтобы пятно было ЧАСТЬЮ ПРЕДСТАВЛЕНИЯ инстанса,
- *   а представление на рампе — это доля `fade`.
- *
- * Доля пересчитывается в `poseAll` того же кадра, то есть ДО `blobCastersPosed`
- * (см. `updateFrame`), и вне рампы она равна единице по построению: у декораций
- * и при выключенном fade запись держит 1 всегда, так что ни один другой путь
- * пятна не теряет.
- */
-function poseOfBlob(record: InstanceRecord, out: BlobCasterPose): boolean {
-  if (!record.posed || !record.visible || record.fade < 1) return false;
-  out.x = record.pos.x;
-  out.y = record.pos.y;
-  out.z = record.seatZ;
-  const normal = record.seatNormal;
-  out.nx = normal.x;
-  out.ny = normal.y;
-  out.nz = normal.z;
-  return true;
-}
-
-/**
- * Опора кадра под инстансом — высота поверхности и её нормаль (REND-30, вход
- * `poseOfBlob`). Считается только при живом носителе пятна: выборка поверхности
- * стоит работы, а инстансу без носителя она не нужна ни для чего.
- *
- * Наземный инстанс уже стоит на опоре — её посчитал `baseHeightOf`, и второй
- * выборки высоты здесь не делается. У летящего (REND-12) поза и опора расходятся:
- * `baseHeightOf` ведёт его по прямой между высотами отрыва и приземления, а
- * пятно обязано лежать на поверхности ПОД ним — там его и берём.
- *
- * Правило посадки — то же, каким сажается сам инстанс (REND-9):
- * walkable-инстанс читает террейн-форму без walkable-вкладов, все прочие — поле
- * целиком. Нет поверхности либо override уровня (TERR-4) — опорой служит
- * посчитанная позой высота, а нормалью вертикаль: наклонять пятно не по чему.
- */
-function captureSeat(
-  record: InstanceRecord,
-  x: number,
-  y: number,
-  base: number,
-  surface: VisualSurface | null,
-  walkableSeat: boolean,
-): void {
-  if (record.blobCaster === null) return;
-  const normal = record.seatNormal;
-  // Порядок ветвей — тот же, что у `baseHeightOf`: манёвр решается ПЕРЕД
-  // override уровня, иначе опора летящего разошлась бы с его же позой.
-  const airborne = surface !== null && isAirborne(record.view);
-  if (surface === null || (!airborne && record.view.levelOverride)) {
-    record.seatZ = base;
-    normal.x = 0;
-    normal.y = 0;
-    normal.z = 1;
-    return;
-  }
-  if (walkableSeat) {
-    record.seatZ = airborne ? surface.terrainFormHeightAt(x, y) : base;
-    surface.terrainFormNormalAt(x, y, normal);
-    return;
-  }
-  record.seatZ = airborne ? surface.heightAt(x, y) : base;
-  surface.normalAt(x, y, normal);
-}
-
-/**
- * Радиус контактного пятна инстанса, мировые единицы (REND-30): половина
- * БОЛЬШЕГО горизонтального габарита нарисованного — габаритов BIND-ПОЗЫ
- * (`boundsOf`), тех же, которыми инстанс виден наружу (REND-3, REND-15).
- *
- * Не консервативные границы отсечения (ASSET-12, REND-21): те — объединение
- * ВСЕХ кадров всех клипов, то есть выпад атаки и распластанная смерть разом, и
- * пятно по ним раздуто всю жизнь юнита, а не в момент выпада. Отсечению
- * консервативность нужна (исчезнуть раньше юнита нельзя), пятну — нет: оно
- * повторяет след стоящего инстанса, и «те же данные, что у отсечения» спутали
- * бы безопасную границу с габаритом.
- *
- * Горизонтального, а не диагонального: пятно лежит на полу и повторяет след
- * инстанса, а высота модели к следу отношения не имеет — иначе башня отбрасывала
- * бы пятно во всю свою высоту. Габаритов ещё нет (модель не загружена, ASSET-4)
- * — радиус нулевой: пятно появится вместе с моделью, а не константой кода.
- */
-function blobRadiusOf(record: InstanceRecord): number {
-  const bounds = boundsOf(record);
-  if (bounds === null) return 0;
-  const width = Math.max(bounds.maxX - bounds.minX, bounds.maxY - bounds.minY);
-  return (width / 2) * Math.abs(record.scale);
-}
-
-/**
- * Ярус теневого кастера инстанса — ПРОИЗВОДНАЯ ДАННЫХ, а не поле записи
- * (design D3): инстанс presentation-состояния (REND-11) двигается тиками и
- * динамичен всегда; decoration (REND-18) статичен, пока запись его вида не
- * объявила анимации (REND-4), — тогда он в кадре меняет позу и обязан
- * попадать в покадровую карту.
- */
-function casterTierOf(record: InstanceRecord): ShadowCasterTier {
-  if (!record.decoration) return 'dynamic';
-  return animatedVisual(record.visual) ? 'dynamic' : 'static';
-}
-
-/** Есть ли у записи вида анимации (REND-4): пустая таблица — их отсутствие. */
-function animatedVisual(visual: EntityVisual | undefined): boolean {
-  const animations = visual?.animations;
-  if (animations === undefined) return false;
-  return (
-    Object.keys(animations.states ?? {}).length > 0 ||
-    Object.keys(animations.events ?? {}).length > 0
-  );
-}
-
-/**
- * Слушатель готовых слоёв батча: набор приезжает асинхронно (ASSET-4) и может
- * приехать ПОВТОРНО — после переподачи манифеста, правившей таблицу скинов
- * записи (REND-17). Прежние массивы текстур освобождаются здесь: они
- * принадлежат батчу, а не ассету (REND-3).
- */
-function batchSkinListener(
-  model: NormalizedModel,
-  materials: readonly VatMaterial[],
-  textures: THREE.DataArrayTexture[],
-): (set: BakedSkinSet) => void {
-  return (set) => {
-    for (const texture of textures) texture.dispose();
-    textures.length = 0;
-    applySkinArrays(model, materials, set, textures);
-  };
-}
-
-/**
- * Готовые слои вариантов — в материалы батча (REND-6). Массив текстур один на
- * пару «слот × вид карты»: цветовое пространство у карты нормалей своё, и
- * делить с ней текстуру базового цвета нельзя. Созданные массивы собираются в
- * `created`: освобождать их — дело того, кто их поставил.
- */
-/**
- * Ход доли проявления/угасания записи по кадрам, как снижение при провале
- * (FOW-8, design D7): угасание — полной длительностью конфига, проявление —
- * короткое (`FADE_IN_RATIO`). Модуль часов: направление задаёт состояние, а не
- * знак хода мира — на обратном ходе угасание не «проявляет» обратно. Decoration
- * не угасает никогда (REND-18) — его доля единица.
- */
-function advanceFade(record: InstanceRecord, settle: number, fadeSeconds: number): void {
-  if (fadeSeconds <= 0 || record.decoration) {
-    record.fade = 1;
-    return;
-  }
-  if (record.fadingOut) {
-    record.fade = Math.max(0, record.fade - settle / fadeSeconds);
-    return;
-  }
-  if (record.fade < 1) {
-    record.fade = Math.min(1, record.fade + settle / (fadeSeconds * FADE_IN_RATIO));
-  }
-}
-
-/**
- * Опорная высота записи в кадре. Сущность на поверхности стоит на визуальной
- * поверхности (рампы и кривизна, REND-9); с override уровня (TERR-4) — на
- * высоте уровня. Летящая — на переходе между высотами отрыва и приземления
- * (REND-12): дискретный уровень под ней в высоте прыжка не участвует, иначе
- * пересечение границы обрыва сдвигало бы инстанс на ступень.
- */
-function baseHeightOf(
-  view: EntityView,
-  t: number,
-  x: number,
-  y: number,
-  heightStep: number,
-  surface: VisualSurface | null,
-  walkableSeat: boolean,
-): number {
-  if (surface !== null && isAirborne(view)) {
-    // Фаза манёвра до первого его тика — ноль: на том тике манёвра ещё не
-    // было, и `prevMotionPhase` пришла как NaN.
-    const phasePrev = Number.isFinite(view.prevMotionPhase) ? view.prevMotionPhase : 0;
-    const phase = phasePrev + (view.currMotionPhase - phasePrev) * t;
-    maneuverEnds(
-      x,
-      y,
-      view.currX - view.prevX,
-      view.currY - view.prevY,
-      phase,
-      view.currMotionPhase - phasePrev,
-      SCRATCH_ENDS,
-    );
-    return jumpBase(
-      surface.heightAt(SCRATCH_ENDS.takeoffX, SCRATCH_ENDS.takeoffY),
-      surface.heightAt(SCRATCH_ENDS.landingX, SCRATCH_ENDS.landingY),
-      phase,
-    );
-  }
-  if (surface !== null && !view.levelOverride) {
-    return walkableSeat ? surface.terrainFormHeightAt(x, y) : surface.heightAt(x, y);
-  }
-  return (view.prevLevel + (view.currLevel - view.prevLevel) * t) * heightStep;
-}
-
-/**
- * Наклон по нормали поверхности (REND-10): только для сущностей на поверхности;
- * сглажен по кадрам, при snap — мгновенно (REND-2).
- */
-function poseTilt(
-  record: InstanceRecord,
-  x: number,
-  y: number,
-  surface: VisualSurface | null,
-  walkableSeat: boolean,
-  tiltRate: number,
-  settle: number,
-): void {
-  if (surface === null || record.tiltFactor <= 0 || record.view.levelOverride) {
-    record.tilt.x = 0;
-    record.tilt.y = 0;
-    return;
-  }
-  if (walkableSeat) surface.terrainFormNormalAt(x, y, SCRATCH_NORMAL);
-  else surface.normalAt(x, y, SCRATCH_NORMAL);
-  tiltTarget(SCRATCH_NORMAL, record.tiltFactor, record.tiltMaxRad, SCRATCH_TILT);
-  if (record.snapPending) {
-    record.tilt.x = SCRATCH_TILT.x;
-    record.tilt.y = SCRATCH_TILT.y;
-    return;
-  }
-  smoothTilt(record.tilt, SCRATCH_TILT, tiltRate, settle);
-}
-
-function applySkinArrays(
-  model: NormalizedModel,
-  materials: readonly VatMaterial[],
-  set: BakedSkinSet,
-  created: THREE.DataArrayTexture[],
-): void {
-  const cache = new Map<string, THREE.DataArrayTexture | null>();
-  model.materials.forEach((source, index) => {
-    const material = materials[index];
-    if (material !== undefined) applySkinMaps(source, material, set, cache, created);
-  });
-}
-
-/** Карты одного материала: слот записи → массивная текстура скина, через кэш. */
-function applySkinMaps(
-  source: NormalizedModel['materials'][number],
-  material: VatMaterial,
-  set: BakedSkinSet,
-  cache: Map<string, THREE.DataArrayTexture | null>,
-  created: THREE.DataArrayTexture[],
-): void {
-  for (const kind of VAT_MAP_KINDS) {
-    if (!material.maps.has(kind)) continue;
-    const slot = slotOfMap(source, kind);
-    if (slot === null) continue;
-    const cacheKey = `${slot}:${kind}`;
-    let texture = cache.get(cacheKey);
-    if (texture === undefined) {
-      texture = skinArrayTexture(set, slot, kind);
-      cache.set(cacheKey, texture);
-      if (texture !== null) created.push(texture);
-    }
-    if (texture === null) continue;
-    setSkinMap(material, kind, texture);
-  }
-}
-
-/** Слот текстуры записи материала под вид карты; null — карты у записи нет. */
-function slotOfMap(
-  source: NormalizedModel['materials'][number],
-  kind: VatMapKind,
-): number | null {
-  if (kind === 'base') return source.baseColorTexture;
-  if (kind === 'normal') return source.normalTexture;
-  return source.emissiveTexture;
-}
-
-/** Массивная текстура скина — в тот униформ материала, которому она адресована. */
-function setSkinMap(
-  material: VatMaterial,
-  kind: VatMapKind,
-  texture: THREE.DataArrayTexture,
-): void {
-  if (kind === 'base') material.uniforms.vatSkinBase.value = texture;
-  else if (kind === 'normal') material.uniforms.vatSkinNormal.value = texture;
-  else material.uniforms.vatSkinEmissive.value = texture;
-}
-
-/** Метрика экранного размера камеры — то, что от неё нужно выбору уровня. */
-interface ScreenScale {
-  /** Тангенс половины вертикального поля зрения; 0 — камера ортографическая. */
-  tanHalfFov: number;
-  /** Видимая высота кадра в мировых единицах у ортографической камеры. */
-  orthoHeight: number;
-}
-
-/**
- * Метрика камеры — в поданную запись; null — камера ни перспективная, ни
- * ортографическая (уровень тогда не выбирается вовсе). Пишет в `out`, а не
- * заводит запись: отсечение с выбором уровня идёт каждый кадр, и своей записи
- * на кадр у него быть не должно — тем же соображением здесь живут пирамида,
- * матрица и сфера.
- */
-function screenScaleOf(camera: THREE.Camera, out: ScreenScale): ScreenScale | null {
-  const perspective = camera as THREE.PerspectiveCamera;
-  if (perspective.isPerspectiveCamera) {
-    out.tanHalfFov = Math.tan(((perspective.fov / 2) * Math.PI) / 180);
-    out.orthoHeight = 0;
-    return out;
-  }
-  const ortho = camera as THREE.OrthographicCamera;
-  if (ortho.isOrthographicCamera) {
-    const height = (ortho.top - ortho.bottom) / (ortho.zoom || 1);
-    if (height <= 0) return null;
-    out.tanHalfFov = 0;
-    out.orthoHeight = height;
-    return out;
-  }
-  return null;
-}
-
-/**
- * Экранный размер инстанса — доля высоты кадра, которую занимает его
- * консервативная сфера (REND-22). Именно доля, а не пиксели: пороги записи
- * (ASSET-13) не должны зависеть от разрешения вьюпорта.
- */
-function screenSize(radius: number, distance: number, screen: ScreenScale): number {
-  if (screen.tanHalfFov > 0) {
-    const visible = Math.max(distance, 1e-6) * screen.tanHalfFov;
-    return radius / visible;
-  }
-  return (2 * radius) / screen.orthoHeight;
-}
-
-
-/**
- * Габариты нарисованного инстанса в его собственных осях: модель (детальный
- * ярус) либо запись батча, а до готовности — заглушка (ASSET-4). null — рисовать
- * нечего, и попадать не во что (REND-15). Один ответ на весь файл: прокси
- * picking'а и границы отсечения (REND-21) обязаны говорить об одном объёме.
- */
-function boundsOf(record: InstanceRecord): ModelBounds | null {
-  if (record.model !== null) return record.model.bounds;
-  if (record.batch !== null) return record.batch.bounds;
-  // Вид, который рисуют частицы (ASSET-14, REND-24), попадаем тем же способом,
-  // что модельный (REND-15, REND-18, REND-37): фиксированный объём.
-  if (record.emitter) return EMITTER_BOUNDS;
-  return record.placeholder === null ? null : PLACEHOLDER_BOUNDS;
-}
-
-/**
- * Консервативные границы по клипам (ASSET-12) — вход отсечения (REND-21); null
- * — производных у модели нет, и отсечение идёт по габаритам с запасом.
- */
-function cullBoundsOf(record: InstanceRecord): ModelBounds | null {
-  return record.batch?.cullBounds ?? record.cullBounds;
-}
-
-/**
- * Публичный вид инстанса поверх его записи: геттеры, а не копия полей, —
- * потребитель, взявший вид один раз, обязан видеть позу текущего кадра, а не ту,
- * что была в момент вызова.
- */
-function viewOf(record: InstanceRecord): ModelInstanceView {
-  const pose: InstancePose = {
-    get x(): number { return record.pos.x; },
-    get y(): number { return record.pos.y; },
-    get z(): number { return record.pos.z; },
-    get qx(): number { return record.quat.x; },
-    get qy(): number { return record.quat.y; },
-    get qz(): number { return record.quat.z; },
-    get qw(): number { return record.quat.w; },
-    get yaw(): number { return record.yaw; },
-    get scale(): number { return record.scale; },
-  };
-  return {
-    entity: record.entity,
-    decoration: record.decoration,
-    get tier(): VisualTier { return record.tier; },
-    get model(): ModelInstance | null { return record.model; },
-    get controller(): AnimationController | null { return record.controller; },
-    get placeholder(): boolean { return record.placeholder !== null; },
-    get visible(): boolean { return record.visible; },
-    get lodLevel(): number { return record.lodLevel; },
-    pose,
-    get bounds(): ModelBounds | null { return boundsOf(record); },
-  };
-}
-
-/**
- * Пересобирать ли инстанс под переподанной записью (REND-17). Граница проходит
- * по тому, что построено из разделяемых данных ассета (REND-3), по ярусу записи
- * (REND-20) и по ярусу теневого кастера (REND-8): другую модель, другой набор
- * её рисуемых частей и другой ярус правкой построенного не получить, а всё
- * прочее записи применяется на живом инстансе.
- */
-function rebuildsInstance(
-  before: EntityVisual | undefined,
-  after: EntityVisual | undefined,
-  fallbackTier: VisualTier,
-  decoration: boolean,
-): boolean {
-  if (before === after) return false;
-  if (before?.model !== after?.model) return true;
-  // Ярус сравнивается ДЕЙСТВУЮЩИЙ (REND-20, QUAL-1): под пресетом с детальным
-  // ярусом по умолчанию правка «убрать явный batched из записи» меняет ярус, а
-  // `resolveVisualTier` этого бы не увидел — он знает только умолчание кода.
-  if (declaredTier(before, fallbackTier) !== declaredTier(after, fallbackTier)) return true;
-  // Ярус теневого кастера decoration производен от наличия анимаций у записи
-  // (REND-4, design D3) и входит в ключ батча — однородность батча по ярусу
-  // иначе держалась бы на том, что запись не правили: дописанная автором
-  // таблица анимаций оставила бы декорацию в статическом батче, и её тень
-  // запеклась бы в кэшированную карту в позе покоя (REND-8).
-  if (decoration && animatedVisual(before) !== animatedVisual(after)) return true;
-  return !samePartSets(before?.hiddenParts, after?.hiddenParts);
-}
-
-/** Один и тот же набор скрытых частей (ASSET-6); порядок и отсутствие — не различия. */
-function samePartSets(before?: readonly number[], after?: readonly number[]): boolean {
-  if (before === after) return true;
-  const a = before ?? [];
-  const b = after ?? [];
-  return a.length === b.length && a.every((part) => b.includes(part));
-}
-
-/**
- * Совпадают ли подмены выбранного скина в двух записях (REND-6). Сравнивается
- * ровно выбранный скин: правка соседнего скина той же записи текстур этого
- * инстанса не меняет и переставлять их не повод (REND-17).
- */
-function sameSkinSlots(
-  before: EntityVisual | undefined,
-  after: EntityVisual | undefined,
-  skin: string | undefined,
-): boolean {
-  // Скина нет — подмен нет ни до, ни после: слоты модели идут как есть.
-  if (skin === undefined) return true;
-  return sameSlotMaps(before?.skins?.[skin], after?.skins?.[skin]);
-}
-
-/**
- * Совпадают ли таблицы скинов двух записей ЦЕЛИКОМ (REND-6). Этим и меряется
- * набор вариантов батча: он производен от всей таблицы — от списка имён (он
- * задаёт сквозные индексы) и от подмен каждого имени (они задают пиксели
- * слоёв), — а не от одного выбранного скина.
- */
-function sameSkinTables(
-  before: EntityVisual['skins'] | undefined,
-  after: EntityVisual['skins'] | undefined,
-): boolean {
-  if (before === after) return true;
-  const a = before ?? {};
-  const b = after ?? {};
-  const names = Object.keys(a);
-  if (names.length !== Object.keys(b).length) return false;
-  return names.every((name) => sameSlotMaps(a[name], b[name]));
-}
-
-/** Один и тот же набор подмен «слот → путь»; отсутствие обеих — совпадение. */
-function sameSlotMaps(
-  a: Readonly<Record<string, string>> | undefined,
-  b: Readonly<Record<string, string>> | undefined,
-): boolean {
-  if (a === b) return true;
-  if (a === undefined || b === undefined) return false;
-  const slots = Object.keys(a);
-  return slots.length === Object.keys(b).length && slots.every((slot) => a[slot] === b[slot]);
 }
