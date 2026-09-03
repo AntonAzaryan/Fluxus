@@ -30,7 +30,9 @@ import {
   type ValidationIssue,
   type ValidationRule,
 } from '@fluxus/editor-core';
-import { parseGltf, type GltfDocument } from './gltf.js';
+import { PAINT_CHANNEL } from './cells.js';
+import { meshDeclaresAttribute, parseGltf, type GltfDocument } from './gltf.js';
+import { sculptObjectsOf } from './sculpt.js';
 import { generateSpatialLayer, hasErrors, type Finding, type SpatialLayer } from './layer.js';
 import { generateCellLayer, withCellLayer } from './maps.js';
 import { hasSingleSemantic, normalizeDocument, type SemanticKind, type SourceObject } from './normalize.js';
@@ -120,16 +122,23 @@ async function readSource(
  * карты кривизны открывается и попадает в группу записи только под слой,
  * который импорт действительно перепишет (BLND-2).
  */
-function slotsOf(objects: readonly SourceObject[]): ImportSlots {
+function slotsOf(document: GltfDocument, objects: readonly SourceObject[]): ImportSlots {
   const has = (kind: SemanticKind): boolean => objects.some((object) => hasSingleSemantic(object, kind));
   // Скалпт-поверхность переписывает ОБА клеточных слоя (BLND-13).
   const sculpt = has('sculpt');
-  // Раскраска едет тем же grid-объектом террейна, что рампа и пол (BLND-14):
-  // канала у скалпт-поверхности нет, и её документ импорт не открывает.
+  // Раскраска едет либо клеточным каналом grid-объекта террейна — рядом с
+  // рампой и полом, — либо каналом sculpt-объектов (BLND-14). У скалпта
+  // спрашивается ОБЪЯВЛЕНИЕ канала: не объявлен ни одним объектом объединения
+  // — раскраски источник не даёт, и документ карты не открывается вовсе.
+  const painted =
+    has('terrain') ||
+    sculptObjectsOf(objects).some(
+      (object) => object.mesh !== null && meshDeclaresAttribute(document, object.mesh, PAINT_CHANNEL),
+    );
   return {
     terrain: sculpt || has('terrain'),
     curvature: sculpt || has('curvature'),
-    paint: has('terrain'),
+    paint: painted,
   };
 }
 
@@ -148,7 +157,7 @@ export async function runImport(request: ImportRequest): Promise<ImportResult> {
   const session = dryRun ? createImportSession() : (request.session ?? createImportSession());
   const target: ImportTarget = await openImportTarget(session, host, {
     scene,
-    slots: slotsOf(objects),
+    slots: slotsOf(document, objects),
     ...(request.manifest === undefined ? {} : { manifest: request.manifest }),
     ...(request.kinds === undefined ? {} : { kinds: request.kinds }),
     ...(request.binding === undefined ? {} : { binding: request.binding }),

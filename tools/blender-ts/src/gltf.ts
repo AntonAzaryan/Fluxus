@@ -425,6 +425,21 @@ function appendPrimitiveTriangles(
   for (const row of readAccessor(document, primitive.indices)) triangles.push(offset + (row[0] ?? 0));
 }
 
+/**
+ * Объявлен ли меш'ом пользовательский канал — по ЗАЯВКЕ примитива, без чтения
+ * аксессоров и буферов. Нужно тому, кто решает состав цели ДО разбора данных:
+ * документ производной карты открывается только под слой, который импорт
+ * действительно перепишет (BLND-2, BLND-14).
+ *
+ * Второй истины это не заводит: `readMeshGeometry` отдаёт `null` ровно у канала,
+ * не объявленного ни одним примитивом, — то же условие, что и здесь.
+ */
+export function meshDeclaresAttribute(document: GltfDocument, mesh: number, name: string): boolean {
+  const def = document.json.meshes?.[mesh];
+  if (def === undefined) return false;
+  return (def.primitives ?? []).some((primitive) => primitive.attributes?.[name] !== undefined);
+}
+
 export function readMeshGeometry(
   document: GltfDocument,
   mesh: number,

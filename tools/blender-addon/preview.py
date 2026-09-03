@@ -451,7 +451,7 @@ def ensure_paint_material(rebuild=False):
 
 
 class FLUXUS_OT_paint_preview(bpy.types.Operator):
-    """Материал предпросмотра раскраски на объект террейна (BLND-14)"""
+    """Материал предпросмотра раскраски на объекты террейна или скалпта (BLND-14)"""
 
     bl_idname = "fluxus.paint_preview"
     bl_label = "Превью раскраски"
@@ -464,16 +464,23 @@ class FLUXUS_OT_paint_preview(bpy.types.Operator):
     )
 
     def execute(self, context):
-        from .grids import TERRAIN_KEY, resolve_grid
+        from .grids import TERRAIN_KEY, resolve_grid, sculpt_objects
 
-        obj = resolve_grid(context, TERRAIN_KEY)
-        if obj is None:
-            self.report({"ERROR"}, "в сцене нет объекта со свойством %r (BLND-3)" % TERRAIN_KEY)
-            return {"CANCELLED"}
+        # Материал читает АТРИБУТ и о клетках ничего не знает, поэтому он ложится
+        # и на скалпт-поверхность (BLND-13): у неё раскраска живёт в том же
+        # `_PAINT`, только сэмплируется импортом в центрах клеток (BLND-14).
+        targets = sculpt_objects(context.scene)
+        if not targets:
+            grid = resolve_grid(context, TERRAIN_KEY)
+            if grid is None:
+                self.report({"ERROR"}, "в сцене нет объекта со свойством %r либо `sculpt` (BLND-3)" % TERRAIN_KEY)
+                return {"CANCELLED"}
+            targets = [grid]
         material = ensure_paint_material(self.rebuild)
-        if material.name not in obj.data.materials:
-            obj.data.materials.append(material)
-        self.report({"INFO"}, "превью раскраски на объекте %s" % obj.name)
+        for obj in targets:
+            if material.name not in obj.data.materials:
+                obj.data.materials.append(material)
+        self.report({"INFO"}, "превью раскраски на объектах: %s" % ", ".join(obj.name for obj in targets))
         return {"FINISHED"}
 
 

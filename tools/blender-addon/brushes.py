@@ -22,6 +22,15 @@
 
 Границы уровней приходят из алфавита опубликованной схемы (TERR-3), размеры
 сетки — из ассета террейна сцены (TERR-2): своих чисел у кисти нет (BLND-8).
+
+**Скалпт красится объектами, а не клетками (BLND-14).** У sculpt-поверхности
+клеточной сетки нет вовсе: слот сэмплируется в центре клетки у геометрии
+верхнего пересечения, а вершины попавшей грани обязаны нести одно значение.
+Мазок по вершинам сваренного меша давал бы расходящиеся грани на каждой границе
+двух покрытий — то есть отказ импорта там, где автор ничего плохого не делал, —
+поэтому раскраска скалпта здесь заливка объекта целиком (`_sculpt_paint_fill`):
+единогласие по построению и та же модель «объект — слот», которой собрана
+арена из примитивов (BLND-13).
 """
 
 import bpy
@@ -35,15 +44,19 @@ from .grids import (
     NOFLOOR_ATTRIBUTE,
     PAINT_ATTRIBUTE,
     RAMP_ATTRIBUTE,
+    SCULPT_KEY,
     TERRAIN_KEY,
     cell_attribute,
     cell_height,
     cell_index,
     ensure_int_attribute,
+    fill_object_attribute,
     grid_dimensions,
+    object_attribute_value,
     resolve_grid,
     set_cell_attribute,
     set_cell_height,
+    sculpt_objects,
 )
 
 
@@ -66,6 +79,16 @@ class GridBrushBase:
     def _prepare(self, context):
         self.grid = resolve_grid(context, self.grid_key)
         if self.grid is None:
+            if sculpt_objects(context.scene):
+                # У скалпт-арены клеточной сетки нет вовсе (BLND-13), и кисть по
+                # клеткам ей не подходит: рельеф правится самим мешем, а
+                # раскраска — заливкой объекта (BLND-14).
+                self.report(
+                    {"ERROR"},
+                    "в сцене sculpt-поверхность: клеточных кистей у неё нет, "
+                    "раскраска — оператором fluxus.sculpt_paint_fill (BLND-13, BLND-14)",
+                )
+                return False
             self.report({"ERROR"}, "в сцене нет объекта со свойством %r (BLND-3)" % self.grid_key)
             return False
         if self.grid.type != "MESH":
@@ -302,6 +325,66 @@ class FLUXUS_OT_terrain_paint_brush(GridBrushBase, bpy.types.Operator):
         return True
 
 
+class FLUXUS_OT_sculpt_paint_fill(bpy.types.Operator):
+    """Кисть раскраски по sculpt-объектам: слот покрытия объекту целиком (BLND-14)"""
+
+    bl_idname = "fluxus.sculpt_paint_fill"
+    bl_label = "Раскрасить sculpt-объект"
+    bl_options = {"REGISTER", "UNDO"}
+
+    action: bpy.props.EnumProperty(
+        name="Действие",
+        items=(
+            ("SET", "Красить", "Залить выбранные sculpt-объекты слотом кисти"),
+            ("PICK", "Взять", "Взять слот активного sculpt-объекта в настройки кисти"),
+        ),
+        default="SET",
+    )
+
+    @classmethod
+    def poll(cls, context):
+        return context.mode == "OBJECT"
+
+    def _targets(self, context):
+        """Выбранные sculpt-объекты, а нет выбора — активный, если он sculpt."""
+        chosen = [obj for obj in context.selected_objects if SCULPT_KEY in obj.keys() and obj.type == "MESH"]
+        if chosen:
+            return chosen
+        active = context.active_object
+        if active is not None and active.type == "MESH" and SCULPT_KEY in active.keys():
+            return [active]
+        return []
+
+    def execute(self, context):
+        settings = context.scene.fluxus
+        targets = self._targets(context)
+        if not targets:
+            self.report({"ERROR"}, "выберите объект со свойством %r (BLND-3)" % SCULPT_KEY)
+            return {"CANCELLED"}
+
+        if self.action == "PICK":
+            # Пипетка: слот активного объекта уезжает в настройки, сам объект
+            # не меняется. Атрибута нет — объект раскраски не несёт, и это не
+            # «слот 0»: разница значима для импорта (BLND-14).
+            value = object_attribute_value(targets[0].data, PAINT_ATTRIBUTE)
+            if value is None:
+                self.report({"WARNING"}, "объект %s не несёт канала %s" % (targets[0].name, PAINT_ATTRIBUTE))
+                return {"CANCELLED"}
+            settings.brush_paint_slot = value
+            return {"FINISHED"}
+
+        painted = 0
+        for obj in targets:
+            if fill_object_attribute(obj.data, PAINT_ATTRIBUTE, settings.brush_paint_slot):
+                painted += 1
+                continue
+            self.report({"ERROR"}, "атрибут %s объекта %s занят другим доменом" % (PAINT_ATTRIBUTE, obj.name))
+        if painted == 0:
+            return {"CANCELLED"}
+        self.report({"INFO"}, "слот %d: объектов %d" % (settings.brush_paint_slot, painted))
+        return {"FINISHED"}
+
+
 class FLUXUS_OT_curvature_brush(GridBrushBase, bpy.types.Operator):
     """Кисть кривизны: визуальное смещение узлов сетки (BLND-10)"""
 
@@ -496,6 +579,7 @@ OPERATORS = (
     FLUXUS_OT_terrain_level_brush,
     FLUXUS_OT_terrain_flag_brush,
     FLUXUS_OT_terrain_paint_brush,
+    FLUXUS_OT_sculpt_paint_fill,
     FLUXUS_OT_curvature_brush,
 )
 

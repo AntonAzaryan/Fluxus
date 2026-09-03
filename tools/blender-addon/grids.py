@@ -192,6 +192,41 @@ def set_cell_level(mesh, index, level):
     set_cell_height(mesh, index, float(level) * LEVEL_UNIT)
 
 
+#: Семантическое свойство скалпт-поверхности (BLND-3, BLND-13).
+SCULPT_KEY = "sculpt"
+
+
+def sculpt_objects(scene):
+    """Меши сцены со свойством `sculpt` — объединение поверхности (BLND-13)."""
+    return [obj for obj in scene.objects if SCULPT_KEY in obj.keys() and obj.type == "MESH"]
+
+
+def fill_object_attribute(mesh, name, value):
+    """
+    Значение целочисленного атрибута ВСЕМ вершинам меша — раскраска
+    sculpt-объекта целиком (BLND-14).
+
+    Клеток у скалпта нет: слот сэмплируется в центре клетки у геометрии
+    верхнего пересечения, а вершины попавшей грани обязаны нести одно значение.
+    Заливка объекта единогласие даёт по построению — покрасить грань «наполовину»
+    ею невозможно, — и совпадает с моделью авторинга «объект — слот».
+    """
+    attribute = ensure_int_attribute(mesh, name)
+    if attribute is None:
+        return False
+    attribute.data.foreach_set("value", [int(value)] * len(attribute.data))
+    mesh.update()
+    return True
+
+
+def object_attribute_value(mesh, name):
+    """Значение атрибута у первой вершины меша; `None` — атрибута нет вовсе."""
+    attribute = mesh.attributes.get(name)
+    if attribute is None or len(attribute.data) == 0:
+        return None
+    return int(attribute.data[0].value)
+
+
 def find_object_with_key(scene, key):
     """Первый объект сцены с этим семантическим свойством (BLND-3)."""
     for obj in scene.objects:
