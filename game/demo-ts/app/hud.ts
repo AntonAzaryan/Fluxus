@@ -28,6 +28,7 @@ import {
   minimapWidgetKind,
   pauseOverlayKind,
   runtimeKind,
+  type HudAnchorSource,
   type HudCameraContract,
   type HudComposition,
   type HudControlChannel,
@@ -265,11 +266,19 @@ export function demoHudComposition(capabilities: DemoShellCapabilities): HudComp
         bindings: { hero: 'hero.entity' },
       },
       {
-        // Полоса здоровья под портретом — та же зона, следующая запись.
+        // Полоса здоровья — НАД ГЕРОЕМ по мировому якорю (HUD-10), а не под
+        // портретом: место на экране ей даёт проекция, которую публикует рендер
+        // (`rendering` REND-41), и идёт она вместе с камерой. Зона записи
+        // остаётся её домом в композиции; смещение поднимает полосу над
+        // макушкой на десяток пикселей, чтобы она не села на неё вплотную.
+        //
+        // Виджет тот же, что стоял в зоне, и кода его это не коснулось ни
+        // строкой: размещение объявлено записью (HUD-4, HUD-10).
         widget: 'hp-bar',
         zone: 'bottom-left',
         params: { stat: STATS.hp, maxStat: STATS.hpMax },
         bindings: { entity: 'hero.entity' },
+        anchor: { entity: 'entity', offsetY: -10 },
       },
     ],
   };
@@ -307,6 +316,12 @@ export interface DemoHudOptions {
    * вида (FOW-7, FOW-10). Сцена без тумана источника не передаёт.
    */
   readonly fog?: MinimapFogSource;
+  /**
+   * Источник мировых якорей (HUD-10) — служба рендера (`rendering` REND-41).
+   * Нет источника — якорные виджеты монтируются скрытыми: HUD без рендера
+   * (headless-прогон, тест композиции) обязан собираться.
+   */
+  readonly anchors?: HudAnchorSource;
 }
 
 export interface DemoHud {
@@ -418,6 +433,11 @@ export function createDemoHud(options: DemoHudOptions): DemoHud {
     camera: options.camera,
     control: options.control,
   });
-  const runtime = new HudRuntime({ registry, host, actions: facade });
+  const runtime = new HudRuntime({
+    registry,
+    host,
+    actions: facade,
+    ...(options.anchors !== undefined ? { anchors: options.anchors } : {}),
+  });
   return { runtime, facade, root: host.root };
 }

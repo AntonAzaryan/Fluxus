@@ -10,6 +10,7 @@
  */
 import { describe, expect, it, vi } from 'vitest';
 import * as THREE from 'three';
+import { validateCurvatureMap, type TerrainCurvatureMap } from '@fluxus/assets';
 import {
   FogSubsystem,
   ModelsSubsystem,
@@ -925,5 +926,165 @@ describe('render.memory: живые ресурсы рендерера (RDBG-1, R
     // «Не измерено» и «ноль живых» — разные утверждения: нулём числа набора
     // читались бы как отсутствие ресурсов (RDBG-7).
     expect(probeOf(layer)?.noData).toContain('renderer.info.memory');
+  });
+});
+
+// ------------------------------- клетка на визуальной поверхности (RDBG-3)
+
+function curvatureMap(width: number, height: number, rows: number[][]): TerrainCurvatureMap {
+  const result = validateCurvatureMap({ width, height, rows });
+  if (!result.ok) throw new Error(result.errors.join('; '));
+  return result.map;
+}
+
+/**
+ * Полигон словаря лежит НА визуальной поверхности (REND-9), а не на её хорде.
+ * Строителей у «клетки на поверхности» было два разной точности — наложения
+ * дробили клетку по тесселяции, отладка сэмплировала одни вершины, — и правило
+ * у них теперь общее (`surfaceCells.ts`).
+ */
+describe('RDBG-3: полигон ложится на визуальную поверхность (REND-9)', () => {
+  /** Слой над сеткой с кривизной; `draw` рисует ровно одну клетку полигоном. */
+  function paintCell(
+    curvature: TerrainCurvatureMap | null,
+    cellX: number,
+    cellY: number,
+  ): { layer: RenderDebugLayer; scene: THREE.Scene; surface: VisualSurfaceSource } {
+    const scene = new THREE.Scene();
+    const context = { ...makeRenderContext(), scene };
+    const grid = flatGrid(3);
+    const surface = new VisualSurfaceSource(grid);
+    surface.init(context);
+    if (curvature !== null) surface.setCurvature(curvature);
+    const layer = new RenderDebugLayer(new PresentationStage(context), { scene, surface });
+    layer.register<DebugProbe>({
+      id: 'x.cell',
+      probe: () => ({}),
+      draw: (_probe, out) => {
+        out.polygon(
+          [cellX, cellY, cellX + 1, cellY, cellX + 1, cellY + 1, cellX, cellY + 1],
+          0xffffff,
+        );
+      },
+    });
+    layer.setEnabled('x.cell', true);
+    layer.frame(frameState(null));
+    return { layer, scene, surface };
+  }
+
+  it('плоская клетка идёт быстрым путём: два треугольника, как и было', () => {
+    const { layer } = paintCell(null, 1, 1);
+    expect(layer.vertexCount).toBe(6);
+  });
+
+  it('клетка с кривизной дробится, и вершины лежат на поле, а не на веере сквозь холм', () => {
+    // Северный ряд узлов поднят: внутри клетки (1,1) поле квадратично по Y.
+    const curvature = curvatureMap(3, 3, [
+      [14, 14, 14, 14],
+      [7, 7, 7, 7],
+      [0, 0, 0, 0],
+      [0, 0, 0, 0],
+    ]);
+    const { layer, scene, surface } = paintCell(curvature, 1, 1);
+    expect(surface.current!.hasCellCurvature(1, 1)).toBe(true);
+    // Дробление есть: одной парой треугольников клетка больше не рисуется.
+    expect(layer.vertexCount).toBeGreaterThan(6);
+
+    // Каждая вершина стоит на поле (с общим подъёмом наложения над ним).
+    const triangles = [...scene.children[0]!.children].find(
+      (child) => (child as THREE.Mesh).type === 'Mesh',
+    ) as THREE.Mesh;
+    const position = triangles.geometry.getAttribute('position') as THREE.BufferAttribute;
+    const count = triangles.geometry.drawRange.count;
+    let lifted = 0;
+    for (let i = 0; i < count; i += 1) {
+      const x = position.getX(i);
+      const y = position.getY(i);
+      const z = position.getZ(i);
+      const field = surface.current!.heightAt(x, y);
+      // Вершина стоит на поле с общим подъёмом наложения над ним; хорда сквозь
+      // холм ушла бы от поля куда дальше этого подъёма.
+      expect(Math.abs(z - field)).toBeLessThan(0.1);
+      if (field > 1e-6) lifted += 1;
+    }
+    // Тест не вырожден: часть вершин стоит ВЫШЕ нуля, то есть на самом холме.
+    expect(lifted).toBeGreaterThan(0);
+  });
+});
+
+// ------------------------------------- точка освобождения слоя (REND-31)
+
+describe('REND-31: снос отладочного слоя отдаёт его ресурсы', () => {
+  /** Все геометрии, материалы и текстуры поддерева — вход шпионов сноса. */
+  function resourcesOf(root: THREE.Object3D): {
+    geometries: THREE.BufferGeometry[];
+    materials: THREE.Material[];
+    textures: THREE.Texture[];
+  } {
+    const geometries: THREE.BufferGeometry[] = [];
+    const materials: THREE.Material[] = [];
+    const textures: THREE.Texture[] = [];
+    root.traverse((child) => {
+      const mesh = child as Partial<THREE.Mesh>;
+      if (mesh.geometry !== undefined) geometries.push(mesh.geometry);
+      const material = mesh.material as THREE.Material | undefined;
+      if (material === undefined) return;
+      materials.push(material);
+      const map = (material as { map?: THREE.Texture | null }).map;
+      if (map !== undefined && map !== null) textures.push(map);
+    });
+    return { geometries, materials, textures };
+  }
+
+  it('носители и растровые плашки отданы, группа снята со сцены (ED-15)', () => {
+    const scene = new THREE.Scene();
+    const layer = new RenderDebugLayer(new PresentationStage(makeRenderContext()), { scene });
+    layer.register<DebugProbe>({
+      id: 'x.everything',
+      probe: () => ({}),
+      draw: (_probe, out) => {
+        out.point(1, 1, 1, 0xffffff);
+        out.segment(0, 0, 0, 1, 1, 1, 0xffffff);
+        out.polygon([0, 0, 1, 0, 1, 1], 0xffffff);
+        out.raster(
+          {
+            raster: true,
+            texels: new Uint8Array(4),
+            widthTexels: 2,
+            heightTexels: 2,
+            worldX: 0, worldY: 0, worldZ: 0,
+            worldWidth: 2, worldHeight: 2,
+          },
+          0xffffff,
+        );
+      },
+    });
+    layer.setEnabled('x.everything', true);
+    layer.frame(frameState(null));
+    expect(scene.children).toHaveLength(1);
+
+    const { geometries, materials, textures } = resourcesOf(scene.children[0]!);
+    // Три носителя плюс плашка растра.
+    expect(geometries.length).toBeGreaterThanOrEqual(4);
+    expect(materials.length).toBeGreaterThanOrEqual(4);
+    expect(textures).toHaveLength(1);
+    const spies = [...geometries, ...materials, ...textures].map((resource) =>
+      vi.spyOn(resource, 'dispose'),
+    );
+
+    layer.dispose();
+    for (const spy of spies) expect(spy).toHaveBeenCalledTimes(1);
+    expect(scene.children).toHaveLength(0);
+  });
+
+  it('снос идемпотентен: повторный вызов ресурс дважды не отдаёт', () => {
+    const scene = new THREE.Scene();
+    const layer = new RenderDebugLayer(new PresentationStage(makeRenderContext()), { scene });
+    layer.register(stubSource('x.quiet'));
+    layer.setEnabled('x.quiet', true);
+    layer.frame(frameState(null));
+    layer.dispose();
+    expect(() => { layer.dispose(); }).not.toThrow();
+    expect(scene.children).toHaveLength(0);
   });
 });

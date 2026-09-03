@@ -17,6 +17,16 @@ import { HUD_ZONES, type HudZoneName } from './zones.js';
 export const HUD_ZONE_ATTR = 'data-hud-zone';
 
 /**
+ * Атрибут якорного слоя (HUD-10): виджеты, размещённые по мировому якорю
+ * (`rendering` REND-41), живут в нём, а не в клетках сетки зон — их место
+ * задают пиксели кадра, и в поток сетки они не встают.
+ */
+export const HUD_ANCHOR_LAYER_ATTR = 'data-hud-anchors';
+
+/** Атрибут держателя одного якорного виджета — по нему его находят тесты. */
+export const HUD_ANCHOR_ATTR = 'data-hud-anchor';
+
+/**
  * Корень: растянут по контейнеру, прозрачен для указателя (HUD-3) и не
  * участвует в кадре рендера — это DOM над canvas, а не его часть.
  */
@@ -30,6 +40,36 @@ const ROOT_STYLE: Readonly<Record<string, string>> = {
 };
 
 const ALIGNMENTS = ['start', 'center', 'end'] as const;
+
+/**
+ * Якорный слой: растянут по контейнеру поверх сетки зон и, как она, прозрачен
+ * для указателя (HUD-3) — перехват остаётся только на объявленном интерактиве.
+ * Он лежит В ТОЙ ЖЕ клетке сетки, что и центральная зона, и растянут на всю
+ * сетку: собственного `position: relative` у корня нет, а абсолютное
+ * позиционирование внутри `grid` считается от него же.
+ */
+const ANCHOR_LAYER_STYLE: Readonly<Record<string, string>> = {
+  'grid-row': '1 / -1',
+  'grid-column': '1 / -1',
+  position: 'relative',
+  'justify-self': 'stretch',
+  'align-self': 'stretch',
+  'pointer-events': 'none',
+};
+
+/**
+ * Держатель одного якорного виджета: точка в кадре плюс перенос «по центру и
+ * НАД точкой». Якорь публикуется над макушкой инстанса (REND-41), и виджет,
+ * поставленный левым верхним углом в эту точку, накрывал бы юнита собой.
+ */
+const ANCHOR_HOLDER_STYLE: Readonly<Record<string, string>> = {
+  position: 'absolute',
+  left: '0',
+  top: '0',
+  'pointer-events': 'none',
+  // До первого кадра якоря нет, и показывать виджет негде (HUD-10).
+  display: 'none',
+};
 
 /** Место зоны в сетке 3×3: порядок `HUD_ZONES` — строки сверху, колонки слева. */
 function zoneStyle(index: number): Record<string, string> {
@@ -55,20 +95,40 @@ export function interactive(node: HudNode): HudNode {
 }
 
 /**
- * Чистое описание оверлея — корень с девятью зонами; тест обходит его без
- * браузера. `onZone` отдаёт материализованные контейнеры зон хосту.
+ * Чистое описание оверлея — корень с девятью зонами и якорным слоем (HUD-10);
+ * тест обходит его без браузера. `onZone` отдаёт материализованные контейнеры
+ * зон хосту, `onAnchors` — якорный слой.
  */
-export function overlayNode(onZone?: (zone: HudZoneName, element: Element) => void): HudNode {
+export function overlayNode(
+  onZone?: (zone: HudZoneName, element: Element) => void,
+  onAnchors?: (element: Element) => void,
+): HudNode {
   return el('div', {
     attrs: { 'data-hud-root': 'true' },
     style: ROOT_STYLE,
-    children: HUD_ZONES.map((zone, index) =>
+    children: [
+      ...HUD_ZONES.map((zone, index) =>
+        el('div', {
+          attrs: { [HUD_ZONE_ATTR]: zone },
+          style: zoneStyle(index),
+          ...(onZone !== undefined ? { ref: (element: Element) => { onZone(zone, element); } } : {}),
+        }),
+      ),
       el('div', {
-        attrs: { [HUD_ZONE_ATTR]: zone },
-        style: zoneStyle(index),
-        ...(onZone !== undefined ? { ref: (element: Element) => { onZone(zone, element); } } : {}),
+        attrs: { [HUD_ANCHOR_LAYER_ATTR]: 'true' },
+        style: ANCHOR_LAYER_STYLE,
+        ...(onAnchors !== undefined ? { ref: onAnchors } : {}),
       }),
-    ),
+    ],
+  });
+}
+
+/** Держатель якорного виджета как описание — тот же путь материализации. */
+export function anchorHolderNode(child: HudNode): HudNode {
+  return el('div', {
+    attrs: { [HUD_ANCHOR_ATTR]: 'true' },
+    style: ANCHOR_HOLDER_STYLE,
+    children: [child],
   });
 }
 
@@ -82,12 +142,18 @@ export class HudOverlayHost {
 
   private readonly doc: Document;
   private readonly zones = new Map<HudZoneName, Element>();
+  private anchorLayer: Element | null = null;
 
   constructor(container: Element) {
     this.doc = container.ownerDocument;
     this.root = renderNode(
       this.doc,
-      overlayNode((zone, element) => this.zones.set(zone, element)),
+      overlayNode(
+        (zone, element) => this.zones.set(zone, element),
+        (element) => {
+          this.anchorLayer = element;
+        },
+      ),
     );
     container.append(this.root);
   }
@@ -106,7 +172,20 @@ export class HudOverlayHost {
     return element;
   }
 
-  /** Убирает размещённый элемент виджета из его зоны. */
+  /**
+   * Материализует описание виджета в ДЕРЖАТЕЛЕ якорного слоя (HUD-10) и
+   * возвращает держатель: двигает его исполнитель, а виджет о своём размещении
+   * не знает вовсе. Держатель и есть то, что снимает `remove`.
+   */
+  placeAnchored(node: HudNode): Element {
+    const layer = this.anchorLayer;
+    if (layer === null) throw new Error('оверлей: якорный слой не материализован');
+    const holder = renderNode(this.doc, anchorHolderNode(node));
+    layer.append(holder);
+    return holder;
+  }
+
+  /** Убирает размещённый элемент виджета из его зоны либо якорного слоя. */
   remove(element: Element): void {
     element.remove();
   }

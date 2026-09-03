@@ -173,8 +173,13 @@ export type {
   FollowTarget,
 } from './camera/rig.js';
 // Сэмпл ввода камеры и edge-pan — вход рига, заполняемый обвязкой окна (CAM-1).
-export { createCameraInput, resetCameraInput, edgePanAxes } from './camera/input.js';
-export type { CameraInput } from './camera/input.js';
+export {
+  createCameraInput,
+  createEdgePanAxes,
+  edgePanAxes,
+  resetCameraInput,
+} from './camera/input.js';
+export type { CameraInput, EdgePanAxes } from './camera/input.js';
 // Источник поверхности и границ камеры над сеткой террейна (CAM-2, CAM-7).
 export { terrainGroundApi } from './camera/terrainSource.js';
 export type { TerrainCameraSource } from './camera/terrainSource.js';
@@ -403,6 +408,23 @@ export type {
   PickProxyVisitor,
   ViewportPickingOptions,
 } from './picking.js';
+// Мировые якоря инстансов (REND-41): проекция точки над нарисованным инстансом
+// в координаты кадра — вход экранного слоя (`match-hud` HUD-10). Проекцию
+// считает рендер той же посадкой позы, которой нарисован кадр (CAM-1).
+export { ScreenAnchors } from './screenAnchors.js';
+export type {
+  AnchorInstanceSource,
+  AnchorRequest,
+  ScreenAnchor,
+  ScreenAnchorsOptions,
+  ScreenViewport,
+} from './screenAnchors.js';
+
+// Проекция курсора на визуальную поверхность (REND-42): общая под picking'ом
+// (REND-15) и прямой вход игрового клиента — прицел ложится на тот пол, который
+// игрок видит, а не на плоскость под камерой.
+export { CursorSurface, DEFAULT_CURSOR_CELL_STEPS } from './cursorSurface.js';
+export type { CursorSurfaceOptions } from './cursorSurface.js';
 // Контракты наведения: их разделяют сервис и марш по полю высот (REND-15).
 export { createPickRay } from './pickContracts.js';
 export type { PickHit, PickKind, PickRay, ViewportPoint } from './pickContracts.js';

@@ -157,6 +157,27 @@ function bareStage(): PresentationStage {
   return stage;
 }
 
+/**
+ * Сцена без пост-обработки и без воды, но со светом, моделями и частицами:
+ * `performance` называет ручки первых двух и потому неприменим целиком, а
+ * `balanced` их не называет и применяется. Объявляемым владельцем ни
+ * `postprocess`, ни `water` сборкой не назван — в игре они регистрируются
+ * всегда, и отсутствие их ручек в реестре здесь означает именно то, что должно:
+ * документ говорит про подсистему, которой в этой сцене нет.
+ */
+function bareLightingRig(): PresentationStage {
+  const empty: VisualManifest = { entities: {} };
+  const stage = new PresentationStage(demoContext());
+  const grid = flatGrid();
+  const lighting = new LightingSubsystem({ grid });
+  stage.register(lighting);
+  stage.register(new TerrainSubsystem(grid, { shadows: lighting }));
+  stage.register(new ModelsSubsystem(empty, { shadows: lighting, warn: () => {} }));
+  stage.register(new EffectsSubsystem(empty, { warn: () => {} }));
+  stage.register(new ParticlesSubsystem(empty, { warn: () => {} }));
+  return stage;
+}
+
 /** Действующие значения ручек как обычный объект — так их удобно сравнивать. */
 function effectiveOf(preset: QualityPresetName | null): Record<string, QualityValue> {
   const controller = new QualityController(
@@ -443,10 +464,14 @@ describe('контроллер качества демо (QUAL-1, design D2)', (
     expect(fog.config.resolution).toBe(SCENE_FOG.resolution);
   });
 
-  it('документ, отвергнутый реестром, — громкая ошибка и запасной balanced', () => {
-    // Сцена без тумана (`SceneDef.fog !== true`): ручки маски реестр не
-    // объявлял, и `performance` для такой сцены неприменим целиком (QUAL-1) —
-    // молча применить половину документа контроллер не вправе.
+  /**
+   * Сцена без тумана (`SceneDef.fog !== true`) — не повод отвергнуть документ,
+   * написанный про СБОРКУ (QUAL-1, находка P-7 аудита рендера). Подсистему
+   * тумана демо строить умеет, и `fog` объявлен в `DEMO_DECLARABLE_SUBSYSTEMS`:
+   * ручка непостроенного владельца ждёт его регистрации, а игрок получает
+   * выбранный им уровень качества, а не молча запасной.
+   */
+  it('сцена без тумана применяет performance целиком, а не уводит на запасной (QUAL-1)', () => {
     const rig = demoRig({ fog: false });
     const said: string[] = [];
 
@@ -455,8 +480,37 @@ describe('контроллер качества демо (QUAL-1, design D2)', (
       warn: (message) => said.push(message),
     });
 
+    expect(quality.current).toBe('performance');
+    expect(said).toEqual([]);
+    // Ручки ПОСТРОЕННЫХ подсистем при этом действуют как написано в документе,
+    // а ручки тумана в реестре просто нет — её и раздавать некому.
+    const effective = quality.controller.effective();
+    expect(effective.get('models.lodThresholdScale')).toBe(
+      QUALITY_PRESETS.performance['models.lodThresholdScale'],
+    );
+    expect(effective.get('terrain.curvatureTessellation')).toBe(
+      QUALITY_PRESETS.performance['terrain.curvatureTessellation'],
+    );
+    expect(effective.has('fog.maskResolution')).toBe(false);
+    expect(quality.select('ultra')).toBe('ultra');
+    expect(quality.select('performance')).toBe('performance');
+  });
+
+  it('документ, отвергнутый реестром, — громкая ошибка и запасной balanced', () => {
+    // Сцена без пост-обработки и без воды: их владельцев сборка объявляемыми не
+    // называет (они регистрируются всегда), и `performance` для такой сцены
+    // неприменим целиком (QUAL-1) — молча применить половину документа
+    // контроллер не вправе. `balanced` их ручек не называет и применяется.
+    const rig = bareLightingRig();
+    const said: string[] = [];
+
+    const quality = createDemoQuality(rig, {
+      preset: 'performance',
+      warn: (message) => said.push(message),
+    });
+
     expect(quality.current).toBe('balanced');
-    expect(said.some((message) => message.includes('fog.maskResolution'))).toBe(true);
+    expect(said.some((message) => message.includes('postprocess.bloom'))).toBe(true);
     expect(said.some((message) => message.includes('performance'))).toBe(true);
     // Остальные документы отказ соседа не задевает.
     expect(quality.select('ultra')).toBe('ultra');
@@ -517,12 +571,13 @@ describe('выбор, сделанный до сборки сцены, дожи�
   });
 
   it('показывается применённое: отвергнутый документ уводит сборку на запасной', () => {
-    // Сцена без тумана: `performance` неприменим целиком (QUAL-1).
-    const rig = demoRig({ fog: false });
+    // Сцена без пост-обработки и воды: `performance` неприменим целиком (QUAL-1),
+    // и объявляемым владельцем ни один из них не назван — они строятся всегда.
+    const stage = bareLightingRig();
     const selection = createQualitySelection('performance');
 
     const quality = selection.attach((preset) =>
-      createDemoQuality(rig.stage, { preset, warn: () => {} }),
+      createDemoQuality(stage, { preset, warn: () => {} }),
     );
 
     expect(quality.current).toBe('balanced');

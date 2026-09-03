@@ -40,6 +40,7 @@ import {
   CAMERA_EFFECTS_DESCRIPTION,
   CameraEffectsDirector,
   CameraRig,
+  CursorSurface,
   DecorationSet,
   decorationInstanceOf,
   EffectsSubsystem,
@@ -49,6 +50,7 @@ import {
   ParticlesSubsystem,
   PostprocessSubsystem,
   RenderDebugLayer,
+  ScreenAnchors,
   TerrainSubsystem,
   ViewportPicking,
   VisualSurfaceSource,
@@ -112,7 +114,7 @@ import {
   navPathsDebugSource,
   staticCollidersDebugSource,
 } from './debugSources.js';
-import { demoEdgePan } from './cameraInput.js';
+import { createEdgePanAxes, demoEdgePan } from './cameraInput.js';
 import { createDemoHud, demoHudComposition } from './hud.js';
 import { prewarmPresentation } from './prewarm.js';
 import { DEMO_STAND_SERVICE, demoStandHost } from './desktopStand.js';
@@ -288,11 +290,11 @@ let pointerMoves = 0;
 let midDrag = false;
 let rightDrag = false;
 
-const raycaster = new THREE.Raycaster();
-const groundPlane = new THREE.Plane(new THREE.Vector3(0, 0, 1), 0);
-/** Временные значения луча: `groundPoint` зовётся с частотой кадра — не аллоцирует. */
-const ndcScratch = new THREE.Vector2();
-const hitScratch = new THREE.Vector3();
+/**
+ * Точка вьюпорта под курсором — запись одна на страницу: разрешение прицела
+ * зовётся с частотой кадра и мусора оставлять не должно (REND-26).
+ */
+const cursorPoint = { x: 0, y: 0, width: 0, height: 0 };
 
 // --------------------------------------------------------- воркер и рендер
 
@@ -317,23 +319,34 @@ const context: RenderContext = { scene: scene3, assets, config: { heightStep: HE
 let remote: RemoteHost | null = null;
 
 /**
- * Точка клика на плоскости пола: луч через камеру (по финальной позе —
- * «куда смотрю, туда и кликаю», design Decision 6). Плоскость — высота
- * поверхности под точкой наблюдения камеры, а не уровень героя: в free-RTS
- * герой может быть за экраном.
+ * Точка пола под курсором — сервисом проекции рендера (REND-42), по ВИЗУАЛЬНОЙ
+ * поверхности (REND-9), а не по плоскости постоянной высоты.
+ *
+ * Прежде здесь пересекалась плоскость на высоте точки наблюдения камеры, и на
+ * многоуровневой арене это был промах: на кромке плато и на рампе прицел уезжал
+ * на `Δh / tan(pitch)` — почти на две клетки на одной ступени высоты. Второго
+ * разрешения курсора у страницы больше нет: марш по полю высот у сервиса и у
+ * инспектора (picking, REND-15) один и тот же.
+ *
+ * Поза — та, которой нарисован ПОСЛЕДНИЙ кадр (`lastPose`): «куда смотрю, туда
+ * и кликаю» (design Decision 6). Прицел считается в стадии `input`, до конвейера
+ * камеры, — по той же позе, по которой игрок видел кадр, ставя курсор. Камеру
+ * кадра сервису не отдают намеренно: он переписывал бы её матрицы между
+ * отсечением и рисованием.
+ *
+ * Возвращается переиспользуемая запись попадания сервиса — читается сразу и
+ * между кадрами не хранится. `null` — прицела нет: сервиса ещё нет (сцена не
+ * собрана), кадр не рисовался ни разу либо луч ушёл мимо арены.
  */
 function groundPoint(clientX: number, clientY: number): { x: number; y: number } | null {
+  if (cursorSurface === null || lastPose === null) return null;
   const rect = renderer3.domElement.getBoundingClientRect();
   if (rect.width === 0 || rect.height === 0) return null;
-  ndcScratch.set(
-    ((clientX - rect.left) / rect.width) * 2 - 1,
-    -((clientY - rect.top) / rect.height) * 2 + 1,
-  );
-  raycaster.setFromCamera(ndcScratch, camera);
-  groundPlane.constant = -(rig?.groundZ ?? 0);
-  return raycaster.ray.intersectPlane(groundPlane, hitScratch) === null
-    ? null
-    : { x: hitScratch.x, y: hitScratch.y };
+  cursorPoint.x = clientX - rect.left;
+  cursorPoint.y = clientY - rect.top;
+  cursorPoint.width = rect.width;
+  cursorPoint.height = rect.height;
+  return cursorSurface.project(lastPose, cursorPoint);
 }
 
 /**
@@ -355,9 +368,6 @@ window.addEventListener('keydown', (e) => {
   if (e.code === 'KeyC') camInput.centerTap = true;
   if (e.code === 'KeyY') {
     camInput.followToggle = true;
-    // Возврат в follow отменяет отложенный перелёт миникарты — иначе он
-    // выстрелил бы в устаревшую точку при следующем откреплении.
-    pendingPan = null;
   }
   // V, а не F: F ушла герою под купол замедления, а E — под щит
   // (`bindings.json`), и две роли на одной клавише — это молча несработавшая
@@ -411,9 +421,9 @@ const bindings = validateBindings(bindingsJson);
 const sampler = new InputSampler({ actionBits: ACTION_BITS });
 
 /**
- * Прицел указателя: точка на полу через raycast (design Decision 6) И угол на
- * неё от героя в единице ядра (FP-7). Null — прицела нет: луч мимо пола, герой
- * ещё не приехал или клик в себя.
+ * Прицел указателя: точка на ВИЗУАЛЬНОЙ поверхности под курсором (REND-42,
+ * design Decision 6) И угол на неё от героя в единице ядра (FP-7). Null —
+ * прицела нет: луч мимо арены, герой ещё не приехал или клик в себя.
  *
  * Отдаётся ОБА, одним разрешением (INP-1, design Decision 12). Угол остаётся —
  * на нём стоит вся сегодняшняя сцена: JSON-системы разворачивают его обратно в
@@ -441,10 +451,10 @@ const kbmSource = new KeyboardMouseSource({
   movementCaptured: () => rig?.capturesMovement() ?? false,
   // ВАЖНО для действий на кнопках мыши (`cast` на ЛКМ, `shield` на ПКМ):
   // нажатие без разрешённого прицела действием не считается (INP-1) — луч мимо
-  // плоскости пола или клик точно в себя не дают ни фронта, ни удержания.
+  // арены или клик точно в себя не дают ни фронта, ни удержания.
   // Каст этим и жив (стрелять в никуда нечем), а вот щит платит за это ценой:
   // ПКМ с курсором выше горизонта его не поставит. Лечится это не здесь, а
-  // источником прицела — сегодня он у демо один и он же луч по полу.
+  // источником прицела — сегодня он у демо один и он же луч по поверхности.
   aimAt: aimAtPointer,
 });
 sampler.add(kbmSource);
@@ -482,7 +492,7 @@ let frameTarget: AimPoint | null = null;
 
 /**
  * Последний НЕПУСТОЙ прицел кадра: им целится шар заряда своего героя. Луч,
- * ушедший мимо плоскости пола, шар не гасит — заряд идёт, а направление у него
+ * ушедший мимо арены, шар не гасит — заряд идёт, а направление у него
  * есть то же самое правило «последнего значения», что у сэмплера (INP-5).
  */
 let lastAim: number | null = null;
@@ -566,6 +576,24 @@ let abilityPreview: AbilityPreviewSubsystem | null = null;
  * дугой манёвра (REND-12), а шар висит перед кастером на своей высоте.
  */
 let visualSurface: VisualSurfaceSource | null = null;
+
+/**
+ * Проекция курсора на визуальную поверхность (REND-42): появляется вместе с
+ * поверхностью в `onReady`. Своей камеры сервису не даётся — он заводит её сам
+ * с тем же мировым верхом (0, 0, 1), что и камера этой страницы; общей у них
+ * остаётся ПОЗА (`lastPose`) и общая её посадка (CAM-1).
+ */
+let cursorSurface: CursorSurface | null = null;
+
+/**
+ * Мировые якоря инстансов (REND-41): экранные точки над героем и прочими
+ * названными сущностями. Появляется вместе с подсистемой моделей — позу и
+ * границы инстанса даёт она (REND-3).
+ *
+ * Кому положен якорь, решает ЭТА сборка: набор — политика игры, а не механизм
+ * рендера. Сегодня в нём один герой: над ним стоит полоса здоровья HUD (HUD-10).
+ */
+let screenAnchors: ScreenAnchors | null = null;
 
 /**
  * Точка пола под интерполированной позой инстанса. Горизонталь — ровно та
@@ -685,6 +713,9 @@ window.addEventListener('wheel', (e) => {
   camInput.wheelSteps += e.deltaY / 100;
 }, { passive: false });
 
+/** Оси edge-pan этого кадра: запись одна на страницу, кадр её переписывает (REND-26). */
+const edgeAxes = createEdgePanAxes();
+
 /** Сэмпл осей камеры на кадр: стрелки, edge-pan, удержания, fly-перемещение. */
 function sampleCameraInput(): void {
   camInput.panX = (keys.has('ArrowRight') ? 1 : 0) - (keys.has('ArrowLeft') ? 1 : 0);
@@ -692,14 +723,17 @@ function sampleCameraInput(): void {
   const rect = renderer3.domElement.getBoundingClientRect();
   // Край экрана — политика сборки (`cameraInput.ts`): в follow он инертен, и
   // прицел мышью у кромки арены больше не срывает слежение за героем (CAM-2).
-  const edge = demoEdgePan({
-    mode: rig?.mode ?? null,
-    pointerOverHud,
-    pointerX,
-    pointerY,
-    rect,
-    margin: rig?.config.edgeMarginPx ?? 0,
-  });
+  const edge = demoEdgePan(
+    {
+      mode: rig?.mode ?? null,
+      pointerOverHud,
+      pointerX,
+      pointerY,
+      rect,
+      margin: rig?.config.edgeMarginPx ?? 0,
+    },
+    edgeAxes,
+  );
   camInput.edgeX = edge.x;
   camInput.edgeY = edge.y;
   camInput.centerHeld = keys.has('KeyC');
@@ -734,21 +768,6 @@ function pushInput(): void {
 // ------------------------------------------------------------- HUD и цикл
 
 /**
- * Ничтожный «ввод панорамы» для открепления камеры от героя: follow не даёт
- * кадрированию хода (CAM-2 — панорама открепляет, кадрирование нет), поэтому
- * клик миникарты сначала открепляет камеру тем же правилом, что ручная
- * панорама. Сдвиг от этого значения — единицы микрон мира, глазу не виден.
- */
-const PAN_DETACH_PX = 1e-4;
-
-/**
- * Просьба кадрирования от миникарты, отложенная до кадра, в котором камера
- * уже откреплена: поданная в кадр с «вводом панорамы» она была бы им же и
- * погашена (CAM-3 — ввод отменяет разовые перелёты).
- */
-let pendingPan: { x: number; y: number } | null = null;
-
-/**
  * Прямоугольник кадрирования вокруг точки клика миникарты: полуразмер подобран
  * так, чтобы перелёт (CAM-8) сажал камеру на базовую дистанцию конфига —
  * обратная формула вертикального ограничения `frameBounds`:
@@ -770,8 +789,15 @@ function panFramingRect(cfg: CameraRig['config'], x: number, y: number): CameraB
 const hudCamera: HudCameraContract = {
   panTo(x: number, y: number): void {
     if (rig === null) return;
-    if (rig.mode === 'follow') camInput.dragDX += PAN_DETACH_PX;
-    pendingPan = { x, y };
+    // Открепление — ЯВНЫМ входом конвейера (CAM-8): в follow точку наблюдения
+    // каждый кадр переписывает цель, и кадрирование там инертно. Фиктивного
+    // микроперетаскивания здесь больше нет: панорама открепляет ЗАОДНО с
+    // движением камеры (CAM-2) и гасит разовые перелёты (CAM-3) — то есть
+    // отменяла бы ровно тот перелёт, ради которого её и подделывали. Просьба
+    // поэтому применяется ТЕМ ЖЕ кадром: переходы режимов конвейер считает до
+    // перелёта, и откреплённая этим же сэмплом камера уже летит.
+    camInput.detach = true;
+    rig.frameBounds({ rect: panFramingRect(rig.config, x, y), aspect: camera.aspect });
   },
   focusOnHero(): void {
     // Тот же фронт, что клавиша C: перелёт центрирования к герою (CAM-2).
@@ -793,11 +819,11 @@ const benchProbe: BenchProbe | null = benchRequested(window.location.search)
   : null;
 
 /**
- * Стадия `input`: прицел кадра, отложенное кадрирование миникарты, сэмпл осей
- * камеры, канонический ввод в воркер и накладка тач-стиков.
+ * Стадия `input`: прицел кадра, сэмпл осей камеры, канонический ввод в воркер и
+ * накладка тач-стиков.
  *
- * Прицел кадра — ОДИН raycast на кадр (design Decision 6): его читают и
- * сэмплер через `pointerAimSource`, и превью каста. Считается ДО
+ * Прицел кадра — ОДНА проекция курсора на кадр (REND-42, design Decision 6):
+ * её читают и сэмплер через `pointerAimSource`, и превью каста. Считается ДО
  * конвейера камеры — по той же позе, по которой игрок видел кадр, когда ставил
  * курсор, и одинаково для обоих потребителей.
  *
@@ -810,11 +836,6 @@ function sampleFrameInput(): void {
   frameTarget = resolved;
   if (frameAim !== null) lastAim = frameAim;
 
-  // Отложенное кадрирование миникарты — когда камера уже не follow (см. panTo).
-  if (pendingPan !== null && rig !== null && rig.mode !== 'follow') {
-    rig.frameBounds({ rect: panFramingRect(rig.config, pendingPan.x, pendingPan.y), aspect: camera.aspect });
-    pendingPan = null;
-  }
   sampleCameraInput();
   pushInput();
   // Третий шов превью (REND-28): локальный, ещё не подтверждённый сэмпл — та же
@@ -1336,6 +1357,10 @@ async function main(): Promise<void> {
       // Та же поверхность — шару заряда: он садится на пол, а не на дугу
       // манёвра инстанса.
       visualSurface = surface;
+      // И ей же разрешается курсор (REND-42): прицел ложится на тот пол, который
+      // игрок видит. Второго разрешения курсора у страницы нет — инспектор
+      // (picking, REND-15) стоит на той же проекции.
+      cursorSurface = new CursorSurface({ surface });
       // Пост-обработка кадра (REND-34) — ПЕРВОЙ подсистемой: её порт берёт
       // подсистема тумана (FOW-7, design D2), а порт объявляет тот, кто
       // зарегистрирован раньше и снесён будет позже (REND-31). Bloom и tone
@@ -1413,6 +1438,39 @@ async function main(): Promise<void> {
         ...(fogEnabled ? { fadeSeconds: fogConfig.fadeSeconds } : {}),
       });
       remote!.register(models);
+      // Мировые якоря — СРАЗУ ЗА моделями (REND-41): они считаются по позам
+      // ЭТОГО кадра, а поставила их подсистема моделей своим `updateFrame`, и
+      // порядок подсистем нормативен (REND-8). Исполнитель HUD зарегистрирован
+      // позже всех и потому видит якоря уже свежими.
+      screenAnchors = new ScreenAnchors({ instances: models });
+      // Свой герой — единственная сегодня сущность набора: над ним стоит полоса
+      // здоровья HUD (HUD-10). Кому ещё положен якорь, решает эта же сборка.
+      screenAnchors.track(heroId);
+      remote!.register({
+        name: 'screen-anchors',
+        init: () => {},
+        syncTick: () => {
+          // Доставленного состояния якорям не нужно: они читают инстансы, то
+          // есть уже построенное из неё (REND-1).
+        },
+        updateFrame: () => {
+          const pose = lastPose;
+          if (pose === null || screenAnchors === null) return;
+          const rect = renderer3.domElement.getBoundingClientRect();
+          if (rect.width === 0 || rect.height === 0) return;
+          screenAnchors.update(pose, rect);
+        },
+        // Стоимость объявлена КОНСТАНТНОЙ (QUAL-3): работа — одна проекция на
+        // ЯКОРЬ, а набор якорей задаёт композиция HUD (HUD-4), то есть документ
+        // игры, а не объём контента. Рычага здесь не будет ни при каком пресете.
+        quality: () => ({
+          subsystem: 'screen-anchors',
+          knobs: [],
+          constantCost:
+            'проекция точки над инстансом в координаты кадра: работа на ЯКОРЬ, а не на инстанс; ' +
+            'состав набора называет композиция HUD (match-hud HUD-4, HUD-10), не контент сцены',
+        }),
+      });
       // Транзиентные эффекты (REND-23) — после моделей: оболочки рисуются
       // поверх инстансов, а шарик снаряда и вовсе заменяет ему модель. Записи
       // — в манифесте (`effects`), кода сцены они не требуют. Список состояний
@@ -1550,6 +1608,10 @@ async function main(): Promise<void> {
         // Слой тумана миникарты (HUD-6): тот же продюсер маски и та же сила
         // затемнения, что у fog-mask основного вида, — сама подсистема тумана.
         ...(fogSubsystem !== null ? { fog: fogSubsystem } : {}),
+        // Мировые якоря (HUD-10): полоса здоровья стоит над героем по точке,
+        // которую ПУБЛИКУЕТ рендер (REND-41). Своей проекции экранный слой не
+        // считает — вторая посадка позы разъехалась бы с кадром (HUD-3).
+        anchors: screenAnchors,
       });
       sampler.add(hud.facade);
       remote!.register(hud.runtime.subsystem);

@@ -110,6 +110,12 @@ function checkKnown(
   }
 }
 
+/** Владелец ручки — часть имени до первой точки (`fog.maskResolution` → `fog`). */
+function ownerOf(name: string): string {
+  const at = name.indexOf('.');
+  return at <= 0 ? '' : name.slice(0, at);
+}
+
 /**
  * Валидация документа пресета против собранного реестра (QUAL-1, design D1).
  * Состав ЗАКРЫТ: неизвестная реестру ручка отвергается адресно — с её именем, —
@@ -117,12 +123,24 @@ function checkKnown(
  * чего ручка и заводилась. Отсутствующая ручка ошибкой не является: у неё есть
  * документированное умолчание.
  *
+ * `declarable` — ОБЪЯВЛЯЕМЫЕ сборкой подсистемы-владельцы (QUAL-1): те, которые
+ * она умеет построить, но на этой сцене могла и не построить. Ручка такого
+ * владельца принимается тогда и только тогда, когда владелец НЕ ПОСТРОЕН — ни
+ * одной его ручки в реестре нет; построенный владелец знает свои имена, и
+ * неизвестное среди них — опечатка, а не ненайденная подсистема. Значение
+ * принятой ручки проверит регистрация её подсистемы (`QualityController`).
+ *
+ * Перечень называет ВЛАДЕЛЬЦЕВ, а не имена ручек: имя ручки принадлежит движку,
+ * и сборка, перечисляющая имена, завела бы второй их список — он расходился бы с
+ * первым молча, стоило подсистеме объявить новую ручку.
+ *
  * Ошибки собираются все разом, как у presentation-документа (PRES-2): чинить
  * документ по одной ошибке за прогон — не работа.
  */
 export function validateQualityPreset(
   doc: unknown,
   knobs: readonly QualityKnob[],
+  declarable: readonly string[] = [],
 ): { ok: true; preset: QualityPreset } | { ok: false; errors: string[] } {
   if (!isRecord(doc)) {
     return {
@@ -131,11 +149,17 @@ export function validateQualityPreset(
     };
   }
   const known = new Map(knobs.map((knob) => [knob.name, knob]));
+  const built = new Set(knobs.map((knob) => ownerOf(knob.name)));
+  const declared = new Set(declarable);
   const names = knobs.length === 0 ? 'ни одной' : knobs.map((knob) => knob.name).join(', ');
   const errors: string[] = [];
   for (const [key, value] of Object.entries(doc)) {
     const knob = known.get(key);
     if (knob === undefined) {
+      const owner = ownerOf(key);
+      // Владелец объявлен сборкой и на этой сцене не построен: его ручка ждёт
+      // его регистрации, а не отвергается вместе со всем документом (QUAL-1).
+      if (owner !== '' && declared.has(owner) && !built.has(owner)) continue;
       errors.push(`${key}: неизвестная ручка качества — реестр её не объявлял (объявлены: ${names})`);
       continue;
     }
@@ -216,6 +240,23 @@ export class QualityController {
   /** Текущий документ против собранного реестра (QUAL-1) — состав и значения. */
   validate(): { ok: true; preset: QualityPreset } | { ok: false; errors: string[] } {
     return validateQualityPreset(this.document, this.knobs);
+  }
+
+  /**
+   * Документ против собранного реестра, ДОПОЛНЕННОГО объявляемыми сборкой
+   * подсистемами-владельцами (QUAL-1). Сцена без тумана не повод отвергнуть
+   * документ, написанный про сборку, которая туман умеет: ручка непостроенного
+   * владельца дождётся его регистрации, а её значение проверит она же.
+   *
+   * Перечень — данные СБОРКИ ИГРЫ: «эту подсистему я умею построить» знает тот,
+   * кто её строит, и вывести это из реестра нельзя по определению — в реестре
+   * лежит построенное.
+   */
+  validateAgainst(
+    declarable: readonly string[],
+    doc: unknown = this.document,
+  ): { ok: true; preset: QualityPreset } | { ok: false; errors: string[] } {
+    return validateQualityPreset(doc, this.knobs, declarable);
   }
 
   /**
