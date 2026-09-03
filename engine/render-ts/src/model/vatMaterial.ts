@@ -50,6 +50,11 @@ export interface VatMaterial {
   readonly uniforms: VatMaterialUniforms;
   /** Карты, читаемые из массива вариантов скина; остальные материал не несёт. */
   readonly maps: ReadonlySet<VatMapKind>;
+  /**
+   * Материал внутри маски команд-цвета (REND-40, ASSET-18): читает
+   * пер-инстансный тинт. Вне маски канала в программе нет вовсе.
+   */
+  readonly tinted: boolean;
 }
 
 /** Uniform массива вариантов по виду карты — один ответ на весь файл. */
@@ -115,6 +120,7 @@ export function createVatMaterial(
   vatTexture: THREE.Texture,
   maps: ReadonlySet<VatMapKind>,
   placeholder: THREE.DataArrayTexture,
+  tinted = false,
 ): VatMaterial {
   // Клон — СВОЙ материал батча, а не разделяемый материал ассета: владеет им
   // подсистема моделей и отдаёт его сносом (REND-31), поэтому и в учёт (PERF-8)
@@ -140,7 +146,10 @@ export function createVatMaterial(
   if (maps.has('normal')) material.normalMap = placeholder;
   if (maps.has('emissive')) material.emissiveMap = placeholder;
 
-  const key = `vat:${VAT_MAP_KINDS.filter((kind) => maps.has(kind)).join(',')}`;
+  // Тинт входит в КЛЮЧ программы (REND-40): маска команд-цвета названа
+  // индексами материалов (ASSET-18), и материал вне маски канала не читает —
+  // ни атрибута, ни varying, ни умножения в нём нет вовсе.
+  const key = `vat:${VAT_MAP_KINDS.filter((kind) => maps.has(kind)).join(',')}${tinted ? ':tint' : ''}`;
   material.customProgramCacheKey = (): string => key;
   material.onBeforeCompile = (shader): void => {
     shader.uniforms.vatMap = uniforms.vatMap;
@@ -148,11 +157,15 @@ export function createVatMaterial(
       if (!maps.has(kind)) continue;
       shader.uniforms[SKIN_UNIFORM[kind]] = uniforms[SKIN_UNIFORM[kind]];
     }
-    shader.vertexShader = patchVertex(shader.vertexShader, MATERIAL_PRELUDE, VERTEX_BASE);
-    shader.fragmentShader = patchFragment(shader.fragmentShader, maps);
+    shader.vertexShader = patchVertex(
+      shader.vertexShader,
+      tinted ? `${MATERIAL_PRELUDE}${TINT_PRELUDE}` : MATERIAL_PRELUDE,
+      tinted ? `${VERTEX_BASE}${TINT_BASE}` : VERTEX_BASE,
+    );
+    shader.fragmentShader = patchFragment(shader.fragmentShader, maps, tinted);
   };
 
-  return { material, uniforms, maps };
+  return { material, uniforms, maps, tinted };
 }
 
 /**
@@ -248,6 +261,23 @@ const VERTEX_BASE = /* glsl */ `${VERTEX_BASE_SKIN}
 	vInstanceFade = instanceFade;
 `;
 
+/**
+ * Пролог и база КАНАЛА ТИНТА (REND-40) — отдельно от материального пролога,
+ * потому что канал есть не у всякого материала: маска команд-цвета названа
+ * индексами материалов записи (ASSET-18), и материал вне маски ни атрибута, ни
+ * varying не объявляет. Это и есть та разница, ради которой тинт входит в ключ
+ * программы.
+ */
+const TINT_PRELUDE = /* glsl */ `
+/** Тинт записи: цвет и сила [0, 1] (REND-40) — множитель цвета фрагмента. */
+attribute vec4 instanceTint;
+varying vec4 vInstanceTint;
+`;
+
+const TINT_BASE = /* glsl */ `
+	vInstanceTint = instanceTint;
+`;
+
 const VERTEX_NORMAL = /* glsl */ `
 	objectNormal = ( vatSkin * vec4( objectNormal, 0.0 ) ).xyz;
 	#ifdef USE_TANGENT
@@ -280,14 +310,24 @@ function patchVertex(source: string, prelude: string, base: string): string {
  * готового кода: `onBeforeCompile` получает шейдер с ещё не раскрытыми
  * `#include`, и искать в нём тело chunk'а нечего.
  */
-function patchFragment(source: string, maps: ReadonlySet<VatMapKind>): string {
+function patchFragment(source: string, maps: ReadonlySet<VatMapKind>, tinted: boolean): string {
   // Сэмплеры объявляются В ПРОЛОГЕ, а не на месте chunk'а: chunk'и раскрываются
   // внутри `main()`, а объявление uniform'а там — не GLSL.
   const declarations = ['varying float vSkinLayer;', 'varying float vInstanceFade;'];
+  if (tinted) declarations.push('varying vec4 vInstanceTint;');
   for (const kind of VAT_MAP_KINDS) {
     if (maps.has(kind)) declarations.push(`uniform highp sampler2DArray ${SKIN_UNIFORM[kind]};`);
   }
   let out = source.replace('#include <common>', `#include <common>\n${declarations.join('\n')}`);
+  // Тинт (REND-40) — МНОЖИТЕЛЬ цвета, взятый после выборки карты и вершинных
+  // цветов и до освещения: сила ноль даёт единичный множитель, и запись без
+  // тинта рисуется теми же пикселями, что рисовалась бы без канала вовсе.
+  if (tinted) {
+    out = out.replace(
+      '#include <alphatest_fragment>',
+      '\tdiffuseColor.rgb *= mix( vec3( 1.0 ), vInstanceTint.rgb, vInstanceTint.a );\n#include <alphatest_fragment>',
+    );
+  }
   // Fade (FOW-8): альфа фрагмента умножается на долю проявленности записи до
   // альфа-теста — угасание прозрачностью, одинаковое с держателем детального
   // яруса (REND-20).

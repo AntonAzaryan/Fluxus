@@ -261,6 +261,32 @@ describe('прогрев подсистемы моделей (FOW-8, ASSET-12)',
     expect(warm.roots[0]!.parent).toBe(ctx.scene);
   });
 
+  it('прогретый батч несёт программу С КАНАЛОМ ТИНТА, если запись его объявила (REND-40)', async () => {
+    // Маска команд-цвета входит в ключ программы материала батча (ASSET-18):
+    // не грей прогрев эту программу — первый же покрашенный инстанс
+    // компилировал бы шейдер прямо в кадре открытия обзора, ровно тем всплеском,
+    // ради которого прогрев и заведён (FOW-8).
+    const manifest: VisualManifest = { entities: { Runner: { model: MODEL_ID, tint: {} } } };
+    const { subsystem, assets } = makeModelsRig(manifest);
+    const pending = subsystem.prewarm();
+    assets.resolve('model', MODEL_ID, makeModel());
+    const warm = await pending;
+
+    const keys = subsystem
+      .batchMeshes()
+      .map((mesh) => (mesh.material as THREE.Material).customProgramCacheKey());
+    expect(keys.length).toBeGreaterThan(0);
+    expect(keys.every((key) => key.endsWith(':tint'))).toBe(true);
+    warm.finish();
+
+    // Живая запись рисуется ТЕМИ ЖЕ материалами, а не вторым их набором.
+    subsystem.syncTick(makeTickView([makeEntityView(1)]));
+    const live = subsystem
+      .batchMeshes()
+      .map((mesh) => (mesh.material as THREE.Material).customProgramCacheKey());
+    expect(live).toEqual(keys);
+  });
+
   it('не доехавшая модель прогрев не держит: ленивый путь с заглушкой как был', async () => {
     const { subsystem, assets } = makeModelsRig(detailedManifest());
     const pending = subsystem.prewarm();

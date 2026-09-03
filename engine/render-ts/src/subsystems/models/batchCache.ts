@@ -42,6 +42,7 @@ import {
   emptyBounds,
   sameSkinTables,
   scaleBounds,
+  tintMaskToken,
   type BatchEntry,
   type InstanceRecord,
 } from './instanceRecord.js';
@@ -113,7 +114,10 @@ function buildBatchKey(
   tier: ShadowCasterTier,
 ): string {
   const hidden = [...(visual?.hiddenParts ?? [])].sort((a, b) => a - b).join(',');
-  return JSON.stringify([visual?.model ?? '', hidden, kind, tier]);
+  // Маска тинта (REND-40, ASSET-18) в ключе потому, что она СКОМПИЛИРОВАНА в
+  // материалы батча: два вида одной модели с разными масками рисуются разными
+  // программами, и делить батч им нельзя.
+  return JSON.stringify([visual?.model ?? '', hidden, kind, tier, tintMaskToken(visual)]);
 }
 
 /** Ключи обоих разделов манифеста (ASSET-9): пространство имён у них одно. */
@@ -308,12 +312,17 @@ export class BatchCache {
     skinPlaceholder ??= createSkinPlaceholder();
     const placeholder = skinPlaceholder;
     const vatTexture = this.vatTexture(visual?.model ?? '', derivatives);
+    // Маска команд-цвета — индексы материалов записи (ASSET-18, REND-40):
+    // читает канал только материал внутри маски, и это его свойство, а не
+    // свойство инстанса, — поэтому оно компилируется в материал батча.
+    const tintMask = visual?.tint === undefined ? null : (visual.tint.materials ?? 'all');
     const materials = shared.model.materials.map((source, index) =>
       createVatMaterial(
         shared.materials[index] ?? own('material', 'models', new THREE.MeshStandardMaterial()),
         vatTexture,
         materialMapKinds(source),
         placeholder,
+        tintMask === 'all' || tintMask?.includes(index) === true,
       ),
     );
 

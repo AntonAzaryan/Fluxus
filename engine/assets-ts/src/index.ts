@@ -83,6 +83,10 @@ export type {
   VisualParticlesSection,
   // параметры яруса и LOD записи (ASSET-13)
   VisualTier,
+  // блок тинта записи и растворение трупа (ASSET-18, `rendering` REND-40, REND-4)
+  TintFlash,
+  VisualTint,
+  VisualDissolve,
 } from './manifest.js';
 // секции камеры манифеста (ASSET-8, ASSET-10). Форма машинного описания типов
 // эффектов (`camera` CAM-9) и состава конфига (CAM-1) живёт здесь, рядом с

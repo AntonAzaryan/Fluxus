@@ -28,6 +28,8 @@ import {
   validateStringMap,
   validateSurfaceAlign,
   validateVerticalOffset,
+  validateVisualDissolve,
+  validateVisualTint,
 } from './manifestFields.js';
 import type { VisualManifest, VisualTier } from './manifest.js';
 import { validateEffects, validateParticles } from './visualSections.js';
@@ -88,6 +90,9 @@ const ENTITY_VISUAL_FIELDS: readonly string[] = [
   'tier',
   'lodThresholds',
   'light',
+  'tint',
+  'dissolve',
+  'anchorHeight',
 ];
 
 /**
@@ -145,6 +150,8 @@ function validateEntityBlocks(
   if ('verticalOffset' in entity) {
     validateVerticalOffset(entity.verticalOffset, `${path}.verticalOffset`, errors);
   }
+  if ('tint' in entity) validateVisualTint(entity.tint, `${path}.tint`, errors);
+  if ('dissolve' in entity) validateVisualDissolve(entity.dissolve, `${path}.dissolve`, errors);
 }
 
 /** Числа самой записи: мировая высота и угол переда модели (REND-13). */
@@ -155,6 +162,13 @@ function validateEntityNumbers(
 ): void {
   if ('scale' in entity && (!isFiniteNumber(entity.scale) || entity.scale <= 0)) {
     errors.push(`${path}.scale: ожидалось положительное число, получено ${typeName(entity.scale)}`);
+  }
+  // Высота якоря (REND-41) — мировая координата НАД позой, и отрицательная у
+  // неё смысла не имеет: якорь под ногами — это не «над макушкой пониже».
+  if ('anchorHeight' in entity && (!isFiniteNumber(entity.anchorHeight) || entity.anchorHeight < 0)) {
+    errors.push(
+      `${path}.anchorHeight: ожидалась неотрицательная высота якоря в мировых единицах, получено ${typeName(entity.anchorHeight)}`,
+    );
   }
   // Диапазон не ограничиваем: угол заворачивается, и «-90» и «270» одинаково
   // законны — требовать канонической записи значило бы придираться к автору.

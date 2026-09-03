@@ -47,6 +47,7 @@ function stubInstance(
   pose: { x: number; y: number; z: number; scale?: number },
   bounds: { maxZ: number } | null,
   visible = true,
+  anchorHeight: number | null = null,
 ): ModelInstanceView {
   return {
     entity,
@@ -72,6 +73,7 @@ function stubInstance(
       bounds === null
         ? null
         : { minX: -0.5, minY: -0.5, minZ: 0, maxX: 0.5, maxY: 0.5, maxZ: bounds.maxZ },
+    anchorHeight,
   };
 }
 
@@ -93,6 +95,28 @@ describe('точка якоря (REND-41)', () => {
     // 2 (поза) + 2 (верх границ) × 1.5 (масштаб набора, REND-11) = 5.
     expect(anchor.worldZ).toBeCloseTo(5, 6);
     expect(anchor.drawn).toBe(true);
+  });
+
+  it('авторская высота записи манифеста вместо верха границ (ASSET-6)', () => {
+    const views = new Map<EntityId, ModelInstanceView>([
+      [1, stubInstance(1, { x: 0, y: 0, z: 1, scale: 2 }, { maxZ: 2 }, true, 3)],
+    ]);
+    const anchors = new ScreenAnchors({ instances: sourceOf(views) });
+    const anchor = anchors.track(1);
+    anchors.update(gamePose(0, 0), VIEWPORT);
+    // 1 (поза) + 3 (высота записи) × 2 (масштаб набора, REND-11) = 7: верх
+    // габаритов дал бы 5, и именно ради этой разницы поле в записи и заведено.
+    expect(anchor.worldZ).toBeCloseTo(7, 6);
+  });
+
+  it('высота потребителя старше авторской: ближний к элементу источник побеждает', () => {
+    const views = new Map<EntityId, ModelInstanceView>([
+      [1, stubInstance(1, { x: 0, y: 0, z: 0 }, { maxZ: 2 }, true, 3)],
+    ]);
+    const anchors = new ScreenAnchors({ instances: sourceOf(views) });
+    const anchor = anchors.track(1, { height: 0.5 });
+    anchors.update(gamePose(0, 0), VIEWPORT);
+    expect(anchor.worldZ).toBeCloseTo(0.5, 6);
   });
 
   it('высота потребителя вместо умолчания — там, где верх границ не тот якорь', () => {

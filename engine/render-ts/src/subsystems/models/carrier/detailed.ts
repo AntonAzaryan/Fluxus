@@ -17,6 +17,7 @@ import {
   type InstanceCarrier,
   type InstanceRecord,
 } from '../instanceRecord.js';
+import { paintDetailed } from '../instanceTint.js';
 import { disposePlaceholder } from './placeholder.js';
 import { applyHolderPose, ensureHolder, makeController, type ControllerOptions } from './support.js';
 
@@ -117,6 +118,11 @@ const DETAILED_CARRIER: InstanceCarrier = {
   tier: 'detailed',
   applyPose: (record, drawScale, settle, warn) => {
     applyHolderPose(record, drawScale);
+    // Тинт (REND-40) — в СВОИ материалы инстанса; батчевый ярус тот же
+    // множитель везёт пер-инстансным атрибутом. Маска команд-цвета выбирает
+    // материалы по индексу (ASSET-18) — тому же, каким она выбирает материалы
+    // батча, и потому оба яруса красят одно и то же.
+    if (record.model !== null) paintDetailed(record.model, record.tint, record.tintMask);
     // Bone-контроль строго после mixer.update и до отрисовки (REND-5).
     if (record.model !== null && record.boneControl !== null) {
       record.boneControl.apply(

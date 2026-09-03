@@ -614,6 +614,97 @@ describe('validateManifest: вертикальное смещение инста
   });
 });
 
+describe('validateManifest: блок тинта записи (ASSET-18, REND-40)', () => {
+  it('блок целиком опционален, а его поля — по отдельности', () => {
+    for (const tint of [
+      {},
+      { materials: [] },
+      { materials: [0, 2] },
+      { byEvent: { Damaged: { color: '#ff4040', seconds: 0.18 } } },
+      { materials: [1], byEvent: { Damaged: { color: '#ff4040', strength: 0.8, seconds: 0.2 } } },
+    ]) {
+      const result = validateManifest({ entities: { x: { model: 'm.mdx', tint } } });
+      expect(result.ok, JSON.stringify(tint)).toBe(true);
+    }
+    // Запись без блока валидна и означает отсутствие канала тинта (REND-40).
+    const bare = validateManifest({ entities: { x: { model: 'm.mdx' } } });
+    expect(bare.ok).toBe(true);
+    if (!bare.ok) return;
+    expect(bare.manifest.entities.x!.tint).toBeUndefined();
+  });
+
+  it('маска — целые неотрицательные индексы материалов модели', () => {
+    expectErrors(
+      { entities: { x: { model: 'm.mdx', tint: { materials: [1.5] } } } },
+      /tint\.materials\[0\]: ожидался неотрицательный целый индекс материала/,
+    );
+    expectErrors(
+      { entities: { x: { model: 'm.mdx', tint: { materials: 2 } } } },
+      /tint\.materials: ожидался массив индексов материалов модели/,
+    );
+  });
+
+  it('вспышка требует цвета и длительности, сила — доля', () => {
+    expectErrors(
+      { entities: { x: { model: 'm.mdx', tint: { byEvent: { Damaged: { seconds: 0.2 } } } } } },
+      /tint\.byEvent\.Damaged\.color: обязательное поле — цвет формы "#rrggbb"/,
+    );
+    expectErrors(
+      { entities: { x: { model: 'm.mdx', tint: { byEvent: { Damaged: { color: '#fff', seconds: 1 } } } } } },
+      /tint\.byEvent\.Damaged\.color: обязательное поле — цвет формы "#rrggbb"/,
+    );
+    expectErrors(
+      { entities: { x: { model: 'm.mdx', tint: { byEvent: { Damaged: { color: '#ffffff', seconds: 0 } } } } } },
+      /tint\.byEvent\.Damaged\.seconds: обязательное поле — длительность вспышки/,
+    );
+    expectErrors(
+      {
+        entities: {
+          x: { model: 'm.mdx', tint: { byEvent: { Damaged: { color: '#ffffff', strength: 2, seconds: 1 } } } },
+        },
+      },
+      /tint\.byEvent\.Damaged\.strength: ожидалось число в \[0\.\.1\]/,
+    );
+    expectErrors(
+      { entities: { x: { model: 'm.mdx', tint: { byEvnt: {} } } } },
+      /tint\.byEvnt: неизвестное поле/,
+    );
+  });
+});
+
+describe('validateManifest: растворение трупа и высота якоря (ASSET-6, REND-4, REND-41)', () => {
+  it('блок растворения опционален, длительность обязательна и положительна', () => {
+    expect(validateManifest({ entities: { x: { model: 'm.mdx', dissolve: { duration: 1.5 } } } }).ok).toBe(true);
+    expect(
+      validateManifest({ entities: { x: { model: 'm.mdx', dissolve: { delay: 2, duration: 1 } } } }).ok,
+    ).toBe(true);
+    expectErrors(
+      { entities: { x: { model: 'm.mdx', dissolve: { delay: 2 } } } },
+      /dissolve\.duration: обязательное поле — длительность растворения/,
+    );
+    expectErrors(
+      { entities: { x: { model: 'm.mdx', dissolve: { duration: 0 } } } },
+      /dissolve\.duration: обязательное поле — длительность растворения/,
+    );
+    expectErrors(
+      { entities: { x: { model: 'm.mdx', dissolve: { delay: -1, duration: 1 } } } },
+      /dissolve\.delay: ожидалось неотрицательное число секунд/,
+    );
+  });
+
+  it('высота якоря — неотрицательное число мировых единиц', () => {
+    expect(validateManifest({ entities: { x: { model: 'm.mdx', anchorHeight: 2.4 } } }).ok).toBe(true);
+    expectErrors(
+      { entities: { x: { model: 'm.mdx', anchorHeight: -1 } } },
+      /anchorHeight: ожидалась неотрицательная высота якоря/,
+    );
+    expectErrors(
+      { entities: { x: { model: 'm.mdx', anchorHeigth: 2 } } },
+      /anchorHeigth: неизвестное поле/,
+    );
+  });
+});
+
 describe('validateManifest: секция транзиентных эффектов (REND-23)', () => {
   const effects = {
     byKind: {

@@ -125,8 +125,16 @@ import {
 import {
 } from '../model/vatMaterial.js';
 import { footprintSink, peak } from '../footprint.js';
-import { FadeClonePool, advanceFade } from './models/instanceFade.js';
+import { FadeClonePool, advanceDissolve, advanceFade } from './models/instanceFade.js';
 import { poseInstance } from './models/instancePose.js';
+import {
+  advanceTint,
+  armFlash,
+  makeTint,
+  resolveTintEntry,
+  setBaseTint,
+  type InstanceTintInput,
+} from './models/instanceTint.js';
 import { DEFAULT_CULL_MARGIN, InstanceCuller } from './models/instanceCull.js';
 import { LightingPorts } from './models/lightingPorts.js';
 import { BatchCache } from './models/batchCache.js';
@@ -485,6 +493,11 @@ export class ModelsSubsystem implements RenderSubsystem, InstanceProxySource {
         record.falling = true;
         record.controller?.setState(STATE_FALL);
       }
+      // Вспышка тинта на событие (REND-40, ASSET-18) — тем же разбором событий,
+      // что и one-shot клипы: у записи это ДВЕ таблицы одного входа, и «мигнуть
+      // на попадании» не требует ни своего канала событий, ни кода игры.
+      const flash = record.tintFlashes?.get(event.type);
+      if (flash !== undefined) armFlash(record.tint, flash);
       record.controller?.handleEvent(event.type);
     }
   }
@@ -781,7 +794,9 @@ export class ModelsSubsystem implements RenderSubsystem, InstanceProxySource {
       if (record.fadingOut && record.fade <= 0) {
         this.remove(record);
         this.instances.delete(record.entity);
+        continue;
       }
+      this.syncDissolved(record);
     }
 
     // Отсечение — после позы: видимость считается по тому преобразованию,
@@ -823,6 +838,48 @@ export class ModelsSubsystem implements RenderSubsystem, InstanceProxySource {
    * набору, и других наблюдаемых последствий у отсечения нет.
    */
 
+  /**
+   * Растворившийся труп — вон из кадра, воскресший — обратно в кадр (REND-4).
+   *
+   * Из КАДРА, а не из набора: сущность в доставленном состоянии осталась —
+   * `Dead` с неё снимает сцена своим временем, а не рендер, — и убрать её из
+   * пула значило бы пересоздать инстанс следующей же доставкой. Снимается
+   * построенное из ассета ровно тем же путём, каким его снимает исчезновение
+   * (`remove`): держатель, батчевый слот, локальный свет, контактное пятно.
+   *
+   * Возврат решается ЦЕЛОСТНОСТЬЮ, а не перечнем событий: `advanceDissolve`
+   * ставит её обратно в единицу, как только сущность перестала быть мёртвой, —
+   * возрождением, снятым маркером состояния или разрывом непрерывности
+   * (`snapAll`, REND-2). Одно место вместо трёх, и новый способ ожить не
+   * потребует четвёртого.
+   */
+  private syncDissolved(record: InstanceRecord): void {
+    if (record.dissolved) {
+      if (record.dissolve < 1) return;
+      record.dissolved = false;
+      this.mountVisual(this.requireCtx(), record);
+      return;
+    }
+    if (record.dissolve > 0) return;
+    this.remove(record);
+    record.dissolved = true;
+  }
+
+  /**
+   * Изображение записи и её носители света и пятна — общий низ создания
+   * инстанса и возврата растворившегося трупа (REND-3, REND-4).
+   */
+  private mountVisual(ctx: RenderContext, record: InstanceRecord): void {
+    this.attachVisual(ctx, record);
+    // Свет — свойство ЗАПИСИ, а не построенного из ассета (REND-33): носитель
+    // объявляется здесь же, до готовности модели и независимо от того, рисуют
+    // инстанс модель, заглушка (ASSET-4) или частицы (ASSET-14).
+    this.lighting.syncLight(record, this.manifest);
+    // Пятно — свойство ЯРУСА КАСТЕРА (REND-30), и объявляется оно тем же
+    // порядком: радиус нулевой, пока габаритов нет, и приезжает вместе с моделью.
+    this.lighting.syncBlob(record);
+  }
+
   private poseAll(
     pool: ReadonlyMap<EntityId, InstanceRecord>,
     dt: number,
@@ -860,6 +917,11 @@ export class ModelsSubsystem implements RenderSubsystem, InstanceProxySource {
     fadeSeconds: number,
   ): void {
     advanceFade(record, settle, fadeSeconds);
+    // Растворение трупа (REND-4) и тинт (REND-40) идут ДО ветки замершей позы:
+    // угасающий в тумане труп продолжает растворяться, а вспышка — гаснуть.
+    // Замирает поза, а не часы картинки.
+    advanceDissolve(record, settle);
+    advanceTint(record.tint, settle);
     const view = record.view;
     // Инстанс в fade-out (FOW-8) держит ПОСЛЕДНЕЕ доставленное состояние, и
     // интерполировать его заново нечем: альфа кадра принадлежит потоку доставок
@@ -1022,6 +1084,30 @@ export class ModelsSubsystem implements RenderSubsystem, InstanceProxySource {
         this.rebuild(ctx, record);
       }
     }
+  }
+
+  /**
+   * Тинт инстанса — порт «цвет на сущность» (REND-40): цвет команды, подсветка
+   * выделения, любой другой цвет, который игра назначает КОНКРЕТНОЙ сущности.
+   * `null` — тинт снят. Возвращает false, если инстанса нет.
+   *
+   * Порт один, и «цвета команды» среди его входов нет намеренно (механизм
+   * против политики, `docs/architecture.md` §3): что такое команда, сколько их,
+   * какого они цвета и по какому стату сущность к ним относится — политика
+   * игры, живущая в её документе палитры. Рендер знает только «этой сущности —
+   * этот цвет с этой силой», и второй порт, называющий одну из политик по
+   * имени, ввёл бы в механизм понятие, которого в нём нет.
+   *
+   * Тинт живёт на ЗАПИСИ, а не на построенном из ассета: он переживает смену
+   * яруса (REND-20), переподачу манифеста (REND-17) и позднюю загрузку модели
+   * (ASSET-4) — по тем же основаниям, по каким их переживает выбранный скин.
+   */
+  setTint(entity: EntityId, tint: InstanceTintInput | null, decoration = false): boolean {
+    const record = (decoration ? this.decorations : this.instances).get(entity);
+    if (record === undefined) return false;
+    if (tint === null) setBaseTint(record.tint, 1, 1, 1, 0);
+    else setBaseTint(record.tint, tint.r, tint.g, tint.b, tint.strength);
+    return true;
   }
 
   /**
@@ -1358,6 +1444,20 @@ export class ModelsSubsystem implements RenderSubsystem, InstanceProxySource {
     // вместе с ними, а не держаться до разрыва непрерывности.
     record.falling &&= descends(record);
     if (!record.falling) record.fallOffset = 0;
+    // Блок тинта записи (ASSET-18, REND-40) раскладывается ЗДЕСЬ, а не в кадре:
+    // цвета вспышек разбираются один раз на запись манифеста, а не на инстанс.
+    // База канала (то, что поставил порт) переподачу переживает — она свойство
+    // сущности, а не записи; уходит с записью только МАСКА и таблица вспышек.
+    const tintEntry = resolveTintEntry(visual);
+    record.tintMask = tintEntry.materials;
+    record.tintFlashes = tintEntry.byEvent;
+    // Растворение трупа (REND-4): запись без блока труп не растворяет — он
+    // лежит, пока его не снимет сцена. Отсчёт задержки начинается заново,
+    // потому что новое число задержки к прошедшему времени не применимо.
+    const dissolve = record.decoration ? undefined : visual?.dissolve;
+    record.dissolveDelay = dissolve?.delay ?? 0;
+    record.dissolveDuration = dissolve?.duration ?? 0;
+    record.dissolveHeld = record.dissolveDelay;
   }
 
   /** Параметры контроля костей записи на живом инстансе (REND-5, REND-17). */
@@ -1491,19 +1591,22 @@ export class ModelsSubsystem implements RenderSubsystem, InstanceProxySource {
       // инстанс ещё не получил, и пятна ему всё равно не полагается (`posed`).
       seatZ: 0,
       seatNormal: { x: 0, y: 0, z: 1 },
+      // Канал тинта (REND-40) заводится пустым: сила ноль — множитель
+      // единичный, и инстанс без тинта рисуется как рисовался бы без канала.
+      tint: makeTint(),
+      tintMask: null,
+      tintFlashes: null,
+      dissolve: 1,
+      dissolveHeld: 0,
+      dissolved: false,
+      dissolveDelay: 0,
+      dissolveDuration: 0,
       publicView: null,
     };
     this.applyEntryParams(record);
     record.yaw = view.facingYaw + record.facingOffset;
 
-    this.attachVisual(ctx, record);
-    // Свет — свойство ЗАПИСИ, а не построенного из ассета (REND-33): носитель
-    // объявляется здесь же, до готовности модели и независимо от того, рисуют
-    // инстанс модель, заглушка (ASSET-4) или частицы (ASSET-14).
-    this.lighting.syncLight(record, this.manifest);
-    // Пятно — свойство ЯРУСА КАСТЕРА (REND-30), и объявляется оно тем же
-    // порядком: радиус нулевой, пока габаритов нет, и приезжает вместе с моделью.
-    this.lighting.syncBlob(record);
+    this.mountVisual(ctx, record);
     return record;
   }
 
