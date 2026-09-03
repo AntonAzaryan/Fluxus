@@ -39,7 +39,7 @@ export type {
 // подсистемой (расширение REND-8), реестр, собираемый из деклараций, и
 // контроллер, раздающий значения документа пресета. Имён пресетов пакет не
 // знает — их приносит приложение игры.
-export { QualityController, validateQualityPreset } from './quality.js';
+export { FRAME_RENDER_SCALE, QualityController, frameKnobs, resolveRenderScale, validateQualityPreset } from './quality.js';
 export { UNLIMITED_FRAME_BUDGET } from './types.js';
 
 export type {

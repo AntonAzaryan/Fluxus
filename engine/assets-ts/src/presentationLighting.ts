@@ -89,6 +89,40 @@ export interface PresentationRimLight {
 }
 
 /**
+ * Фон кадра (REND-29): либо ПЛОСКИЙ тон (`color`), либо вертикальный ГРАДИЕНТ
+ * (`top` и `bottom` вместе). Смешивать их в одной подсекции нельзя — валидация
+ * отвергает такую запись адресно: «какой из двух фонов рисовать» не вопрос
+ * умолчания, а неоднозначность документа.
+ */
+export interface PresentationEnvironmentBackground {
+  /** Плоский тон фона, `#rrggbb`. */
+  readonly color?: string;
+  /** Верх вертикального градиента, `#rrggbb`. */
+  readonly top?: string;
+  /** Низ вертикального градиента, `#rrggbb`. */
+  readonly bottom?: string;
+}
+
+/**
+ * Окружение сцены (REND-29): фон кадра и освещение им PBR-материалов.
+ * Подсекция необязательна, и её ОТСУТСТВИЕ значит отсутствие и фона, и
+ * окружения — кадр рисуется тем же, чем рисовался.
+ *
+ * Карта окружения строится из ТОНОВ САМОЙ СЕКЦИИ (тона фона, а нет их — тона
+ * полусферной подсветки), а не приходит ассетом: равнопромежуточная текстура
+ * автора — работа другого размера, и формат под неё поля пока не занимает.
+ */
+export interface PresentationEnvironment {
+  readonly background?: PresentationEnvironmentBackground;
+  /**
+   * Интенсивность освещения окружением (IBL), неотрицательная; по умолчанию 0 —
+   * окружения нет. Тонов, из которых его строить, может не быть вовсе: тогда
+   * поле не действует ни на один материал.
+   */
+  readonly intensity?: number;
+}
+
+/**
  * Режим теней сцены, по возрастанию стоимости (`rendering` REND-30): теней нет;
  * контактные пятна под динамикой без карт теней; статика в кэшированной карте, а
  * динамика в покадровой; все кастеры покадрово. Порядок значений нормативен — по
@@ -172,6 +206,8 @@ export interface PresentationLighting {
   readonly hemisphere?: PresentationHemisphereLight;
   /** Контровой источник (REND-29); нет подсекции — нет источника. */
   readonly rim?: PresentationRimLight;
+  /** Окружение — фон кадра и освещение им (REND-29); нет подсекции — нет ни того, ни другого. */
+  readonly environment?: PresentationEnvironment;
   readonly shadows?: PresentationShadows;
   readonly cycle?: PresentationLightingCycle;
 }
@@ -186,6 +222,7 @@ const LIGHTING_KEYS: readonly string[] = [
   'directional',
   'hemisphere',
   'rim',
+  'environment',
   'shadows',
   'cycle',
 ];
@@ -194,6 +231,8 @@ const DIRECTIONAL_KEYS: readonly string[] = ['color', 'intensity', 'direction'];
 const HEMISPHERE_KEYS: readonly string[] = ['skyColor', 'groundColor', 'intensity'];
 const DIRECTION_KEYS: readonly string[] = ['x', 'y', 'z'];
 const SHADOW_KEYS: readonly string[] = ['mode', 'mapSize'];
+const ENVIRONMENT_KEYS: readonly string[] = ['background', 'intensity'];
+const BACKGROUND_KEYS: readonly string[] = ['color', 'top', 'bottom'];
 const CYCLE_KEYS: readonly string[] = ['transitionSeconds', 'phases'];
 const PHASE_KEYS: readonly string[] = [
   'name',
@@ -271,6 +310,43 @@ function validateShadows(node: Record<string, unknown>, errors: string[]): void 
 }
 
 /**
+ * Окружение: фон и интенсивность освещения им (REND-29). Фон — ЛИБО плоский
+ * тон, ЛИБО градиент: документ, назвавший и то и другое, отвергается адресно —
+ * выбирать за автора, какой из двух фонов он имел в виду, значит рисовать не то,
+ * что написано. Половина градиента — та же неоднозначность с другой стороны.
+ */
+function validateEnvironment(node: Record<string, unknown>, errors: string[]): void {
+  const path = 'lighting.environment';
+  closedKeys(node, path, ENVIRONMENT_KEYS, errors);
+  numberField(
+    node,
+    path,
+    'intensity',
+    { what: 'неотрицательное число интенсивности освещения окружением', min: 0 },
+    errors,
+  );
+  const background = optionalSubsection(node, path, 'background', errors);
+  if (background === null) return;
+  const at = `${path}.background`;
+  closedKeys(background, at, BACKGROUND_KEYS, errors);
+  for (const key of BACKGROUND_KEYS) namedColorField(background, at, key, errors);
+  const flat = 'color' in background;
+  const top = 'top' in background;
+  const bottom = 'bottom' in background;
+  if (flat && (top || bottom)) {
+    errors.push(
+      `${at}: фон либо плоский (color), либо градиент (top и bottom) — в одной подсекции их не бывает (REND-29)`,
+    );
+    return;
+  }
+  if (top !== bottom) {
+    errors.push(
+      `${at}: у вертикального градиента фона обязательны ОБА края — написан только ${top ? 'top' : 'bottom'} (REND-29)`,
+    );
+  }
+}
+
+/**
  * Какие необязательные источники есть у СТАТИЧЕСКОЙ части секции (REND-29):
  * наличие возможности — свойство секции, фаза меняет только числа (REND-32).
  * Флаги едут в проверку фазы, потому что решение «фаза называет то, чего нет»
@@ -303,6 +379,14 @@ function validateCyclePhase(
   for (const key of Object.keys(node)) {
     if (PHASE_KEYS.includes(key)) continue;
     const shadowField = key === 'shadows' || SHADOW_KEYS.includes(key);
+    if (key === 'environment') {
+      // Карта окружения строится один раз на текстуру и кэшируется по объекту:
+      // водить её по кругу значило бы пересобирать её каждым кадром перехода.
+      errors.push(
+        `${path}.environment: окружения в фазе цикла нет и быть не может — фон и карта окружения принадлежат секции целиком (REND-32, REND-29)`,
+      );
+      continue;
+    }
     errors.push(
       shadowField
         ? `${path}.${key}: параметров теней в фазе цикла нет и быть не может — режим и сторона карты принадлежат секции целиком (REND-32, REND-30)`
@@ -462,6 +546,8 @@ export function validateLighting(section: unknown, errors: string[]): void {
   // интенсивность и направление, и второго перечня этих полей быть не должно.
   const rim = optionalSubsection(root, 'lighting', 'rim', errors);
   if (rim !== null) validateDirectionalLight(rim, 'lighting.rim', errors);
+  const environment = optionalSubsection(root, 'lighting', 'environment', errors);
+  if (environment !== null) validateEnvironment(environment, errors);
   const shadows = optionalSubsection(root, 'lighting', 'shadows', errors);
   if (shadows !== null) validateShadows(shadows, errors);
   // Наличие необязательных источников — свойство СТАТИЧЕСКОЙ части (REND-32):

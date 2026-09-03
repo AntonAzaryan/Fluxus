@@ -36,6 +36,7 @@ import {
   BLOOM_TENT_KERNEL,
   BLOOM_TENT_WEIGHT_SUM,
   BLOOM_UPSAMPLE_FRAGMENT,
+  FXAA_FRAGMENT,
   RESOLVE_FRAGMENT,
   bloomUpsampleScale,
   createResolveMaterial,
@@ -1178,5 +1179,144 @@ describe('REND-34: LUT — цветокоррекция после сведен�
 
     expect(post.config.lutAsset).toBeNull();
     expect(assets.requests).toEqual([]);
+  });
+});
+
+// ------------------- 2.7: проходы списком и экранное сглаживание (L-12, REND-34)
+
+describe('REND-34, L-12: кадр цепочки — список проходов, а не фиксированная цепь', () => {
+  /** Подсистема под документом пресета — тот же стенд, что у ручек выше. */
+  function withKnobs(
+    config: PresentationPostprocess | undefined,
+    preset: Record<string, boolean | number>,
+  ): PostprocessSubsystem {
+    const stage = new PresentationStage(makeRenderContext());
+    const post = new PostprocessSubsystem(config === undefined ? {} : { config });
+    stage.register(post);
+    new QualityController(stage, preset);
+    return post;
+  }
+
+  it('порядок кадра читается ИМЕНАМИ проходов, а не чтением `render`', () => {
+    // Смысл списка (L-12) ровно в этом: будущий проход — виньетка, контур —
+    // добавляется записью, и его место в кадре видно, не открывая цепочку.
+    expect(subsystem(TONE_AND_BLOOM).post.passNames).toEqual(['bloom', 'resolve']);
+    expect(subsystem(TONE_ONLY).post.passNames).toEqual(['resolve']);
+    // Неактивная цепочка не заводит ни одного прохода — и это тот же список.
+    expect(subsystem().post.passNames).toEqual([]);
+  });
+
+  it('ноль сэмплов ставит в конец списка экранное сглаживание', () => {
+    // Мультисэмплированной цели нет — сглаживание берёт на себя проход по
+    // готовому кадру: устройство остаётся сглаженным, а не теряет сглаживание.
+    const post = withKnobs(TONE_AND_BLOOM, { [POSTPROCESS_ANTIALIAS]: 0 });
+
+    expect(post.passNames).toEqual(['bloom', 'resolve', 'fxaa']);
+    // Ненулевое число сэмплов снимает его: два сглаживания подряд — не цель.
+    expect(withKnobs(TONE_AND_BLOOM, { [POSTPROCESS_ANTIALIAS]: 2 }).passNames).toEqual([
+      'bloom',
+      'resolve',
+    ]);
+  });
+
+  it('экранный проход — последний, и сведение ложится в промежуточную цель', () => {
+    const post = withKnobs(TONE_ONLY, { [POSTPROCESS_ANTIALIAS]: 0 });
+    const spy = new PostRendererSpy();
+    post.render(spy, camera());
+
+    const relay = post.passes.relay;
+    expect(relay).not.toBeNull();
+    // Сцена в свою цель, сведение — в промежуточную, сглаживание — на канвас.
+    expect(spy.targets).toEqual([post.passes.scene, relay, null, null]);
+    expect(spy.materials.at(-1)).toBe(post.passes.fxaa);
+    // Шаг выборки — тексель КАДРА: сглаживается готовый кадр целиком.
+    const texel = (post.passes.fxaa!.uniforms.uTexel as { value: THREE.Vector2 }).value;
+    expect(texel.x).toBeCloseTo(1 / FRAME_WIDTH, 6);
+    expect(texel.y).toBeCloseTo(1 / FRAME_HEIGHT, 6);
+  });
+
+  it('промежуточной цели без экранного прохода не бывает вовсе', () => {
+    // Одного двигающего кадр прохода достаточно, чтобы цели не было: она
+    // заводится ровно под второй.
+    const { post } = subsystem(TONE_ONLY);
+    post.render(new PostRendererSpy(), camera());
+
+    expect(post.passes.relay).toBeNull();
+    expect(post.passes.fxaa).toBeNull();
+  });
+
+  it('маска тумана остаётся финальным проходом кадра (FOW-7)', () => {
+    // Экранное сглаживание — последний проход ЦЕПОЧКИ, а не кадра: её выход
+    // читает маскирующий проход, и читает он уже сглаженный кадр.
+    const post = withKnobs(TONE_ONLY, { [POSTPROCESS_ANTIALIAS]: 0 });
+    const spy = new PostRendererSpy();
+    const frame = post.renderToTexture(spy, camera());
+
+    expect(post.passNames.at(-1)).toBe('fxaa');
+    expect(frame.color).toBe(post.passes.output?.texture);
+    expect(spy.targets).toEqual([post.passes.scene, post.passes.relay, post.passes.output, null]);
+  });
+
+  it('неактивная цепочка экранного прохода не добавляет (REND-34, PERF-2)', () => {
+    const post = withKnobs(undefined, { [POSTPROCESS_ANTIALIAS]: 0 });
+    const spy = new PostRendererSpy();
+    const counters = createCostCounters();
+    withCostSink(counters, () => {
+      post.render(spy, camera());
+    });
+
+    expect(post.passNames).toEqual([]);
+    expect(spy.targets).toEqual([]);
+    expect(counters.postprocessPasses).toBe(0);
+  });
+
+  it('экранный проход считается своим счётчиком (PERF-2, PERF-3)', () => {
+    const post = withKnobs(TONE_ONLY, { [POSTPROCESS_ANTIALIAS]: 0 });
+    const counters = createCostCounters();
+    withCostSink(counters, () => {
+      post.render(new PostRendererSpy(), camera());
+    });
+
+    // Сцена, сведение, сглаживание — три прохода, и два последних полноразмерны.
+    expect(counters.postprocessPasses).toBe(3);
+    expect(counters.postprocessTexels).toBe(2 * FRAME_WIDTH * FRAME_HEIGHT);
+  });
+
+  it('рёбра ищутся по ВОСПРИНИМАЕМОЙ яркости, а не по линейной', () => {
+    // Цепочка работает в линейном пространстве, а ступени человек видит по
+    // кривой дисплея: в тенях линейные разности малы, видимые велики, и поиск
+    // по линейной яркости пропускал бы там рёбра. `sqrt` — дешёвое приближение
+    // гаммы 2, и оно стоит ВНУТРИ функции яркости, а не вокруг кадра: сам кадр
+    // проход не трогает нигде, кроме найденных рёбер.
+    const luma = FXAA_FRAGMENT.indexOf('float fxaaLuma');
+    const perceptual = FXAA_FRAGMENT.indexOf('sqrt(dot(rgb');
+    expect(luma).toBeGreaterThan(0);
+    expect(perceptual).toBeGreaterThan(luma);
+    // Размах вдоль ребра ограничен: длинное почти горизонтальное ребро иначе
+    // размазало бы кадр на полэкрана.
+    expect(FXAA_FRAGMENT).toContain('FXAA_SPAN_MAX');
+    // И проход НЕ трогает кадр там, где ребра нет: результат — одна из двух
+    // оценок вдоль направления, а не размытие всего подряд.
+    expect(FXAA_FRAGMENT).toContain('lumaB < lumaMin || lumaB > lumaMax ? rgbA : rgbB');
+  });
+
+  it('снос отдаёт промежуточную цель и материал сглаживания (REND-31)', () => {
+    const post = withKnobs(TONE_ONLY, { [POSTPROCESS_ANTIALIAS]: 0 });
+    post.render(new PostRendererSpy(), camera());
+    const relay = post.passes.relay!;
+    const fxaa = post.passes.fxaa!;
+    const disposed = { relay: false, fxaa: false };
+    relay.addEventListener('dispose', () => {
+      disposed.relay = true;
+    });
+    fxaa.addEventListener('dispose', () => {
+      disposed.fxaa = true;
+    });
+
+    post.dispose();
+
+    expect(disposed).toEqual({ relay: true, fxaa: true });
+    expect(post.passes.relay).toBeNull();
+    expect(post.passes.fxaa).toBeNull();
   });
 });

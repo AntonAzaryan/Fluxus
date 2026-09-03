@@ -98,6 +98,32 @@ describe('ED-1: свет арены — из подсистемы, а не из 
     });
   }
 
+  it(`фон кадра ставит подсистема, а не потребитель (REND-29, §4.1.8)`, () => {
+    for (const consumer of CONSUMERS) {
+      const code = codeOf(sourceOf(consumer.path));
+      // `scene.background = …` в коде потребителя — ровно тот способ, которым
+      // кадр вьюпорта расходился с кадром игрока ПО ПОСТРОЕНИЮ: демо красило
+      // фон строкой, вьюпорт не красил вовсе. Теперь тон приходит подсекцией
+      // `environment` секции `lighting` (PRES-2), и обоим — один и тот же.
+      expect(code, consumer.what).not.toMatch(/scene\w*\.background\s*=/);
+    }
+  });
+
+  it('одна секция — один фон у обоих потребителей (ED-1)', () => {
+    const section = { environment: { background: { color: '#1a1a2e' } } };
+    const client = new LightingSubsystem({ grid: flatGrid(), config: section });
+    const viewport = new LightingSubsystem({ grid: flatGrid(), config: section });
+    const clientScene = new THREE.Scene();
+    const viewportScene = new THREE.Scene();
+    client.init(contextOf(clientScene));
+    viewport.init(contextOf(viewportScene));
+
+    expect((clientScene.background as THREE.Color).getHexString()).toBe('1a1a2e');
+    expect((viewportScene.background as THREE.Color).getHexString()).toBe('1a1a2e');
+    client.dispose();
+    viewport.dispose();
+  });
+
   it('локальный свет достаётся обоим потребителям одним портом (REND-33)', () => {
     for (const consumer of CONSUMERS) {
       const code = codeOf(sourceOf(consumer.path));

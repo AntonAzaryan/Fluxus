@@ -66,6 +66,8 @@
  */
 import {
   QualityController,
+  frameKnobs,
+  resolveRenderScale,
   type PresentationStage,
   type QualityPreset,
 } from '@fluxus/render';
@@ -182,7 +184,23 @@ export interface DemoQualityOptions {
   readonly preset?: QualityPresetName;
   /** Куда громко сказать об отвергнутом документе; по умолчанию — консоль. */
   readonly warn?: (message: string) => void;
+  /**
+   * Хост кадра (QUAL-5): куда ехать ДЕЙСТВУЮЩЕМУ масштабу буфера отрисовки —
+   * `min(плотность устройства, потолок сборки, значение ручки)`. Функции нет —
+   * ручка не объявляется вовсе: у прогона вне браузера ни канваса, ни буфера
+   * нет, и объявлять ось, которой никто не управляет, незачем.
+   */
+  readonly renderScale?: (scale: number) => void;
+  /** Плотность пикселей устройства; нет — единица (прогон вне браузера). */
+  readonly devicePixels?: number;
 }
+
+/**
+ * Потолок плотности буфера отрисовки СБОРКИ (QUAL-5): выше двух кратностей
+ * демо не рисует ни на каком экране — это его граница разумного, а не политика
+ * уровня качества, и в документ пресета она не переезжает.
+ */
+export const DEMO_PIXEL_RATIO_CAP = 2;
 
 export interface DemoQuality {
   /** Контроллер качества сцены (QUAL-1): им и раздаются значения ручек. */
@@ -221,6 +239,17 @@ export function createDemoQuality(
       console.error(message);
     });
   const controller = new QualityController(stage);
+  // Ручка хоста объявляется ВСЕГДА и ДО проверки документов (QUAL-5): ось
+  // существует у этой сборки независимо от того, взялся ли кто-то за неё в
+  // ЭТОМ прогоне — реестр обязан быть одним и тем же и в браузере, и под
+  // тестом, иначе проверка документов проверяла бы не тот реестр. Функции нет
+  // — значения просто некуда везти: у прогона вне браузера буфера отрисовки
+  // нет вовсе.
+  const applyScale = options.renderScale;
+  const devicePixels = options.devicePixels ?? 1;
+  controller.declareHost(frameKnobs(), (values) => {
+    applyScale?.(resolveRenderScale(values, devicePixels, DEMO_PIXEL_RATIO_CAP));
+  });
   const refused = new Set<QualityPresetName>();
   for (const name of QUALITY_PRESET_NAMES) {
     // Против ОБЪЯВЛЯЕМОГО, а не только против собранного (QUAL-1): ручка

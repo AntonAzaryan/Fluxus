@@ -41,6 +41,7 @@ import type {
   QualityKnob,
   QualityPreset,
   QualityValue,
+  QualityValues,
   RenderSubsystem,
 } from './types.js';
 // Только тип: контроллер сцену не строит, он на неё подписывается.
@@ -169,12 +170,85 @@ export function validateQualityPreset(
   return { ok: true, preset: doc as QualityPreset };
 }
 
+// ------------------------------------------------- ручки хоста кадра (QUAL-5)
+
+/**
+ * Масштаб буфера отрисовки (QUAL-5) — ручка, у которой владельца-подсистемы нет
+ * и быть не может: буфер задаёт тот, кто зовёт `setPixelRatio`/`setSize`, то
+ * есть СБОРКА, а подсистемам кадр приходит уже нужного размера и о его масштабе
+ * они не знают вовсе.
+ *
+ * Имя принадлежит движку, а не приложению: второй его список в коде сборки
+ * разошёлся бы с первым молча (то же основание, что у перечня объявляемых
+ * владельцев, QUAL-1).
+ */
+export const FRAME_RENDER_SCALE = 'frame.renderScale';
+
+/** Владелец ручек кадра — хост, а не подсистема: неймспейс тот же механизм. */
+export const FRAME_KNOB_OWNER = 'frame';
+
+/**
+ * Границы масштаба. Ниже четверти кадр перестаёт быть кадром — это уже не
+ * рычаг производительности, а другая картинка; выше четырёх не бывает плотности
+ * ни у одного экрана, и потолок там ничего не ограничивает.
+ */
+const MIN_RENDER_SCALE = 0.25;
+const MAX_RENDER_SCALE = 4;
+
+/**
+ * Объявление ручки масштаба (QUAL-5). Семантика — ПОТОЛОК над плотностью
+ * пикселей устройства: умолчание «потолка нет» (бесконечность) оставляет кадр
+ * тем же, каким сборка рисовала его до появления ручки.
+ */
+export function frameScaleKnob(): QualityKnob {
+  return {
+    name: FRAME_RENDER_SCALE,
+    cost: 'пиксели буфера отрисовки: работа КАЖДОГО прохода кадра — и сцены, и пост-обработки, и маски тумана — растёт квадратом масштаба',
+    semantics: 'ceiling',
+    default: Number.POSITIVE_INFINITY,
+    min: MIN_RENDER_SCALE,
+    max: MAX_RENDER_SCALE,
+  };
+}
+
+/**
+ * Декларация хоста кадра одной функцией (QUAL-5): сборке остаётся сказать, КУДА
+ * ехать значениям, а из чего состоит объявление — знает движок. Собранная
+ * сборкой запись была бы вторым списком имён и разошлась бы с первым молча.
+ */
+export function frameKnobs(): QualityDeclaration {
+  return { subsystem: FRAME_KNOB_OWNER, knobs: [frameScaleKnob()] };
+}
+
+/**
+ * Действующий масштаб буфера (QUAL-5): `min(плотность устройства, потолок
+ * сборки, значение ручки)`. Потолок сборки остаётся у сборки — это её граница
+ * разумного (буфер, кратный плотности дорогого экрана), а не политика уровня
+ * качества.
+ *
+ * Функция живёт здесь, а не в приложении, по тому же основанию, что имя ручки:
+ * иначе демо и вьюпорт редактора считали бы одно и то же число двумя копиями
+ * формулы, и разошлись бы они молча (`editor` ED-1).
+ */
+export function resolveRenderScale(values: QualityValues, devicePixels: number, cap: number): number {
+  const knob = values.get(FRAME_RENDER_SCALE);
+  const ceiling = typeof knob === 'number' && Number.isFinite(knob) ? knob : Number.POSITIVE_INFINITY;
+  return Math.max(MIN_RENDER_SCALE, Math.min(devicePixels, cap, ceiling));
+}
+
 // ------------------------------------------------------------ контроллер
 
-/** Подсистема и её декларация — пара, по которой считается доставка значений. */
+/**
+ * Декларация и получатель её значений — пара, по которой считается доставка.
+ *
+ * Получатель — ФУНКЦИЯ, а не подсистема: ручку объявляет и хост кадра (QUAL-5),
+ * у которого точки `applyQuality` нет вовсе. Разница между двумя входами в
+ * реестр этим и исчерпывается — всё остальное (неймспейс, уникальность имени,
+ * немедленная выдача значений, повторная на смене пресета) у них общее.
+ */
 interface Attached {
-  readonly subsystem: RenderSubsystem;
   readonly declaration: QualityDeclaration;
+  readonly apply: (values: QualityValues) => void;
 }
 
 /**
@@ -266,8 +340,32 @@ export class QualityController {
   private attach(subsystem: RenderSubsystem): void {
     const declaration = subsystem.quality?.();
     if (declaration === undefined) return;
+    this.bind(declaration, (values) => {
+      subsystem.applyQuality?.(values);
+    });
+  }
+
+  /**
+   * Декларация хоста кадра (QUAL-5): сборка объявляет ось, которой не владеет
+   * ни одна подсистема, — масштаб буфера отрисовки, — и получает её значения
+   * функцией. Путь тот же, что у подсистемы: неймспейс владельца, уникальность
+   * имени, значения сразу и заново при смене пресета.
+   */
+  declareHost(declaration: QualityDeclaration, apply: (values: QualityValues) => void): void {
+    this.bind(declaration, apply);
+  }
+
+  /**
+   * Общий вход в реестр: объявление плюс немедленная выдача значений.
+   *
+   * Имя не `declare`: репозиторий гоняет TypeScript в Node снятием типов, а
+   * `declare` там — модификатор объявления, и метод с таким именем ломает
+   * разбор файла (`bin/tsHook.mjs`, CLI-8). Ловится это только запуском бинаря,
+   * не тестами пакета.
+   */
+  private bind(declaration: QualityDeclaration, apply: (values: QualityValues) => void): void {
     this.register(declaration);
-    const entry: Attached = { subsystem, declaration };
+    const entry: Attached = { declaration, apply };
     this.attached.push(entry);
     this.push(entry);
   }
@@ -321,7 +419,7 @@ export class QualityController {
   private push(entry: Attached): void {
     const values = new Map<string, QualityValue>();
     for (const knob of entry.declaration.knobs) values.set(knob.name, this.valueOf(knob));
-    entry.subsystem.applyQuality?.(values);
+    entry.apply(values);
   }
 
   /** Значение ручки: из документа, а нет его — документированное умолчание (QUAL-1). */

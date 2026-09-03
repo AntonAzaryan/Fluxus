@@ -178,6 +178,9 @@ import {
   PostprocessSubsystem,
   PresentationStage,
   QualityController,
+  frameKnobs,
+  resolveRenderScale,
+  type ShadowRendererLike,
   TerrainSubsystem,
   ViewportPicking,
   VisualSurfaceSource,
@@ -443,6 +446,14 @@ export interface ViewportSubsystemDeps {
   readonly camera: THREE.PerspectiveCamera;
   /** Манифест визуалов (ASSET-6), которым поднимаются читающие его подсистемы. */
   readonly visuals: VisualManifest;
+  /**
+   * Рендерер — вход теневых проходов режима `hybrid` (REND-30): подсистема
+   * освещения сама заказывает глубину ярусов и их сведение в карту источника.
+   * Нет его — `hybrid` исполняется как `full`: картинка та же, кэша статики
+   * нет. Необязателен потому, что headless-прогон набора (ED-29) рисовать не
+   * умеет вовсе.
+   */
+  readonly renderer?: ShadowRendererLike;
 }
 
 /**
@@ -489,7 +500,7 @@ export function registerViewportSubsystems(
   presentation: PresentationStage,
   deps: ViewportSubsystemDeps,
 ): ViewportSubsystems {
-  const { grid, camera, visuals } = deps;
+  const { grid, camera, visuals, renderer } = deps;
   // Пост-обработка кадра (REND-34) — ПЕРВОЙ подсистемой: она владеет
   // проходами кадра, и вьюпорт рисует его её вызовом, а собственной
   // пост-обработки поверх не ведёт (REND-34, `editor` ED-1). Секции у сцены может не
@@ -508,7 +519,15 @@ export function registerViewportSubsystems(
   // источники, что игрок, — то есть кадры разошлись бы там, где ED-1 требует
   // тождества. Позу на камеру сажает `applyCameraPose` до кадра подсистем (см.
   // `frame`), поэтому отбор идёт по взгляду ЭТОГО кадра.
-  const lighting = new LightingSubsystem({ camera, ...(grid === null ? {} : { grid }) });
+  // Рендерер подсистеме освещения — вход теневых проходов режима `hybrid`
+  // (REND-30): без порта она исполняет `hybrid` как `full` — картинка та же,
+  // кэша статики нет. Кадр вьюпорта обязан быть ТЕМ ЖЕ кадром (ED-1), включая
+  // цену, которой он нарисован.
+  const lighting = new LightingSubsystem({
+    camera,
+    ...(renderer === undefined ? {} : { renderer }),
+    ...(grid === null ? {} : { grid }),
+  });
   presentation.register(lighting);
   let surface: VisualSurfaceSource | null = null;
   let terrain: TerrainSubsystem | null = null;
@@ -608,7 +627,9 @@ export function createSceneStage(options: SceneStageOptions): SceneStage {
   const heightStep = options.heightStep ?? HEIGHT_STEP;
 
   const renderer = new THREE.WebGLRenderer({ antialias: true });
-  renderer.setPixelRatio(Math.min(globalThis.devicePixelRatio || 1, 2));
+  // Плотность буфера отрисовки ведёт ручка хоста (`render-quality` QUAL-5) —
+  // объявляется она вместе с контроллером качества ниже, и до первого кадра
+  // значение приезжает оттуда же.
   // Теневые карты включает владелец рендерера (design D8) — тем же вызовом и с
   // тем же типом фильтрации, что игровой клиент: кадр вьюпорта обязан быть тем
   // же кадром (`editor` ED-1), а не похожим. Тип — `PCFShadowMap`: `PCFSoftShadowMap` в
@@ -650,7 +671,14 @@ export function createSceneStage(options: SceneStageOptions): SceneStage {
   // получит текущие значения ручек ровно так же, как поднятая сразу. Своей
   // ссылки ему не нужно — переключателя качества у редактора нет и не будет:
   // авторская картинка не настройка (design D4).
-  new QualityController(presentation, EDITOR_QUALITY_PRESET);
+  const quality = new QualityController(presentation, EDITOR_QUALITY_PRESET);
+  // Масштаб буфера отрисовки — ручка ХОСТА (QUAL-5): владельца-подсистемы у неё
+  // нет, кадр приходит подсистемам уже нужного размера. Документ вьюпорта её не
+  // называет, и действует умолчание «потолка нет»: плотность экрана под
+  // потолком сборки — ровно тот кадр, что вьюпорт рисовал и раньше.
+  quality.declareHost(frameKnobs(), (values) => {
+    renderer.setPixelRatio(resolveRenderScale(values, globalThis.devicePixelRatio || 1, 2));
+  });
   const source = new DocumentSource(presentation);
   // Третий набор рядом с продюсером, а не второй продюсер (REND-18): декорации
   // остаются в кадре и в превью — гасить их смена режима не должна.
@@ -841,6 +869,7 @@ export function createSceneStage(options: SceneStageOptions): SceneStage {
       grid: first,
       camera: camera3,
       visuals,
+      renderer,
     });
     parts = raised;
     if (raised.surface !== null && raised.overlays !== null) {

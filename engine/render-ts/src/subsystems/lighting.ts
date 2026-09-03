@@ -110,14 +110,14 @@ import {
 import { LightingCycle, type LightingCycleSample } from '../lighting/cycle.js';
 import { fillLightingDebugState } from '../lighting/debugState.js';
 import { ShadowComposite, type ShadowRendererLike } from '../lighting/shadowComposite.js';
-import { aimDirectional, arenaExtent, type ArenaExtent } from '../lighting/arena.js';
+import { arenaExtent, type ArenaExtent } from '../lighting/arena.js';
 import { BlobShadowField } from '../lighting/blobShadows.js';
+import { SceneEnvironment } from '../lighting/environment.js';
+import { applyCycleSampleTo } from '../lighting/applySample.js';
 import { OptionalLights } from '../lighting/optionalLights.js';
 import {
   aimShadowLight,
-  applyShadowBias,
   applyShadowFlags,
-  fitShadowFrustum,
   isShadowMode,
   releaseShadowMap,
   shadowMapSizeKnob,
@@ -210,6 +210,12 @@ export class LightingSubsystem
    * материал и инстанс-буфер — всё в `lighting/blobShadows.ts`.
    */
   private readonly blobs = new BlobShadowField();
+  /**
+   * Окружение сцены (REND-29): фон кадра и карта, которой окружение освещает
+   * PBR-материалы. Фон принадлежит подсистеме — потребитель рендера его больше
+   * не ставит, и кадр вьюпорта равен кадру игрока по построению (ED-1).
+   */
+  private readonly environment = new SceneEnvironment();
 
   private phase: ShadowPhase = 'none';
   /** Кэш статики устарел: ближайший кадр перерисует его (design D2). */
@@ -306,6 +312,11 @@ export class LightingSubsystem
    * ярусов, карта сведения и проход. Пусто, пока режим с портом рендерера не
    * пришёл ни разу.
    */
+  /** Текстура градиента окружения (REND-29) — вход тестов и учёта (REND-31). */
+  get environmentTexture(): THREE.DataTexture | null {
+    return this.environment.gradient;
+  }
+
   get shadowComposite(): ShadowComposite {
     return this.composite;
   }
@@ -356,6 +367,9 @@ export class LightingSubsystem
     this.sun.removeFromParent();
     this.ambient.removeFromParent();
     this.optional.dispose();
+    // Текстура градиента — собственность подсистемы (REND-31); фон и карта
+    // окружения снимаются со сцены здесь же: их поставили мы.
+    this.environment.dispose(this.ctx?.scene);
     this.staticRoots.clear();
     this.dynamicRoots.clear();
   }
@@ -805,6 +819,9 @@ export class LightingSubsystem
     this.ambient.color.set(next.ambientColor);
     this.ambient.intensity = next.ambientIntensity;
     this.optional.apply(this.ctx?.scene, this.extent, next.hemisphere, next.rim);
+    // Окружение — из тонов ЭТОЙ же секции (REND-29): тона фона, а нет их —
+    // тона полусферной подсветки, которую применили строкой выше.
+    this.environment.apply(this.ctx?.scene, next.environment, next.hemisphere);
 
     // Интенсивность источника — АВТОРСКАЯ целиком (REND-30): делить её между
     // ярусами больше нечем и не за чем — карта одна, и тень в `hybrid` так же
@@ -861,36 +878,19 @@ export class LightingSubsystem
    * света) и переобтягивается ровно на кадре, где направление поехало.
    */
   private applyCycleSample(sample: LightingCycleSample): void {
-    this.ambient.color.copy(sample.ambientColor);
-    this.ambient.intensity = sample.ambientIntensity;
-    // Необязательные источники ведёт фаза, но ЗАВОДИТ их статическая часть
-    // (REND-32): источник уже в сцене, кадр меняет только числа — ни добавления,
-    // ни снятия здесь не бывает, и пересборки программ материалов кадром тоже.
-    this.optional.applySample(sample, this.extent);
-    this.sun.color.copy(sample.directionalColor);
-    // Интенсивность фазы — целиком на единственный источник (REND-30): делить
-    // её между ярусами нечем, карта одна.
-    this.sun.intensity = sample.directionalIntensity;
-    const { directionX: dx, directionY: dy, directionZ: dz } = sample;
-    aimDirectional(this.sun, this.extent, dx, dy, dz);
-    // Фрустум — функция направления и коробки арены: поехало направление —
-    // переобтягиваем, иначе кастеры у края арены уехали бы за его границу.
-    // Смещения выборки следуют за фрустумом: тексель у него свой.
-    if (sample.directionMoved) {
-      fitShadowFrustum(this.sun, this.extent);
-      applyShadowBias(this.sun, this.current.shadowMapSize);
-    }
-    // Карта глубины зависит от направления, а не от тона: кэш статики устаревает
-    // ровно тогда, когда источник ПОЕХАЛ, — и на каждом таком кадре, включая
-    // последний, добивающий кэш точным направлением установившейся фазы.
-    //
-    // Своего чередования цикл при этом не ведёт: делят кадры между картами
+    const moved = applyCycleSampleTo(
+      this.ambient,
+      this.sun,
+      this.optional,
+      this.extent,
+      this.current.shadowMapSize,
+      sample,
+    );
+    // Своего чередования цикл не ведёт: делят кадры между картами ярусов
     // ворота REND-30 в `updateFrame` — кадр статики допустим, только если
     // предыдущий ею не был либо динамики нет вовсе. Устаревание липкое, поэтому
-    // отклонённый воротами запрос не теряется, а ждёт своего кадра; собственное
-    // чередование поверх ворот лишь вдвое разредило бы обновление кэша там, где
-    // динамики нет, и жгло бы кадры на перестановку флагов ни за чем.
-    if (sample.directionMoved) this.staticStale = true;
+    // отклонённый воротами запрос не теряется, а ждёт своего кадра.
+    if (moved) this.staticStale = true;
   }
 
   /**

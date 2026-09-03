@@ -37,12 +37,14 @@ import {
   QualityController,
   TerrainSubsystem,
   WaterSubsystem,
+  frameKnobs,
   validateQualityPreset,
   type QualityValue,
   type RenderContext,
 } from '@fluxus/render';
 import {
   DEFAULT_QUALITY_PRESET,
+  DEMO_PIXEL_RATIO_CAP,
   QUALITY_PRESETS,
   QUALITY_PRESET_NAMES,
   QUALITY_STORAGE_KEY,
@@ -190,6 +192,10 @@ function effectiveOf(preset: QualityPresetName | null): Record<string, QualityVa
 describe('документы пресетов применимы к сцене демо (QUAL-1)', () => {
   it('каждый из трёх документов проходит валидацию против собранного реестра', () => {
     const controller = new QualityController(demoRig().stage);
+    // Реестр СБОРКИ — это ручки подсистем плюс ручки хоста кадра (QUAL-5):
+    // масштаб буфера отрисовки объявляет демо, потому что зовёт `setPixelRatio`
+    // оно, а не подсистема. Без этой строки проверялся бы не тот реестр.
+    controller.declareHost(frameKnobs(), () => {});
     for (const name of QUALITY_PRESET_NAMES) {
       const result = validateQualityPreset(QUALITY_PRESETS[name], controller.knobs);
       // Причина в сообщении: имя ручки из отказа — это и есть подсказка, что чинить.
@@ -199,12 +205,16 @@ describe('документы пресетов применимы к сцене �
 
   it('реестр сцены демо — ровно те ручки, о которых написаны документы', () => {
     const controller = new QualityController(demoRig().stage);
+    controller.declareHost(frameKnobs(), () => {});
     expect(controller.knobs.map((knob) => knob.name).sort()).toEqual([
       // Потолок дробления наземных фигур (REND-43): документы пресетов его не
       // называют, и действует кодовое умолчание «потолка нет» — телеграф
       // облегает рельеф так, как его написал автор записи (QUAL-1).
       'effects.shapeDetail',
       'fog.maskResolution',
+      // Ручка ХОСТА (QUAL-5): владельца-подсистемы у масштаба буфера нет —
+      // кадр приходит подсистемам уже нужного размера.
+      'frame.renderScale',
       'lighting.maxLocalLights',
       'lighting.shadowMapSize',
       'lighting.shadowMode',
@@ -600,5 +610,48 @@ describe('выбор, сделанный до сборки сцены, дожи�
 
     expect(quality.current).toBe('balanced');
     expect(selection.pending).toBe('balanced');
+  });
+});
+
+describe('масштаб буфера отрисовки — ручка хоста демо (QUAL-5)', () => {
+  /** Журнал масштабов, доехавших до рендерера: сам он тесту не нужен. */
+  function scales(preset: QualityPresetName, devicePixels: number): number[] {
+    const applied: number[] = [];
+    createDemoQuality(demoRig().stage, {
+      preset,
+      devicePixels,
+      renderScale: (scale) => applied.push(scale),
+    });
+    return applied;
+  }
+
+  it('пресет производительности опускает масштаб ниже плотности экрана', () => {
+    // Крупнейший рычаг слабого устройства (Steam Deck 1280×800): работа КАЖДОГО
+    // прохода кадра растёт квадратом масштаба, и до появления ручки он был
+    // строкой в коде страницы — вне пресета и вне отчёта действующих значений.
+    expect(scales('performance', 3).at(-1)).toBe(0.75);
+    // На экране без запаса плотности потолок ручки всё равно действует.
+    expect(scales('performance', 1).at(-1)).toBe(0.75);
+  });
+
+  it('пресет без ручки оставляет масштаб сборке: `min(плотность, потолок)`', () => {
+    expect(scales('balanced', 3).at(-1)).toBe(DEMO_PIXEL_RATIO_CAP);
+    expect(scales('balanced', 1.5).at(-1)).toBe(1.5);
+    expect(scales('ultra', 3).at(-1)).toBe(DEMO_PIXEL_RATIO_CAP);
+  });
+
+  it('смена пресета в рантайме доезжает до буфера, как до подсистем', () => {
+    const applied: number[] = [];
+    const quality = createDemoQuality(demoRig().stage, {
+      preset: 'balanced',
+      devicePixels: 2,
+      renderScale: (scale) => applied.push(scale),
+    });
+
+    quality.select('performance');
+
+    expect(applied.at(-1)).toBe(0.75);
+    quality.select('ultra');
+    expect(applied.at(-1)).toBe(DEMO_PIXEL_RATIO_CAP);
   });
 });
