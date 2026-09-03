@@ -41,6 +41,7 @@ import {
   CameraEffectsDirector,
   CameraRig,
   CursorSurface,
+  SpectatorSubjects,
   DecorationSet,
   decorationInstanceOf,
   EffectsSubsystem,
@@ -115,7 +116,7 @@ import {
   staticCollidersDebugSource,
 } from './debugSources.js';
 import { createEdgePanAxes, demoEdgePan } from './cameraInput.js';
-import { createDemoHud, demoHudComposition } from './hud.js';
+import { createDemoHud, createDemoMinimapSource, demoHudComposition } from './hud.js';
 import { prewarmPresentation } from './prewarm.js';
 import { DEMO_STAND_SERVICE, demoStandHost } from './desktopStand.js';
 import { demoMode, demoServerUrl, localModeUrl, serverModeUrl, type DemoMode } from './mode.js';
@@ -373,6 +374,15 @@ window.addEventListener('keydown', (e) => {
   // (`bindings.json`), и две роли на одной клавише — это молча несработавшая
   // способность.
   if (e.code === 'KeyV') camInput.flyToggle = true;
+  // Перебор субъектов наблюдения (CAM-10): `[` и `]` — соседние с ними клавиши
+  // раскладка героя не занимает (`bindings.json`), и двух ролей на одной
+  // клавише — то есть молча несработавшей способности — не возникает.
+  if (e.code === 'BracketRight') stepSpectate(1);
+  if (e.code === 'BracketLeft') stepSpectate(-1);
+  // Backslash снимает наблюдение: камера возвращается к своему герою.
+  if (e.code === 'Backslash') stopSpectate();
+  // P — снимок кадра без HUD (фото-режим, приложение: спеки у него нет).
+  if (e.code === 'KeyP') void capturePhoto();
   keys.add(e.code);
 });
 window.addEventListener('keyup', (e) => keys.delete(e.code));
@@ -594,6 +604,27 @@ let cursorSurface: CursorSurface | null = null;
  * рендера. Сегодня в нём один герой: над ним стоит полоса здоровья HUD (HUD-10).
  */
 let screenAnchors: ScreenAnchors | null = null;
+
+/**
+ * Набор decoration-инстансов арены (PRES-2 → REND-18): держится модулем ради
+ * ОДНОГО потребителя — следов декораций на миникарте (HUD-6). Ключ записи
+ * документа переводит в инстанс он, а границы отдаёт подсистема моделей: схема
+ * рисует то, что нарисовал рендер, и второго источника размеров у неё нет.
+ */
+let decorationSet: DecorationSet | null = null;
+
+/**
+ * Перебор субъектов наблюдения (CAM-10): кандидаты — доставленные сущности со
+ * статом слота (`STATS.slot`, HUD-8), то есть участники матча. Имя стата — вход,
+ * а не константа камеры: «кто здесь игрок» знает контент этой сцены.
+ *
+ * Живёт в сборке, а не в риге: следовать за сущностью follow умеет и так, а
+ * «за кем» — вопрос потребителя (CAM-10). Пустой субъект возвращает камеру к
+ * своему герою — обычному поведению демо.
+ */
+const spectator = new SpectatorSubjects({ playerStat: STATS.slot, teamStat: STATS.team });
+/** Кем наблюдение заменило героя; null — смотрим своего (обычный матч). */
+let spectateEntity: EntityId | null = null;
 
 /**
  * Точка пола под интерполированной позой инстанса. Горизонталь — ровно та
@@ -874,11 +905,125 @@ function chargeTooYoung(): boolean {
 }
 
 /**
+ * Перебор субъекта наблюдения (CAM-10). Кандидаты пересчитываются доставкой
+ * (см. `cameraFrame`), а клавиша только двигает выбор по кругу.
+ *
+ * Наблюдение не трогает ни ввода героя, ни доставки: это presentation-состояние
+ * страницы (CAM-1), и в воркер отсюда не уходит ничего.
+ */
+function stepSpectate(direction: 1 | -1): void {
+  const subject = direction === 1 ? spectator.next() : spectator.prev();
+  spectateEntity = subject === null ? null : subject.entity;
+  showSpectate(subject === null ? '' : spectateLabel(subject.entity, subject.team));
+}
+
+/** Снять наблюдение: камера возвращается к своему герою. */
+function stopSpectate(): void {
+  spectator.clear();
+  spectateEntity = null;
+  showSpectate('');
+}
+
+/** Подпись наблюдаемого — показание страницы, а не виджет HUD (design D4 демо). */
+function spectateLabel(entity: EntityId, team: number | null): string {
+  const suffix = team === null ? '' : ` · команда ${String(team)}`;
+  return `наблюдение: #${String(entity)}${suffix}`;
+}
+
+/**
+ * Подпись наблюдения поверх вьюпорта. Элемент заводится по первой надобности и
+ * стилем живёт здесь: в композицию HUD (HUD-4) он не входит — это показание
+ * СТРАНИЦЫ о её собственном режиме просмотра, как выбор качества и запас ввода.
+ * Пустая строка гасит его.
+ */
+function showSpectate(text: string): void {
+  let element = document.getElementById('spectate');
+  if (element === null) {
+    element = document.createElement('div');
+    element.id = 'spectate';
+    element.style.cssText =
+      'position:fixed;left:50%;top:12px;transform:translateX(-50%);z-index:30;' +
+      'padding:4px 10px;border-radius:8px;pointer-events:none;' +
+      'font:12px/1.4 ui-monospace,Menlo,monospace;color:#ffd479;' +
+      'background:rgba(10,10,24,0.8);border:1px solid rgba(255,212,121,0.4)';
+    document.body.append(element);
+  }
+  element.textContent = text;
+  element.style.display = text === '' ? 'none' : 'block';
+}
+
+/**
+ * Фото-режим (приложение, спеки у него нет): кадр без HUD и без тряски камеры,
+ * снятый с канваса PNG-файлом.
+ *
+ * HUD — отдельный DOM-слой (HUD-3), и снять его значит просто не показать.
+ * Эффекты камеры на этот кадр замораживаются (REND-25): трясущийся снимок
+ * показывает движение, которого в мире нет. `preserveDrawingBuffer` при этом не
+ * включается — он стоит памяти КАЖДОМУ кадру матча ради одного кадра снимка;
+ * канвас снимается тем же тактом, что и рисуется, до очистки композитором.
+ */
+async function capturePhoto(): Promise<void> {
+  const canvas = renderer3.domElement;
+  const hudDisplay = hudRoot instanceof HTMLElement ? hudRoot.style.display : null;
+  if (hudRoot instanceof HTMLElement) hudRoot.style.display = 'none';
+  try {
+    // Конвейер камеры здесь НЕ прокручивается: он сбросил бы фронты ввода
+    // посреди кадра. Берётся логическая поза последнего кадра — та же, что и
+    // нарисованная, но без слоя эффектов (CAM-6): снимок показывает мир, а не
+    // тряску камеры (REND-25).
+    if (lastPose !== null) applyCameraPose(camera, logicalPose);
+    presentFrame(performance.now());
+    drawScene();
+    const blob = await new Promise<Blob | null>((resolve) => {
+      canvas.toBlob((one) => { resolve(one); }, 'image/png');
+    });
+    if (blob !== null) downloadBlob(blob, `fluxus-${String(Date.now())}.png`);
+  } catch (error) {
+    console.warn('демо: снимок кадра не удался', error);
+  } finally {
+    if (hudRoot instanceof HTMLElement && hudDisplay !== null) hudRoot.style.display = hudDisplay;
+    // Кадр возвращается к нарисованной позе — со всеми эффектами, как и был.
+    if (lastPose !== null) applyCameraPose(camera, lastPose);
+  }
+}
+
+/** Отдать файл пользователю — ссылкой с `download`, без сервера и без сети. */
+function downloadBlob(blob: Blob, name: string): void {
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = name;
+  link.click();
+  URL.revokeObjectURL(url);
+}
+
+/**
  * Поза, которой нарисован ПОСЛЕДНИЙ кадр (CAM-1) — уже с эффектами. Её же
  * читают отладочный инспектор (picking по видимому, REND-15) и источник камеры:
  * второго конвейера позы не заводится, и луч под курсором совпадает с картинкой.
  */
 let lastPose: CameraPose | null = null;
+
+/**
+ * ЛОГИЧЕСКАЯ поза того же кадра — до слоя эффектов (CAM-6). Её потребитель один:
+ * снимок фото-режима, которому тряска не нужна (REND-25). Запись своя и
+ * переиспользуемая: поза рига — его собственный переиспользуемый объект, и
+ * держать ссылку на неё между кадрами нельзя (CAM-1).
+ */
+const logicalPose: CameraPose = {
+  posX: 0, posY: 0, posZ: 0, yaw: 0, pitch: 0, roll: 0, fovDeg: 45,
+};
+
+/** Копия позы в свою запись — второго способа её переписать не заводится. */
+function writePose(out: CameraPose, from: CameraPose): void {
+  out.posX = from.posX;
+  out.posY = from.posY;
+  out.posZ = from.posZ;
+  out.yaw = from.yaw;
+  out.pitch = from.pitch;
+  out.roll = from.roll;
+  out.fovDeg = from.fovDeg;
+}
 
 /**
  * Стадия `camera` — конвейер камеры (CAM-1): follow-цель — интерполированная
@@ -893,10 +1038,17 @@ let lastPose: CameraPose | null = null;
  */
 function cameraFrame(dtSec: number): void {
   if (rig === null) return;
-  // Цель слежения — видимая поза инстанса (REND-3): узла сцены рендер наружу
-  // не отдаёт, и камера ведёт по тем же числам, которыми он нарисован.
-  const instance = heroId === null ? null : (models?.instanceFor(heroId) ?? null);
-  const heroView = heroId === null ? undefined : remote?.view?.entities.get(heroId);
+  // Кандидаты наблюдения — по ДОСТАВЛЕННОМУ состоянию (CAM-10, REND-1): состав
+  // участников матча меняется вместе с миром, и второго его источника нет.
+  // Пересчёт идёт кадром, а не доставкой, только потому, что доставку сборка
+  // раздаёт подсистемам, а наблюдение подсистемой не является.
+  const entities = remote?.view?.entities;
+  if (entities !== undefined) spectator.sync(entities.values());
+  // Follow ведёт ЛЮБУЮ доставленную сущность (CAM-10): наблюдаемую, если зритель
+  // её выбрал, иначе — своего героя.
+  const followed = spectateEntity ?? heroId;
+  const instance = followed === null ? null : (models?.instanceFor(followed) ?? null);
+  const heroView = followed === null ? undefined : remote?.view?.entities.get(followed);
   const target =
     instance === null
       ? null
@@ -916,6 +1068,9 @@ function cameraFrame(dtSec: number): void {
   // осмотреться в замороженном мире — ровно то, ради чего перемотку и смотрят.
   const worldDt = (remote?.view?.mode ?? 'Running') === 'Running' ? dtSec : 0;
   const applied = director === null ? logical : director.stack.apply(logical, worldDt);
+  // Логическая поза запоминается рядом с применённой: по ней снимается кадр
+  // фото-режима — снимок без тряски (REND-25), а не с замороженной тряской.
+  writePose(logicalPose, logical);
   lastPose = applied;
   applyCameraPose(camera, applied);
 }
@@ -1532,7 +1687,8 @@ async function main(): Promise<void> {
       // подаётся один раз из загруженного документа; рисуют его те же
       // подсистемы и тем же путём, что у сущностей мира.
       if (presentation !== null && presentation.decorations.length > 0) {
-        new DecorationSet(remote!.stage).apply(demoDecorations(presentation));
+        decorationSet = new DecorationSet(remote!.stage);
+        decorationSet.apply(demoDecorations(presentation));
       }
 
       // Камера: поверхность и границы — из той же сетки, что рендер террейна
@@ -1602,7 +1758,20 @@ async function main(): Promise<void> {
         container: app,
         assets,
         visuals: manifest,
-        terrain: remote!,
+        // Сетка и СЛОИ подложки миникарты (HUD-6): уровни приезжают той же
+        // сеткой handshake, вода — секцией парного документа, следы декораций —
+        // границами инстансов, которые нарисовал рендер. Миникарта документов
+        // не читает: источники ей даёт сборка.
+        terrain: createDemoMinimapSource({
+          terrain: remote!,
+          presentation,
+          // Ключ записи документа переводит в инстанс набор декораций, границы
+          // отдаёт подсистема моделей: схема рисует то, что нарисовал рендер.
+          decorations: {
+            entityOf: (key) => decorationSet?.entityOf(key),
+            instanceFor: (entity, decoration) => models?.instanceFor(entity, decoration) ?? null,
+          },
+        }),
         camera: hudCamera,
         control: remote!,
         // Слой тумана миникарты (HUD-6): тот же продюсер маски и та же сила

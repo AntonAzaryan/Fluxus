@@ -12,7 +12,13 @@ import { tick as simTick, type SceneDef } from '@fluxus/core';
 import { resolveComposition, type MinimapTerrainSource } from '@fluxus/hud';
 import { AssetService, type VisualManifest } from '@fluxus/assets';
 import { RemoteHost, WorkerShell } from '@fluxus/client';
-import { createDemoHudRegistry, demoHudComposition } from '../app/hud.js';
+import {
+  createDemoHudRegistry,
+  createDemoMinimapSource,
+  demoDecorationFootprints,
+  demoHudComposition,
+  demoWaterMask,
+} from '../app/hud.js';
 import demoBindings from '../app/bindings.json';
 import { createDemoExtractor } from '../app/extractor.js';
 import {
@@ -294,5 +300,80 @@ describe('панель способностей не обещает нажати
     // (`rewind.holdButton`): разошлись бы — удержание кнопки кастовало ульту, а
     // точку остановки не вело (NET-11, REW-13).
     expect(ACTION_BITS.rewind).toBe(DEMO_REWIND?.holdButton);
+  });
+});
+
+// --------------------------------------- слои подложки миникарты (HUD-6)
+
+import presentationJson from '../../../content/scenes/duel.presentation.json';
+import type { PresentationScene } from '@fluxus/assets';
+
+/** Парный документ сцены демо — контент, читаемый ею законно (CONT-4). */
+const PRESENTATION = presentationJson as unknown as PresentationScene;
+
+describe('слои подложки миникарты — данные сборки, а не чтение документа в HUD (HUD-6)', () => {
+  it('маска воды считается по секции документа и ложится на сетку сцены', () => {
+    const rows = PRESENTATION.water?.cells ?? [];
+    expect(rows.length).toBeGreaterThan(0);
+    const grid = { width: rows[0]!.length, height: rows.length, tileSize: 65536 };
+    const mask = demoWaterMask(PRESENTATION, grid)!;
+    expect(mask).not.toBeNull();
+    expect(mask.length).toBe(grid.width * grid.height);
+    // Вода на арене дуэли есть: пустая маска означала бы, что слой не считается.
+    expect(mask.some((cell) => cell !== 0)).toBe(true);
+    // И там, где документ ставит точку, воды нет.
+    const emptyAt = rows.findIndex((row) => row.includes('.'));
+    const column = rows[emptyAt]!.indexOf('.');
+    expect(mask[emptyAt * grid.width + column]).toBe(0);
+  });
+
+  it('карта, не ложащаяся на сетку, слоем не становится', () => {
+    expect(demoWaterMask(PRESENTATION, { width: 3, height: 3, tileSize: 65536 })).toBeNull();
+    expect(demoWaterMask(null, { width: 3, height: 3, tileSize: 65536 })).toBeNull();
+    expect(demoWaterMask(PRESENTATION, null)).toBeNull();
+  });
+
+  it('след декорации — позиция и радиус НАРИСОВАННОГО инстанса, а не запись документа', () => {
+    const built = demoDecorationFootprints(2, {
+      entityOf: (key) => (key === '#0' ? 11 : 12),
+      instanceFor: (entity) =>
+        entity === 11
+          ? {
+              pose: { x: 4, y: 6, scale: 2 },
+              bounds: { minX: -0.5, minY: -0.25, maxX: 0.5, maxY: 0.25 },
+            }
+          : // Модель второй ещё грузится (ASSET-4): границ нет, и следа тоже.
+            { pose: { x: 0, y: 0, scale: 1 }, bounds: null },
+    });
+    expect(built.ready).toBe(false);
+    expect(built.footprints).toEqual([{ x: 4, y: 6, radius: 1 }]);
+  });
+
+  it('источник отдаёт сетку и слои геттерами: и то и другое приезжает позже сборки HUD', () => {
+    const holder: { terrain: { width: number; height: number; tileSize: number } | null } = {
+      terrain: null,
+    };
+    const source = createDemoMinimapSource({
+      terrain: holder,
+      presentation: PRESENTATION,
+      decorations: null,
+    });
+    // До handshake сетки нет — и слоёв тоже.
+    expect(source.terrain).toBeNull();
+    expect(source.layers?.water ?? null).toBeNull();
+
+    const rows = PRESENTATION.water?.cells ?? [];
+    holder.terrain = { width: rows[0]!.length, height: rows.length, tileSize: 65536 };
+    expect(source.terrain).not.toBeNull();
+    expect(source.layers?.water ?? null).not.toBeNull();
+  });
+
+  it('запись миникарты называет палитру уровней и цвета слоёв — данными (HUD-6)', () => {
+    const composition = demoHudComposition({ controls: true, matchPause: true, tickMs: 16 });
+    const minimap = composition.entries.find((entry) => entry.widget === 'minimap')!;
+    const palette = minimap.params!.levelPalette as readonly string[];
+    expect(palette.length).toBeGreaterThan(1);
+    expect(typeof minimap.params!.waterColor).toBe('string');
+    expect(typeof minimap.params!.decorationColor).toBe('string');
   });
 });

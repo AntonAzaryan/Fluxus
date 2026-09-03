@@ -21,7 +21,11 @@
  * REND-24) `visualSections.ts`, блок света записи (ASSET-16) `visualLight.ts`.
  */
 import { resolveLightBlock, type ResolvedVisualLight, type VisualLight } from './visualLight.js';
-import type { CameraConfigSection, CameraEffectsSection } from './cameraEffects.js';
+import type {
+  CameraConfigSection,
+  CameraEffectsSection,
+  CameraPathsSection,
+} from './cameraEffects.js';
 import type { AssetKind } from './types.js';
 
 /** Ключ — sim-идентификатор (имя prefab'а/архетипа). */
@@ -53,6 +57,8 @@ export interface VisualManifest {
   cameraEffects?: CameraEffectsSection;
   /** Секция конфига камеры (ASSET-10); потребитель — конвейер `camera` CAM-1. */
   cameraConfig?: CameraConfigSection;
+  /** Секция кинематографических путей камеры (ASSET-17); потребитель — `camera` CAM-10. */
+  cameraPaths?: CameraPathsSection;
 }
 
 /** Запись визуального ключа как она есть: модельная либо эмиттерная (ASSET-14). */

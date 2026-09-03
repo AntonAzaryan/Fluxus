@@ -159,68 +159,10 @@ export type { FlightPhaseSource, StatSource } from './statSources.js';
 export { ViewBuffer } from './viewBuffer.js';
 export type { FrameTiming, ViewBufferConfig } from './viewBuffer.js';
 
-// Камера (capability camera): rig режимов и вход кадрирования, слой эффектов,
-// диспетчер по манифесту, общее применение позы к THREE-камере.
-export { CameraRig, DEFAULT_CAMERA_CONFIG } from './camera/rig.js';
-export type {
-  CameraBounds,
-  CameraConfig,
-  CameraFraming,
-  CameraMode,
-  CameraPose,
-  CameraRigOptions,
-  CameraSources,
-  FollowTarget,
-} from './camera/rig.js';
-// Сэмпл ввода камеры и edge-pan — вход рига, заполняемый обвязкой окна (CAM-1).
-export {
-  createCameraInput,
-  createEdgePanAxes,
-  edgePanAxes,
-  resetCameraInput,
-} from './camera/input.js';
-export type { CameraInput, EdgePanAxes } from './camera/input.js';
-// Источник поверхности и границ камеры над сеткой террейна (CAM-2, CAM-7).
-export { terrainGroundApi } from './camera/terrainSource.js';
-export type { TerrainCameraSource } from './camera/terrainSource.js';
-export {
-  EffectStack,
-  SwayEffect,
-  TraumaShake,
-  defaults,
-  valueNoise,
-  DEFAULT_SHAKE,
-  DEFAULT_SWAY,
-  SHAKE_TYPE,
-  SWAY_TYPE,
-} from './camera/effects.js';
-export type {
-  CameraEffect,
-  CameraEffectType,
-  ImpulseEffect,
-  ImpulseEffectType,
-  LastingEffect,
-  LastingEffectType,
-  PoseOffset,
-  ShakeParams,
-  SwayParams,
-} from './camera/effects.js';
-// Машинное описание типов эффектов (CAM-9) — единственный перечень типов:
-// по нему строит эффекты слой, проверяет секцию валидация манифеста (ASSET-8)
-// и рисует таблицы редактор (ED-14).
-export { CAMERA_EFFECTS_DESCRIPTION, CAMERA_EFFECT_TYPES } from './camera/effectTypes.js';
-// Машинный адрес конфига камеры (CAM-1): перечень параметров для валидации
-// секции манифеста (ASSET-10) и сборка частичного конфига из неё.
-export {
-  CAMERA_CONFIG_DESCRIPTION,
-  CAMERA_CONFIG_PARAMS,
-  cameraConfigFromManifest,
-} from './camera/config.js';
-export type { CameraConfigFromManifestOptions } from './camera/config.js';
-export type { CameraEffectsCatalog } from './camera/effectTypes.js';
-export { CameraEffectsDirector } from './camera/director.js';
-export type { CameraEffectsDirectorOptions } from './camera/director.js';
-export { applyCameraPose } from './camera/apply.js';
+// Камера (capability camera) — своим барьером (`camera/index.ts`): режимы и
+// вход кадрирования, наблюдение и путь (CAM-10), слой эффектов, диспетчер по
+// манифесту, общее применение позы к THREE-камере.
+export * from './camera/index.js';
 
 // Визуальная поверхность террейна (REND-9, REND-10): хелпер, общий для
 // подсистем террейна и моделей, и его источник с загрузкой карты кривизны.

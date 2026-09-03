@@ -1190,3 +1190,99 @@ describe('resolveVisualClaim: кто рисует вид без модельно
     expect(resolveVisualClaim(value, 'Exploded')).toBeNull();
   });
 });
+
+/**
+ * ASSET-17: секция путей задаёт ЗНАЧЕНИЯ, состав каналов ключа и перечень
+ * сглаживаний принадлежат коду камеры (CAM-10) и приезжают описанием — своего
+ * перечня у теста нет по той же причине, по какой его нет у модуля ассетов.
+ */
+describe('validateManifest: секция путей камеры (ASSET-17)', () => {
+  const entities = { x: { model: 'm.mdx' } };
+  const description = {
+    channels: [
+      { name: 'x', required: true },
+      { name: 'y', required: true },
+      { name: 'distance', required: false, min: 0 },
+    ],
+    easings: ['linear', 'easeInOut'],
+  };
+  const checked = (section: unknown) =>
+    validateManifest({ entities, cameraPaths: section }, { cameraPaths: description });
+
+  const opener = {
+    keys: [
+      { x: 0, y: 0, duration: 2, easing: 'easeInOut' },
+      { x: 10, y: 4, distance: 20 },
+    ],
+  };
+
+  it('манифест без секции валиден — путей у сборки просто нет', () => {
+    const result = validateManifest({ entities });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.manifest.cameraPaths).toBeUndefined();
+    expect(result.warnings).toEqual([]);
+  });
+
+  it('путь из ключей с длительностями и сглаживанием проходит и типизируется', () => {
+    const result = checked({ opener });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.manifest.cameraPaths!.opener!.keys).toHaveLength(2);
+    expect(result.warnings).toEqual([]);
+  });
+
+  it('незнакомый канал ключа — предупреждение и пропуск (симметрия с ASSET-8, ASSET-10)', () => {
+    const result = checked({ p: { keys: [{ x: 0, y: 0, roll: 1 }] } });
+    expect(result.ok).toBe(true);
+    expect(result.warnings).toHaveLength(1);
+    expect(result.warnings[0]).toMatch(/cameraPaths\.p\.keys\[0\]\.roll/);
+  });
+
+  it('незнакомое сглаживание — предупреждение: будет линейное', () => {
+    const result = checked({ p: { keys: [{ x: 0, y: 0, easing: 'бросок' }] } });
+    expect(result.ok).toBe(true);
+    expect(result.warnings[0]).toMatch(/easing/);
+  });
+
+  it('ключ без точки наблюдения — адресный отказ с именем пути и номером ключа', () => {
+    const result = checked({ opener: { keys: [{ x: 0, y: 0, duration: 1 }, { y: 4 }] } });
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.errors.some((e) => e.includes('cameraPaths.opener.keys[1].x'))).toBe(true);
+  });
+
+  it('структура проверяется строго и без описания: путь без ключей, негодная длительность', () => {
+    expectErrors({ entities, cameraPaths: 5 }, /cameraPaths: ожидался объект/);
+    expectErrors({ entities, cameraPaths: { p: { keys: [] } } }, /cameraPaths\.p\.keys/);
+    expectErrors(
+      { entities, cameraPaths: { p: { keys: [{ x: 0, y: 0, duration: 0 }, { x: 1, y: 1 }] } } },
+      /cameraPaths\.p\.keys\[0\]\.duration/,
+    );
+    // Длительность обязательна у всех ключей, кроме последнего: идти после
+    // него некуда, а между прочими отрезок существует.
+    expectErrors(
+      { entities, cameraPaths: { p: { keys: [{ x: 0, y: 0 }, { x: 1, y: 1 }] } } },
+      /keys\[0\]\.duration: длительность/,
+    );
+    expectErrors({ entities, cameraPaths: { p: { keys: [{ x: 0, y: 0 }], loop: 'да' } } }, /loop/);
+    expectErrors({ entities, cameraPaths: { p: { keys: [{ x: 0, y: 'край' }] } } }, /keys\[0\]\.y/);
+  });
+
+  it('значение вне границ описания — ошибка, а не предупреждение: границы осмысленности', () => {
+    const result = checked({ p: { keys: [{ x: 0, y: 0, distance: -5 }] } });
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.errors[0]).toMatch(/distance/);
+  });
+
+  it('без описания состав каналов не проверяется вовсе: своего перечня у валидации нет', () => {
+    const result = validateManifest({ entities, cameraPaths: { p: { keys: [{ roll: 1 }] } } });
+    expect(result.ok).toBe(true);
+    expect(result.warnings).toEqual([]);
+  });
+
+  it('незнакомый ключ записи пути — ошибка закрытого состава', () => {
+    expectErrors({ entities, cameraPaths: { p: { keys: [{ x: 0, y: 0 }], speed: 2 } } }, /speed/);
+  });
+});

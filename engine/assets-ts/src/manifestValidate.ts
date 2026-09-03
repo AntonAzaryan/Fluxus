@@ -12,8 +12,16 @@
  * (REND-23, REND-24) — `visualSections.ts`, блок света записи (ASSET-16) —
  * `visualLight.ts`, а поля, общие у разных записей, — `manifestFields.ts`.
  */
-import { validateCameraConfig, validateCameraEffects } from './cameraEffects.js';
-import type { CameraConfigDescription, CameraEffectsDescription } from './cameraEffects.js';
+import {
+  validateCameraConfig,
+  validateCameraEffects,
+  validateCameraPaths,
+} from './cameraEffects.js';
+import type {
+  CameraConfigDescription,
+  CameraEffectsDescription,
+  CameraPathDescription,
+} from './cameraEffects.js';
 import {
   VISUAL_TIERS,
   validateLodThresholds,
@@ -282,6 +290,7 @@ const MANIFEST_FIELDS: readonly string[] = [
   'particles',
   'cameraEffects',
   'cameraConfig',
+  'cameraPaths',
 ];
 
 /** Что валидация знает сверх самого документа. */
@@ -298,6 +307,12 @@ export interface ValidateManifestOptions {
    * (ASSET-10).
    */
   readonly cameraConfig?: CameraConfigDescription;
+  /**
+   * Машинное описание пути камеры (`camera` CAM-10). Без него секция путей
+   * проверяется только структурно: перечня каналов и сглаживаний у модуля
+   * ассетов нет (ASSET-17).
+   */
+  readonly cameraPaths?: CameraPathDescription;
 }
 
 /** Результат валидации: находки двух последствий (ASSET-8). */
@@ -332,6 +347,9 @@ export function validateManifest(doc: unknown, options: ValidateManifestOptions 
   }
   if ('cameraConfig' in doc) {
     validateCameraConfig(doc.cameraConfig, errors, warnings, options.cameraConfig);
+  }
+  if ('cameraPaths' in doc) {
+    validateCameraPaths(doc.cameraPaths, errors, warnings, options.cameraPaths);
   }
   if ('surfaceAlign' in doc) validateSurfaceAlign(doc.surfaceAlign, 'surfaceAlign', errors);
   if ('terrain' in doc) validateTerrainSection(doc.terrain, errors);

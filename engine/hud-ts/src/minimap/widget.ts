@@ -80,15 +80,58 @@ export interface MinimapTerrainGrid {
   readonly height: number;
   /** Размер клетки в Q16.16 (TERR-2). */
   readonly tileSize: number;
+  /**
+   * Уровень каждой клетки (`terrain` TERR-4) — тот же массив сетки handshake,
+   * которым рисует основной вид (HUD-6): второго его источника нет. Поля нет —
+   * подложка рисуется одним цветом пола, как до появления слоёв.
+   */
+  readonly levels?: ArrayLike<number>;
+}
+
+/**
+ * След статической декорации на схеме (HUD-6): мировой круг под инстансом.
+ * Круг, а не прямоугольник записи документа: миникарта показывает, где на арене
+ * стоит препятствие, а не как оно повёрнуто, — и радиус берётся из границ
+ * НАРИСОВАННОГО инстанса, то есть из того же, чем декорацию рисует рендер
+ * (`rendering` REND-3, REND-18).
+ */
+export interface MinimapFootprint {
+  /** Мировая позиция инстанса. */
+  readonly x: number;
+  readonly y: number;
+  /** Радиус следа в мировых единицах. */
+  readonly radius: number;
+}
+
+/**
+ * Слои подложки сверх пола (HUD-6). Наполняет их СБОРКА — тем, что уже держит
+ * для рендера: миникарта документов сцены не читает, второй читатель разошёлся
+ * бы с рендером так же, как два определения «что в тумане».
+ *
+ * Слой, которого сборка не дала, не рисуется вовсе — сцена без воды и без
+ * декораций выглядит как прежде.
+ */
+export interface MinimapTerrainLayers {
+  /**
+   * Клетки воды (`presentation-scene` PRES-2 → `rendering` REND-35): ненулевое
+   * значение — вода есть. Длина — как у сетки; расхождение длины гасит слой.
+   */
+  readonly water?: ArrayLike<number> | null;
+  /** Следы статических декораций; пустой список и отсутствие неразличимы. */
+  readonly decorations?: readonly MinimapFootprint[] | null;
 }
 
 /**
  * Источник сетки handshake (SHELL-5). `RemoteHost` подходит структурно
  * (`remoteHost.terrain`); до handshake и на сценах без террейна — null,
  * миникарте нечего показывать.
+ *
+ * Слои подложки (HUD-6) приходят тем же источником и тем же путём — от сборки,
+ * а не чтением документа.
  */
 export interface MinimapTerrainSource {
   readonly terrain: MinimapTerrainGrid | null;
+  readonly layers?: MinimapTerrainLayers | null;
 }
 
 /** Значение слота `floor`: зеркало пола и дельты одной доставки (HUD-6). */
@@ -144,18 +187,29 @@ export const minimapFloorSelector: HudSelector = (state: HudDeliveredState) =>
  * Параметры записи композиции (все — JSON-значения, HUD-4):
  * - `markers` (обязателен) — таблица маркеров `MinimapMarkerTable` (HUD-6);
  * - `width`, `height` — размер поверхности в px;
- * - `floorColor`, `holeColor` — цвет клетки с полом и дыры.
+ * - `floorColor`, `holeColor` — цвет клетки с полом и дыры;
+ * - `levelPalette` — цвет клетки по индексу её уровня (HUD-6); пустая палитра
+ *   даёт прежнюю картинку — один `floorColor` на всю арену;
+ * - `waterColor`, `decorationColor` — цвета слоёв воды и следов декораций.
+ *
+ * Окраска слоёв — ДАННЫЕ, а не константы кода (HUD-6): сколько уровней у арены
+ * и какими они читаются — политика игры.
  */
 interface MinimapConfig {
   readonly width: number;
   readonly height: number;
   readonly floorColor: string;
   readonly holeColor: string;
+  readonly levelPalette: readonly string[];
+  readonly waterColor: string;
+  readonly decorationColor: string;
 }
 
 const DEFAULT_SIZE = 192;
 const DEFAULT_FLOOR_COLOR = '#3d4450';
 const DEFAULT_HOLE_COLOR = '#14161a';
+const DEFAULT_WATER_COLOR = '#1d5a6b';
+const DEFAULT_DECORATION_COLOR = '#5a5f68';
 
 function numberParam(params: HudParams, name: string, fallback: number): number {
   const value = params[name];
@@ -171,18 +225,41 @@ function stringParam(params: HudParams, name: string, fallback: string): string 
   return value;
 }
 
+/** Палитра уровней записи композиции; отсутствие и пустой список неразличимы. */
+function paletteParam(params: HudParams, name: string): readonly string[] {
+  const value = params[name];
+  if (value === undefined) return [];
+  if (!Array.isArray(value)) {
+    throw new Error(`миникарта: параметр "${name}" должен быть списком цветов`);
+  }
+  return value.map((color, index) => {
+    if (typeof color !== 'string') {
+      throw new Error(`миникарта: "${name}[${String(index)}]" должен быть строкой цвета`);
+    }
+    return color;
+  });
+}
+
 function configFrom(params: HudParams): MinimapConfig {
   return {
     width: numberParam(params, 'width', DEFAULT_SIZE),
     height: numberParam(params, 'height', DEFAULT_SIZE),
     floorColor: stringParam(params, 'floorColor', DEFAULT_FLOOR_COLOR),
     holeColor: stringParam(params, 'holeColor', DEFAULT_HOLE_COLOR),
+    levelPalette: paletteParam(params, 'levelPalette'),
+    waterColor: stringParam(params, 'waterColor', DEFAULT_WATER_COLOR),
+    decorationColor: stringParam(params, 'decorationColor', DEFAULT_DECORATION_COLOR),
   };
 }
 
 // ------------------------------------------------------------------- виджет
 
-/** Кэш аффинного преобразования мир → px миникарты (см. шапку модуля). */
+/**
+ * Кэш аффинного преобразования мир → px миникарты (см. шапку модуля) и слоёв
+ * подложки этой сетки (HUD-6). Слои лежат здесь, а не читаются у источника на
+ * каждую клетку: их состав меняется вместе с сеткой, а перерисовка клетки —
+ * горячий путь доставки.
+ */
 interface MinimapTransform {
   readonly scale: number;
   readonly offsetX: number;
@@ -192,6 +269,12 @@ interface MinimapTransform {
   readonly gridWidth: number;
   readonly worldWidth: number;
   readonly worldHeight: number;
+  /** Уровни клеток сетки; null — сетка их не несёт (HUD-6). */
+  readonly levels: ArrayLike<number> | null;
+  /** Клетки воды; null — слоя нет либо он не по этой сетке. */
+  readonly water: ArrayLike<number> | null;
+  /** Следы декораций; null — слоя нет. */
+  readonly decorations: readonly MinimapFootprint[] | null;
 }
 
 /** Канвас глазами виджета — структурный минимум `HTMLCanvasElement`. */
@@ -344,6 +427,9 @@ class MinimapWidget implements HudWidget {
     const worldWidth = grid.width * tile;
     const worldHeight = grid.height * tile;
     const scale = Math.min(this.config.width / worldWidth, this.config.height / worldHeight);
+    const cells = grid.width * grid.height;
+    const layers = this.terrainSource.layers ?? null;
+    const water = layers?.water ?? null;
     this.transform = {
       scale,
       tile,
@@ -352,6 +438,11 @@ class MinimapWidget implements HudWidget {
       offsetY: (this.config.height - worldHeight * scale) / 2,
       worldWidth,
       worldHeight,
+      levels: grid.levels ?? null,
+      // Слой не по этой сетке — не слой: рисовать чужую маску значило бы
+      // показать воду не там, где она есть (HUD-6).
+      water: water !== null && water.length === cells ? water : null,
+      decorations: layers?.decorations ?? null,
     };
     this.transformGrid = grid;
     this.paintedBits = null; // другая сетка — прежний фон недействителен
@@ -381,18 +472,79 @@ class MinimapWidget implements HudWidget {
       ctx.clearRect(0, 0, this.config.width, this.config.height);
       for (let cell = 0; cell < floor.bits.length; cell++) this.paintCell(ctx, floor.bits, cell, t);
       this.paintedBits = floor.bits;
+      this.paintDecorations(ctx, t);
       return;
     }
+    if (floor.changed.length === 0) return;
     for (const cell of floor.changed) this.paintCell(ctx, floor.bits, cell, t);
+    // Следы декораций не клеточные (HUD-6): перерисованная клетка стирает тот
+    // их кусок, что лежал на ней, — и кладутся они снова целиком. Их единицы,
+    // и десяток кругов дешевле второго слоя canvas.
+    this.paintDecorations(ctx, t);
   }
 
+  /**
+   * Клетка подложки: пол или дыра, а под полом — её уровень (`terrain` TERR-4)
+   * и вода (HUD-6). Уровень и вода — свойства КЛЕТКИ, поэтому рисуются здесь же:
+   * точечная перерисовка по дельтам доставки их не теряет.
+   */
   private paintCell(ctx: MinimapContext2D, bits: Uint8Array, cell: number, t: MinimapTransform): void {
     const cx = cell % t.gridWidth;
     const cy = Math.floor(cell / t.gridWidth);
     const cellPx = t.tile * t.scale;
-    ctx.fillStyle = bits[cell] === 0 ? this.config.holeColor : this.config.floorColor;
+    const px = t.offsetX + cx * cellPx;
     // Верхний край клетки на экране — её ДАЛЬНЯЯ по миру сторона (HUD-6).
-    ctx.fillRect(t.offsetX + cx * cellPx, pixelY((cy + 1) * t.tile, t), cellPx, cellPx);
+    const py = pixelY((cy + 1) * t.tile, t);
+    ctx.fillStyle = bits[cell] === 0 ? this.config.holeColor : this.floorColorOf(cell, t);
+    ctx.fillRect(px, py, cellPx, cellPx);
+    if (bits[cell] === 0 || !this.hasWater(cell, t)) return;
+    // Вода поверх пола, а не вместо него: под ней остаётся тот же уровень, и
+    // на дыре воды не бывает — дыра это отсутствие пола, а не мель.
+    ctx.fillStyle = this.config.waterColor;
+    ctx.fillRect(px, py, cellPx, cellPx);
+  }
+
+  /**
+   * Цвет пола клетки: цвет её уровня из палитры записи композиции (HUD-6),
+   * уровень выше последнего цвета прижимается к последнему. Пустая палитра или
+   * сетка без уровней — прежний единственный цвет пола.
+   */
+  private floorColorOf(cell: number, t: MinimapTransform): string {
+    const palette = this.config.levelPalette;
+    const levels = t.levels;
+    if (palette.length === 0 || levels === null) return this.config.floorColor;
+    const level = levels[cell] ?? 0;
+    const index = level < 0 ? 0 : Math.min(Math.floor(level), palette.length - 1);
+    return palette[index] ?? this.config.floorColor;
+  }
+
+  /** Есть ли в клетке вода (HUD-6); слоя нет либо он не по этой сетке — нет. */
+  private hasWater(cell: number, t: MinimapTransform): boolean {
+    const water = t.water;
+    return water !== null && (water[cell] ?? 0) !== 0;
+  }
+
+  /**
+   * Следы статических декораций (HUD-6): круги по мировым позициям и радиусам,
+   * которые дала сборка из НАРИСОВАННЫХ инстансов. Слоя нет — прохода нет.
+   */
+  private paintDecorations(ctx: MinimapContext2D, t: MinimapTransform): void {
+    const footprints = t.decorations;
+    if (footprints === null || footprints.length === 0) return;
+    ctx.fillStyle = this.config.decorationColor;
+    for (const one of footprints) {
+      const radius = one.radius * t.scale;
+      // Круг рисуется квадратом со скруглением до пикселя: у миникарты клетка
+      // и так в единицы пикселей, а `arc` заводил бы второй путь отрисовки
+      // ради формы, неразличимой в этом масштабе.
+      const size = Math.max(1, radius * 2);
+      ctx.fillRect(
+        t.offsetX + one.x * t.scale - size / 2,
+        pixelY(one.y, t) - size / 2,
+        size,
+        size,
+      );
+    }
   }
 
   /**
