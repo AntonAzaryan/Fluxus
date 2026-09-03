@@ -30,6 +30,7 @@ import {
   type CameraInput,
   type CameraPose,
   type TerrainCameraSource,
+  type VisualSurfaceSource,
 } from '@fluxus/render';
 import type { TerrainGrid } from '@fluxus/core';
 
@@ -85,6 +86,13 @@ export interface SceneCameraOptions {
    * же конвейером без источников, а не вторым способом считать позу (ED-13).
    */
   readonly grid?: TerrainGrid;
+  /**
+   * Источник визуальной поверхности вьюпорта (REND-9) — тот же, которым живут
+   * подсистемы террейна и воды. С ним высота цели камеры идёт по ПОЛЮ: лощина
+   * кривизны и walkable-настил декорации видны камере так же, как игроку
+   * (ED-13). Нет источника — полем служит уровень клетки (REND-7).
+   */
+  readonly surface?: VisualSurfaceSource;
   /** Шаг высоты уровня — параметр рендера (REND-7); тот же, что у подсистемы. */
   readonly heightStep: number;
   /**
@@ -157,7 +165,9 @@ export function createSceneCamera(options: SceneCameraOptions): SceneCamera {
   // террейна не имеет ни границ, ни поверхности, и подсунуть ему выдуманную
   // арену значило бы клампить камеру по несуществующему.
   let ground: TerrainCameraSource | null =
-    options.grid === undefined ? null : terrainGroundApi(options.grid, options.heightStep);
+    options.grid === undefined
+      ? null
+      : terrainGroundApi(options.grid, options.heightStep, options.surface);
   const input = createCameraInput();
   const rig = new CameraRig({
     ...(ground === null
@@ -198,7 +208,7 @@ export function createSceneCamera(options: SceneCameraOptions): SceneCamera {
     setGrid(grid) {
       // Первая сетка заводит источник: кадр, у которого арены не было, получает
       // её теми же средствами, а не остаётся без границ молча.
-      ground ??= terrainGroundApi(grid, options.heightStep);
+      ground ??= terrainGroundApi(grid, options.heightStep, options.surface);
       ground.setGrid(grid);
       // Границы — значение, и без переподачи камера осталась бы клампиться по
       // прежней арене (CAM-7). Высоту источник отдаёт замыканием и по новой

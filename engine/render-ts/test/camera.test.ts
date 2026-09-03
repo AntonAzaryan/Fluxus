@@ -14,13 +14,16 @@ import {
   createCameraInput,
   edgePanAxes,
   resetCameraInput,
+  VisualSurfaceSource,
   terrainGroundApi,
   type CameraInput,
   type CameraPose,
   type CameraRigOptions,
   type FollowTarget,
 } from '../src/index.js';
-import { FIXED_ONE, type TerrainGrid } from '@fluxus/core';
+import { FIXED_ONE, createTerrainGrid, type TerrainGrid } from '@fluxus/core';
+import { validateCurvatureMap } from '@fluxus/assets';
+import { makeAssets } from './fixtures.js';
 
 const target = (x: number, y: number, snap = false): FollowTarget => ({ x, y, snap });
 
@@ -435,6 +438,41 @@ describe('вспомогательные функции камеры', () => {
     expect(ground.groundHeightAt(1.5, 0.5)).toBeCloseTo(1.2, 6);
     expect(ground.groundHeightAt(99, 99)).toBeCloseTo(1.2, 6); // кламп к крайней клетке
     expect(ground.bounds).toEqual({ minX: 0, minY: 0, maxX: 2, maxY: 1 });
+  });
+
+  it('terrainGroundApi с источником поверхности: высота идёт по ПОЛЮ, а не по уровням', () => {
+    // Камера обеих сборок получала источник только по уровням, и высота цели
+    // игнорировала кривизну: в лощине кадр «висел» над землёй. Поле у неё то
+    // же, что у геометрии террейна и посадки инстансов (REND-9).
+    const grid = createTerrainGrid({
+      width: 4,
+      height: 4,
+      tileSize: FIXED_ONE,
+      levels: Array.from({ length: 4 }, () => '0000'),
+      flags: Array.from({ length: 4 }, () => '....'),
+    });
+    const step = 0.6;
+    const rows = Array.from({ length: 5 }, (_, ny) =>
+      Array.from({ length: 5 }, (_, nx) => (nx >= 1 && nx <= 3 && ny >= 1 && ny <= 3 ? -16 : 0)),
+    );
+    const map = validateCurvatureMap({ width: 4, height: 4, rows });
+    if (!map.ok) throw new Error(map.errors.join('; '));
+
+    const surface = new VisualSurfaceSource(grid);
+    const ground = terrainGroundApi(grid, step, surface);
+    // До init поверхности ещё нет — источник отвечает по уровням и не падает.
+    expect(ground.groundHeightAt(2, 2)).toBe(0);
+
+    surface.init({
+      scene: new THREE.Scene(),
+      assets: makeAssets().service,
+      config: { heightStep: step },
+    });
+    surface.setCurvature(map.map);
+    // Дно лощины — полшага вниз: камера видит его, а не плоскую ступень.
+    expect(ground.groundHeightAt(2, 2)).toBeCloseTo(-0.5 * step, 6);
+    // Без источника та же арена читается плоской — фолбэк по уровням (REND-7).
+    expect(terrainGroundApi(grid, step).groundHeightAt(2, 2)).toBe(0);
   });
 });
 

@@ -56,9 +56,9 @@
       "terrainChunksRebuilt": 24,
       "terrainFloorQuads": 42912,
       "terrainSkirtQuads": 3888,
-      "terrainWallQuads": 6144,
+      "terrainWallQuads": 0,
       "waterBodiesDrawn": 24,
-      "waterDepthTexels": 4096,
+      "waterDepthTexels": 5660,
       "waterQuads": 96,
       "waterRippleSources": 0
     },
@@ -115,9 +115,9 @@
       "terrainChunksRebuilt": 24,
       "terrainFloorQuads": 116352,
       "terrainSkirtQuads": 5472,
-      "terrainWallQuads": 12288,
+      "terrainWallQuads": 0,
       "waterBodiesDrawn": 24,
-      "waterDepthTexels": 16384,
+      "waterDepthTexels": 22640,
       "waterQuads": 96,
       "waterRippleSources": 22
     },

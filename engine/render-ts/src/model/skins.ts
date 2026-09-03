@@ -69,15 +69,26 @@ export function skinTextureSources(
   return sources;
 }
 
-/** THREE-текстура из декодированных пикселей ассета. Работает и в Node. */
-export function textureFromImage(image: DecodedImage, map: TextureTarget['map']): THREE.Texture {
+/**
+ * THREE-текстура из декодированных пикселей ассета. Работает и в Node.
+ *
+ * `owner` — строка учёта памяти (PERF-8): текстуру строят и подсистемы вне
+ * моделей (деталь воды REND-35, покрытия террейна REND-7), и записать её чужим
+ * владельцем значило бы показать в эталоне памяти рост моделей там, где растёт
+ * вода. Умолчание — модели: скины (REND-6) зовут её без аргумента.
+ */
+export function textureFromImage(
+  image: DecodedImage,
+  map: TextureTarget['map'],
+  owner = 'model',
+): THREE.Texture {
   // Пиксели ассета отдаются как есть: DataTexture их не копирует, а типовое
   // сужение до Uint8Array<ArrayBuffer> — формальность (SharedArrayBuffer здесь
   // взяться неоткуда, буфер приходит из декодера).
   const pixels = image.pixels as Uint8Array<ArrayBuffer>;
   const texture = own(
     'texture',
-    'model',
+    owner,
     new THREE.DataTexture(pixels, image.width, image.height, THREE.RGBAFormat),
   );
   // Цветовые карты хранятся в sRGB, карты нормалей — линейные данные, а не цвет.

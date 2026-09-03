@@ -219,8 +219,8 @@ export { applyCameraPose } from './camera/apply.js';
 
 // Визуальная поверхность террейна (REND-9, REND-10): хелпер, общий для
 // подсистем террейна и моделей, и его источник с загрузкой карты кривизны.
-export { cornerLevels, createVisualSurface } from './visualSurface.js';
-export type { MutableVisualSurface, SurfaceNormal, VisualSurface } from './visualSurface.js';
+export { clampIndex, cornerLevels, createVisualSurface, levelFieldSampler } from './visualSurface.js';
+export type { HeightSampler, MutableVisualSurface, SurfaceNormal, VisualSurface } from './visualSurface.js';
 export { VisualSurfaceSource } from './surfaceSource.js';
 export type { SurfaceChangeListener, VisualSurfaceSourceOptions } from './surfaceSource.js';
 export { tiltTarget, smoothTilt, orientFromTiltYaw } from './model/surfaceAlign.js';
@@ -238,7 +238,13 @@ export type { ManeuverEnds } from './model/verticalOffset.js';
 export { TerrainSubsystem } from './subsystems/terrain.js';
 export type { TerrainOptions } from './subsystems/terrain.js';
 export type { TerrainCover, TerrainUvMapping } from './subsystems/terrainCover.js';
-export { buildFloorGeometry, buildWallGeometry } from './subsystems/terrainGeometry.js';
+export {
+  buildFloorGeometry,
+  buildWallGeometry,
+  cliffOwnerCell,
+  cornerHeight,
+  sampleWallSide,
+} from './subsystems/terrainGeometry.js';
 export { toBufferGeometry } from './subsystems/terrainMesh.js';
 export { buildSkirtGeometry, SKIRT_BOTTOMLESS_Z } from './subsystems/terrainSkirt.js';
 export type { CellRect, TerrainGeometryData } from './subsystems/terrainGeometry.js';
@@ -317,8 +323,14 @@ export { WATER_RENDER_ORDER, WaterBodyView } from './water/body.js';
 export type { WaterBodyLimits, WaterBodyOptions } from './water/body.js';
 export { greedyRects, waterGeometryOf, waterRegionsOf } from './water/region.js';
 export type { WaterGeometryData, WaterRect, WaterRegion } from './water/region.js';
-export { depthTexelRect, fillWaterDepth, levelFieldSampler, waterDepthLayout } from './water/depth.js';
-export type { WaterDepthLayout, WaterFieldSampler } from './water/depth.js';
+export { depthTexelRect, fillWaterDepth, waterDepthLayout } from './water/depth.js';
+export type {
+  WaterDepthCells,
+  WaterDepthFill,
+  WaterDepthLayout,
+  WaterFieldSampler,
+  WaterTexelRect,
+} from './water/depth.js';
 export { WaterRippleField } from './water/ripples.js';
 export type { WaterRippleOptions, WaterRippleSource } from './water/ripples.js';
 export { createWaterMaterial, waterFragmentShader } from './water/material.js';

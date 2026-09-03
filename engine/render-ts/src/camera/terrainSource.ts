@@ -9,10 +9,9 @@
  * fixed-point глубже не проникает.
  */
 import { FIXED_ONE, type TerrainGrid } from '@fluxus/core';
+import { levelFieldSampler, type HeightSampler } from '../visualSurface.js';
+import type { VisualSurfaceSource } from '../surfaceSource.js';
 import type { CameraBounds, CameraSources } from './rig.js';
-
-/** Индекс клетки в пределах сетки: точка за ней прижимается к крайней клетке. */
-const clampCell = (value: number, size: number): number => Math.min(Math.max(value, 0), size - 1);
 
 /**
  * Источник поверхности и границ камеры над сеткой террейна — набор,
@@ -26,33 +25,45 @@ export interface TerrainCameraSource extends CameraSources {
 }
 
 /**
- * Поверхность и границы камеры из сетки террейна (CAM-2, CAM-3): уровень
- * клифа клетки под точкой × шаг высоты; точки за сеткой прижимаются к
- * крайним клеткам. Читает те же данные, что рендер террейна (REND-7).
+ * Поверхность и границы камеры из сетки террейна (CAM-2, CAM-3). Высота — та
+ * же ВИЗУАЛЬНАЯ ПОВЕРХНОСТЬ (REND-9), по которой построена геометрия террейна
+ * и посажены инстансы: источник приходит опцией, как подсистемам террейна и
+ * воды. Точки за сеткой прижимаются к крайним клеткам.
+ *
+ * Источника нет — полем служит уровень клетки (REND-7), той же единственной
+ * выборкой `levelFieldSampler`, какой берёт поле вода в сборке без порта
+ * поверхности (REND-35): второй копии формулы «высота по уровням» здесь не
+ * заводится. Разница между ветвями видна там, где поле от уровней отличается:
+ * лощина кривизны и walkable-настил декорации — по уровням камера их не
+ * замечает и держит цель на плоской ступени.
  *
  * Сетка живёт ссылкой, а не снимается при вызове: документная доставка
  * декларативна и приезжает НОВЫМ объектом (REND-14), и снимок молча отвечал бы
  * по прежней арене (CAM-7). Переподать источник конвейеру всё равно нужно —
  * `setGrid` меняет ответы источника, а не состояние камеры.
  */
-export function terrainGroundApi(grid: TerrainGrid, heightStep: number): TerrainCameraSource {
-  let current = grid;
-  let tile = grid.tileSize / FIXED_ONE;
-  let bounds: CameraBounds = gridBounds(grid, tile);
+export function terrainGroundApi(
+  grid: TerrainGrid,
+  heightStep: number,
+  surface?: VisualSurfaceSource,
+): TerrainCameraSource {
+  let levels: HeightSampler = levelFieldSampler(grid, heightStep);
+  let bounds: CameraBounds = gridBounds(grid, grid.tileSize / FIXED_ONE);
   return {
     // Замыкание, а не метод: потребитель отрывает его от объекта и передаёт полем.
     groundHeightAt: (x: number, y: number): number => {
-      const cx = clampCell(Math.floor(x / tile), current.width);
-      const cy = clampCell(Math.floor(y / tile), current.height);
-      return current.levels[cy * current.width + cx]! * heightStep;
+      // Поверхность спрашивается КАЖДЫЙ раз, а не запоминается при сборке: до
+      // `init` источника её ещё нет, и она появляется под уже отданным набором
+      // (REND-9), а сетку под собой она переживает.
+      const field = surface?.current;
+      return field == null ? levels(x, y) : field.heightAt(x, y);
     },
     get bounds(): CameraBounds {
       return bounds;
     },
     setGrid(next: TerrainGrid): void {
-      current = next;
-      tile = next.tileSize / FIXED_ONE;
-      bounds = gridBounds(next, tile);
+      levels = levelFieldSampler(next, heightStep);
+      bounds = gridBounds(next, next.tileSize / FIXED_ONE);
     },
   };
 }

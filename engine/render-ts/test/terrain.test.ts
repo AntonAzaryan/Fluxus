@@ -15,8 +15,12 @@ import {
   buildFloorGeometry,
   buildSkirtGeometry,
   buildWallGeometry,
+  cornerHeight,
   cornerLevels,
+  createCostCounters,
   createVisualSurface,
+  sampleWallSide,
+  withCostSink,
   type RenderContext,
 } from '../src/index.js';
 import { makeAssets, makeTickView } from './fixtures.js';
@@ -816,5 +820,211 @@ describe('покрытия пола и стенок текстурой (REND-7; 
     });
     subsystem.dispose();
     expect(disposed).toBe(true);
+  });
+});
+
+// ------------- раздельные причины пометки и раскладка обрывов по чанкам (T-5)
+
+describe('REND-7: пол и стенки метятся раздельно — выбитый пол стен не двигает', () => {
+  function stand(chunkSize = 8) {
+    const grid = createTerrainGrid({
+      width: 8,
+      height: 8,
+      tileSize: FIXED_ONE,
+      // Возвышенный столбец x = 4: cliff-отрезки ядра идут по его границам.
+      levels: Array.from({ length: 8 }, () => '00001000'),
+      flags: Array.from({ length: 8 }, () => '........'),
+    });
+    const ctx: RenderContext = {
+      scene: new THREE.Scene(),
+      assets: makeAssets().service,
+      config: { heightStep: STEP },
+    };
+    const subsystem = new TerrainSubsystem(grid, { chunkSize });
+    subsystem.init(ctx);
+    return { grid, ctx, subsystem };
+  }
+
+  it('мутация пола пересобирает пол и юбку, а меш стенок остаётся тем же объектом', () => {
+    const { grid, ctx, subsystem } = stand();
+    const walls = ctx.scene.getObjectByName('terrain:walls:0,0');
+    const floor = ctx.scene.getObjectByName('terrain:chunk:0,0');
+    expect(walls).toBeDefined();
+    expect(subsystem.wallVertexCount).toBeGreaterThan(0);
+
+    const bits = new Uint8Array(grid.floor);
+    bits[0] = 0;
+    const counters = createCostCounters();
+    withCostSink(counters, () => {
+      subsystem.syncTick(makeTickView([], { floorBits: bits, floorChangedCells: [0] }));
+      subsystem.updateFrame(0.016, 1);
+    });
+
+    // Пол и юбка пересобраны — дыра видна не позже следующего кадра (TERR-6).
+    expect(ctx.scene.getObjectByName('terrain:chunk:0,0')).not.toBe(floor);
+    expect(counters.terrainChunksRebuilt).toBe(1);
+    expect(counters.terrainFloorQuads).toBeGreaterThan(0);
+    // А стенки — тот же объект сцены и ни одного пересчитанного квада: пол
+    // cliff-геометрию изменить не может (TERR-5), и платить за неё незачем.
+    expect(ctx.scene.getObjectByName('terrain:walls:0,0')).toBe(walls);
+    expect(counters.terrainWallQuads).toBe(0);
+    expect(subsystem.wallVertexCount).toBeGreaterThan(0);
+  });
+
+  it('правка уровня пересобирает и стенки: раздельность множеств не теряет форму', () => {
+    const { ctx, subsystem } = stand();
+    const walls = ctx.scene.getObjectByName('terrain:walls:0,0');
+    const counters = createCostCounters();
+    withCostSink(counters, () => {
+      subsystem.applyGrid(
+        createTerrainGrid({
+          width: 8,
+          height: 8,
+          tileSize: FIXED_ONE,
+          levels: Array.from({ length: 8 }, () => '00011000'),
+          flags: Array.from({ length: 8 }, () => '........'),
+        }),
+      );
+      subsystem.updateFrame(0.016, 1);
+    });
+    expect(ctx.scene.getObjectByName('terrain:walls:0,0')).not.toBe(walls);
+    expect(counters.terrainWallQuads).toBeGreaterThan(0);
+  });
+
+  it('раскладка обрывов по чанкам-владельцам даёт ровно прежнюю геометрию', () => {
+    // Объединение стенок всех чанков — это `grid.cliffs` и ни одного отрезка
+    // дважды: предподсчёт обязан быть разбиением, а не эвристикой.
+    const { grid, ctx, subsystem } = stand(4);
+    let quads = 0;
+    for (const node of ctx.scene.children) {
+      if (!node.name.startsWith('terrain:walls:')) continue;
+      quads += (node as THREE.Mesh).geometry.getIndex()!.count / 6;
+    }
+    expect(quads).toBe(grid.cliffs.length);
+    expect(subsystem.wallVertexCount).toBe(grid.cliffs.length * 4);
+  });
+});
+
+// ---------------------------- снос подсистемы террейна (REND-31, T-7, T-11)
+
+describe('REND-31: снесённый террейн не метит чанков и не строит мешей', () => {
+  it('правка поверхности после сноса не двигает ни одного счётчика', () => {
+    const grid = docGrid();
+    const surface = new VisualSurfaceSource(grid);
+    const ctx: RenderContext = {
+      scene: new THREE.Scene(),
+      assets: makeAssets().service,
+      config: { heightStep: STEP },
+    };
+    const subsystem = new TerrainSubsystem(grid, { chunkSize: CHUNK, surface });
+    subsystem.init(ctx);
+    subsystem.dispose();
+
+    const counters = createCostCounters();
+    withCostSink(counters, () => {
+      // Кисть кривизны после сноса: подписки уже нет.
+      surface.setCurvature(docCurvature([[1, 1]]));
+      subsystem.updateFrame(0.016, 1);
+    });
+    expect(counters.terrainChunksMarked).toBe(0);
+    expect(counters.terrainChunksRebuilt).toBe(0);
+    expect(ctx.scene.children).toEqual([]);
+  });
+
+  it('applyGrid после сноса не строит мешей в чужую сцену', () => {
+    const ctx: RenderContext = {
+      scene: new THREE.Scene(),
+      assets: makeAssets().service,
+      config: { heightStep: STEP },
+    };
+    const subsystem = new TerrainSubsystem(docGrid(), { chunkSize: CHUNK });
+    subsystem.init(ctx);
+    subsystem.dispose();
+    subsystem.applyGrid(docGridRaised(1, 1));
+    subsystem.updateFrame(0.016, 1);
+    expect(ctx.scene.children).toEqual([]);
+  });
+
+  it('при подключённом источнике поверхности мазок метится один раз, а не дважды', () => {
+    const grid = docGrid();
+    const surface = new VisualSurfaceSource(grid);
+    const ctx: RenderContext = {
+      scene: new THREE.Scene(),
+      assets: makeAssets().service,
+      config: { heightStep: STEP },
+    };
+    const subsystem = new TerrainSubsystem(grid, { chunkSize: CHUNK, surface });
+    subsystem.init(ctx);
+    // Тот же канал, которым правка доезжает до подсистемы (REND-9).
+    const notified: number[] = [];
+    surface.onChange((cells) => {
+      if (cells !== null) notified.push(...cells);
+    });
+
+    const marked = createCostCounters();
+    withCostSink(marked, () => {
+      subsystem.applyGrid(docGridRaised(1, 1));
+    });
+
+    // Клетка (1, 1) и вся её окрестность SHAPE_RADIUS лежат в чанке 0, поэтому
+    // каждая названная источником клетка даёт ровно одну пометку: счётчик
+    // обязан совпасть с длиной уведомления. Отметив те же клетки ещё и сам,
+    // террейн показывал бы вдвое больше работы, чем сделано, — пересборка при
+    // этом одна.
+    expect(notified.length).toBeGreaterThan(0);
+    expect(marked.terrainChunksMarked).toBe(notified.length);
+
+    const rebuilt = createCostCounters();
+    withCostSink(rebuilt, () => {
+      subsystem.updateFrame(0.016, 1);
+    });
+    expect(rebuilt.terrainChunksRebuilt).toBe(1);
+  });
+});
+
+// ------------------ кромка стенки и юбки без поля идёт по углам рампы (T-11)
+
+describe('REND-9: без источника поверхности кромка стенки — углы рампы, не уровень', () => {
+  it('cornerHeight на рампе отдаёт угол cornerLevels, а не плоский уровень клетки', () => {
+    // Клетка 0 — рампа нулевого уровня на плато уровня 1: её восточные углы
+    // подняты к проходимому соседу (TERR-5), и пол с юбкой стоят именно на них.
+    const grid = rampGrid();
+    expect(cornerLevels(grid, 0, 0)).toEqual([0, 1, 1, 0]);
+
+    // Узел (1, 0) — восточный угол рампы: высота кромки стенки обязана совпасть
+    // с высотой пола там же, иначе между ними щель.
+    expect(cornerHeight(grid, STEP, undefined, 0, 1, 0)).toBeCloseTo(1 * STEP, 9);
+    // А западный угол остался на своём уровне.
+    expect(cornerHeight(grid, STEP, undefined, 0, 0, 0)).toBeCloseTo(0, 9);
+    // Ветвь с полем отвечает тем же: правило одно, реализации две быть не должно.
+    const surface = createVisualSurface(grid, STEP);
+    expect(cornerHeight(grid, STEP, surface, 0, 1, 0)).toBeCloseTo(1 * STEP, 9);
+  });
+
+  it('sampleWallSide без поля идёт по билинейной площадке углов, а не по уровню', () => {
+    const grid = rampGrid();
+    // Восточное ребро рампы (u = 1): оба его угла подняты — высота 1 × STEP.
+    expect(sampleWallSide(grid, STEP, undefined, 0, 1, 0.5)).toBeCloseTo(1 * STEP, 9);
+    // Середина клетки — половина подъёма, как у плоскости пола.
+    expect(sampleWallSide(grid, STEP, undefined, 0, 0.5, 0.5)).toBeCloseTo(0.5 * STEP, 9);
+    // С полем — та же величина: выборка одна (REND-9).
+    const surface = createVisualSurface(grid, STEP);
+    expect(sampleWallSide(grid, STEP, surface, 0, 0.5, 0.5)).toBeCloseTo(0.5 * STEP, 9);
+  });
+
+  it('юбка под рампой начинается от той же кромки, что и пол — своей копии правила нет', () => {
+    const grid = rampGrid();
+    // Юбка идёт по границе сетки; южное ребро клетки-рампы (y = 0) тянется от
+    // её углов c00 = 0 и c10 = 1 × STEP.
+    const skirt = buildSkirtGeometry(grid, grid.floor, STEP, 1, 0, 0, 1, 1);
+    const tops = new Map<number, number>();
+    for (let v = 0; v < skirt.positions.length; v += 3) {
+      if (Math.abs(skirt.positions[v + 1]!) > 1e-9) continue; // ребро y = 0
+      const x = skirt.positions[v]!;
+      const z = skirt.positions[v + 2]!;
+      tops.set(x, Math.max(tops.get(x) ?? Number.NEGATIVE_INFINITY, z));
+    }
+    expect(tops.get(0)).toBeCloseTo(0, 9);
+    expect(tops.get(1)).toBeCloseTo(1 * STEP, 9);
   });
 });

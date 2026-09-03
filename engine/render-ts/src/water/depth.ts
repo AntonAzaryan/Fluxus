@@ -21,7 +21,6 @@
  * клетку» под потолком пресета (QUAL-1).
  */
 import { DataUtils } from 'three';
-import { FIXED_ONE, type TerrainGrid } from '@fluxus/core';
 import type { WaterRegion } from './region.js';
 
 /** Раскладка глубинной текстуры тела: размер в текселях и мировой охват. */
@@ -85,56 +84,178 @@ export function waterDepthLayout(
 }
 
 /**
- * Поле высот без порта источника поверхности (REND-35, «Сборка без источника
- * поверхности»): полем служит высота уровня клетки (REND-7) — та же опорная
- * высота, что у вертикального смещения инстанса (REND-12). Кривизны в ней нет,
- * поэтому вода в лощине кривизны не видна, а вода в русле из уровней рисуется;
- * ошибкой это не является.
+ * Клетки покрытия глазами заливки: маска тела (`WaterRegion.mask`) и живая
+ * карта пола (TERR-6). Раздельные правила у клетки ТЕЛА и у клетки, попавшей в
+ * bbox покрытия, но телу не принадлежащей, — см. `fillWaterDepth`.
  */
-export function levelFieldSampler(grid: TerrainGrid, heightStep: number): WaterFieldSampler {
-  // Приём `tileSize` — точка входной границы рендера (REND-1, TERR-2).
-  const tile = grid.tileSize / FIXED_ONE;
-  return (wx, wy) => {
-    const x = Math.min(Math.max(Math.floor(wx / tile), 0), grid.width - 1);
-    const y = Math.min(Math.max(Math.floor(wy / tile), 0), grid.height - 1);
-    return grid.levels[y * grid.width + x]! * heightStep;
-  };
+export interface WaterDepthCells {
+  /** Маска клеток тела по сетке row-major: 1 — клетка тела. */
+  readonly mask: Uint8Array;
+  /** Ширина сетки: ею адресуются и маска, и карта пола. */
+  readonly gridWidth: number;
+  /** Живая карта пола (TERR-6); `null` — пол считается везде. */
+  readonly floor: Uint8Array | null;
+}
+
+/** Прямоугольник текселей [tx0..tx1] × [ty0..ty1], включительно. */
+export interface WaterTexelRect {
+  readonly tx0: number;
+  readonly ty0: number;
+  readonly tx1: number;
+  readonly ty1: number;
+}
+
+/** Что заливке нужно сверх поля: адрес правки и клетки покрытия. */
+export interface WaterDepthFill {
+  /** Прямоугольник к перезаполнению; не задан — вся раскладка. */
+  readonly rect?: WaterTexelRect | undefined;
+  /** Клетки покрытия; не заданы — «урез − поле» во всех текселях без правил. */
+  readonly cells?: WaterDepthCells | undefined;
 }
 
 /**
- * Заполняет прямоугольник текселей [tx0..tx1] × [ty0..ty1] (включительно,
- * клампится по раскладке) значением «урез − поле» и возвращает число
- * заполненных текселей — счётную величину стоимости (PERF-3).
+ * Заполняет прямоугольник текселей (клампится по раскладке) значением
+ * «урез − поле» и возвращает число заполненных текселей — счётную величину
+ * стоимости (PERF-3).
  *
  * Тексель адресует ЦЕНТР своей ячейки: так билинейная выборка фрагмента и
  * запечённое значение говорят об одной и той же точке, а край покрытия не
  * съезжает на полтекселя.
+ *
+ * ## Клетка тела, клетка без пола и клетка за телом — три разных правила
+ *
+ * Покрытие — bbox тела, и в него попадают клетки, телу не принадлежащие:
+ * плато между рукавами реки, соседний берег, вырез карты. Меша там нет, но
+ * ЗНАЧЕНИЕ там есть, и билинейная выборка фрагмента у самой кромки меша
+ * смешивает его с последним текселем воды. Отсюда правила:
+ *
+ * - клетка ТЕЛА (`mask === 1`) с полом — «урез − поле» в центре текселя: берег
+ *   внутри тела остаётся линией пересечения уреза полем (REND-35);
+ * - клетка ТЕЛА без пола (TERR-6) — ровно ноль: под выбитой клеткой дна нет, и
+ *   глубина там не положительна, то есть вода не рисуется (REND-35);
+ * - клетка ЗА ТЕЛОМ — ДИЛАТАЦИЯ: наибольшее из значений соседних текселей
+ *   тела, а нет таких соседей — своё «урез − поле». Стена уровня выше уреза не
+ *   берег: без дилатации её тексель держит около −(перепад) при соседнем
+ *   водяном около +0.1 шага, смесь пересекает ноль в доле текселя ВНУТРИ меша,
+ *   и у подножия стены отбрасывалась бы полоса воды с пеной и градиентом
+ *   мелководья.
+ *
+ * Правило дилатации — чистая функция адреса (максимум по соседям, а не
+ * распространение по уже записанным значениям): точечная перезаливка
+ * прямоугольника даёт то же, что перезаливка всей текстуры, и повторный вызов
+ * ничего не сдвигает.
  */
 export function fillWaterDepth(
   target: Uint16Array,
   layout: WaterDepthLayout,
   field: WaterFieldSampler,
   surfaceHeight: number,
-  tx0 = 0,
-  ty0 = 0,
-  tx1 = layout.width - 1,
-  ty1 = layout.height - 1,
+  options: WaterDepthFill = {},
 ): number {
-  const fromX = Math.max(tx0, 0);
-  const fromY = Math.max(ty0, 0);
-  const toX = Math.min(tx1, layout.width - 1);
-  const toY = Math.min(ty1, layout.height - 1);
+  const rect = options.rect;
+  const fromX = Math.max(rect?.tx0 ?? 0, 0);
+  const fromY = Math.max(rect?.ty0 ?? 0, 0);
+  const toX = Math.min(rect?.tx1 ?? layout.width - 1, layout.width - 1);
+  const toY = Math.min(rect?.ty1 ?? layout.height - 1, layout.height - 1);
   if (toX < fromX || toY < fromY) return 0;
   const stepX = layout.sizeX / layout.width;
   const stepY = layout.sizeY / layout.height;
+  const cells = options.cells;
+  /** «Урез − поле» в центре текселя — выборка без правил клеток. */
+  const raw = (tx: number, ty: number): number =>
+    surfaceHeight -
+    field(layout.originX + (tx + 0.5) * stepX, layout.originY + (ty + 0.5) * stepY);
   for (let ty = fromY; ty <= toY; ty++) {
-    const wy = layout.originY + (ty + 0.5) * stepY;
     for (let tx = fromX; tx <= toX; tx++) {
-      const wx = layout.originX + (tx + 0.5) * stepX;
-      target[ty * layout.width + tx] = DataUtils.toHalfFloat(surfaceHeight - field(wx, wy));
+      target[ty * layout.width + tx] = DataUtils.toHalfFloat(
+        texelDepth(cells, layout, tx, ty, raw),
+      );
     }
   }
   return (toX - fromX + 1) * (toY - fromY + 1);
+}
+
+/**
+ * Значение ОДНОГО текселя — чистая функция его адреса: три правила выше,
+ * выбранные принадлежностью клетки телу. Без клеток покрытия остаётся прежняя
+ * разность «урез − поле» — так заливку зовут прямые вызовы (редактор, тесты).
+ */
+function texelDepth(
+  cells: WaterDepthCells | undefined,
+  layout: WaterDepthLayout,
+  tx: number,
+  ty: number,
+  raw: (tx: number, ty: number) => number,
+): number {
+  if (cells === undefined) return raw(tx, ty);
+  if (inBody(cells, layout, tx, ty)) return bodyDepth(cells, layout, tx, ty, raw);
+  return dilated(cells, layout, tx, ty, raw);
+}
+
+/** Клетка сетки под текселем; тексель раскладки всегда лежит в пределах сетки. */
+function cellOf(cells: WaterDepthCells, layout: WaterDepthLayout, tx: number, ty: number): number {
+  const cx = layout.cellX + Math.floor(tx / layout.texelsPerCell);
+  const cy = layout.cellY + Math.floor(ty / layout.texelsPerCell);
+  return cy * cells.gridWidth + cx;
+}
+
+/** Принадлежит ли тексель клетке ТЕЛА — по маске региона (design D4). */
+function inBody(cells: WaterDepthCells, layout: WaterDepthLayout, tx: number, ty: number): boolean {
+  return cells.mask[cellOf(cells, layout, tx, ty)] === 1;
+}
+
+/** Глубина текселя тела: ноль под выбитой клеткой (TERR-6), иначе «урез − поле». */
+function bodyDepth(
+  cells: WaterDepthCells,
+  layout: WaterDepthLayout,
+  tx: number,
+  ty: number,
+  raw: (tx: number, ty: number) => number,
+): number {
+  const floor = cells.floor;
+  if (floor !== null && floor[cellOf(cells, layout, tx, ty)] === 0) return 0;
+  return raw(tx, ty);
+}
+
+/**
+ * Дилатация в тексель за телом: наибольшая глубина среди соседних текселей
+ * тела; соседей нет — своё «урез − поле». Восемь соседей, а не четыре: у
+ * внутреннего угла стены водяной сосед бывает только по диагонали.
+ */
+function dilated(
+  cells: WaterDepthCells,
+  layout: WaterDepthLayout,
+  tx: number,
+  ty: number,
+  raw: (tx: number, ty: number) => number,
+): number {
+  let best = Number.NEGATIVE_INFINITY;
+  for (let dy = -1; dy <= 1; dy++) {
+    for (let dx = -1; dx <= 1; dx++) {
+      if (dx === 0 && dy === 0) continue;
+      const value = sourceDepth(cells, layout, tx + dx, ty + dy, raw);
+      if (value > best) best = value;
+    }
+  }
+  return best === Number.NEGATIVE_INFINITY ? raw(tx, ty) : best;
+}
+
+/**
+ * Глубина соседа как ИСТОЧНИКА дилатации: минус бесконечность у текселя за
+ * покрытием и у текселя, телу не принадлежащего, — источником он не является.
+ */
+function sourceDepth(
+  cells: WaterDepthCells,
+  layout: WaterDepthLayout,
+  tx: number,
+  ty: number,
+  raw: (tx: number, ty: number) => number,
+): number {
+  if (tx < 0 || ty < 0 || tx >= layout.width || ty >= layout.height) {
+    return Number.NEGATIVE_INFINITY;
+  }
+  if (!inBody(cells, layout, tx, ty)) return Number.NEGATIVE_INFINITY;
+  return bodyDepth(cells, layout, tx, ty, raw);
 }
 
 /**
@@ -149,7 +270,7 @@ export function depthTexelRect(
   y0: number,
   x1: number,
   y1: number,
-): { tx0: number; ty0: number; tx1: number; ty1: number } {
+): WaterTexelRect {
   const density = layout.texelsPerCell;
   return {
     tx0: (x0 - layout.cellX) * density,

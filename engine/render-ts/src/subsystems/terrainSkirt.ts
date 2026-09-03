@@ -13,7 +13,7 @@
 import { FIXED_ONE, type TerrainGrid } from '@fluxus/core';
 import { DEFAULT_CURVATURE_TESSELLATION } from '../types.js';
 import { costSink } from '../cost.js';
-import { cornerLevels, type VisualSurface } from '../visualSurface.js';
+import type { VisualSurface } from '../visualSurface.js';
 import { cornerHeight, sampleWallSide, type TerrainGeometryData } from './terrainGeometry.js';
 
 /**
@@ -211,7 +211,12 @@ function skirtDivisions(
   return curved ? steps : 1;
 }
 
-/** Верх юбки в узле сетки: меньшая из высот углов клеток ребра. */
+/**
+ * Верх юбки в узле сетки: меньшая из высот углов клеток ребра. Высота угла —
+ * ровно `cornerHeight` стенок (REND-9), включая ветвь без поля: угол рампы
+ * поднят к проходимому соседу (TERR-5), и юбка обязана дойти до фактической
+ * кромки пола без щели. Своей копии этого правила у юбки нет.
+ */
 function skirtCornerTop(
   grid: TerrainGrid,
   heightStep: number,
@@ -220,35 +225,11 @@ function skirtCornerTop(
   nodeX: number,
   nodeY: number,
 ): number {
-  const owner = skirtCorner(grid, heightStep, surface, edge.ownerX, edge.ownerY, nodeX, nodeY);
+  const ownerCell = edge.ownerY * grid.width + edge.ownerX;
+  const owner = cornerHeight(grid, heightStep, surface, ownerCell, nodeX, nodeY);
   if (edge.neighborX < 0) return owner;
-  return Math.min(
-    owner,
-    skirtCorner(grid, heightStep, surface, edge.neighborX, edge.neighborY, nodeX, nodeY),
-  );
-}
-
-/**
- * Высота угла клетки в узле. С полем — как у стенок (`cornerHeight`); без поля
- * — по `cornerLevels`, а не по плоскому уровню: угол рампы поднят к проходимому
- * соседу (TERR-5), и юбка обязана дойти до фактической кромки пола без щели.
- */
-function skirtCorner(
-  grid: TerrainGrid,
-  heightStep: number,
-  surface: VisualSurface | undefined,
-  cellX: number,
-  cellY: number,
-  nodeX: number,
-  nodeY: number,
-): number {
-  const cell = cellY * grid.width + cellX;
-  if (surface !== undefined) return cornerHeight(grid, heightStep, surface, cell, nodeX, nodeY);
-  const [c00, c10, c11, c01] = cornerLevels(grid, cellX, cellY);
-  const dx = nodeX - cellX;
-  const dy = nodeY - cellY;
-  const level = dy === 0 ? (dx === 0 ? c00 : c10) : dx === 0 ? c01 : c11;
-  return level * heightStep;
+  const neighborCell = edge.neighborY * grid.width + edge.neighborX;
+  return Math.min(owner, cornerHeight(grid, heightStep, surface, neighborCell, nodeX, nodeY));
 }
 
 /** Верх юбки в промежуточной точке разбитой кромки: меньшая из выборок поля. */

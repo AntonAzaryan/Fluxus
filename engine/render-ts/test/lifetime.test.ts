@@ -800,3 +800,73 @@ describe('PERF-9: цикл сборки и сноса тракта не оста
     });
   });
 });
+
+// ------------------- владелец текстуры в учёте памяти (PERF-8, T-8)
+
+describe('PERF-8: текстуру записывает тот, кто ею владеет', () => {
+  const image = { width: 1, height: 1, format: 'rgba8' as const, pixels: new Uint8Array(4) };
+
+  it('деталь воды учтена владельцем water, а не model', () => {
+    const sink = createFootprint();
+    const assets = makeAssets();
+    const grid = flatGrid(8);
+    let before = 0;
+    withFootprintSink(sink, () => {
+      const water = new WaterSubsystem({
+        grid,
+        config: {
+          cells: Array.from({ length: 8 }, () => '0'.repeat(8)),
+          bodies: [
+            {
+              surfaceLevel: 0.5,
+              shallowColor: '#4db8c4',
+              deepColor: '#16505e',
+              detail: {
+                source: 'textured',
+                normalMap: 'visuals/water-normal.png',
+                foamNoise: 'visuals/water-foam.png',
+              },
+            },
+          ],
+        },
+        warn: () => {},
+      });
+      water.init({
+        scene: new THREE.Scene(),
+        assets: assets.service,
+        config: { heightStep: 0.5 },
+      });
+      // Глубинная текстура тела уже учтена подсистемой — считается ПРИРОСТ от
+      // приезда карт детали, а не итог.
+      before = footprintLive(sink).water?.texture ?? 0;
+      assets.resolve('texture', 'visuals/water-normal.png', image);
+      assets.resolve('texture', 'visuals/water-foam.png', image);
+    });
+    const live = footprintLive(sink);
+    // Две карты детали — обе за подсистемой воды: в эталоне памяти деталь воды
+    // обязана стоять своей строкой, а не растить строку моделей.
+    expect((live.water?.texture ?? 0) - before).toBe(2);
+    expect(live.model?.texture ?? 0).toBe(0);
+  });
+
+  it('покрытие террейна учтено владельцем terrain, а не model', () => {
+    const sink = createFootprint();
+    const assets = makeAssets();
+    const grid = flatGrid(8);
+    withFootprintSink(sink, () => {
+      const terrain = new TerrainSubsystem(grid, {
+        chunkSize: 8,
+        floorCover: { texture: 'visuals/grass.png', period: 4 },
+      });
+      terrain.init({
+        scene: new THREE.Scene(),
+        assets: assets.service,
+        config: { heightStep: 0.5 },
+      });
+      assets.resolve('texture', 'visuals/grass.png', image);
+    });
+    const live = footprintLive(sink);
+    expect(live.terrain?.texture).toBe(1);
+    expect(live.model?.texture ?? 0).toBe(0);
+  });
+});

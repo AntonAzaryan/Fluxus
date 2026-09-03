@@ -16,8 +16,10 @@ import {
   depthTexelRect,
   fillWaterDepth,
   waterDepthLayout,
+  type WaterDepthCells,
   type WaterDepthLayout,
   type WaterFieldSampler,
+  type WaterTexelRect,
 } from './depth.js';
 import { createWaterMaterial, type WaterMaterialInput } from './material.js';
 import { waterGeometryOf, type WaterRegion } from './region.js';
@@ -67,10 +69,20 @@ export class WaterBodyView {
   private readonly rippleOptions: WaterRippleOptions;
   /** Прямоугольник клеток к перезаполнению; `maxX < minX` — чистое тело. */
   private dirty = { x0: 0, y0: 0, x1: -1, y1: -1 };
+  /**
+   * Клетки покрытия для заливки: маска тела и ЖИВАЯ карта пола (TERR-6).
+   * Запись одна на тело и переиспользуется — карта пола приезжает доставкой и
+   * подменяется в ней ссылкой, а кадр перезаполнения не аллоцирует (PERF-3).
+   */
+  private readonly cells: { -readonly [K in keyof WaterDepthCells]: WaterDepthCells[K] };
+  /** Запись опций заливки — одна на тело: перезаполнение не аллоцирует лишнего. */
+  private readonly fill: { rect: WaterTexelRect | undefined; cells: WaterDepthCells };
 
   constructor(options: WaterBodyOptions) {
     this.options = options;
     const { region, config, tile, heightStep } = options;
+    this.cells = { mask: region.mask, gridWidth: options.gridWidth, floor: null };
+    this.fill = { rect: undefined, cells: this.cells };
     const surfaceHeight = config.surfaceLevel * heightStep;
     this.layout = waterDepthLayout(region, tile, options.limits.depthTexelsPerCell);
     this.data = new Uint16Array(Math.max(1, this.layout.width * this.layout.height));
@@ -92,6 +104,13 @@ export class WaterBodyView {
     this.texture.wrapS = THREE.ClampToEdgeWrapping;
     this.texture.wrapT = THREE.ClampToEdgeWrapping;
     this.texture.colorSpace = THREE.NoColorSpace;
+    // Ряд текстуры — ширина bbox × плотность текселей по два байта на тексель, и
+    // выравнивание рядов у three по умолчанию четыре: при нечётном произведении
+    // ряды не выровнены, `texImage2D` отвергает загрузку, текстура остаётся
+    // пустой — и КАЖДЫЙ фрагмент воды отбрасывается по `depth <= 0`, молча.
+    // Плотность — ручка пресета с минимумом 1 (QUAL-1), так что нечётная
+    // ширина достижима данными; единица снимает вопрос целиком.
+    this.texture.unpackAlignment = 1;
     this.texture.needsUpdate = true;
 
     this.geometry = own('geometry', 'water', new THREE.BufferGeometry());
@@ -105,6 +124,11 @@ export class WaterBodyView {
     this.mesh = new THREE.Mesh(this.geometry, this.material);
     this.mesh.name = `water:body:${region.body}`;
     this.mesh.renderOrder = WATER_RENDER_ORDER;
+    // Вода — приёмник теней (REND-30): материал читает теневые карты сцены, а
+    // рендерер отдаёт ему признак приёма отдельным униформом — без флага он
+    // остался бы `false`, и река под тенью плато светилась бы как на солнце.
+    // Кастером вода не становится: плоскость на урезе тени не отбрасывает.
+    this.mesh.receiveShadow = true;
     this.rippleOptions = {
       limit: options.limits.rippleSources,
       minSpeed: config.ripples.minSpeed,
@@ -160,21 +184,18 @@ export class WaterBodyView {
    * Перезаполнение помеченного прямоугольника — не позже следующего кадра
    * (REND-35). Возвращает число заполненных текселей: счётная величина
    * стоимости, а не диагностика (PERF-3).
+   *
+   * `floor` — живая карта пола владельца (TERR-6): под выбитой клеткой тела
+   * глубина не положительна, и вода там не рисуется (REND-35). `null` — пол
+   * считается везде.
    */
-  flush(field: WaterFieldSampler): number {
+  flush(field: WaterFieldSampler, floor: Uint8Array | null = null): number {
     if (this.dirty.x1 < this.dirty.x0 || this.layout.width === 0) return 0;
     const rect = depthTexelRect(this.layout, this.dirty.x0, this.dirty.y0, this.dirty.x1, this.dirty.y1);
     const surfaceHeight = this.options.config.surfaceLevel * this.options.heightStep;
-    const texels = fillWaterDepth(
-      this.data,
-      this.layout,
-      field,
-      surfaceHeight,
-      rect.tx0,
-      rect.ty0,
-      rect.tx1,
-      rect.ty1,
-    );
+    this.cells.floor = floor;
+    this.fill.rect = rect;
+    const texels = fillWaterDepth(this.data, this.layout, field, surfaceHeight, this.fill);
     this.dirty = { x0: 0, y0: 0, x1: -1, y1: -1 };
     if (texels > 0) this.texture.needsUpdate = true;
     return texels;

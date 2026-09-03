@@ -38,9 +38,11 @@
  * ## Свет приходит механизмом three, а не соседней подсистемой
  *
  * `lights: true` — и рендерер сам кладёт в программу источники СЦЕНЫ
- * (`ambientLightColor`, `directionalLights`). Ссылки на подсистему освещения у
- * воды нет и не будет: подсистемы за общим контрактом друг о друге не знают
- * (REND-8), а второго перечня источников света в пакете быть не должно.
+ * (`ambientLightColor`, `directionalLights`) и их теневые карты
+ * (`directionalShadowMap`, REND-30). Ссылки на подсистему освещения у воды нет
+ * и не будет: подсистемы за общим контрактом друг о друге не знают (REND-8), а
+ * второго перечня источников света и второй теневой карты в пакете быть не
+ * должно — тень читается штатными чанками три, теми же, что у остальной сцены.
  */
 import * as THREE from 'three';
 import {
@@ -57,16 +59,29 @@ import {
 import { uniformOf } from '../uniforms.js';
 import { own } from '../footprint.js';
 
-/** Позиция меша — уже мировая (меш строится в мировых координатах, REND-7). */
+/**
+ * Позиция меша — уже мировая (меш строится в мировых координатах, REND-7).
+ *
+ * Координаты теневых карт считает штатный чанк три: ему нужна `worldPosition`
+ * ровно этим именем, и `vDirectionalShadowCoord` он объявляет и заполняет сам.
+ * Нормали у геометрии воды нет (плоскость на урезе), поэтому `HAS_NORMAL` три
+ * не определяет и нормального смещения тени в чанке не будет — для плоскости
+ * оно и не нужно.
+ */
 const WATER_VERTEX = /* glsl */ `
+#include <common>
+#include <shadowmap_pars_vertex>
+
 varying vec3 vWorld;
 varying vec3 vViewPosition;
 
 void main() {
-  vWorld = (modelMatrix * vec4(position, 1.0)).xyz;
-  vec4 viewPosition = viewMatrix * vec4(vWorld, 1.0);
+  vec4 worldPosition = modelMatrix * vec4(position, 1.0);
+  vWorld = worldPosition.xyz;
+  vec4 viewPosition = viewMatrix * worldPosition;
   vViewPosition = -viewPosition.xyz;
   gl_Position = projectionMatrix * viewPosition;
+  #include <shadowmap_vertex>
 }
 `;
 
@@ -199,6 +214,7 @@ vec2 waterRippleSlope(vec2 world) {
 const WATER_FRAGMENT_HEAD = /* glsl */ `
 #include <common>
 #include <lights_pars_begin>
+#include <shadowmap_pars_fragment>
 
 varying vec3 vWorld;
 varying vec3 vViewPosition;
@@ -293,20 +309,51 @@ void main() {
   vec3 irradiance = ambientLightColor;
   vec3 specular = vec3(0.0);
 #if NUM_DIR_LIGHTS > 0
-  for (int i = 0; i < NUM_DIR_LIGHTS; i++) {
-    vec3 toLight = directionalLights[i].direction;
-    float lit = max(dot(viewNormal, toLight), 0.0);
-    irradiance += directionalLights[i].color * lit;
-    vec3 halfDir = normalize(toLight + viewDir);
-    float ndh = max(dot(viewNormal, halfDir), 0.0);
-    float vdh = max(dot(viewDir, halfDir), 0.0);
+  // Переменные подняты НАД циклом, а сам цикл помечен unroll_loop_start:
+  // массивы теневых сэмплеров индексируются только константой, поэтому три
+  // разворачивает такие циклы сама — а разворот склеивает тела без скобок, и
+  // объявление внутри стало бы повторным. Тот же приём и по той же причине,
+  // что в lights_fragment_begin самой библиотеки.
+  vec3 toLight;
+  float lit;
+  float shade;
+  vec3 halfDir;
+  float ndh;
+  float vdh;
+  float schlick;
+  float lobe;
+  #if defined( USE_SHADOWMAP ) && NUM_DIR_LIGHT_SHADOWS > 0
+  DirectionalLightShadow waterShadow;
+  #endif
+  #pragma unroll_loop_start
+  for ( int i = 0; i < NUM_DIR_LIGHTS; i ++ ) {
+    toLight = directionalLights[ i ].direction;
+    lit = max(dot(viewNormal, toLight), 0.0);
+    // Тень читается ТОЙ ЖЕ картой, что у остальной сцены (REND-30): река под
+    // кэшированной тенью плато обязана быть в тени, иначе вода — единственная
+    // поверхность кадра, освещённая как на солнце. Стоимость — одна выборка на
+    // фрагмент, и её нет вовсе, когда режим теней сцены выключен: без
+    // USE_SHADOWMAP этот блок в программу не попадает (QUAL-1, ручка
+    // lighting.shadowMode), поэтому своей ручки вода не заводит.
+    shade = 1.0;
+    #if defined( USE_SHADOWMAP ) && ( UNROLLED_LOOP_INDEX < NUM_DIR_LIGHT_SHADOWS )
+    waterShadow = directionalLightShadows[ i ];
+    shade = receiveShadow ? getShadow( directionalShadowMap[ i ], waterShadow.shadowMapSize, waterShadow.shadowIntensity, waterShadow.shadowBias, waterShadow.shadowRadius, vDirectionalShadowCoord[ i ] ) : 1.0;
+    #endif
+    lit *= shade;
+    irradiance += directionalLights[ i ].color * lit;
+    halfDir = normalize(toLight + viewDir);
+    ndh = max(dot(viewNormal, halfDir), 0.0);
+    vdh = max(dot(viewDir, halfDir), 0.0);
     // Шлик по полувектору: у воды в упор отражается ~2%, и блик обязан это
     // помнить — иначе солнце заливает всю плоскость одним пятном.
-    float schlick = uFresnelF0 + (1.0 - uFresnelF0) * pow(1.0 - vdh, 5.0);
+    schlick = uFresnelF0 + (1.0 - uFresnelF0) * pow(1.0 - vdh, 5.0);
     // Нормированный Blinn-Phong, (n + 8) / 8π: острее лепесток — ярче искра.
-    float lobe = pow(ndh, uShininess) * (uShininess + 8.0) / 25.1327;
-    specular += directionalLights[i].color * lobe * schlick * min(lit * 4.0, 1.0);
+    lobe = pow(ndh, uShininess) * (uShininess + 8.0) / 25.1327;
+    // Блик гаснет вместе с диффузным: искра в тени плато — та же ложь о свете.
+    specular += directionalLights[ i ].color * lobe * schlick * min(lit * 4.0, 1.0);
   }
+  #pragma unroll_loop_end
 #endif
 
   float tint = clamp(fresnel * uFresnelStrength, 0.0, 1.0);

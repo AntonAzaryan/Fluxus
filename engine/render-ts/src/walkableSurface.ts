@@ -30,7 +30,7 @@ import {
   type NormalizedModel,
 } from '@fluxus/assets';
 import { orientFromTiltYaw, tiltTarget, type TiltVector } from './model/surfaceAlign.js';
-import type { SurfaceNormal } from './visualSurface.js';
+import { clampIndex, type SurfaceNormal } from './visualSurface.js';
 
 /**
  * Размещение walkable-инстанса — ровно те входы, из которых подсистема моделей
@@ -482,6 +482,3 @@ function slabAxis(origin: number, dir: number, lo: number, hi: number): boolean 
   return true;
 }
 
-function clampIndex(value: number, size: number): number {
-  return Math.min(Math.max(value, 0), size - 1);
-}
