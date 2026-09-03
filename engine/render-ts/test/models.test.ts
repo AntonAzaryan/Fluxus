@@ -5,8 +5,8 @@
  */
 import { describe, expect, it, vi } from 'vitest';
 import * as THREE from 'three';
-import { ModelsSubsystem, type RenderContext } from '../src/index.js';
-import type { VisualManifest } from '@fluxus/assets';
+import { ModelsSubsystem, type BlobCaster, type LightingSink, type RenderContext } from '../src/index.js';
+import { modelDerivatives, type VisualManifest } from '@fluxus/assets';
 import { makeAssets, makeEntityView, makeModel, makeTickView, type AssetsStub } from './fixtures.js';
 
 const MODEL_ID = 'models/runner.mdx';
@@ -48,6 +48,7 @@ function makeRig(
     readonly fadeSeconds?: number;
     readonly stateComponents?: readonly string[];
     readonly deadState?: string;
+    readonly shadows?: LightingSink;
   } = {},
 ): {
   subsystem: ModelsSubsystem;
@@ -987,5 +988,396 @@ describe('персональная шкала времени сущности (R
     expect(slowYaw).toBeCloseTo(fullYaw, 10);
     expect(fullYaw).toBeGreaterThan(0);
     expect(fullYaw).toBeLessThan(Math.PI / 2);
+  });
+});
+
+
+/**
+ * Авторитет смерти — на ЗАПИСИ инстанса (REND-4), а не в её сегодняшнем
+ * контроллере. Контроллер — носитель воспроизведения: он вправе появиться позже
+ * модели (`assets` ASSET-4), смениться вместе с ярусом (REND-20, QUAL-1) и
+ * пересобраться переподачей манифеста (REND-17), — а сущность всё это время
+ * мертва, и каждый следующий контроллер обязан встать трупом так же, как встал
+ * бы первый.
+ */
+describe('фиксация смерти переживает смену контроллера (REND-4)', () => {
+  /** Сборка, назвавшая состояние смерти: бит 0 словаря — `Dead`. */
+  const DEAD_BIT = 1;
+
+  /** Запись без контроля костей: ярус ей выбирает пресет (QUAL-1, REND-20). */
+  function tierlessManifest(): VisualManifest {
+    const manifest = makeManifest();
+    delete manifest.entities.Runner!.boneControls;
+    return manifest;
+  }
+
+  function died(entity: number): Parameters<typeof makeTickView>[1] {
+    return { freshEvents: true, events: [{ type: 'EntityDied', data: { entity } }] };
+  }
+
+  it('гибель ДО прихода модели: поздний контроллер встаёт трупом', () => {
+    // Состояния смерти сборка не называет — путь событийный, как в сцене без
+    // зеркалирования маркера.
+    const { subsystem, assets } = makeRig();
+    subsystem.syncTick(makeTickView([makeEntityView(1)]));
+    // Контроллера ещё нет: модель — разделяемый ассет и вправе ехать сколько
+    // угодно (ASSET-4), а гибель уже случилась, и терять её нельзя.
+    expect(subsystem.instanceFor(1)!.controller).toBeNull();
+
+    subsystem.syncTick(makeTickView([makeEntityView(1)], died(1)));
+    assets.resolve('model', MODEL_ID, makeModel());
+
+    const controller = subsystem.instanceFor(1)!.controller!;
+    expect(controller.isDead).toBe(true);
+    expect(controller.currentClipName).toBe('Death');
+  });
+
+  it('то же с названным состоянием смерти: маркер доставки поднимает фиксацию', () => {
+    const { subsystem, assets } = makeRig(makeManifest(), {
+      stateComponents: ['Dead'],
+      deadState: 'Dead',
+    });
+    // Инстанс появился ЖИВЫМ (маркера в этой доставке нет), поэтому «появился
+    // уже мёртвым» тут ни при чём: смерть приходит событием при пустом
+    // контроллере, а состояние лишь подтверждает её следующими доставками.
+    subsystem.syncTick(makeTickView([makeEntityView(1)]));
+    subsystem.syncTick(makeTickView([makeEntityView(1, { states: DEAD_BIT })], died(1)));
+    assets.resolve('model', MODEL_ID, makeModel());
+    subsystem.syncTick(makeTickView([makeEntityView(1, { states: DEAD_BIT })]));
+
+    expect(subsystem.instanceFor(1)!.controller!.isDead).toBe(true);
+  });
+
+  it('смена яруса по пресету не поднимает труп (QUAL-1 → REND-20)', () => {
+    const { subsystem, assets } = makeRig(tierlessManifest());
+    subsystem.syncTick(makeTickView([makeEntityView(1)]));
+    assets.resolve('model', MODEL_ID, makeModel());
+    subsystem.syncTick(makeTickView([makeEntityView(1)], died(1)));
+    expect(subsystem.instanceFor(1)!.tier).toBe('batched');
+    expect(subsystem.instanceFor(1)!.controller!.isDead).toBe(true);
+
+    // Пресет переключил ярус записей, ярус не назвавших: инстанс пересобран, и
+    // контроллер у него ДРУГОЙ — а сущность как была мертва, так и осталась.
+    subsystem.applyQuality(new Map([['models.defaultTier', 'detailed']]));
+
+    const controller = subsystem.instanceFor(1)!.controller!;
+    expect(subsystem.instanceFor(1)!.tier).toBe('detailed');
+    expect(controller.isDead).toBe(true);
+    expect(controller.currentClipName).toBe('Death');
+  });
+
+  it('переподача манифеста со сменой модели не поднимает труп (REND-17)', () => {
+    const { subsystem, assets } = makeRig();
+    subsystem.syncTick(makeTickView([makeEntityView(1)]));
+    assets.resolve('model', MODEL_ID, makeModel());
+    subsystem.syncTick(makeTickView([makeEntityView(1)], died(1)));
+
+    const next = makeManifest();
+    next.entities.Runner!.model = 'models/other.mdx';
+    subsystem.applyManifest(next);
+    assets.resolve('model', 'models/other.mdx', makeModel());
+
+    expect(subsystem.instanceFor(1)!.controller!.isDead).toBe(true);
+  });
+
+  it('возрождение снимает фиксацию с записи, а не только с контроллера', () => {
+    const { subsystem, assets } = makeRig(makeManifest(), { reviveEvent: 'HeroRespawned' });
+    subsystem.syncTick(makeTickView([makeEntityView(1)]));
+    subsystem.syncTick(makeTickView([makeEntityView(1)], died(1)));
+    subsystem.syncTick(
+      makeTickView([makeEntityView(1)], {
+        freshEvents: true,
+        events: [{ type: 'HeroRespawned', data: { entity: 1 } }],
+      }),
+    );
+    // Оба события пришлись на окно загрузки: и гибель, и возрождение записаны
+    // на записи, и контроллер появляется живым.
+    assets.resolve('model', MODEL_ID, makeModel());
+
+    expect(subsystem.instanceFor(1)!.controller!.isDead).toBe(false);
+  });
+
+  it('разрыв непрерывности снимает фиксацию с записи (REND-2)', () => {
+    const { subsystem, assets } = makeRig();
+    subsystem.syncTick(makeTickView([makeEntityView(1)]));
+    subsystem.syncTick(makeTickView([makeEntityView(1)], died(1)));
+    // Перемотка через момент смерти: мир авторитетно другой, и труп в нём жив.
+    subsystem.syncTick(makeTickView([makeEntityView(1)], { snapAll: true }));
+    assets.resolve('model', MODEL_ID, makeModel());
+
+    expect(subsystem.instanceFor(1)!.controller!.isDead).toBe(false);
+  });
+});
+
+/**
+ * Провал наблюдаем ровно СНИЖЕНИЕМ (REND-4, REND-12): состояние `fall` —
+ * представление опускающегося инстанса, а не отметка о полученном событии.
+ */
+describe('состояние fall выводится из снижения (REND-4, REND-12)', () => {
+  type Offset = NonNullable<VisualManifest['entities'][string]['verticalOffset']>;
+
+  /** Манифест с клипом состояния `fall`; параметры снижения — по требованию. */
+  function fallManifest(offset?: Offset): VisualManifest {
+    const manifest = makeManifest();
+    const entry = manifest.entities.Runner!;
+    entry.animations = {
+      ...entry.animations,
+      states: { ...entry.animations?.states, fall: 'Fall' },
+    };
+    if (offset !== undefined) entry.verticalOffset = offset;
+    return manifest;
+  }
+
+  const fell = { freshEvents: true, events: [{ type: 'FellThroughFloor', data: { entity: 1 } }] };
+
+  it('запись без параметров снижения в состояние fall не входит', () => {
+    const { subsystem, assets } = makeRig(fallManifest());
+    subsystem.syncTick(makeTickView([makeEntityView(1)]));
+    assets.resolve('model', MODEL_ID, makeModel());
+
+    subsystem.syncTick(makeTickView([makeEntityView(1)], fell));
+    for (let i = 0; i < 60; i++) subsystem.updateFrame(1 / 60, 1);
+
+    // Снижаться нечем — и клипа падения на стоящей сущности быть не должно:
+    // иначе он держался бы до разрыва непрерывности, врал о происходящем и
+    // перебивал бы состояния локомоции.
+    expect(subsystem.instanceFor(1)!.controller!.currentClipName).toBe('Stand - 1');
+    expect(subsystem.instanceFor(1)!.pose.z).toBe(0);
+  });
+
+  it('запись со снижением входит в него и опускается', () => {
+    const { subsystem, assets } = makeRig(fallManifest({ fallSpeed: 6, fallDepth: 3 }));
+    subsystem.syncTick(makeTickView([makeEntityView(1)]));
+    assets.resolve('model', MODEL_ID, makeModel());
+
+    subsystem.syncTick(makeTickView([makeEntityView(1)], fell));
+    expect(subsystem.instanceFor(1)!.controller!.currentClipName).toBe('Fall');
+    subsystem.updateFrame(1 / 60, 1);
+    expect(subsystem.instanceFor(1)!.pose.z).toBeLessThan(0);
+  });
+
+  it('снятые переподачей параметры снимают и состояние (REND-17)', () => {
+    const { subsystem, assets } = makeRig(fallManifest({ fallSpeed: 6, fallDepth: 3 }));
+    subsystem.syncTick(makeTickView([makeEntityView(1)]));
+    assets.resolve('model', MODEL_ID, makeModel());
+    subsystem.syncTick(makeTickView([makeEntityView(1)], fell));
+    subsystem.updateFrame(1 / 60, 1);
+    expect(subsystem.instanceFor(1)!.pose.z).toBeLessThan(0);
+
+    // Автор убрал снижение из записи: инстанс возвращается на поверхность тем
+    // же кадром, а состояние уходит вместе со снижением.
+    subsystem.applyManifest(fallManifest());
+    subsystem.syncTick(makeTickView([makeEntityView(1)]));
+    subsystem.updateFrame(1 / 60, 1);
+
+    expect(subsystem.instanceFor(1)!.pose.z).toBe(0);
+    expect(subsystem.instanceFor(1)!.controller!.currentClipName).toBe('Stand - 1');
+  });
+});
+
+/**
+ * Угасающий инстанс держит ПОСЛЕДНЕЕ доставленное состояние (FOW-8), и
+ * интерполировать его заново нечем: альфа кадра принадлежит потоку доставок и
+ * каждой следующей сбрасывается (REND-2).
+ */
+describe('поза записи в fade-out замирает (FOW-8 → REND-2)', () => {
+  it('ушедший в туман юнит не отматывает свой последний шаг', () => {
+    const { subsystem, assets } = makeRig(makeManifest(), { fadeSeconds: 0.5 });
+    subsystem.syncTick(makeTickView([makeEntityView(1)]));
+    assets.resolve('model', MODEL_ID, makeModel());
+    for (let i = 0; i < 60; i++) subsystem.updateFrame(1 / 60, 1); // fade-in доигран
+
+    // Последний доставленный шаг — из нуля в единицу по X.
+    subsystem.syncTick(makeTickView([makeEntityView(1, { prevX: 0, currX: 1, moving: true })]));
+    subsystem.updateFrame(1 / 60, 1);
+    expect(subsystem.instanceFor(1)!.pose.x).toBeCloseTo(1, 6);
+
+    // Сущность ушла в туман: следующие кадры идут с альфой начала интервала —
+    // так их и подаёт буфер доставки. Замри поза не здесь, юнит дрожал бы между
+    // 0 и 1 весь fade.
+    subsystem.syncTick(makeTickView([]));
+    subsystem.updateFrame(1 / 60, 0);
+    expect(subsystem.instanceFor(1)!.pose.x).toBeCloseTo(1, 6);
+    subsystem.updateFrame(1 / 60, 0.5);
+    expect(subsystem.instanceFor(1)!.pose.x).toBeCloseTo(1, 6);
+    // Угасание при этом идёт: доля проявленности — не поза.
+    expect(subsystem.instanceFor(1)).not.toBeNull();
+  });
+});
+
+/**
+ * Контактное пятно (REND-30) повторяет след НАРИСОВАННОГО инстанса, а не
+ * консервативную границу отсечения по всем кадрам всех клипов (ASSET-12).
+ */
+describe('радиус контактного пятна — габарит bind-позы (REND-30)', () => {
+  function blobRig(): { subsystem: ModelsSubsystem; assets: AssetsStub; casters: BlobCaster[] } {
+    const casters: BlobCaster[] = [];
+    const shadows: LightingSink = {
+      setCaster: () => {},
+      dropCaster: () => {},
+      invalidateStatic: () => {},
+      setBlobCaster: (caster) => { casters.push(caster); },
+      dropBlobCaster: () => {},
+    };
+    const { subsystem, assets } = makeRig(makeManifest(), { shadows });
+    return { subsystem, assets, casters };
+  }
+
+  it('пятно не раздувается границами отсечения', () => {
+    const { subsystem, assets, casters } = blobRig();
+    subsystem.syncTick(makeTickView([makeEntityView(1)]));
+    const model = makeModel();
+    assets.resolve('model', MODEL_ID, model);
+
+    const bounds = subsystem.instanceFor(1)!.bounds!;
+    const expected = Math.max(bounds.maxX - bounds.minX, bounds.maxY - bounds.minY) / 2;
+    expect(casters).toHaveLength(1);
+    expect(casters[0]!.radius).toBeCloseTo(expected, 10);
+
+    // Те же данные, что у отсечения (REND-21), дали бы пятно во много раз шире:
+    // запечённые границы — объединение всех кадров всех клипов, то есть выпад
+    // атаки и распластанная смерть разом, и след юнита ими раздут всю его жизнь.
+    const baked = modelDerivatives(model);
+    if (!baked.ok) throw new Error('фикстура обязана давать запечённые производные');
+    const normalized = 1 / model.height; // масштаб записи 1, высота модели → 1
+    const cullWidth = Math.max(
+      baked.derivatives.bounds.max[0] - baked.derivatives.bounds.min[0],
+      baked.derivatives.bounds.max[1] - baked.derivatives.bounds.min[1],
+    ) * normalized;
+    expect(casters[0]!.radius).toBeLessThan(cullWidth / 2);
+  });
+});
+
+/**
+ * Идентификатор сущности переиспользуется (NTR-16): после разветвления истории
+ * освободившийся номер достаётся другому объекту, и его вид приезжает вместе с
+ * ним. Правкой живой записи вид не применить — за ним и модель, и запись
+ * манифеста, и ярус (REND-20).
+ */
+describe('смена вида под живым идентификатором пересоздаёт инстанс (NTR-16)', () => {
+  it('запись того же номера с другим видом строится заново', () => {
+    const manifest = makeManifest();
+    manifest.entities.Keeper = { model: 'models/keeper.mdx', scale: 1 };
+    const { subsystem, assets } = makeRig(manifest);
+
+    subsystem.syncTick(makeTickView([makeEntityView(1)]));
+    assets.resolve('model', MODEL_ID, makeModel());
+    const before = subsystem.instanceFor(1)!;
+    expect(before.model).not.toBeNull();
+
+    // Тот же номер — другой вид. Наследовать чужую модель он не вправе.
+    subsystem.syncTick(makeTickView([makeEntityView(1, { kind: 'Keeper' })]));
+    const after = subsystem.instanceFor(1)!;
+    expect(after).not.toBe(before);
+    // Модель нового вида ещё не доехала — значит и рисуется заглушка (ASSET-4),
+    // а не поддерево прежнего вида.
+    expect(after.placeholder).toBe(true);
+    expect(after.model).toBeNull();
+    expect(assets.requests).toContainEqual({ kind: 'model', id: 'models/keeper.mdx' });
+
+    // Дорога, которой этот случай приходит на самом деле: ветвление истории
+    // (NTR-16) поднимает `snapAll`, и освободившийся номер приезжает уже с
+    // чужим видом. Правило то же — запись пересоздаётся.
+    assets.resolve('model', 'models/keeper.mdx', makeModel());
+    subsystem.syncTick(makeTickView([makeEntityView(1)], { snapAll: true }));
+    const branched = subsystem.instanceFor(1)!;
+    expect(branched).not.toBe(after);
+    expect(branched.model).not.toBeNull();
+  });
+
+  it('вид, ставший невизуальным, убирает нарисованное', () => {
+    const { subsystem, ctx, assets } = makeRig();
+    subsystem.syncTick(makeTickView([makeEntityView(1)]));
+    assets.resolve('model', MODEL_ID, makeModel());
+    expect(ctx.scene.children.length).toBe(1);
+
+    subsystem.syncTick(makeTickView([makeEntityView(1, { kind: null })]));
+    expect(subsystem.instanceFor(1)!.model).toBeNull();
+    expect(ctx.scene.children.length).toBe(0);
+  });
+});
+
+/**
+ * Пиксели скина разделяются модулем ассетов (ASSET-2), и GPU-текстура за ними
+ * — тоже (REND-3, REND-6): десять инстансов одного скина заливают одну картинку
+ * в видеопамять ОДИН раз.
+ */
+describe('текстуры скина разделяются инстансами (REND-6 → REND-31)', () => {
+  /** Карта базового цвета первого материала инстанса. */
+  function baseMap(subsystem: ModelsSubsystem, entity: number): THREE.Texture | null {
+    return subsystem.instanceFor(entity)!.model!.materials[0]!.map;
+  }
+
+  it('N инстансов одного скина держат одну текстуру', () => {
+    const { subsystem, assets } = makeRig();
+    subsystem.syncTick(makeTickView([makeEntityView(1), makeEntityView(2), makeEntityView(3)]));
+    assets.resolve('model', MODEL_ID, makeModel());
+    assets.resolve('texture', 'tex/red.png', {
+      width: 1,
+      height: 1,
+      format: 'rgba8',
+      pixels: Uint8Array.from([9, 9, 9, 255]),
+    });
+
+    const first = baseMap(subsystem, 1);
+    expect(first).not.toBeNull();
+    expect(baseMap(subsystem, 2)).toBe(first);
+    expect(baseMap(subsystem, 3)).toBe(first);
+
+    // Смена скина одного инстанса заводит текстуру ДРУГИХ пикселей — и соседей
+    // не трогает (REND-6).
+    assets.resolve('texture', 'tex/blue.png', {
+      width: 1,
+      height: 1,
+      format: 'rgba8',
+      pixels: Uint8Array.from([1, 2, 3, 255]),
+    });
+    subsystem.setSkin(1, 'blue');
+    expect(baseMap(subsystem, 1)).not.toBe(first);
+    expect(baseMap(subsystem, 2)).toBe(first);
+  });
+
+  it('текстура уходит с последней ссылкой, а не с первой', () => {
+    const { subsystem, assets } = makeRig();
+    subsystem.syncTick(makeTickView([makeEntityView(1), makeEntityView(2)]));
+    assets.resolve('model', MODEL_ID, makeModel());
+    assets.resolve('texture', 'tex/red.png', {
+      width: 1,
+      height: 1,
+      format: 'rgba8',
+      pixels: Uint8Array.from([9, 9, 9, 255]),
+    });
+    const shared = baseMap(subsystem, 1)!;
+    const disposed = vi.spyOn(shared, 'dispose');
+
+    // Первый инстанс снят — текстуру держит второй.
+    subsystem.syncTick(makeTickView([makeEntityView(2)]));
+    expect(disposed).not.toHaveBeenCalled();
+    expect(baseMap(subsystem, 2)).toBe(shared);
+
+    // Ушёл и он: держать пиксели в видеопамяти больше некому (REND-31).
+    subsystem.syncTick(makeTickView([]));
+    expect(disposed).toHaveBeenCalledTimes(1);
+  });
+});
+
+/**
+ * Ожидание готовности модели живёт ССЫЛКОЙ на записи (`waitingOn`): снятый
+ * инстанс обязан уйти из ожиданий своего — и только своего — ассета.
+ */
+describe('ожидание ассета снимается вместе с инстансом (ASSET-4)', () => {
+  it('доехавшая модель не достаётся снятому инстансу', () => {
+    const { subsystem, ctx, assets } = makeRig();
+    subsystem.syncTick(makeTickView([makeEntityView(1), makeEntityView(2)]));
+    const waiting = subsystem.instanceFor(1)!;
+
+    // Первый ушёл, пока модель ещё ехала.
+    subsystem.syncTick(makeTickView([makeEntityView(2)]));
+    assets.resolve('model', MODEL_ID, makeModel());
+
+    expect(waiting.model).toBeNull();
+    expect(subsystem.instanceFor(2)!.model).not.toBeNull();
+    // В сцене остался ровно один держатель — снятый ничего в неё не вернул.
+    expect(ctx.scene.children.length).toBe(1);
   });
 });

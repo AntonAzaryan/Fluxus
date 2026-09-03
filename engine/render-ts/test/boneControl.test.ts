@@ -5,7 +5,14 @@
  */
 import { describe, expect, it } from 'vitest';
 import * as THREE from 'three';
-import { BoneControlState, clampYaw, smoothYaw, stepYaw, wrapAngle } from '../src/index.js';
+import {
+  BoneControlState,
+  clampYaw,
+  smoothYaw,
+  stepYaw,
+  wrapAngle,
+  type BoneLookup,
+} from '../src/index.js';
 
 describe('математика доворота', () => {
   it('wrapAngle приводит угол к (-π, π]', () => {
@@ -102,5 +109,94 @@ describe('BoneControlState.apply (REND-5)', () => {
     control.apply({ bonesByName }, 1, 0, 0.016, (message) => warnings.push(message));
     expect(warnings.length).toBe(1);
     expect(warnings[0]).toContain('Bone_Head');
+  });
+});
+
+
+/**
+ * Доворот идёт вокруг вертикали МОДЕЛИ (REND-5), а не вокруг Z родителя кости.
+ * У MDX повороты в позе покоя единичны (`build.ts`), и разницы не видно; риги
+ * glTF (BLND-11) приезжают с повёрнутыми Hips/Spine, и `premultiply` вокруг Z
+ * родителя разворачивал бы торс вокруг наклонённой оси.
+ */
+describe('ось доворота при повёрнутой позе покоя (REND-5, BLND-11)', () => {
+  /** Поворот родителя в покое: 90° вокруг X — model-up уезжает в −Y родителя. */
+  const REST = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1, 0, 0), Math.PI / 2);
+
+  interface TiltedRig {
+    readonly bone: THREE.Bone;
+    readonly parent: THREE.Bone;
+    readonly withSkeleton: BoneLookup;
+    readonly withoutSkeleton: BoneLookup;
+  }
+
+  function makeTiltedRig(): TiltedRig {
+    const parent = new THREE.Bone();
+    parent.name = 'b0';
+    parent.quaternion.copy(REST);
+    const bone = new THREE.Bone();
+    bone.name = 'b1';
+    parent.add(bone);
+    const body = new THREE.Group();
+    body.add(parent);
+    // Мировые матрицы до сборки скелета — как в `createModelInstance`: иначе
+    // матрицы обратной привязки посчитались бы по единичным.
+    body.updateMatrixWorld(true);
+    const bonesByName = new Map([['Bone_Chest', bone]]);
+    return {
+      bone,
+      parent,
+      withSkeleton: { bonesByName, skeleton: new THREE.Skeleton([parent, bone]) },
+      withoutSkeleton: { bonesByName },
+    };
+  }
+
+  /** Мировая ориентация кости: композиция покоя родителя и её локального поворота. */
+  function worldOf(rig: TiltedRig): THREE.Quaternion {
+    return new THREE.Quaternion().multiplyQuaternions(rig.parent.quaternion, rig.bone.quaternion);
+  }
+
+  /** Что обязано получиться: поза покоя, довёрнутая на `yaw` вокруг вертикали модели. */
+  function expected(yaw: number): THREE.Quaternion {
+    return new THREE.Quaternion()
+      .setFromAxisAngle(new THREE.Vector3(0, 0, 1), yaw)
+      .multiply(REST);
+  }
+
+  it('кость доворачивается вокруг вертикали модели, а не вокруг Z родителя', () => {
+    const rig = makeTiltedRig();
+    const control = new BoneControlState({
+      torso: { bone: 'Bone_Chest', maxYawDeg: 45, smoothing: 0 },
+    });
+
+    // Цель 90°, лимит 45°: доворот ровно на лимит — вокруг model-up.
+    control.apply(rig.withSkeleton, Math.PI / 2, 0, 0.016);
+
+    expect(worldOf(rig).angleTo(expected(Math.PI / 4))).toBeCloseTo(0, 6);
+  });
+
+  it('без скелета ось берётся из накопленных поворотов предков — тот же результат', () => {
+    const rig = makeTiltedRig();
+    const control = new BoneControlState({
+      torso: { bone: 'Bone_Chest', maxYawDeg: 45, smoothing: 0 },
+    });
+
+    control.apply(rig.withoutSkeleton, Math.PI / 2, 0, 0.016);
+
+    expect(worldOf(rig).angleTo(expected(Math.PI / 4))).toBeCloseTo(0, 6);
+  });
+
+  it('ось считается раз на роль и переживает кадры: доворот не накапливается', () => {
+    const rig = makeTiltedRig();
+    const control = new BoneControlState({
+      torso: { bone: 'Bone_Chest', maxYawDeg: 45, smoothing: 0 },
+    });
+
+    for (let i = 0; i < 5; i++) control.apply(rig.withSkeleton, Math.PI / 2, 0, 0.016);
+    expect(worldOf(rig).angleTo(expected(Math.PI / 4))).toBeCloseTo(0, 6);
+
+    // Цель снята — кость возвращается ровно в позу покоя, а не «около неё».
+    control.apply(rig.withSkeleton, null, 0, 0.016);
+    expect(worldOf(rig).angleTo(REST)).toBeCloseTo(0, 6);
   });
 });

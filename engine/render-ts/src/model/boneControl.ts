@@ -9,8 +9,14 @@
  */
 import * as THREE from 'three';
 
-/** MDX Z-up: вертикаль модели; premultiply вокруг неё — доворот в пространстве родителя кости. */
+/** Z-up канонических осей ассета (ASSET-5): вертикаль МОДЕЛИ, вокруг которой идёт доворот. */
 const UP_Z = new THREE.Vector3(0, 0, 1);
+
+/** Переиспользуемое хозяйство разбора позы привязки — оси считаются раз на роль. */
+const SCRATCH_MATRIX = new THREE.Matrix4();
+const SCRATCH_POSITION = new THREE.Vector3();
+const SCRATCH_SCALE = new THREE.Vector3();
+const SCRATCH_QUAT = new THREE.Quaternion();
 
 /** Приводит угол к (-π, π] — кратчайшая дуга без перескока через ±π. */
 export function wrapAngle(angle: number): number {
@@ -52,6 +58,13 @@ export interface BoneControlDef {
 interface RoleState {
   /** Кость, к которой роль привязана сейчас: переподача манифеста её меняет (REND-17). */
   bone: string;
+  /**
+   * Ось доворота в пространстве РОДИТЕЛЯ кости; null — кость ещё не найдена.
+   * Считается один раз: поза привязки — свойство рига, а не кадра (см.
+   * `upAxisInParent`). Роль, переехавшая на другую кость, начинается заново
+   * вместе со своим состоянием — и ось пересчитывается по новой кости.
+   */
+  axis: THREE.Vector3 | null;
   yaw: number;
   warned: boolean;
   /** Что мы записали в кость в прошлом кадре и что там было до override. */
@@ -62,6 +75,58 @@ interface RoleState {
 /** Доступ к костям инстанса по исходным именам нод модели. */
 export interface BoneLookup {
   readonly bonesByName: ReadonlyMap<string, THREE.Bone>;
+  /**
+   * Скелет инстанса — источник позы ПРИВЯЗКИ (`build.ts`, `buildSkeleton`): по
+   * ней берётся ориентация родителя кости для оси доворота (`upAxisInParent`).
+   * Необязателен: без него ось считается по накопленным локальным поворотам
+   * предков — на иерархии, которую ещё не двигал клип, это то же самое.
+   */
+  readonly skeleton?: THREE.Skeleton;
+}
+
+/**
+ * Ось доворота роли: вертикаль МОДЕЛИ, выраженная в пространстве родителя кости
+ * (REND-5). `bone.quaternion.premultiply(q)` крутит кость в осях её родителя,
+ * поэтому вокруг model-up она повернётся только если ось взята как
+ * `q_родителя⁻¹ · Z`. У MDX повороты в позе покоя единичны (`build.ts`), и обе
+ * оси совпадают; у ригов glTF (BLND-11) с повёрнутыми Hips/Spine разница
+ * наблюдаема сразу — торс разворачивается вокруг наклонённой оси.
+ *
+ * Ориентация родителя берётся из позы ПРИВЯЗКИ, а не из текущего кадра: ось —
+ * свойство рига, и пересчитывать её каждый кадр значило бы возить её вместе с
+ * клипом. Пишет в `out` и его же возвращает.
+ */
+function upAxisInParent(bone: THREE.Bone, lookup: BoneLookup, out: THREE.Vector3): THREE.Vector3 {
+  const parent = bone.parent;
+  if (parent === null) return out.copy(UP_Z);
+  return out.copy(UP_Z).applyQuaternion(bindQuaternion(parent, lookup).invert()).normalize();
+}
+
+/** Узел иерархии — кость: выше корня скелета накапливать уже нечего. */
+function isBone(node: THREE.Object3D | null): node is THREE.Bone {
+  return node !== null && (node as Partial<THREE.Bone>).isBone === true;
+}
+
+/**
+ * Ориентация узла в позе привязки, модельные оси. Матрицы обратной привязки
+ * скелета — прямой ответ (их и считает `buildSkeleton` по позе покоя либо
+ * берёт у формата); без скелета остаются локальные повороты предков, накопленные
+ * до корня скелета. Возвращает ОБЩИЙ scratch-кватернион — вызывающий обязан
+ * употребить его сразу.
+ */
+function bindQuaternion(node: THREE.Object3D, lookup: BoneLookup): THREE.Quaternion {
+  const bones = lookup.skeleton?.bones;
+  const index = bones === undefined ? -1 : bones.indexOf(node as THREE.Bone);
+  const inverse = index < 0 ? undefined : lookup.skeleton?.boneInverses[index];
+  if (inverse !== undefined) {
+    SCRATCH_MATRIX.copy(inverse).invert().decompose(SCRATCH_POSITION, SCRATCH_QUAT, SCRATCH_SCALE);
+    return SCRATCH_QUAT;
+  }
+  SCRATCH_QUAT.identity();
+  for (let current: THREE.Object3D | null = node; isBone(current); current = current.parent) {
+    SCRATCH_QUAT.premultiply(current.quaternion);
+  }
+  return SCRATCH_QUAT;
 }
 
 /**
@@ -126,6 +191,7 @@ export class BoneControlState {
       if (state === undefined) {
         state = {
           bone: def.bone,
+          axis: null,
           yaw: 0,
           warned: false,
           lastWritten: null,
@@ -145,6 +211,11 @@ export class BoneControlState {
         continue;
       }
 
+      // Ось доворота — раз на роль (REND-5): поза привязки от кадра не зависит,
+      // а кость роли меняется только переподачей манифеста, и она заводит
+      // состояние роли заново.
+      state.axis ??= upAxisInParent(bone, instance, new THREE.Vector3());
+
       const relative = targetYaw === null ? 0 : wrapAngle(targetYaw - rootYaw);
       state.yaw = stepYaw(state.yaw, relative, (def.maxYawDeg * Math.PI) / 180, def.smoothing, dt);
 
@@ -155,7 +226,7 @@ export class BoneControlState {
         bone.quaternion.copy(state.preOverride);
       }
       state.preOverride.copy(bone.quaternion);
-      bone.quaternion.premultiply(this.quat.setFromAxisAngle(UP_Z, state.yaw));
+      bone.quaternion.premultiply(this.quat.setFromAxisAngle(state.axis, state.yaw));
       state.lastWritten ??= new THREE.Quaternion();
       state.lastWritten.copy(bone.quaternion);
     }

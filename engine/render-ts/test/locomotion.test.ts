@@ -482,7 +482,10 @@ describe('ModelsSubsystem: состояния манёвров (REND-4)', () => 
   });
 
   it('провал играет клип fall по событию арены (ARENA-5)', () => {
-    const { subsystem, assets } = makeModelsRig();
+    // Запись называет снижение: состояние `fall` производно от него, а не от
+    // самого события (REND-4, REND-12) — запись без `fallSpeed`/`fallDepth` в
+    // это состояние не входит вовсе (см. models.test.ts).
+    const { subsystem, assets } = makeModelsRig({ fallSpeed: 6, fallDepth: 3 });
     subsystem.syncTick(makeTickView([makeEntityView(1)]));
     assets.resolve('model', MODEL_ID, makeModel());
 

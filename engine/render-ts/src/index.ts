@@ -481,8 +481,8 @@ export {
 export type { BoneControlDef, BoneLookup } from './model/boneControl.js';
 
 // Скины (REND-6).
-export { applySkin, skinTextureSources, textureFromImage } from './model/skins.js';
-export type { SkinApplication, SkinTextureSource } from './model/skins.js';
+export { applySkin, createSkinTextureCache, skinTextureSources, textureFromImage } from './model/skins.js';
+export type { SkinApplication, SkinTextureCache, SkinTextureSource } from './model/skins.js';
 
 // Типы контракта ассетов, которыми оперирует публичный API рендера.
 export type {

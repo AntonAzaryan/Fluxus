@@ -5,9 +5,16 @@
  * Текстура приезжает декодированной (ASSET-5), поэтому проверяется весь путь.
  */
 import * as THREE from 'three';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import type { DecodedImage, NormalizedModel } from '@fluxus/assets';
-import { applySkin, buildSharedModel, createModelInstance, skinTextureSources } from '../src/index.js';
+import {
+  applySkin,
+  buildSharedModel,
+  createModelInstance,
+  createSkinTextureCache,
+  skinTextureSources,
+  textureFromImage,
+} from '../src/index.js';
 import type { SkinTextureSource } from '../src/model/skins.js';
 import { makeAssets, makeModel } from './fixtures.js';
 
@@ -184,5 +191,61 @@ describe('applySkin (REND-6)', () => {
     const instance = createModelInstance(buildSharedModel(makeModel()));
     applySkin(instance.ownTextureTargets(), new Map([[42, path('tex/ghost.png')]]), assets.service);
     expect(assets.requests).toEqual([]);
+  });
+});
+
+
+/**
+ * Кэш GPU-текстур скина (REND-6, REND-31): пиксели ассета разделяются модулем
+ * ассетов (ASSET-2), и заливать их в видеопамять по разу на инстанс незачем.
+ */
+describe('createSkinTextureCache', () => {
+  it('одни пиксели — одна текстура; цветовое пространство их разделяет', () => {
+    const cache = createSkinTextureCache();
+    const pixels = image(1, 2, 3);
+
+    const base = cache.acquire(pixels, 'base');
+    expect(cache.acquire(pixels, 'base')).toBe(base);
+    // Эмиссия — то же пространство, что базовый цвет: та же текстура.
+    expect(cache.acquire(pixels, 'emissive')).toBe(base);
+    // Карта нормалей линейна (`textureFromImage`) — ей нужна своя.
+    const normal = cache.acquire(pixels, 'normal');
+    expect(normal).not.toBe(base);
+    expect(base.colorSpace).toBe(THREE.SRGBColorSpace);
+    expect(normal.colorSpace).toBe(THREE.NoColorSpace);
+
+    // Другие пиксели — другая текстура, сколько бы их ни было в кэше.
+    expect(cache.acquire(image(4, 5, 6), 'base')).not.toBe(base);
+  });
+
+  it('текстура освобождается последней ссылкой, а не первой', () => {
+    const cache = createSkinTextureCache();
+    const pixels = image(7, 7, 7);
+    const texture = cache.acquire(pixels, 'base');
+    cache.acquire(pixels, 'base');
+    const disposed = vi.spyOn(texture, 'dispose');
+
+    cache.release(texture);
+    expect(disposed).not.toHaveBeenCalled();
+    cache.release(texture);
+    expect(disposed).toHaveBeenCalledTimes(1);
+
+    // Отпущенные пиксели снова спрашивают — строится НОВАЯ текстура: прежняя
+    // отдана, и держать её было бы утечкой (REND-31).
+    expect(cache.acquire(pixels, 'base')).not.toBe(texture);
+  });
+
+  it('чужую текстуру не трогает, а свои отдаёт со сносом ассета', () => {
+    const cache = createSkinTextureCache();
+    const own = cache.acquire(image(1, 1, 1), 'base');
+    const foreign = textureFromImage(image(2, 2, 2), 'base');
+    const ownDisposed = vi.spyOn(own, 'dispose');
+    const foreignDisposed = vi.spyOn(foreign, 'dispose');
+
+    cache.release(foreign);
+    expect(foreignDisposed).not.toHaveBeenCalled();
+
+    cache.dispose();
+    expect(ownDisposed).toHaveBeenCalledTimes(1);
   });
 });
