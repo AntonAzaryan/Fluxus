@@ -9,9 +9,10 @@
  * тумана СТОЯЩИЙ юнит вставал бы лицом на +X (yaw 0) до первого своего шага.
  */
 import { describe, expect, it } from 'vitest';
-import { LOCOMOTION_NORMAL } from '@fluxus/core';
+import { LOCOMOTION_AIRBORNE, LOCOMOTION_NORMAL } from '@fluxus/core';
 import { type ExtractedTick } from '../src/index.js';
-import { FACING_MEMORY_LIMIT, ViewBuffer, interpolateYaw } from '../src/viewBuffer.js';
+import { FACING_MEMORY_LIMIT, ViewBuffer } from '../src/viewBuffer.js';
+import { interpolateYaw } from '../src/entityRecord.js';
 
 /**
  * Сущность доставки стенда: курс `NaN` — стоит, число — идёт этим курсом.
@@ -24,6 +25,10 @@ interface Delivered {
   readonly pace?: number;
   /** Индекс вида в словаре доставки; не задан — `−1`, сущность не рисуется. */
   readonly kind?: number;
+  /** Позиция по X; не задана — ноль (тестам курса она не нужна). */
+  readonly x?: number;
+  /** Вид манёвра (REND-12); не задан — обычный шаг. */
+  readonly motion?: number;
 }
 
 /**
@@ -49,17 +54,23 @@ function extOf(
     snapAll,
     branchChanged,
     freshEvents: true,
+    // Рукописный кадр стенда ПОЛНЫЙ: набор строк в нём авторитетен, и
+    // отсутствие сущности означает её смерть (SHELL-3). Частичные кадры
+    // проверяются отдельным стендом ниже.
+    full: true,
+    removed: new Float64Array(0),
+    removedCount: 0,
     count,
     id: Float64Array.from(entities, (entity) => entity.id),
     kind: Int32Array.from(entities, (entity) => entity.kind ?? -1),
-    x: new Float32Array(count),
+    x: Float32Array.from(entities, (entity) => entity.x ?? 0),
     y: new Float32Array(count),
     level: new Uint8Array(count),
     simLevel: new Uint8Array(count),
     flags: new Uint8Array(count),
     facingYaw: Float32Array.from(entities, (entity) => entity.facing),
     aimYaw: new Float32Array(count).fill(Number.NaN),
-    motion: new Uint8Array(count).fill(LOCOMOTION_NORMAL),
+    motion: Uint8Array.from(entities, (entity) => entity.motion ?? LOCOMOTION_NORMAL),
     motionPhase: new Float32Array(count).fill(Number.NaN),
     flightPhase: new Float32Array(count).fill(Number.NaN),
     timeScale: Float32Array.from(entities, (entity) => entity.pace ?? 1),
@@ -292,5 +303,231 @@ describe('ViewBuffer: курс — пара двух последних дост
     expect(interpolateYaw(0.5, 1.5, 0)).toBeCloseTo(0.5, 9);
     expect(interpolateYaw(0.5, 1.5, 1)).toBeCloseTo(1.5, 9);
     expect(interpolateYaw(0.5, 1.5, 0.25)).toBeCloseTo(0.75, 9);
+  });
+});
+
+// -- change `delivery-interpolation-and-dirty-extract`: буфер под джиттер
+
+describe('ViewBuffer: показ с отставанием под каденс доставок (REND-2)', () => {
+  const TICK_SECONDS = 0.05;
+
+  /**
+   * Стенд каденса: доставки и кадры по управляемым часам, позиция сущности
+   * растёт на единицу за доставку — по ней и видно, ЧТО именно показано.
+   */
+  function rig(): {
+    deliver: (ms: number, tick: number, x: number, snapAll?: boolean) => void;
+    frame: (ms: number) => number;
+    shownX: () => number;
+    currX: () => number;
+    prevX: () => number;
+    delay: () => number;
+  } {
+    let now = 0;
+    const buffer = new ViewBuffer({ tickSeconds: TICK_SECONDS, clock: () => now });
+    let alpha = 0;
+    const record = (): { prevX: number; currX: number } => buffer.view.entities.get(5)!;
+    return {
+      deliver: (ms, tick, x, snapAll = false) => {
+        now = ms;
+        buffer.apply(extOf(tick, [{ id: 5, facing: 0, x }], snapAll));
+      },
+      frame: (ms) => {
+        now = ms;
+        alpha = buffer.frame(ms)!.alpha;
+        return alpha;
+      },
+      shownX: () => {
+        const entity = record();
+        return entity.prevX + (entity.currX - entity.prevX) * alpha;
+      },
+      currX: () => record().currX,
+      prevX: () => record().prevX,
+      delay: () => buffer.view.cadence!.delaySeconds,
+    };
+  }
+
+  /** Ровный канал: отставание — интервал, и показ идёт по последней доставке. */
+  function steady(stand: ReturnType<typeof rig>, count: number): number {
+    let tick = 100;
+    let x = 0;
+    let ms = 0;
+    for (let i = 0; i < count; i++) {
+      stand.deliver(ms, tick++, x++);
+      ms += 50;
+    }
+    return ms - 50;
+  }
+
+  it('ровный каденс: показывается последняя доставка, отложенного не заводится', () => {
+    const stand = rig();
+    const last = steady(stand, 8);
+    expect(stand.delay()).toBeCloseTo(0.05, 6);
+    // Последняя доставленная позиция — сразу `curr`: буфер ничего не удержал.
+    expect(stand.currX()).toBe(7);
+    // Середина интервала — середина сегмента: поведение прежнее.
+    stand.frame(last + 25);
+    expect(stand.shownX()).toBeCloseTo(6.5, 6);
+  });
+
+  it('нецелый интервал каденса отложенного не заводит: сравнение с допуском', () => {
+    const stand = rig();
+    let tick = 100;
+    let x = 0;
+    let ms = 0;
+    // 60 доставок в секунду: интервал в миллисекундах непредставим точно, и
+    // время показа `now − интервал` промахивается мимо штампа на 1e-14 мс.
+    // Без допуска (`DISPLAY_EPSILON_MS`) ровный канал раз за разом откладывал
+    // бы доставку, и локальная сборка поехала бы не тем путём, что прежде.
+    for (let i = 0; i < 16; i++) {
+      stand.deliver(ms, tick++, x++);
+      ms += 1000 / 60;
+    }
+    // Отставание — ровно интервал, и последняя доставка показана сразу.
+    expect(stand.delay()).toBeCloseTo(1 / 60, 6);
+    expect(stand.currX()).toBe(15);
+    expect(stand.prevX()).toBe(14);
+  });
+
+  it('поздний пакет не упирает показ в curr: сегмент ещё не доигран', () => {
+    const stand = rig();
+    let tick = 100;
+    let x = 0;
+    let ms = 0;
+    // Дрожащий канал: доставки то через 25, то через 75 мс. Отставание
+    // поднимается выше интервала, и один сегмент всегда в запасе.
+    for (let i = 0; i < 16; i++) {
+      stand.deliver(ms, tick++, x++);
+      ms += i % 2 === 0 ? 25 : 75;
+    }
+    const last = ms - 75;
+    expect(stand.delay()).toBeGreaterThan(0.05);
+
+    // Полтора интервала без единой доставки. БЕЗ буфера альфа упёрлась бы в
+    // единицу — сущность стояла бы у `curr`, пока пакет не придёт.
+    const alpha = stand.frame(last + 75);
+    expect(alpha).toBeLessThan(1);
+    expect(alpha).toBeGreaterThan(0);
+  });
+
+  it('пачка доставок не телепортирует: вторая ждёт своего времени показа', () => {
+    const stand = rig();
+    let tick = 100;
+    let x = 0;
+    let ms = 0;
+    for (let i = 0; i < 16; i++) {
+      stand.deliver(ms, tick++, x++);
+      ms += i % 2 === 0 ? 25 : 75;
+    }
+    // Две доставки в один и тот же момент — пачка после паузы канала.
+    const burst = ms + 100;
+    stand.deliver(burst, tick++, x++);
+    stand.deliver(burst, tick++, x++);
+    const newest = x - 1;
+    // Показанное — ПЕРВАЯ из пачки: вторая лежит в отложенном слоте, и скачка
+    // через обе сущность не делает.
+    expect(stand.currX()).toBe(newest - 1);
+    // Её время показа приходит позже — и тогда она вступает сама, без доставки.
+    stand.frame(burst + 400);
+    expect(stand.currX()).toBe(newest);
+  });
+
+  it('вид манёвра отложенной доставки ждёт времени показа (REND-12)', () => {
+    let now = 0;
+    const buffer = new ViewBuffer({ tickSeconds: TICK_SECONDS, clock: () => now });
+    const record = (): { motion: number; prevMotion: number } => buffer.view.entities.get(5)!;
+    let tick = 100;
+    let x = 0;
+    let ms = 0;
+    // Дрожащий канал: отставание поднимается выше интервала, и очередная
+    // доставка ложится в отложенный слот.
+    for (let i = 0; i < 16; i++) {
+      now = ms;
+      buffer.apply(extOf(tick++, [{ id: 5, facing: 0, x: x++ }]));
+      ms += i % 2 === 0 ? 25 : 75;
+    }
+    expect(record().motion).toBe(LOCOMOTION_NORMAL);
+
+    // Прыжок начался, но его время показа ещё не наступило: вид манёвра —
+    // член пары интерполяции, и ставить его раньше показа значило бы считать
+    // вклад ПРОШЛОГО тика высотой ещё не показанного прыжка.
+    now = ms;
+    buffer.apply(extOf(tick++, [{ id: 5, facing: 0, x: x++, motion: LOCOMOTION_AIRBORNE }]));
+    expect(record().motion).toBe(LOCOMOTION_NORMAL);
+
+    // Время показа дошло: вид вступает, а вклад прошлого тика остаётся шагом.
+    buffer.frame(ms + 200);
+    expect(record().motion).toBe(LOCOMOTION_AIRBORNE);
+    expect(record().prevMotion).toBe(LOCOMOTION_NORMAL);
+  });
+
+  it('разрыв непрерывности сбрасывает отложенное и показывает доставленное', () => {
+    const stand = rig();
+    let tick = 100;
+    let x = 0;
+    let ms = 0;
+    for (let i = 0; i < 16; i++) {
+      stand.deliver(ms, tick++, x++);
+      ms += i % 2 === 0 ? 25 : 75;
+    }
+    // В слоте лежит доставка, чьё время показа не пришло, — и тут разрыв
+    // непрерывности (перемотка, REND-2). Отложенное несёт стёртую ветвь, и
+    // показывать его больше нечего: снап отставанию не подчиняется.
+    stand.deliver(ms + 25, 5, 99, true);
+    expect(stand.currX()).toBe(99);
+    expect(stand.prevX()).toBe(99);
+    // Слот пуст: следующий кадр ничего не «доигрывает» из стёртой ветви.
+    stand.frame(ms + 400);
+    expect(stand.currX()).toBe(99);
+  });
+});
+
+describe('ViewBuffer: частичный кадр (SHELL-3)', () => {
+  /** Кадр без части строк: отсутствие означает «не менялась», а не смерть. */
+  function partial(
+    tick: number,
+    entities: readonly Delivered[],
+    removed: readonly number[] = [],
+  ): ExtractedTick {
+    return {
+      ...extOf(tick, entities),
+      full: false,
+      removed: Float64Array.from(removed),
+      removedCount: removed.length,
+    };
+  }
+
+  it('запись без строки живёт дальше и не дёргается: пара схлопнута', () => {
+    const buffer = new ViewBuffer({ tickSeconds: 1 / 60, clock: () => 0 });
+    buffer.apply(extOf(1, [{ id: 5, facing: 0, x: 1 }, { id: 6, facing: 0, x: 10 }]));
+    buffer.apply(partial(2, [{ id: 5, facing: 0, x: 2 }]));
+
+    // Обе живы: отсутствие строки — не смерть.
+    expect(buffer.view.entities.size).toBe(2);
+    const idle = buffer.view.entities.get(6)!;
+    // Пара стоящей схлопнута: интерполировать её между двумя точками значило бы
+    // дёргать её назад в начале каждого интервала.
+    expect(idle.prevX).toBe(idle.currX);
+    expect(idle.currX).toBe(10);
+    expect(idle.snap).toBe(false);
+    // А изменившаяся сдвинулась своим сегментом.
+    const moved = buffer.view.entities.get(5)!;
+    expect(moved.prevX).toBe(1);
+    expect(moved.currX).toBe(2);
+  });
+
+  it('удаление идёт списком, а не отсутствием строки', () => {
+    const buffer = new ViewBuffer({ tickSeconds: 1 / 60, clock: () => 0 });
+    buffer.apply(extOf(1, [{ id: 5, facing: 0 }, { id: 6, facing: 0 }]));
+    buffer.apply(partial(2, [], [6]));
+    expect(buffer.view.entities.has(5)).toBe(true);
+    expect(buffer.view.entities.has(6)).toBe(false);
+  });
+
+  it('полный кадр авторитетен: запись без строки в нём удаляется', () => {
+    const buffer = new ViewBuffer({ tickSeconds: 1 / 60, clock: () => 0 });
+    buffer.apply(extOf(1, [{ id: 5, facing: 0 }, { id: 6, facing: 0 }]));
+    buffer.apply(extOf(2, [{ id: 5, facing: 0 }]));
+    expect(buffer.view.entities.has(6)).toBe(false);
   });
 });

@@ -42,6 +42,24 @@ export interface SocketPose {
 }
 
 /**
+ * Поза узла в форме источника — семь чисел, а не объекты three: так её отдаёт
+ * подсистема моделей на обоих ярусах (REND-20), и сюда она ложится без импорта
+ * — подсистемы друг о друге не знают (REND-8). Переписывается в `SocketPose`
+ * одной переиспользуемой записью на модуль.
+ */
+export interface SocketNodePose {
+  x: number;
+  y: number;
+  z: number;
+  qx: number;
+  qy: number;
+  qz: number;
+  qw: number;
+}
+
+const NODE_POSE_SCRATCH: SocketNodePose = { x: 0, y: 0, z: 0, qx: 0, qy: 0, qz: 0, qw: 1 };
+
+/**
  * Инстансы моделей глазами подсистемы частиц — источник узлов-сокетов (REND-24).
  * Подсистема моделей удовлетворяет этому интерфейсу по форме, а импорта её сюда
  * нет: подсистемы друг о друге не знают (REND-8), и знать нужно ровно одно —
@@ -64,7 +82,7 @@ export interface SocketSource {
    * Мировая поза названного узла в кадре; `false` — узла нет (инстанс ещё
    * строится, вид без такого узла). Пишет в `out` и ничего не аллоцирует.
    */
-  nodePose?(entity: EntityId, node: string, out: SocketPose, decoration?: boolean): boolean;
+  nodePose?(entity: EntityId, node: string, out: SocketNodePose, decoration?: boolean): boolean;
 }
 
 /** Состояние привязки, которое оболочка эмиттера несёт на себе. */
@@ -116,7 +134,12 @@ export function resolveSocketPose(
   // появление метода у подсистемы моделей, а не правка здесь.
   if (sockets.nodePose !== undefined) {
     dropSocketCache(binding);
-    if (sockets.nodePose(entity, name, out, binding.decoration)) return true;
+    if (sockets.nodePose(entity, name, NODE_POSE_SCRATCH, binding.decoration)) {
+      const pose = NODE_POSE_SCRATCH;
+      out.position.set(pose.x, pose.y, pose.z);
+      out.quaternion.set(pose.qx, pose.qy, pose.qz, pose.qw);
+      return true;
+    }
     warnOnce(
       `socket:${name}`,
       `render: узла-сокета "${name}" в инстансе нет — эмиттер играет в позиции сущности (REND-24)`,

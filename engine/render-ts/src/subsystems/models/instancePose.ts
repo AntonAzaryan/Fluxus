@@ -12,7 +12,7 @@ import type { VisualSurface, SurfaceNormal } from '../../visualSurface.js';
 import { orientFromTiltYaw, smoothTilt, tiltTarget, type TiltVector } from '../../model/surfaceAlign.js';
 import { advanceFall, jumpArc, jumpBase, maneuverEnds, type ManeuverEnds } from '../../model/verticalOffset.js';
 import { smoothYaw } from '../../model/boneControl.js';
-import { interpolateYaw } from '../../viewBuffer.js';
+import { interpolateYaw } from '../../entityRecord.js';
 import { arcHeightOf, isAirborne, type InstanceRecord } from './instanceRecord.js';
 
 // Переиспользуемые между кадрами объекты — аллокаций на инстанс на кадр нет.

@@ -10,12 +10,13 @@
   },
   "extract": {
     "extractCalls": 16,
-    "extractChannelValues": 1024,
-    "extractEntitiesCopied": 64,
+    "extractChannelValues": 316,
+    "extractEntitiesCopied": 18,
     "extractEntitiesScanned": 64,
     "extractEvents": 0,
     "extractFloorCellsScanned": 0,
-    "extractStatPairs": 64
+    "extractRowsCompared": 60,
+    "extractStatPairs": 32
   },
   "performance": {
     "frame": {

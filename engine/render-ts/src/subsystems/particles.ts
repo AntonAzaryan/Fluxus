@@ -121,7 +121,7 @@ import {
   type StateReader,
 } from './shellSupport.js';
 
-export type { SocketPose, SocketSource } from '../particleSockets.js';
+export type { SocketNodePose, SocketPose, SocketSource } from '../particleSockets.js';
 
 /** Вид эмиттерного ассета в реестре загрузчиков (ASSET-14). */
 const EFFECT_ASSET_KIND = 'particle-effect';

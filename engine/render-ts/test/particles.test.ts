@@ -1278,8 +1278,14 @@ describe('ParticlesSubsystem: сокет через прямую позу узл
     const sockets: SocketSource = {
       nodePose: (entity, node, out) => {
         calls.push(`${String(entity)}:${node}`);
-        out.position.set(7, 8, 9);
-        out.quaternion.setFromAxisAngle(new THREE.Vector3(0, 0, 1), Math.PI / 2);
+        // Семь чисел формы источника (REND-20): поворот на π/2 вокруг Z.
+        out.x = 7;
+        out.y = 8;
+        out.z = 9;
+        out.qx = 0;
+        out.qy = 0;
+        out.qz = Math.SQRT1_2;
+        out.qw = Math.SQRT1_2;
         return true;
       },
     };

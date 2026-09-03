@@ -317,6 +317,12 @@ export function extractSizes(): { readonly small: AxisSize; readonly large: Axis
  * `Extractor` — ровно тот шов, на котором сняты счётчики стадии `extract`
  * (PERF-2). Презентационного тракта здесь нет: ось меряет экстракцию, и
  * доставка с кадром только смешали бы в документ чужие стадии.
+ *
+ * Каждый кадр объявляется ДОСТАВЛЕННЫМ (`markDelivered`, SHELL-3): без этого
+ * зеркало последнего доставленного кадра осталось бы пустым, и ось мерила бы
+ * канал, которого не бывает, — тот, где ни один кадр не уехал. С ним ось
+ * показывает обе величины отбора сразу: сравнение строк растёт числом
+ * сущностей (`extractRowsCompared`), а объём канала на стоящей сцене — нет.
  */
 export function playExtraction(def: ScenarioDef, diagnostics?: DiagnosticsSink): void {
   const kindOf = benchKinds();
@@ -331,6 +337,7 @@ export function playExtraction(def: ScenarioDef, diagnostics?: DiagnosticsSink):
     ...(diagnostics !== undefined ? { diagnostics } : {}),
     onTick: (result) => {
       extractor.extract(result);
+      extractor.markDelivered();
     },
   });
 }
@@ -939,9 +946,18 @@ export class PresentationBench {
     return this.fog.config.resolution;
   }
 
-  /** Тик мира — доставка и кадры презентации. Часы идут ровно по каденсу тика. */
+  /**
+   * Тик мира — доставка и кадры презентации. Часы идут ровно по каденсу тика.
+   *
+   * Доставка объявляется состоявшейся сразу за `apply` — так и делает
+   * однопоточная сборка (`RenderHost`, SHELL-3): зеркало последнего
+   * доставленного кадра двигает факт доставки, и без этого объявления стенд
+   * платил бы каналу полным состоянием каждый тик, чего ни одна сборка не
+   * делает.
+   */
   step(result: TickResult): void {
     this.deliver(this.extractor.extract(result));
+    this.extractor.markDelivered();
   }
 
   /** Та же доставка от синтетической плоской формы — ось масштабирования (PERF-6). */
@@ -1122,6 +1138,9 @@ export function syntheticTick(load: SyntheticLoad): ExtractedTick {
     snapAll: false,
     branchChanged: false,
     freshEvents: true,
+    full: true,
+    removed: new Float64Array(0),
+    removedCount: 0,
     count,
     id: new Float64Array(count),
     kind: new Int32Array(count),

@@ -192,7 +192,12 @@ export class NetworkShell {
     this.config = config;
     this.current = config.client;
     this.clock = config.clock ?? (() => performance.now());
-    this.sender = new ShellSender(config.port, config.sender);
+    // Тот же шов, что в локальной оболочке: зеркало частичного кадра двигает
+    // факт доставки, о котором знает только отправитель (SHELL-3, SHELL-4).
+    this.sender = new ShellSender(config.port, {
+      ...config.sender,
+      onDelivered: () => { config.extractor.markDelivered(); },
+    });
     this.host = this.hostFor(config.client, config.transport);
     config.port.onMessage((message) => { this.onMessage(message as MainToWorker); });
   }

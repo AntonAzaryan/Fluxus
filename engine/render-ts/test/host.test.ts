@@ -784,3 +784,75 @@ describe('RenderHost: часы кадра неактивного продюсе�
     expect(dts[3]).toBeCloseTo(0.016, 5);
   });
 });
+
+// ---- change `delivery-interpolation-and-dirty-extract`: буфер под джиттер
+
+describe('RenderHost: показ отстаёт под наблюдаемый джиттер (REND-2, SHELL-7)', () => {
+  /** Стенд каденса: доставки и кадры по управляемым часам, альфа — наружу. */
+  function cadenceRig(): {
+    deliver: (ms: number, at: number) => void;
+    frame: (ms: number) => number;
+    view: () => TickView;
+  } {
+    const { scene, sim } = makeScene();
+    spawnRunner(scene, 0.5, 0.5, 0.1, 0);
+    const state = initialState(scene.world, 7);
+    const { host, setNow } = makeHost(scene);
+    for (let i = 0; i < 40; i++) tick(sim, state);
+    const alphas: number[] = [];
+    host.register({
+      name: 'probe',
+      init: () => {},
+      syncTick: () => {},
+      updateFrame: (_dt, alpha) => alphas.push(alpha),
+    });
+    return {
+      deliver: (ms, at) => {
+        setNow(ms);
+        dispatch(deliveredResult(state, at, 'Running'), [host]);
+      },
+      frame: (ms) => {
+        setNow(ms);
+        host.frame();
+        return alphas[alphas.length - 1]!;
+      },
+      view: () => host.view,
+    };
+  }
+
+  it('ровный каденс: отставание — ровно интервал, поведение прежнее', () => {
+    const rig = cadenceRig();
+    let at = 30;
+    // Каденс стенда равен его же тику (50 мс): пол знаменателя альфы не
+    // вмешивается, и видно ровно то, что было до буфера джиттера.
+    for (let ms = 0; ms <= 300; ms += 50) rig.deliver(ms, at++);
+
+    const cadence = rig.view().cadence!;
+    expect(cadence.intervalSeconds).toBeCloseTo(0.05, 4);
+    // Дрожания нет — и отставание равно интервалу: это и есть прежняя
+    // интерполяция «между двумя последними доставленными тиками».
+    expect(cadence.jitterSeconds).toBeCloseTo(0, 6);
+    expect(cadence.delaySeconds).toBeCloseTo(cadence.intervalSeconds, 6);
+    // Альфа считается ровно как прежде: доля интервала с последней доставки.
+    expect(rig.frame(325)).toBeCloseTo(0.5, 2);
+    expect(rig.frame(350)).toBeCloseTo(1, 2);
+  });
+
+  it('дрожащий каденс поднимает отставание, и оно ограничено двумя интервалами', () => {
+    const rig = cadenceRig();
+    let at = 30;
+    let ms = 0;
+    // Тот же средний каденс 50 мс, но доставки приходят то рано, то поздно:
+    // джиттер ненулевой, и отставание обязано его учесть.
+    for (let i = 0; i < 16; i++) {
+      ms += i % 2 === 0 ? 25 : 75;
+      rig.deliver(ms, at++);
+    }
+    const cadence = rig.view().cadence!;
+    expect(cadence.intervalSeconds).toBeCloseTo(0.05, 2);
+    expect(cadence.jitterSeconds).toBeGreaterThan(0);
+    expect(cadence.delaySeconds).toBeGreaterThan(cadence.intervalSeconds);
+    // Потолок — глубина буфера: одна отложенная доставка, то есть два интервала.
+    expect(cadence.delaySeconds).toBeLessThanOrEqual(cadence.intervalSeconds * 2 + 1e-9);
+  });
+});

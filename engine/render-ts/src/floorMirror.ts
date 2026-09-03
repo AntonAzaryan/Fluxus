@@ -9,14 +9,22 @@
  */
 import {
   FLOOR_COMPONENT,
+  queryInto,
   world,
   type EntityId,
+  type QuerySpec,
   type TerrainGrid,
   type WorldState,
 } from '@fluxus/core';
 
 /** Тег singleton-сущности террейна — конвенция `terrainPrefab` ядра. */
 const TERRAIN_TAG = 'terrain';
+
+/**
+ * Носитель карты пола: тег террейна плюс сам компонент. Константа модуля —
+ * объект спецификации на вызов был бы аллокацией пути извлечения (REND-26).
+ */
+const TERRAIN_SPEC: QuerySpec = { all: [FLOOR_COMPONENT], withTag: TERRAIN_TAG };
 
 export class FloorMirror {
   /** Текущее зеркало: байт на клетку, row-major. Мутирует только `sync`. */
@@ -33,6 +41,13 @@ export class FloorMirror {
   /** Имена полей-слов компонента пола в порядке возрастания индекса слова. */
   private fields: readonly string[] | null = null;
   private entity: EntityId | null = null;
+  /**
+   * Буфер поиска носителя — на ОДНУ запись: носитель singleton'ный (TERR-6), и
+   * первый совпавший он и есть. `listAlive` выделял здесь массив размером в мир
+   * — редко (носитель кэшируется), но по той же дороге, которую REND-26 закрыл
+   * для остального пути извлечения.
+   */
+  private readonly candidate = new Float64Array(1);
 
   constructor(grid: TerrainGrid) {
     this.grid = grid;
@@ -77,17 +92,10 @@ export class FloorMirror {
 
   private findEntity(state: WorldState): EntityId | null {
     if (this.entity !== null && world.isAlive(state, this.entity)) return this.entity;
-    this.entity = null;
-    const alive = world.listAlive(state);
-    for (const candidate of alive) {
-      if (
-        world.hasTag(state, candidate, TERRAIN_TAG) &&
-        world.hasComponent(state, candidate, FLOOR_COMPONENT)
-      ) {
-        this.entity = candidate;
-        break;
-      }
-    }
+    // Буфер короче отбора не ошибка (QUERY-3): записана ПЕРВАЯ совпавшая, а
+    // носителей карты пола в мире один. Ноль совпавших — сцены без террейна.
+    const found = queryInto(state, TERRAIN_SPEC, this.candidate);
+    this.entity = found === 0 ? null : this.candidate[0]!;
     return this.entity;
   }
 }

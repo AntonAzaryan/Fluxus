@@ -80,6 +80,10 @@ export class RenderHost implements TickObserver, PresentationProducer {
 
   onTick(result: TickResult): void {
     this.buffer.apply(this.extractor.extract(result));
+    // Кадр доставлен тем же вызовом, каким извлечён: канала здесь нет, и
+    // конфляции (SHELL-4) — тоже. Зеркало частичного кадра (SHELL-3) двигает
+    // именно ФАКТ доставки, поэтому однопоточная сборка говорит о нём сразу.
+    this.extractor.markDelivered();
     // Публикация потоком тиков: если состояние наполнял документный источник,
     // его набор гасится здесь же — объект не попадёт в кадр дважды (REND-11).
     this.presentation.publish(this, this.buffer.view);

@@ -408,6 +408,27 @@ describe('RDBG-7: дамп кадра', () => {
     expect(JSON.stringify(first.sections)).not.toContain('deliverySpanTicks');
   });
 
+  it('каденс доставок и отставание показа — часовые величины (REND-2)', () => {
+    const layer = new RenderDebugLayer(new PresentationStage(makeRenderContext()));
+    layer.register(deliveryDebugSource());
+    layer.setEnabled('net.delivery', true);
+    // Доставленное состояние несёт запись каденса; продюсер без доставок её не
+    // заполняет, и источник тогда честно печатает нули.
+    const view = makeTickView([makeEntityView(1)], {
+      tick: 3,
+      cadence: { intervalSeconds: 0.033, jitterSeconds: 0.004, delaySeconds: 0.041 },
+    });
+    layer.frame(frameState(view));
+    const dump = layer.dump();
+
+    expect(dump.clock['net.delivery.deliveryIntervalSeconds']).toBeCloseTo(0.033, 6);
+    expect(dump.clock['net.delivery.deliveryJitterSeconds']).toBeCloseTo(0.004, 6);
+    expect(dump.clock['net.delivery.renderDelaySeconds']).toBeCloseTo(0.041, 6);
+    // В теле секции их нет: величины выведены из часов главного потока и
+    // воспроизводимыми не бывают (RDBG-7).
+    expect(JSON.stringify(dump.sections['net.delivery'])).not.toContain('renderDelay');
+  });
+
   it('перечень усекается потолком и помечает усечение', () => {
     const layer = new RenderDebugLayer(new PresentationStage(makeRenderContext()));
     layer.register(deliveryDebugSource({ cap: 3 }));

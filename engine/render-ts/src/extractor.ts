@@ -54,6 +54,8 @@ import {
   STATE_BITS_SHIFT,
   type ChannelArrayValue,
 } from './channelLayout.js';
+import { AimTracker, DEFAULT_AIM_HOLD_TICKS } from './aimTracker.js';
+import { FrameMirror } from './frameMirror.js';
 import { renderEventData } from './eventData.js';
 import type { RenderEvent } from './types.js';
 
@@ -61,8 +63,6 @@ import type { RenderEvent } from './types.js';
 const DEFAULT_VELOCITY_COMPONENT = 'Velocity';
 /** Порог скорости (единиц за тик) состояния `move`; ниже — дрожание стоящих не считается бегом. */
 const DEFAULT_MOVE_EPSILON = 1e-3;
-/** Направление каста держится ~0.75 с при 60 тиках, дальше торс возвращается к движению. */
-const DEFAULT_AIM_HOLD_TICKS = 45;
 /** Дефолты имён компонентов локомоушена — те же, что у `LocomotionSystem` (LOC-1). */
 const DEFAULT_LOCOMOTION_STATE_COMPONENT = 'LocomotionState';
 const DEFAULT_LOCOMOTION_CONFIG_COMPONENT = 'Locomotion';
@@ -191,6 +191,24 @@ export interface ExtractedTick {
   statPairs: number;
   /** События этого тика (копии, OBS-3), с номером тика — для reliable-доставки (SHELL-4). */
   events: readonly RenderEvent[];
+  /**
+   * Кадр ПОЛНЫЙ: набор строк авторитетен, и запись без строки у приёмника
+   * удаляется (SHELL-3). Объявляется полным разрыв непрерывности, смена ветви и
+   * первая доставка сессии — то есть ровно те случаи, когда приёмнику не
+   * известно ничего.
+   *
+   * Частичный кадр (`false`) несёт только изменившиеся строки; отсутствие
+   * сущности в нём означает «не менялась», а не «умерла».
+   */
+  full: boolean;
+  /**
+   * Идентификаторы ИСЧЕЗНУВШИХ с прошлой доставки — единственный способ узнать
+   * о смерти в частичном кадре. На полном кадре список пуст: там о смерти
+   * говорит само отсутствие строки.
+   */
+  removed: Float64Array;
+  /** Сколько идентификаторов занято в `removed`. */
+  removedCount: number;
   /** Пары (клетка, бит) реально изменившихся клеток пола (TERR-6 → REND-7). ArrayLike — читатель канала подставляет view в буфер доставки. */
   floorDelta: ArrayLike<number>;
   /** Живой словарь визуальных типов; растёт append-only (SHELL-5). */
@@ -254,6 +272,13 @@ type ChannelColumnFields = {
   [K in keyof ExtractedTick as ExtractedTick[K] extends ChannelArrayValue ? K : never]: ExtractedTick[K];
 };
 
+/** Рост буфера идентификаторов — событие сцены, не тик (REND-26). */
+function grownIds(current: Float64Array, needed: number): Float64Array<ArrayBuffer> {
+  const grown = new Float64Array(Math.max(16, Math.ceil(needed * 1.5)));
+  grown.set(current);
+  return grown;
+}
+
 const EMPTY_EVENTS: readonly RenderEvent[] = [];
 const EMPTY_DELTA: readonly number[] = [];
 
@@ -261,8 +286,6 @@ export class Extractor {
   private readonly kindOf: (state: WorldState, entity: EntityId) => string | null;
   private readonly velocityComponent: string;
   private readonly moveEpsilonSq: number;
-  private readonly aimEvents: ReadonlySet<string>;
-  private readonly aimHoldTicks: number;
   private readonly stateComponents: readonly string[];
   private readonly locomotionState: string;
   private readonly locomotionConfig: string;
@@ -277,13 +300,25 @@ export class Extractor {
   private readonly kindIndexOf = new Map<string, number>();
   /** Тип сущности вычисляется один раз: generation в ID делает кэш безопасным. */
   private readonly kinds = new Map<EntityId, number>();
-  /** Направление последнего каста сущности и тик, на котором оно поставлено. */
-  private readonly aim = new Map<EntityId, { yaw: number; tick: number }>();
+  /** Направление последнего каста по сущностям (REND-5) — своё владение. */
+  private readonly aim: AimTracker;
   private readonly seen = new Set<EntityId>();
   /** Буфер обхода живых сущностей: растёт только вместе со сценой (REND-26). */
   private alive = new Float64Array(0);
+  /**
+   * Зеркало последнего ДОСТАВЛЕННОГО кадра (SHELL-3): по нему кадр становится
+   * частичным. Двигает его `markDelivered`, а не извлечение, — так конфляция
+   * (SHELL-4) остаётся корректной без накопителя изменений.
+   */
+  private readonly frameMirror: FrameMirror;
+  /** Идентификаторы исчезнувших этой доставки; растёт только со сценой. */
+  private removed = new Float64Array(0);
 
   private hasTick = false;
+  /** Клеток пола, просмотренных последним `syncFloor` — вход счётчика (PERF-3). */
+  private floorCells = 0;
+  /** Строк, сравнённых с зеркалом последним обходом, — вход счётчика (PERF-3). */
+  private comparedRows = 0;
   private prevTick = 0;
   private prevMode: WorldMode = 'Running';
 
@@ -295,8 +330,7 @@ export class Extractor {
     this.velocityComponent = config.velocityComponent ?? DEFAULT_VELOCITY_COMPONENT;
     const moveEpsilon = config.moveEpsilon ?? DEFAULT_MOVE_EPSILON;
     this.moveEpsilonSq = moveEpsilon * moveEpsilon;
-    this.aimEvents = new Set(config.aimEvents ?? []);
-    this.aimHoldTicks = config.aimHoldTicks ?? DEFAULT_AIM_HOLD_TICKS;
+    this.aim = new AimTracker(config.aimEvents ?? [], config.aimHoldTicks ?? DEFAULT_AIM_HOLD_TICKS);
     this.stateComponents = config.stateComponents ?? [];
     if (this.stateComponents.length > MAX_STATE_COMPONENTS) {
       throw new Error(
@@ -309,6 +343,7 @@ export class Extractor {
       config.locomotion?.configComponent ?? DEFAULT_LOCOMOTION_CONFIG_COMPONENT;
     this.flight = config.flight;
     this.stats = new StatReader(config.stats ?? []);
+    this.frameMirror = new FrameMirror(this.stats.size);
     this.grid = config.terrainGrid;
     this.mirror = this.grid === undefined ? null : new FloorMirror(this.grid);
     this.out = {
@@ -321,6 +356,9 @@ export class Extractor {
       snapAll: false,
       branchChanged: false,
       freshEvents: false,
+      full: true,
+      removed: new Float64Array(0),
+      removedCount: 0,
       count: 0,
       statNames: this.stats.names,
       statIndex: new Int32Array(0),
@@ -372,26 +410,19 @@ export class Extractor {
     }
 
     const events = this.copyEvents(result);
-    if (freshEvents) this.captureAim(state, result.tick, events);
+    if (freshEvents) this.aim.capture(state, result.tick, events);
 
-    const scanned = this.copyEntities(state, result.tick);
+    // Приёмнику не известно ничего: разрыв непрерывности и смена ветви стирают
+    // зеркало, и кадр объявляет себя ПОЛНЫМ (SHELL-3, design D5). Пустое
+    // зеркало держится до фактической доставки, поэтому «полный» переживает и
+    // конфляцию: не уехавший полный кадр не превращается в частичный.
+    if (snapAll) this.frameMirror.clear();
+    const full = this.frameMirror.size === 0;
+    out.full = full;
 
-    // Зеркало пола: перечитываем только когда дельта тика тронула компонент
-    // либо при разрыве непрерывности (rewind мог откатить пол без дельты).
-    let floorDelta: readonly number[] = EMPTY_DELTA;
-    let floorCells = 0;
-    if (this.mirror !== null) {
-      const floorDirty = result.changes.changedEntities(FLOOR_COMPONENT).size > 0;
-      if (floorDirty || snapAll || !this.hasTick) {
-        const changed = this.mirror.sync(state);
-        floorCells = this.mirror.lastScanned;
-        if (changed.length > 0) {
-          const pairs: number[] = [];
-          for (const cell of changed) pairs.push(cell, this.mirror.bits[cell]!);
-          floorDelta = pairs;
-        }
-      }
-    }
+    const scanned = this.copyEntities(state, result.tick, full);
+
+    const floorDelta = this.syncFloor(state, result, snapAll);
 
     out.tick = result.tick;
     out.mode = result.mode;
@@ -410,11 +441,16 @@ export class Extractor {
       cost.extractCalls++;
       cost.extractEntitiesScanned += scanned;
       cost.extractEntitiesCopied += out.count;
+      cost.extractRowsCompared += this.comparedRows;
       cost.extractStatPairs += out.statPairs;
       cost.extractEvents += events.length;
-      cost.extractFloorCellsScanned += floorCells;
+      cost.extractFloorCellsScanned += this.floorCells;
+      // Объём, ОТДАННЫЙ каналу (PERF-2): строки частичного кадра, их пары
+      // статов, пары клеток пола и идентификаторы исчезнувших. Просмотренные на
+      // изменение, но не уехавшие строки сюда не входят — их цена видна
+      // `extractEntitiesScanned`, и в этом разрыве и виден смысл change'а.
       cost.extractChannelValues +=
-        out.count * CHANNEL_COLUMNS + out.statPairs * 2 + floorDelta.length;
+        out.count * CHANNEL_COLUMNS + out.statPairs * 2 + floorDelta.length + out.removedCount;
     }
 
     this.prevTick = result.tick;
@@ -423,8 +459,50 @@ export class Extractor {
     return out;
   }
 
+  /**
+   * Зеркало пола (TERR-6 → REND-7): перечитываем только когда дельта тика
+   * тронула компонент либо при разрыве непрерывности — rewind мог откатить пол
+   * без дельты. Просмотренные клетки уезжают полем: сток стоимости читается
+   * один раз на вызов, а не здесь (PERF-3).
+   */
+  private syncFloor(state: WorldState, result: TickResult, snapAll: boolean): readonly number[] {
+    this.floorCells = 0;
+    const mirror = this.mirror;
+    if (mirror === null) return EMPTY_DELTA;
+    const floorDirty = result.changes.changedEntities(FLOOR_COMPONENT).size > 0;
+    if (!floorDirty && !snapAll && this.hasTick) return EMPTY_DELTA;
+    const changed = mirror.sync(state);
+    this.floorCells = mirror.lastScanned;
+    if (changed.length === 0) return EMPTY_DELTA;
+    const pairs: number[] = [];
+    for (const cell of changed) pairs.push(cell, mirror.bits[cell]!);
+    return pairs;
+  }
+
+  /**
+   * Кадр ДОСТАВЛЕН: зеркало последнего доставленного состояния двигается на
+   * него (SHELL-3, design D4). Зовут это ровно те, кто знает про факт доставки:
+   * однопоточная сборка — сразу после `apply` буфера, оболочка — из отправителя
+   * после записи кадра в буфер канала.
+   *
+   * Не позвать — не ошибка, а «кадр не уехал»: зеркало остаётся прежним, и та
+   * же строка снова отличается на следующем тике. Так конфляция (SHELL-4)
+   * остаётся корректной без накопителя изменений.
+   */
+  markDelivered(): void {
+    this.frameMirror.commit(this.out, this.out.removed, this.out.removedCount);
+  }
+
+  /**
+   * Кадр обязан приехать ПОЛНЫМ: приёмник начал слушать заново (SHELL-5).
+   * Зеркало стирается, и ближайшее извлечение отдаёт все строки.
+   */
+  forgetDelivered(): void {
+    this.frameMirror.clear();
+  }
+
   /** Копирует сущности в колонки; возвращает, сколько живых просмотрел обход. */
-  private copyEntities(state: WorldState, tick: number): number {
+  private copyEntities(state: WorldState, tick: number, full: boolean): number {
     const out = this.out;
     const seen = this.seen;
     seen.clear();
@@ -432,6 +510,7 @@ export class Extractor {
     const scanned = this.listAlive(state);
     this.ensureCapacity(scanned);
     let count = 0;
+    let compared = 0;
     out.statPairs = 0;
     // Индекс слотов способностей на кадр (ABIL-1): статы слотовой формы
     // адресуют спутника владельца, и искать его на каждую запись каждой
@@ -441,17 +520,47 @@ export class Extractor {
       const entity = this.alive[i]!;
       if (!world.hasComponent(state, entity, POSITION_COMPONENT)) continue;
       seen.add(entity);
+      // Строка пишется в кадр ВСЕГДА — сравнить её иначе не с чем, — но место
+      // за собой оставляет, только если отличается от доставленного (SHELL-3).
+      // Не отличилась — курсор статов возвращается, и следующая строка ложится
+      // поверх неё.
+      const statAt = out.statPairs;
       this.copyEntity(state, entity, count, tick);
-      count++;
+      if (full) {
+        count++;
+        continue;
+      }
+      compared++;
+      if (this.frameMirror.differs(out, count, entity, statAt)) count++;
+      else out.statPairs = statAt;
     }
     out.count = count;
+    this.comparedRows = compared;
+    out.removedCount = full ? 0 : this.collectRemoved(seen);
 
     for (const id of this.kinds.keys()) {
       if (seen.has(id)) continue;
       this.kinds.delete(id);
-      this.aim.delete(id);
+      this.aim.forget(id);
     }
     return scanned;
+  }
+
+  /**
+   * Исчезнувшие: те, кого приёмник знает, а обход больше не встретил. На полном
+   * кадре список не нужен — там о смерти говорит отсутствие строки (SHELL-3).
+   */
+  private collectRemoved(seen: ReadonlySet<EntityId>): number {
+    const out = this.out;
+    let count = 0;
+    for (const id of this.frameMirror.ids()) {
+      if (seen.has(id)) continue;
+      if (count >= this.removed.length) this.removed = grownIds(this.removed, count + 1);
+      this.removed[count] = id;
+      count++;
+    }
+    out.removed = this.removed;
+    return count;
   }
 
   /**
@@ -517,9 +626,7 @@ export class Extractor {
       : 1;
     this.stats.read(state, entity, count, out);
 
-    const aim = this.aim.get(entity);
-    out.aimYaw[count] =
-      aim !== undefined && tick - aim.tick <= this.aimHoldTicks ? aim.yaw : Number.NaN;
+    out.aimYaw[count] = this.aim.yawOf(entity, tick);
   }
 
   /**
@@ -617,59 +724,4 @@ export class Extractor {
     return events ?? EMPTY_EVENTS;
   }
 
-  /**
-   * Направление атаки/каста для bone-контроля (REND-5) из событий тика.
-   * Конвенции полей события: `entity`/`source` — кастующий (EVENT_ENTITY_FIELDS
-   * ядра); направление — `dirX`/`dirY` (вектор), иначе `x`/`y` (точка мира),
-   * иначе `target` (сущность — берём её позицию).
-   *
-   * Координаты события здесь УЖЕ float: события приезжают сюда после
-   * `copyEvents`, то есть за входной границей (REND-1). Делится на `FIXED_ONE`
-   * только читаемое прямо из мира — позиции сущностей.
-   */
-  private captureAim(state: WorldState, tick: number, events: readonly RenderEvent[]): void {
-    for (const event of events) {
-      if (!this.aimEvents.has(event.type)) continue;
-      const caster = event.data.entity ?? event.data.source;
-      if (caster === undefined) continue;
-      if (!world.isAlive(state, caster) || !world.hasComponent(state, caster, POSITION_COMPONENT)) {
-        continue;
-      }
-      const yaw = this.aimYawOf(state, event, caster);
-      if (yaw === null) continue;
-      const entry = this.aim.get(caster);
-      if (entry === undefined) {
-        this.aim.set(caster, { yaw, tick });
-      } else {
-        entry.yaw = yaw;
-        entry.tick = tick;
-      }
-    }
-  }
-
-  private aimYawOf(state: WorldState, event: RenderEvent, caster: EntityId): number | null {
-    const dirX = event.data.dirX;
-    const dirY = event.data.dirY;
-    if (dirX !== undefined && dirY !== undefined && (dirX !== 0 || dirY !== 0)) {
-      return Math.atan2(dirY, dirX);
-    }
-    const cx = world.getField(state, caster, POSITION_COMPONENT, 'x') / FIXED_ONE;
-    const cy = world.getField(state, caster, POSITION_COMPONENT, 'y') / FIXED_ONE;
-    const px = event.data.x;
-    const py = event.data.y;
-    if (px !== undefined && py !== undefined) {
-      return Math.atan2(py - cy, px - cx);
-    }
-    const target = event.data.target;
-    if (
-      target !== undefined &&
-      world.isAlive(state, target) &&
-      world.hasComponent(state, target, POSITION_COMPONENT)
-    ) {
-      const tx = world.getField(state, target, POSITION_COMPONENT, 'x') / FIXED_ONE;
-      const ty = world.getField(state, target, POSITION_COMPONENT, 'y') / FIXED_ONE;
-      return Math.atan2(ty - cy, tx - cx);
-    }
-    return null;
-  }
 }

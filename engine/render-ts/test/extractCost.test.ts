@@ -157,6 +157,37 @@ describe('PERF-2: стадия «экстракция и канал достав
     );
   });
 
+  it('стоящая сцена не платит каналу: объём падает, а просмотр — нет (SHELL-3)', () => {
+    const { extractor, sim, state } = stand();
+    const counters = createCostCounters();
+
+    withCostSink(counters, () => {
+      // Первый кадр полный: приёмнику не известно ничего. Он объявляется
+      // доставленным — дальше зеркало отвечает на вопрос «что изменилось».
+      extractor.extract(tick(sim, state));
+      extractor.markDelivered();
+      const afterFull = counters.extractChannelValues;
+      expect(counters.extractRowsCompared).toBe(0);
+
+      // Бегуны стоят: `Velocity` двигает их системой, которой у сцены нет, —
+      // и ни одна колонка ни одной строки не меняется.
+      for (let step = 0; step < 4; step++) {
+        extractor.extract(tick(sim, state));
+        extractor.markDelivered();
+      }
+      // Пол выбивается шестым тиком, до него канал не получает НИЧЕГО сверх
+      // первого кадра: стоящая сцена стоит каналу ноль.
+      expect(counters.extractChannelValues).toBe(afterFull);
+    });
+
+    // Просмотр при этом идёт каждый тик — это и есть цена отбора: строки
+    // сравниваются с зеркалом (двое бегунов × четыре тика после полного).
+    expect(counters.extractRowsCompared).toBe(8);
+    expect(counters.extractEntitiesScanned).toBe(15);
+    // Уехали строки только первого кадра.
+    expect(counters.extractEntitiesCopied).toBe(2);
+  });
+
   it('PERF-3: выключенный учёт бесплатен — без стока экстракция ничего не считает', () => {
     const { extractor, sim, state } = stand();
     const counters = createCostCounters();

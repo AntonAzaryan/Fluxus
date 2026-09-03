@@ -10,15 +10,30 @@
  * Мира здесь нет и быть не может: всё, что нужно кадру, обязано приехать
  * в плоской форме (SHELL-1, SHELL-2).
  */
-import { LOCOMOTION_NORMAL, type EntityId, type WorldMode } from '@fluxus/core';
+import type { EntityId, WorldMode } from '@fluxus/core';
 import { ENTITY_LEVEL_OVERRIDE, ENTITY_MOVING, STATE_BITS_SHIFT } from './channelLayout.js';
 import type { ExtractedTick } from './extractor.js';
-import type { EntityView, TickView } from './types.js';
-import { wrapAngle } from './model/boneControl.js';
+import type { TickView } from './types.js';
+import {
+  collapsePair,
+  kindOf,
+  slideFacing,
+  slidePair,
+  stagePending,
+  type EntityRecord,
+} from './entityRecord.js';
+import { CadenceTracker, DEFAULT_MAX_RENDER_DELAY } from './deliveryCadence.js';
 import { peak } from './footprint.js';
 
 /** Скачок позиции за тик больше этого — телепорт: интерполяция «проехала бы» пол-арены. */
 const DEFAULT_SNAP_DISTANCE = 2;
+
+/**
+ * Допуск сравнения времени показа со штампом доставки, миллисекунды (design
+ * D1). См. `displayReached`: он держит тождество «отставание в интервал = путь
+ * до буфера джиттера» против ошибки округления, а не против дрожания канала.
+ */
+const DISPLAY_EPSILON_MS = 1e-3;
 
 /**
  * Ход часов презентации по режиму доставленного мира (REND-25): вперёд в
@@ -39,51 +54,6 @@ function clockDirection(mode: WorldMode): number {
 
 const EMPTY_CELLS: readonly number[] = [];
 
-/** Вид сущности доставки по её индексу: `null` — сущность не рисуется. */
-function kindOf(ext: ExtractedTick, i: number): string | null {
-  const index = ext.kind[i]!;
-  return index < 0 ? null : (ext.kindTable[index] ?? null);
-}
-
-/**
- * Интерполяция КУРСА между двумя доставленными тиками по кратчайшей дуге
- * (REND-2). Курс живёт на окружности, и линейная интерполяция через ±π
- * развернула бы сущность длинной стороной — на пол-оборота вместо доли.
- *
- * Функция чистая и живёт здесь, рядом с парой, которую она читает: считает её
- * кадр подсистемы, а не буфер — по альфе своего кадра (SHELL-7).
- */
-export function interpolateYaw(prev: number, curr: number, alpha: number): number {
-  return prev + wrapAngle(curr - prev) * alpha;
-}
-
-/**
- * Сглаживание оценки «тиков за доставку» (REND-25): доля новой пробы в
- * экспоненциальном среднем. Сырое отношение дрожало бы от каждой сбитой
- * доставки — conflation (SHELL-4) и потеря снапшота меняют пробу на один шаг, а
- * темп клипов от этого дёргаться не должен.
- */
-const SPAN_SMOOTHING = 0.25;
-
-/**
- * Границы темпа обратного хода: скраб быстрее живого мира в 4 раза крутит клипы
- * вчетверо быстрее, дальше — уже не «догоняя движение», а мельтешение. Нижняя
- * граница симметрична и бережёт от деления на дрожащую оценку.
- */
-const MIN_REWIND_PACE = 0.25;
-const MAX_REWIND_PACE = 4;
-
-/**
- * Шаг оценки каденса: ПЕРВАЯ проба задаёт значение целиком, дальше идёт
- * экспоненциальное среднее. Ноль означает «ещё не наблюдали», и он же —
- * непроба: нулевой интервал между доставками каденсом не является (часы стенда
- * вправе стоять на месте), а «ноль тиков за доставку» — тем более.
- */
-function observe(current: number, sample: number): number {
-  if (sample <= 0) return current;
-  return current === 0 ? sample : current + (sample - current) * SPAN_SMOOTHING;
-}
-
 /**
  * Потолок памяти курсов (см. `facingMemory`). Идентификаторы сущностей
  * поколенческие и не переиспользуются, поэтому за долгий матч словарь рос бы
@@ -94,46 +64,17 @@ function observe(current: number, sample: number): number {
  */
 export const FACING_MEMORY_LIMIT = 4096;
 
-/** Внутренняя запись сущности: EntityView плюс интерполяционный буфер. */
-interface EntityRecord extends EntityView {
-  prevX: number;
-  prevY: number;
-  currX: number;
-  currY: number;
-  prevLevel: number;
-  currLevel: number;
-  snap: boolean;
-  spawned: boolean;
-  moving: boolean;
-  levelOverride: boolean;
-  /** Уровень сущности глазами симуляции (TERR-4) — вход маски тумана (FOW-9). */
-  simLevel: number;
-  prevFacingYaw: number;
-  facingYaw: number;
-  aimYaw: number | null;
-  states: number;
-  motion: number;
-  prevMotion: number;
-  prevMotionPhase: number;
-  currMotionPhase: number;
-  /** Фаза полёта последнего доставленного тика; `NaN` — сущность не летит (REND-12). */
-  flightPhase: number;
-  /** Персональная шкала времени последнего доставленного тика; 1 — обычный темп (REND-38). */
-  timeScale: number;
-  /**
-   * Статы сущности (HUD-8). Словарь заводится ЛЕНИВО — у сущности без статов
-   * его нет вовсе — и переиспользуется между доставками: запись живёт всё время
-   * жизни сущности, и пересоздавать словарь на каждый тик значило бы
-   * аллоцировать пропорционально числу сущностей.
-   */
-  stats?: Map<string, number>;
-}
-
 const EMPTY_STAT_NAMES: readonly string[] = [];
 
 export interface ViewBufferConfig {
   /** Длительность тика в секундах — знаменатель альфы интерполяции (REND-2). */
   readonly tickSeconds: number;
+  /**
+   * Потолок отставания показа в секундах (REND-2, design D2): сверх него
+   * задержка отклика дороже плавности. Сверху его всё равно ограничивает
+   * глубина буфера — одна отложенная доставка, то есть два интервала.
+   */
+  readonly maxRenderDelay?: number;
   /** Скачок позиции за тик больше этого (мировых единиц) — телепорт, snap (REND-2). */
   readonly snapDistance?: number;
   /**
@@ -215,40 +156,36 @@ export class ViewBuffer {
   private lastTickAtMs = 0;
   private lastFrameAtMs: number | null = null;
   /**
-   * Тиков за доставку в идущем мире и в скрабе — сглаженные оценки (REND-25).
-   * Ноль означает «ещё не наблюдали»: пока одной из них нет, темп обратного хода
-   * равен прямому, а не выводится из половины данных.
-   *
-   * Отношение и есть темп: мир скрабится по `step` тиков за цикл рассылки
-   * (REW-13), живой идёт по `tickRate / snapshotRate` за ту же доставку, и клип
-   * бега, отматываемый по часам главного потока, отставал бы от сущности ровно
-   * во столько раз. «Догоняя обратное движение» из сценария REND-25 — это оно.
+   * Наблюдатель каденса доставок (SHELL-7): тиков за доставку, секунд между
+   * ними и дрожание — по режимам мира. Из него выводятся темп обратного хода
+   * (REND-25), знаменатель альфы и отставание показа (REND-2).
    */
-  private runningSpan = 0;
-  private rewindSpan = 0;
+  private readonly cadenceTracker: CadenceTracker;
   /**
-   * Секунд между ПРОДВИГАЮЩИМИ доставками в идущем мире и в скрабе —
-   * сглаженные оценки тех же часов, что ведут кадр (SHELL-7). Ноль означает
-   * «ещё не наблюдали».
-   *
-   * Без них темп обратного хода врал бы каденсом: скраб, шагающий по `step`
-   * тиков раз в `every` рассылок, отматывал бы клипы в `every` раз быстрее ног
-   * (тиков за доставку у него в `step` раз больше, а доставок во столько же
-   * меньше). Тиков в секунду — величина, в которой оба режима сравнимы:
-   * `span / interval`.
+   * Штампы прибытия ОТОБРАЖАЕМОЙ пары (часы главного потока, SHELL-7): время
+   * показа `now − delay` лежит между ними, и альфа — доля от `prevStampMs`.
    */
-  private runningInterval = 0;
-  private rewindInterval = 0;
-  /** Момент и режим последней продвигающей доставки — база пробы интервала. */
-  private lastAdvanceAtMs: number | null = null;
-  private lastAdvanceMode: WorldMode = 'Running';
-  private lastMode: WorldMode = 'Running';
+  private prevStampMs = 0;
+  private currStampMs = 0;
+  /**
+   * Штамп доставки, чьё время показа ещё не наступило; null — отложенной нет.
+   * Слот один (design D2): пришедшая при занятом слоте доставка продвигает
+   * отложенную немедленно — так пачка проигрывается сегментами, а не скачком.
+   */
+  private pendingStampMs: number | null = null;
+  /** Тиков между отложенной доставкой и отображаемым `curr` — порог телепорта. */
+  private pendingSpan = 1;
+
 
   constructor(config: ViewBufferConfig) {
     this.tickSeconds = config.tickSeconds;
     const snapDistance = config.snapDistance ?? DEFAULT_SNAP_DISTANCE;
     this.snapDistanceSq = snapDistance * snapDistance;
     this.floorBits = config.floorBits ?? null;
+    this.cadenceTracker = new CadenceTracker(
+      config.tickSeconds,
+      config.maxRenderDelay ?? DEFAULT_MAX_RENDER_DELAY,
+    );
     this.clock = config.clock ?? (() => performance.now());
     this.view = {
       tick: 0,
@@ -262,6 +199,7 @@ export class ViewBuffer {
       expiredEvents: 0,
       floorBits: this.floorBits,
       floorChangedCells: [],
+      cadence: this.cadenceTracker.probe,
     };
   }
 
@@ -292,9 +230,37 @@ export class ViewBuffer {
     // объявлять телепортом обычное движение тем вернее, чем крупнее шаг.
     const span = !this.hasTick ? 1 : Math.max(1, Math.abs(ext.tick - view.tick));
     // Первая доставка сессии пробой каденса не является: мерить её не с чем.
-    this.observeSpan(ext.mode, tickAdvanced && this.hasTick, span, now);
+    this.cadenceTracker.observeDelivery(ext.mode, tickAdvanced && this.hasTick, span, now);
 
-    this.applyEntities(ext, tickAdvanced, snapAll, span);
+    // Слот один: занят — освобождаем. Сперва по времени показа (обычный ход),
+    // а если оно ещё не дошло — принудительно: пришедшая пачкой доставка не
+    // имеет права вытеснить не показанную (REND-2).
+    if (this.pendingStampMs !== null && !this.advanceDisplay(now)) this.promote();
+    // Разрыв непрерывности отставанию не подчиняется (REND-2): отложенное несёт
+    // стёртую ветвь либо прежний режим, и показывать его больше нечего.
+    if (snapAll) this.dropPending();
+    // Немедленно ли эта доставка вступает в показ. При отставании в один
+    // интервал (ровный канал, локальная оболочка) — всегда, и путь тогда ровно
+    // тот же, каким он был до буфера джиттера. Ненаблюдаемый каденс — тоже
+    // всегда: буферизовать против неизвестного интервала нечего, а стенд с
+    // неподвижными часами обязан вести себя как прежде.
+    const immediate =
+      snapAll ||
+      !this.hasTick ||
+      !tickAdvanced ||
+      this.cadenceTracker.intervalOf(ext.mode) <= 0 ||
+      this.displayReached(now, this.currStampMs);
+
+    this.applyEntities(ext, tickAdvanced, snapAll, span, immediate);
+    if (tickAdvanced || !this.hasTick) {
+      if (immediate) {
+        this.prevStampMs = this.currStampMs;
+        this.currStampMs = now;
+      } else {
+        this.pendingStampMs = now;
+        this.pendingSpan = span;
+      }
+    }
     const floorChanged = this.applyFloor(ext);
 
     view.tick = ext.tick;
@@ -308,7 +274,10 @@ export class ViewBuffer {
     view.floorChangedCells = floorChanged;
 
     if (tickAdvanced || !this.hasTick) this.lastTickAtMs = now;
+    // Первая доставка сессии: пары нет — обе её стороны и есть этот момент.
+    if (!this.hasTick) this.prevStampMs = this.currStampMs = now;
     this.hasTick = true;
+    this.cadenceTracker.publish(ext.mode);
 
     // Величины состояния приёма доставки (PERF-8): записи сущностей и память
     // курсов — то, что оборот обязан возвращать (PERF-9). Две пробы на
@@ -345,6 +314,10 @@ export class ViewBuffer {
    */
   frame(now: number = this.clock()): FrameTiming | null {
     if (!this.hasTick) return null;
+    // Отложенная доставка вступает в показ ЗДЕСЬ, когда время показа дошло до
+    // штампа отображаемого `curr` (REND-2, design D1): при отставании в один
+    // интервал это уже случилось в `apply`, и кадр не делает ничего.
+    this.advanceDisplay(now);
     const dtMs = this.lastFrameAtMs === null ? 0 : now - this.lastFrameAtMs;
     this.lastFrameAtMs = now;
     // Кламп МОДУЛЯ: после паузы вкладки первый кадр не должен «доигрывать»
@@ -353,11 +326,24 @@ export class ViewBuffer {
     // Темп обратного хода — отношение наблюдаемых каденсов (REND-25): мир,
     // скрабящийся вдвое быстрее живого, и клипы отматывает вдвое быстрее.
     // Кламп по модулю остаётся тем же и после умножения.
-    const dt = Math.min(magnitude * this.pace(), 0.25) * clockDirection(this.view.mode);
+    const dt =
+      Math.min(magnitude * this.cadenceTracker.pace(this.view.mode), 0.25) *
+      clockDirection(this.view.mode);
+    // Альфа — доля пройденного от штампа `prev` до `curr` по ВРЕМЕНИ ПОКАЗА
+    // (design D1). Знаменатель — сглаженный интервал, а не фактический зазор
+    // штампов: зазор внёс бы дрожание канала прямо в скорость движения.
     const alpha =
       this.tickSeconds <= 0
         ? 1
-        : Math.min(Math.max((now - this.lastTickAtMs) / 1000 / this.alphaSeconds(), 0), 1);
+        : Math.min(
+            Math.max(
+              (this.renderTimeMs(now) - this.prevStampMs) /
+                1000 /
+                this.cadenceTracker.alphaSeconds(this.view.mode),
+              0,
+            ),
+            1,
+          );
     // ponytail: три числа кадра уезжают новой записью — ОДНОЙ на кадр, а не на
     // инстанс, поэтому давление на GC от неё не растёт ни с числом сущностей,
     // ни с объёмом контента. Переиспользуемая запись сделала бы величины кадра
@@ -366,77 +352,73 @@ export class ViewBuffer {
     return { dt, alpha, realDt: magnitude };
   }
 
-  /**
-   * Наблюдение каденса доставок по режимам (REND-25). Оценка скраба заводится
-   * заново на КАЖДОМ входе в перемотку: шаг ведения точки — конфиг матча, и
-   * прошлая перемотка о нынешней ничего не говорит. Оценка живого мира,
-   * наоборот, копится всю сессию: это темп рассылки, и он не меняется.
-   *
-   * Доставка, не сдвинувшая тик (замороженный мир, повтор), пробой не является:
-   * «ноль тиков за доставку» — не каденс, а его отсутствие.
-   */
-  private observeSpan(mode: WorldMode, tickAdvanced: boolean, span: number, nowMs: number): void {
-    if (mode === 'Rewinding' && this.lastMode !== 'Rewinding') {
-      this.rewindSpan = 0;
-      this.rewindInterval = 0;
-    }
-    this.lastMode = mode;
-    if (!tickAdvanced) return;
-    // Проба интервала берётся только между двумя продвигающими доставками
-    // ОДНОГО режима: интервал через смену режима мерил бы не каденс, а момент
-    // переключения. Нулевой и отрицательный интервал пробой не является —
-    // часы стенда вправе стоять на месте, а каденс из нуля не выводится.
-    const previous = this.lastAdvanceAtMs;
-    const sample =
-      previous !== null && this.lastAdvanceMode === mode ? (nowMs - previous) / 1000 : 0;
-    this.lastAdvanceAtMs = nowMs;
-    this.lastAdvanceMode = mode;
-    if (mode === 'Running') {
-      this.runningSpan = observe(this.runningSpan, span);
-      this.runningInterval = observe(this.runningInterval, sample);
-    } else if (mode === 'Rewinding') {
-      this.rewindSpan = observe(this.rewindSpan, span);
-      this.rewindInterval = observe(this.rewindInterval, sample);
-    }
+  /** Время показа в миллисекундах тех же часов: `now − отставание` (design D1). */
+  private renderTimeMs(nowMs: number): number {
+    return nowMs - this.cadenceTracker.delay(this.view.mode) * 1000;
   }
 
   /**
-   * Множитель хода часов презентации. Единица везде, кроме перемотки: скраб
-   * идёт своим шагом по тикам (REW-13), и клипы обязаны идти назад в том же
-   * темпе, иначе бег «отстаёт» от собственных ног. Пока какой-то из каденсов не
-   * наблюдался, множитель — единица: выводить темп из половины данных хуже, чем
-   * не выводить вовсе.
+   * Дошло ли время показа до штампа `stampMs` — С ДОПУСКОМ (design D1).
+   *
+   * Допуск здесь не бережёт «на всякий случай», а держит ТОЖДЕСТВО: на ровном
+   * канале отставание равно интервалу, и время показа обязано попадать в штамп
+   * ровно. Обе величины при этом идут разными дорогами округления — интервал
+   * живёт секундами (проба `(now − prev)/1000`, экспоненциальное среднее),
+   * штамп миллисекундами, — и разность в единицы 1e-14 мс переворачивала бы
+   * сравнение то так, то этак. Микросекунда заведомо крупнее этой ошибки и
+   * заведомо мельче любого наблюдаемого дрожания канала.
    */
-  private pace(): number {
-    if (this.view.mode !== 'Rewinding') return 1;
-    if (this.runningSpan <= 0 || this.rewindSpan <= 0) return 1;
-    // Тиков В СЕКУНДУ, а не тиков за доставку: скраб вправе шагать реже живого
-    // мира, и «четыре тика за доставку» при вдвое редких доставках означает
-    // вдвое, а не вчетверо быстрее. Пока интервал одного из режимов не
-    // наблюдался (первая доставка, стоящие часы стенда), действует прежнее
-    // отношение спанов: выводить каденс из половины данных хуже, чем не
-    // выводить вовсе.
-    const paced = this.runningInterval > 0 && this.rewindInterval > 0;
-    const ratio = paced
-      ? this.rewindSpan / this.rewindInterval / (this.runningSpan / this.runningInterval)
-      : this.rewindSpan / this.runningSpan;
-    return Math.min(Math.max(ratio, MIN_REWIND_PACE), MAX_REWIND_PACE);
+  private displayReached(nowMs: number, stampMs: number): boolean {
+    return this.renderTimeMs(nowMs) >= stampMs - DISPLAY_EPSILON_MS;
   }
 
   /**
-   * Знаменатель альфы интерполяции (REND-2) — сглаженный интервал между
-   * продвигающими доставками ТЕКУЩЕГО режима, с полом в длительность тика.
-   *
-   * Не `tickSeconds`: доставка раз в два тика (conflation SHELL-4, рассылка
-   * реже тиков, шаг скраба REW-13) заканчивала бы интерполяцию на половине
-   * интервала, и вторую половину сущность стояла бы — 50 % duty-цикл, то есть
-   * череда телепортов, которую REND-2 запрещает ровно так же, как «проезд»
-   * через пол-арены. Пол нужен затем, что альфа обязана оставаться долей и при
-   * доставках чаще тика: там знаменателем остаётся тик.
+   * Отложенная доставка вступает в показ, когда время показа дошло до штампа
+   * отображаемого `curr` (design D1). Ни от кадра, ни от доставки не зависит:
+   * зовут её оба, и оба — с одними часами.
    */
-  private alphaSeconds(): number {
-    const observed = this.view.mode === 'Rewinding' ? this.rewindInterval : this.runningInterval;
-    return observed > this.tickSeconds ? observed : this.tickSeconds;
+  private advanceDisplay(nowMs: number): boolean {
+    if (this.pendingStampMs === null) return false;
+    if (!this.displayReached(nowMs, this.currStampMs)) return false;
+    this.promote();
+    return true;
+  }
+
+  /**
+   * Пара сдвигается на одну доставку: `prev ← curr`, `curr ← отложенное`.
+   * Запись без отложенного СХЛОПЫВАЕТ пару — она не менялась (частичный кадр,
+   * SHELL-3) либо её доставка уже показана; иначе альфа, пробегая 0→1 каждый
+   * интервал, дёргала бы её назад в начало сегмента. Здесь же гаснут кадровые
+   * признаки записи: `snap` и `spawned` принадлежат ОДНОМУ показанному шагу.
+   */
+  private promote(): void {
+    const teleportSq = this.snapDistanceSq * this.pendingSpan * this.pendingSpan;
+    for (const record of this.records.values()) {
+      if (record.hasPending) {
+        record.hasPending = false;
+        slidePair(
+          record,
+          record.pendX,
+          record.pendY,
+          record.pendLevel,
+          record.pendMotionPhase,
+          record.pendMotion,
+          teleportSq,
+        );
+        slideFacing(record, record.pendFacingYaw, true);
+      } else {
+        collapsePair(record);
+      }
+    }
+    this.prevStampMs = this.currStampMs;
+    if (this.pendingStampMs !== null) this.currStampMs = this.pendingStampMs;
+    this.pendingStampMs = null;
+  }
+
+  /** Отложенное сбрасывается разрывом непрерывности: показывать его нечего. */
+  private dropPending(): void {
+    this.pendingStampMs = null;
+    for (const record of this.records.values()) record.hasPending = false;
   }
 
   private applyEntities(
@@ -444,6 +426,7 @@ export class ViewBuffer {
     tickAdvanced: boolean,
     snapAll: boolean,
     span: number,
+    immediate: boolean,
   ): void {
     // Порог телепорта на весь этот шаг: `snapDistance` — скачок ЗА ТИК, и на
     // доставке через `span` тиков сущность вправе пройти во столько же раз
@@ -476,14 +459,51 @@ export class ViewBuffer {
       if (record === undefined) {
         record = this.spawnRecord(ext, i, id);
         this.records.set(id, record);
-      } else {
-        this.advanceRecord(record, ext, i, tickAdvanced, snapAll, teleportSq);
+        statAt = this.applyTickFields(record, ext, i, statAt, id);
+        slideFacing(record, ext.facingYaw[i]!, tickAdvanced);
+        continue;
       }
-      statAt = this.applyTickFields(record, ext, i, statAt, id, tickAdvanced);
+      if (immediate) {
+        this.advanceRecord(record, ext, i, tickAdvanced, snapAll, teleportSq);
+        statAt = this.applyTickFields(record, ext, i, statAt, id);
+        slideFacing(record, ext.facingYaw[i]!, tickAdvanced);
+        continue;
+      }
+      // Время показа этой доставки ещё не наступило: интерполируемые величины
+      // ложатся в отложенный слот, остальные применяются сразу (design D3).
+      stagePending(record, ext, i);
+      statAt = this.applyTickFields(record, ext, i, statAt, id);
     }
 
-    for (const id of this.records.keys()) {
-      if (!seen.has(id)) this.records.delete(id);
+    this.reconcileRecords(ext, tickAdvanced, immediate);
+  }
+
+  /**
+   * Что делать с записями, строк которых в кадре не было.
+   *
+   * Полный кадр АВТОРИТЕТЕН (SHELL-3): запись без строки в нём — мёртвая.
+   * Частичный несёт только изменившиеся строки, и отсутствие означает «не
+   * менялась»; о смерти в нём говорит явный список исчезнувших, а не молчание.
+   *
+   * Неизменившиеся обязаны СХЛОПНУТЬ пару — иначе альфа, пробегая 0→1 каждый
+   * интервал, дёргала бы их назад в начало прежнего сегмента. В отложенном пути
+   * это делает продвижение (там проход по записям и так есть), а в немедленном
+   * — вот этот проход. Он O(записей) на доставку и аллокаций не делает: SHELL-3
+   * запрещает аллокацию, растущую со сценой, а не работу приёмника, и экономия
+   * change'а — байты канала, а не такты.
+   */
+  private reconcileRecords(ext: ExtractedTick, tickAdvanced: boolean, immediate: boolean): void {
+    const seen = this.seen;
+    if (ext.full) {
+      for (const id of this.records.keys()) {
+        if (!seen.has(id)) this.records.delete(id);
+      }
+      return;
+    }
+    for (let i = 0; i < ext.removedCount; i++) this.records.delete(ext.removed[i]!);
+    if (!immediate || !tickAdvanced) return;
+    for (const [id, record] of this.records) {
+      if (!seen.has(id)) collapsePair(record);
     }
   }
 
@@ -497,6 +517,7 @@ export class ViewBuffer {
     const y = ext.y[i]!;
     const level = ext.level[i]!;
     const phase = ext.motionPhase[i]!;
+    const motion = ext.motion[i]!;
     const kindIndex = ext.kind[i]!;
     return {
       id,
@@ -520,8 +541,11 @@ export class ViewBuffer {
       facingYaw: this.facingMemory.get(id) ?? 0,
       aimYaw: null,
       states: 0,
-      motion: LOCOMOTION_NORMAL,
-      prevMotion: LOCOMOTION_NORMAL,
+      // Пара вида манёвра у появившейся записи схлопнута, как позиция и фаза:
+      // прошлого тика у неё нет, и вклад прошлого обязан считаться высотой её
+      // собственного манёвра, а не обычного шага (REND-12).
+      motion,
+      prevMotion: motion,
       prevMotionPhase: phase,
       currMotionPhase: phase,
       flightPhase: Number.NaN,
@@ -529,6 +553,15 @@ export class ViewBuffer {
       // единица, а не ноль, иначе появившаяся сущность на один вызов замерла
       // бы. Настоящую величину тика ставит `applyTickFields` тут же следом.
       timeScale: 1,
+      // Появившаяся запись показывается сразу: откладывать нечего — обе стороны
+      // её пары и так этот тик (design D3).
+      pendX: x,
+      pendY: y,
+      pendLevel: level,
+      pendMotionPhase: phase,
+      pendMotion: motion,
+      pendFacingYaw: 0,
+      hasPending: false,
     };
   }
 
@@ -558,7 +591,7 @@ export class ViewBuffer {
       record.prevY = record.currY = y;
       record.prevLevel = record.currLevel = level;
       record.prevMotionPhase = record.currMotionPhase = phase;
-      record.prevMotion = motion;
+      record.prevMotion = record.motion = motion;
       record.snap = true;
       record.spawned = false;
       return;
@@ -568,20 +601,7 @@ export class ViewBuffer {
       record.spawned = false;
       return;
     }
-    const dx = x - record.currX;
-    const dy = y - record.currY;
-    const teleport = dx * dx + dy * dy > teleportSq;
-    record.prevX = teleport ? x : record.currX;
-    record.prevY = teleport ? y : record.currY;
-    record.prevLevel = teleport ? level : record.currLevel;
-    record.prevMotionPhase = teleport ? phase : record.currMotionPhase;
-    record.prevMotion = teleport ? motion : record.motion;
-    record.currX = x;
-    record.currY = y;
-    record.currLevel = level;
-    record.currMotionPhase = phase;
-    record.snap = teleport;
-    record.spawned = false;
+    slidePair(record, x, y, level, phase, motion, teleportSq);
   }
 
   /**
@@ -595,9 +615,9 @@ export class ViewBuffer {
     i: number,
     statAt: number,
     id: EntityId,
-    tickAdvanced: boolean,
   ): number {
-    record.motion = ext.motion[i]!;
+    // Вид манёвра сюда НЕ входит: он член пары интерполяции и двигается вместе
+    // с фазой — в `slidePair`, по показанному шагу (REND-12, design D3).
     // Фаза полёта — величина последнего доставленного тика, а не пара для
     // интерполяции (REND-12): дуга производна от неё, и conflation (SHELL-4)
     // ей не вредит — пропущенный тик просто не был показан.
@@ -614,22 +634,10 @@ export class ViewBuffer {
     record.moving = (flags & ENTITY_MOVING) !== 0;
     record.levelOverride = (flags & ENTITY_LEVEL_OVERRIDE) !== 0;
     record.states = flags >>> STATE_BITS_SHIFT;
-    // Курс — пара двух последних доставленных тиков, как позиция (REND-2):
-    // `NaN` означает «курс не менять», и стоящая сущность оставляет пару такой,
-    // какой она была, — остановка разворачивать юнита не имеет права.
+    // Память курса пополняется ДОСТАВКОЙ, а не показом (см. `facingMemory`):
+    // это «последний известный курс», и отставание показа его не касается.
     const facing = ext.facingYaw[i]!;
-    const heading = Number.isNaN(facing) ? record.facingYaw : facing;
-    if (record.snap || record.spawned) {
-      // Разрыв непрерывности: интерполировать не по чему — пара схлопнута, и
-      // курс встаёт мгновенно ровно там же, где мгновенно встаёт позиция.
-      record.prevFacingYaw = heading;
-    } else if (tickAdvanced) {
-      record.prevFacingYaw = record.facingYaw;
-    }
-    record.facingYaw = heading;
-    if (!Number.isNaN(facing)) {
-      this.rememberFacing(id, facing);
-    }
+    if (!Number.isNaN(facing)) this.rememberFacing(id, facing);
     const aim = ext.aimYaw[i]!;
     record.aimYaw = Number.isNaN(aim) ? null : aim;
     return next;
