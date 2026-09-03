@@ -60,11 +60,15 @@ import {
   createTerrainGrid,
   fixed,
   tick,
+  world as coreWorld,
+  type Action,
   type DiagnosticsSink,
   type EntityId,
   type InputFrame,
+  type SceneDef,
   type ScenarioDef,
   type ScenarioSpawn,
+  type SystemDef,
   type TerrainGrid,
   type TickResult,
 } from '@fluxus/core';
@@ -73,6 +77,7 @@ import type {
   PresentationPostprocess,
   PresentationWater,
 } from '@fluxus/assets';
+import type { MatchConfig, MatchTrace, PresentedState } from '@fluxus/net';
 import {
   Extractor,
   FogSubsystem,
@@ -105,20 +110,103 @@ import {
   benchCurvature,
   benchManifest,
 } from './benchContent.js';
-import { PositionsSubsystem, TICK_RATE } from './fixtures.js';
+import {
+  PositionsSubsystem,
+  TICK_RATE,
+  connectClient,
+  duelConfig,
+  duelScene,
+  fogScene,
+  fuzzInput,
+  harness,
+  playMatch,
+  propScene,
+  settle,
+  walkRight,
+  type ConnectedClient,
+  type Harness,
+  type MatchStepObserver,
+  type PlayedMatch,
+} from './fixtures.js';
 
 /** Эталоны стоимости лежат рядом с парами матчей — там же, где вся golden-культура. */
 export const GOLDEN_DIR = join(dirname(fileURLToPath(import.meta.url)), '..', '..', 'tests', 'golden');
 
+/** Файл канонического лога записи (CLI-2, CLI-10): пара golden-набора зовётся именем записи. */
+export function recordingFile(name: string): string {
+  return `${name}.scenario.json`;
+}
+
+/**
+ * ОПРЕДЕЛЕНИЕ записанного матча (CLI-10): имя пары golden-набора и живой прогон,
+ * которым эта пара снимается, — генератор ввода, число тиков и конфиг вместе.
+ *
+ * Определение лежит здесь, а не в тесте записи, потому что стендов у записи
+ * ДВА: `matchGolden.test.ts` снимает ею канонический лог, а гейт стоимости
+ * провода (`performance-budget` PERF-12) прогоняет ту же запись ради байтов
+ * персональных снапшотов. Разойдись они генератором ввода или числом тиков —
+ * эталон провода мерил бы матч, которого в golden-наборе нет, и обе стороны
+ * при этом остались бы зелёными.
+ */
+export interface MatchRecording {
+  /** Имя записи — оно же имя пары файлов golden-набора. */
+  readonly name: string;
+  /** Живой прогон записи на loopback-стенде; наблюдатель итераций — по надобности. */
+  readonly play: (onStep?: MatchStepObserver) => Promise<PlayedMatch>;
+}
+
+/** Длина и seed фазз-записи: ввод предвычисляется с запасом на подстановку кадров. */
+const FUZZ_TICKS = 60;
+const FUZZ_SEED = 977;
+
+export const MATCH_RECORDINGS: readonly MatchRecording[] = [
+  {
+    // Движение одного игрока при молчащем втором: виден и ввод, и подстановка
+    // predicted-кадров молчащего слота (TICK-2) в каноническом логе.
+    name: 'match-walk',
+    play: (onStep) => playMatch(24, { a: walkRight(16) }, duelConfig({ name: 'match-walk' }), onStep),
+  },
+  {
+    // Seeded-фазз обоих слотов: пространство сценариев шире рукописного.
+    name: 'match-fuzz',
+    play: (onStep) =>
+      playMatch(
+        FUZZ_TICKS,
+        {
+          a: fuzzInput(FUZZ_SEED, 'record-p1', FUZZ_TICKS + 64),
+          b: fuzzInput(FUZZ_SEED, 'record-p2', FUZZ_TICKS + 64),
+        },
+        duelConfig({ name: 'match-fuzz', seed: FUZZ_SEED }),
+        onStep,
+      ),
+  },
+  {
+    // Сцена с непустой расстановкой (SER-7, SER-8): реквизит сцены занимает
+    // первые ID, герои матча идут за ним. Забытая в прологе `buildMatchWorld`
+    // расстановка сцены краснеет здесь и в паре ядра к этому сценарию (NTR-8).
+    name: 'match-props',
+    play: (onStep) =>
+      playMatch(16, { a: walkRight(12) }, duelConfig({ name: 'match-props', scene: propScene() }), onStep),
+  },
+];
+
 /**
  * Записанные матчи бенча — ровно те записи, что стережёт `matchGolden.test.ts`
- * (CLI-10). Список здесь именами, а не сценариями: нагрузка гейта стоимости
- * обязана быть той же самой записью, а не похожим на неё свежим матчем.
+ * (CLI-10). Список ВЫВОДИТСЯ из определений выше, а не выписывается рядом:
+ * нагрузка гейта стоимости обязана быть той же самой записью, а не похожим на
+ * неё свежим матчем.
  */
-export const RECORDED_MATCHES = ['match-walk', 'match-fuzz', 'match-props'] as const;
+export const RECORDED_MATCHES: readonly string[] = MATCH_RECORDINGS.map((recording) => recording.name);
+
+/** Определение записи по имени; неизвестное имя — отказ, а не молчаливый пропуск. */
+function recordingOf(name: string): MatchRecording {
+  const recording = MATCH_RECORDINGS.find((entry) => entry.name === name);
+  if (recording === undefined) throw new Error(`запись матча "${name}" не объявлена в MATCH_RECORDINGS`);
+  return recording;
+}
 
 export function loadRecording(name: string): ScenarioDef {
-  return JSON.parse(readFileSync(join(GOLDEN_DIR, `${name}.scenario.json`), 'utf8')) as ScenarioDef;
+  return JSON.parse(readFileSync(join(GOLDEN_DIR, recordingFile(name)), 'utf8')) as ScenarioDef;
 }
 
 /**
@@ -1194,4 +1282,998 @@ export function syntheticTick(load: SyntheticLoad): ExtractedTick {
     ext.statPairs++;
   }
   return ext;
+}
+
+// ------------------- ось платформы способностей (PERF-6, ABIL-5, ABIL-9, BUFF-3)
+
+/**
+ * Синтетическая нагрузка платформы способностей: N кастеров, каждый со своим
+ * слотом, каждые четыре тика подтверждают шаг прицеливания по фигуре, кладут
+ * бафф на общую цель и выпускают снаряд, и все они наблюдают друг друга сквозь
+ * туман войны. Записью матча она не является — участников у неё нет, — поэтому
+ * лежит не парой golden-набора, а строится здесь, как и её размеры.
+ *
+ * Нагрузка эта заведена ровно затем, зачем PERF-6 требует оси: без неё
+ * счётчики платформ способностей, баффов, твинов и видимости лежали бы во ВСЕХ
+ * эталонах нулями (записанные матчи их платформ не поднимают вовсе), и гейт
+ * стоимости не видел бы ни квадратичного поиска хозяина баффа, ни скана всего
+ * мира на каждый каст — то есть ровно тех регрессий, ради которых счётчики
+ * заведены (PERF-3).
+ *
+ * Документом на диске она не лежит по той же причине, по какой им не лежит ось
+ * DSL: сцена есть ФУНКЦИЯ размера оси, и держать два рукописных документа с
+ * шестьюдесятью четырьмя расстановками значило бы держать два документа,
+ * расходящихся молча.
+ */
+export const ABILITY_STRESS = 'ability-stress';
+
+/**
+ * Полный размер оси: кастеров сеткой `ABILITY_GRID × ABILITY_GRID`. Сторона
+ * НЕЧЁТНАЯ намеренно: малый размер берёт каждую вторую линию сетки, и только у
+ * нечётной стороны в него попадают обе крайние — то есть охват арены у размеров
+ * совпадает ТОЧНО, а не с точностью до шага сетки.
+ */
+const ABILITY_GRID = 9;
+const ABILITY_CASTERS = ABILITY_GRID * ABILITY_GRID;
+
+/**
+ * Прореживание малого размера: каждый второй СТОЛБЕЦ и каждая вторая СТРОКА
+ * сетки (см. `abilityStressSizes`), то есть вчетверо меньше кастеров при том же
+ * охвате арены. Оно же — сторона блока сетки, внутри которого кастеры делят
+ * цель шага и сторону: в прореженном размере от каждого блока остаётся ровно
+ * один кастер, поэтому набор целей и сторон у обоих размеров один и тот же.
+ */
+const ABILITY_THIN = 2;
+
+/** Блоков сетки по стороне — они же кастеры малого размера по стороне. */
+const ABILITY_BLOCKS = Math.ceil(ABILITY_GRID / ABILITY_THIN);
+
+/** Тиков в прогоне — столько же, сколько у соседних осей стороны симуляции. */
+const ABILITY_STRESS_TICKS = 24;
+
+/** Цели шага прицеливания: их число НЕ зависит от оси — ось двигает кастеров. */
+const ABILITY_ANCHORS = 4;
+
+/** Укрытия линии видимости: тоже вне оси — иначе она двигала бы две величины. */
+const ABILITY_COVERS = 4;
+
+/** Сторона арены в тайлах; сетка ровная — обрывов у нагрузки нет. */
+const ABILITY_ARENA = 16;
+
+/** Шаг сетки кастеров и её начало, в тайлах. */
+const ABILITY_STEP = 1.75;
+const ABILITY_ORIGIN = 1;
+
+/** Биты сцены (INP-4): каст — 0, подтверждение шага — 1. */
+const ABILITY_CAST_BIT = 0;
+const ABILITY_CONFIRM_BIT = 1;
+
+const F = (value: number): number => fixed.fromFloat(value);
+
+/** Центр сетки кастеров — точка прицела всех: цель шага у них общая (BUFF-3). */
+const ABILITY_CENTER = ABILITY_ORIGIN + ((ABILITY_GRID - 1) * ABILITY_STEP) / 2;
+
+/**
+ * Полураствор конуса шага — 90°. Угол здесь — Q16.16-ДОЛЯ ОБОРОТА (EXPR-2,
+ * FP-7), а не радианы: 16384 и есть четверть оборота.
+ */
+const ABILITY_HALF_ANGLE = 16384;
+
+/** Цель шага номер `i`: их четыре, стоят рядом в середине сетки кастеров. */
+function anchorAt(i: number): { readonly x: number; readonly y: number } {
+  return { x: ABILITY_CENTER + (i % 2) * 0.5, y: ABILITY_CENTER + Math.floor(i / 2) * 0.5 };
+}
+
+/**
+ * Расстановка нагрузки: сначала кастеры сеткой (их и прореживает малый размер),
+ * затем цели и укрытия. Порядок записей нормативен (SER-8, ID-2), поэтому
+ * прореживание только выбрасывает записи, а не переставляет их.
+ */
+function abilityStressSpawns(): ScenarioSpawn[] {
+  const spawns: ScenarioSpawn[] = [];
+  for (let i = 0; i < ABILITY_CASTERS; i++) {
+    const col = i % ABILITY_GRID;
+    const row = Math.floor(i / ABILITY_GRID);
+    // Номер блока сетки: цель шага и сторона — свойства БЛОКА, а не
+    // порядкового номера кастера. Прореживание оставляет от каждого блока ровно
+    // одного кастера, поэтому у обоих размеров одни и те же четыре цели и обе
+    // стороны: иначе ось двигала бы заодно разброс наложений по целям и состав
+    // сторон, а наложения сводились бы не в четыре инстанса, а в один (BUFF-3).
+    const block = Math.floor(col / ABILITY_THIN) + Math.floor(row / ABILITY_THIN) * ABILITY_BLOCKS;
+    const aim = anchorAt(block % ABILITY_ANCHORS);
+    spawns.push({
+      prefab: 'Caster',
+      overrides: {
+        Position: { x: F(ABILITY_ORIGIN + col * ABILITY_STEP), y: F(ABILITY_ORIGIN + row * ABILITY_STEP) },
+        Input: { targetX: F(aim.x), targetY: F(aim.y) },
+        // Стороны чередуются теми же блоками: у одной стороны пересчёт
+        // видимости не доходил бы до линии видимости вовсе — свой всегда виден
+        // своему (FOW-2).
+        Player: { slot: block % 2 },
+        Team: { id: block % 2 },
+      },
+    });
+  }
+  for (let i = 0; i < ABILITY_ANCHORS; i++) {
+    const at = anchorAt(i);
+    spawns.push({ prefab: 'Anchor', overrides: { Position: { x: F(at.x), y: F(at.y) } } });
+  }
+  for (let i = 0; i < ABILITY_COVERS; i++) {
+    spawns.push({
+      prefab: 'Cover',
+      overrides: { Position: { x: F(ABILITY_CENTER - 2 - i), y: F(ABILITY_CENTER - 2) } },
+    });
+  }
+  return spawns;
+}
+
+/**
+ * Ввод кастера — не кадрами протокола, а системой сцены: величина оси здесь
+ * число КАСТУЮЩИХ агентов, и заводить под неё шестьдесят четыре игрока с
+ * потоком кадров значило бы двигать заодно и раскладку ввода (TICK-2, TICK-5).
+ * Цикл в четыре тика: фронт бита каста, фронт бита подтверждения при удержанном
+ * бите каста (иначе отпускание прервало бы каст, ABIL-4), и два тика покоя.
+ */
+function abilityDriveSystem(): SystemDef {
+  // Фаза цикла читается БИТАМИ номера тика: остатка от деления в словаре
+  // выражений нет (арифметика там Q16.16, EXPR-2), а `bitTest` над сырым целым
+  // есть — и четвёрка цикла ровно два младших бита и занимает.
+  const low = { bitTest: [{ tick: [] }, 0] };
+  const high = { bitTest: [{ tick: [] }, 1] };
+  const cast = 1 << ABILITY_CAST_BIT;
+  const confirm = 1 << ABILITY_CONFIRM_BIT;
+  return {
+    name: 'Drive',
+    order: -900,
+    query: { all: ['Input'] },
+    as: 'e',
+    do: [
+      {
+        modifyComponent: {
+          entity: { var: 'e' },
+          component: 'Input',
+          values: {
+            // Прежняя маска — та же, что читает платформа (ABIL-3, TICK-4):
+            // обе записи видят мир до flush, поэтому фронт считается верно.
+            prevButtons: { getComponent: [{ var: 'e' }, 'Input', 'buttons'] },
+            buttons: {
+              if: [
+                // Тик ≡ 1 (mod 4) — фронт бита каста.
+                { and: [low, { '!': [high] }] },
+                cast,
+                // Тик ≡ 2 (mod 4) — фронт подтверждения при удержанном касте.
+                { and: [{ '!': [low] }, high] },
+                cast | confirm,
+                0,
+              ],
+            },
+          },
+        },
+      },
+    ],
+  };
+}
+
+/** Полный документ прогона нагрузки: сцена целиком плюс расстановка. */
+function abilityStressScenario(): ScenarioDef {
+  const row = '0'.repeat(ABILITY_ARENA);
+  const flags = '.'.repeat(ABILITY_ARENA);
+  return {
+    name: ABILITY_STRESS,
+    seed: 20260903,
+    ticks: ABILITY_STRESS_TICKS,
+    physics: {},
+    visibility: {},
+    scene: {
+      capacity: 1024,
+      components: [
+        { name: 'Position', fields: { x: 'fixed', y: 'fixed' } },
+        { name: 'Velocity', fields: { x: 'fixed', y: 'fixed' } },
+        {
+          name: 'Collider',
+          fields: {
+            blockMask: 'i32',
+            cliffRise: 'i32',
+            halfX: 'fixed',
+            halfY: 'fixed',
+            hitMask: 'i32',
+            layer: 'i32',
+            radius: 'fixed',
+            shape: 'i32',
+          },
+        },
+        {
+          name: 'Input',
+          fields: {
+            aimDir: 'fixed',
+            buttons: 'i32',
+            moveX: 'fixed',
+            moveY: 'fixed',
+            prevButtons: 'i32',
+            seq: 'i32',
+            targetX: 'fixed',
+            targetY: 'fixed',
+          },
+        },
+        { name: 'Player', fields: { slot: 'i32' } },
+        { name: 'Health', fields: { hp: 'fixed' } },
+        // Маркер цели шага: предикат шага — политика контента (ABIL-5), и
+        // «во что целиться» описывается компонентом сцены, а не платформой.
+        { name: 'Anchor', fields: { flag: 'i32' } },
+        { name: 'Granted', fields: { atTick: 'i32' } },
+      ],
+      prefabs: [
+        {
+          name: 'Caster',
+          components: {
+            Position: { x: 0, y: 0 },
+            // Точку прицела задаёт расстановка (`abilityStressSpawns`): у
+            // каждого кастера она своя из четырёх целей сцены.
+            Input: {},
+            Player: { slot: 0 },
+            Health: { hp: FIXED_ONE },
+            Vision: { radius: fixed.fromInt(8) },
+            Visibility: { visibleTo: 0 },
+            Team: { id: 0 },
+            VisionModifier: {},
+            StealthSources: {},
+            DetectionSources: {},
+          },
+        },
+        { name: 'Anchor', components: { Position: { x: 0, y: 0 }, Health: { hp: FIXED_ONE }, Anchor: { flag: 1 } } },
+        {
+          name: 'Cover',
+          components: {
+            Position: { x: 0, y: 0 },
+            Collider: {
+              blockMask: 0,
+              cliffRise: 0,
+              halfX: F(0.5),
+              halfY: F(0.5),
+              hitMask: 0,
+              layer: 0,
+              radius: F(0.5),
+              shape: 1,
+            },
+          },
+          tags: ['blocksVision'],
+        },
+        { name: 'Slot', components: { AbilitySlot: { abilityId: 0, slotIndex: 0 }, AbilityCooldown: { remaining: 0, total: 0 } } },
+        { name: 'Buff', components: { BuffInstance: {} } },
+        { name: 'Bolt', components: { Position: { x: 0, y: 0 }, AbilityProjectile: { abilityId: 0, range: 0, ticksLeft: 6 } } },
+      ],
+      systems: [
+        // Слот выдаётся обычным спавном (ABIL-1) — тем же приёмом, каким его
+        // выдаёт сцена дуэли: платформа своего канала «дать способность» не имеет.
+        {
+          name: 'Grant',
+          order: -950,
+          query: { all: ['Input', 'Player'], not: ['Granted'] },
+          as: 'e',
+          do: [
+            { spawnEntity: { prefab: 'Slot', overrides: { AbilitySlot: { owner: { var: 'e' } } } } },
+            { addComponent: { entity: { var: 'e' }, component: 'Granted', values: { atTick: { tick: [] } } } },
+          ],
+        },
+        abilityDriveSystem(),
+        // Твин на каждом носителе здоровья: величина оси двигает и его — твинов
+        // столько же, сколько кастеров плюс постоянные цели (TWEEN-1).
+        {
+          name: 'Pulse',
+          order: 30,
+          query: { all: ['Health'], not: ['Tween'] },
+          as: 'e',
+          do: [
+            {
+              addTween: {
+                entity: { var: 'e' },
+                def: 0,
+                from: 0,
+                to: FIXED_ONE,
+                duration: FIXED_ONE,
+                easing: 0,
+                ignoreTimeScale: 1,
+              },
+            },
+          ],
+        },
+      ],
+      tweens: [{ target: 'Health.hp' }],
+      abilities: [
+        {
+          id: 'mark',
+          trigger: { input: { bit: ABILITY_CAST_BIT } },
+          confirmBit: ABILITY_CONFIRM_BIT,
+          // Шаг `unit` с направленной фигурой — это и есть скан кандидатов
+          // (ABIL-5): запрос к миру в радиусе, фигура-гейт, предикат контента.
+          targeting: {
+            steps: [
+              {
+                kind: 'unit',
+                range: fixed.fromInt(24),
+                filter: { hasComponent: [{ var: 'candidate' }, 'Anchor'] },
+                shape: { kind: 'circle', radius: fixed.fromInt(24), halfAngle: ABILITY_HALF_ANGLE },
+              },
+            ],
+          },
+          phases: [{ id: 'aim', trigger: 'commit', durationTicks: 8, timeout: { then: 'cancel' } }],
+          effects: [
+            { spawnEntity: { prefab: 'Buff', overrides: { BuffInstance: { target: { var: 'unit0' }, source: { var: 'owner' }, buffId: 0 } } } },
+            {
+              spawnEntity: {
+                prefab: 'Bolt',
+                overrides: {
+                  AbilityProjectile: {
+                    owner: { var: 'owner' },
+                    originX: { getComponent: [{ var: 'owner' }, 'Position', 'x'] },
+                    originY: { getComponent: [{ var: 'owner' }, 'Position', 'y'] },
+                  },
+                  Position: {
+                    x: { getComponent: [{ var: 'owner' }, 'Position', 'x'] },
+                    y: { getComponent: [{ var: 'owner' }, 'Position', 'y'] },
+                  },
+                },
+              },
+            },
+          ],
+          projectile: {
+            onFade: [{ emitEvent: { type: 'BoltFaded', data: { entity: { var: 'self' } } } }],
+          },
+        },
+      ],
+      buffs: [
+        // `refresh` на общей цели — то самое наложение, поиск хозяина которого
+        // перебирает живые инстансы (BUFF-3): ось делает его квадратичность числом.
+        { id: 'marked', class: 'negative', durationTicks: 6, stacking: 'refresh' },
+      ],
+      abilityRuntime: { teamField: ['Player', 'slot'] },
+      terrain: {
+        width: ABILITY_ARENA,
+        height: ABILITY_ARENA,
+        tileSize: FIXED_ONE,
+        levels: Array.from({ length: ABILITY_ARENA }, () => row),
+        flags: Array.from({ length: ABILITY_ARENA }, () => flags),
+      },
+      fog: true,
+      initial: abilityStressSpawns(),
+    },
+  };
+}
+
+/**
+ * Два размера оси «число кастующих агентов» (ABIL-5, BUFF-3, PERF-6).
+ *
+ * Малый размер — каждый второй СТОЛБЕЦ и каждая вторая СТРОКА сетки, а не
+ * каждый четвёртый кастер по порядку и тем более не первая четверть сетки: ось
+ * обязана двигать ровно одну величину (PERF-6), а оба этих прореживания сжимали
+ * бы заодно охват сетки — при радиусе обзора в восемь тайлов геометрия двигала
+ * бы `visibilityPairs` и `abilityCandidates` наравне с числом кастеров, и
+ * отношение L/S нечему было бы приписать. Прореживание по сетке оставляет её
+ * углы на местах: охват по обеим осям, цели шага, укрытия, сетка террейна и все
+ * таблицы у размеров одни и те же, а различается только число кастующих
+ * агентов — вчетверо.
+ */
+export function abilityStressSizes(): { readonly small: AxisSize; readonly large: AxisSize } {
+  const full = abilityStressScenario();
+  const initial = full.scene.initial ?? [];
+  let caster = 0;
+  const thinned = initial.filter((spawn) => {
+    if (spawn.prefab !== 'Caster') return true;
+    const i = caster++;
+    return (i % ABILITY_GRID) % ABILITY_THIN === 0 && Math.floor(i / ABILITY_GRID) % ABILITY_THIN === 0;
+  });
+  return {
+    small: {
+      magnitude: ABILITY_BLOCKS * ABILITY_BLOCKS,
+      def: { ...full, scene: { ...full.scene, initial: thinned } },
+    },
+    large: { magnitude: ABILITY_CASTERS, def: full },
+  };
+}
+
+// ------------------- ось data-driven слоя (PERF-6, SYS-1, ACT-1, EXPR-8)
+
+/**
+ * Синтетическая нагрузка evaluator'а JSON-систем (`data-driven-systems` SYS-1):
+ * N сущностей одного prefab'а, разложенных сеткой, и ЧЕТЫРЕ системы сцены над
+ * ними — движение по скорости, ветвление по здоровью, запрос с фильтрами и
+ * эмиссия события по условию. Набор систем фиксирован (PERF-6), и величина оси
+ * у неё ровно одна: число сущностей, которые эти системы обрабатывают.
+ *
+ * Ось заведена затем, что data-driven слой — неснимаемый принцип ядра, а мерился
+ * он ОДНИМ размером: на записанных матчах `expressions` набирает несколько сотен
+ * за прогон, а на обеих прежних осях стороны симуляции (`npcAgents`, `navAgents`)
+ * он ноль вовсе — их нагрузки собраны нативными системами. Линейно ли растёт
+ * работа evaluator'а по обработанной сущности, по одному числу не видно: обход
+ * запроса заново на каждую сущность или повторное вычисление выражения на шаг
+ * дали бы то же самое число, только большее. Отвечает на это второй размер
+ * отношением L/S (PERF-4).
+ *
+ * Нагрузка — фикстура ДВИЖКА, а не контент (`game-content` CONT-4): `content/`
+ * бенч не читает вовсе, и сцена строится здесь ФУНКЦИЕЙ размера — по той же
+ * причине, по какой ею строятся оси экстракции и способностей: два рукописных
+ * документа с двумя с половиной сотнями расстановок расходились бы молча.
+ *
+ * Ни физики, ни видимости, ни навигации у прогона нет намеренно: их счётчики
+ * растут ПЛОТНОСТЬЮ и геометрией, а не числом обработанных сущностей, и на этой
+ * оси двигали бы вторую величину. Отсюда же роль позиций: здесь они инертные
+ * данные — их пишет система движения и не читает ни один пространственный
+ * запрос (ни `withinRadius`, ни `nearestTo`, ни луч), — поэтому малый размер
+ * берётся ПРЕФИКСОМ расстановки, а не прореживанием сетки. У оси NPC
+ * прореживание обязательно ровно потому, что там выборка соседей растёт
+ * плотностью толпы; здесь плотности не читает никто, и префикс оставляет
+ * различие размеров одним-единственным — числом сущностей.
+ */
+export const DSL_SCALE = 'dsl-scale';
+
+/** Тиков в прогоне — столько же, сколько у соседних осей стороны симуляции. */
+const DSL_TICKS = 24;
+
+/** Сущностей в ряду сетки: раскладка сеткой, а не линией. */
+const DSL_ROW = 16;
+
+/**
+ * Вариантов начальных значений четыре, и вариант сущности — остаток её
+ * порядкового номера. Оба размера кратны четырём, поэтому префикс держит ровно
+ * ту же ДОЛЮ каждого варианта, что и полная расстановка, а работа evaluator'а
+ * на сущность зависит только от её варианта и номера тика — не от того, сколько
+ * сущностей стоит рядом. Отсюда ожидание оси: счётчики растут РОВНО отношением
+ * размеров, и всякое отклонение означает работу, зависящую не от самой
+ * сущности, а от их числа.
+ *
+ * Доля вариантов важна именно потому, что вклад систем в счётчик выражений у
+ * них РАЗНЫЙ: односторонний `if` системы 3 (ACT-1) вычисляет тело не на каждой
+ * сущности, и сдвиг долей между размерами двигал бы отношение L/S сам по себе.
+ */
+const DSL_VARIANTS = 4;
+
+/**
+ * Ёмкость мира — ОДНА на оба размера и с запасом над большим: `worldBytes`
+ * эталона памяти есть константа мира (PERF-8), и ёмкость, подобранная под
+ * размер, двигала бы её вместе с осью.
+ */
+const DSL_CAPACITY = 512;
+
+/** Порог ветвления и шаг здоровья: около порога значение и колеблется. */
+const DSL_HALF = F(0.5);
+const DSL_PULSE = F(0.125);
+
+/**
+ * Расстановка нагрузки: сущности одного prefab'а сеткой шириной `DSL_ROW`.
+ * Начальные здоровье и скорость — свойства ВАРИАНТА, а не порядкового номера,
+ * и потому одинаково распределены у обоих размеров.
+ */
+function dslSpawns(entities: number): ScenarioSpawn[] {
+  const spawns: ScenarioSpawn[] = [];
+  for (let i = 0; i < entities; i++) {
+    const variant = i % DSL_VARIANTS;
+    spawns.push({
+      prefab: 'Mote',
+      overrides: {
+        Position: { x: F(i % DSL_ROW), y: F(Math.floor(i / DSL_ROW)) },
+        Velocity: { x: F((variant + 1) / 16), y: F(-(variant + 1) / 16) },
+        Health: { hp: F(0.25 * (variant + 1)) },
+      },
+    });
+  }
+  return spawns;
+}
+
+/**
+ * Четыре системы нагрузки (design D1) — по одной на способ, которым контент
+ * тратит evaluator: арифметика над полями, ветвление по условию, запрос с
+ * фильтрами и структурной командой, эмиссия события.
+ *
+ * Запросов ВНУТРИ действий нет ни одного (ни `forEach`, ни `nearestTo`):
+ * линейность по обработанной сущности — то самое ожидаемое свойство нагрузки,
+ * которое ось и проверяет, а вложенный запрос сделал бы квадратичность
+ * свойством самой нагрузки, и отличить её от квадратичности evaluator'а было бы
+ * нечем.
+ *
+ * `order` — из свободной полосы 1…49 между `LocomotionSystem` и `TweenSystem`
+ * (`determinism-core` DET-9): нативных систем у этого прогона нет вовсе, но
+ * шкала общая, и занимать чужие якоря незачем.
+ */
+function dslSystems(): SystemDef[] {
+  const e = { var: 'e' };
+  const hp = { getComponent: [e, 'Health', 'hp'] };
+  const field = (component: string, name: string): unknown => ({ getComponent: [e, component, name] });
+  const pulse = (op: '+' | '-'): Action => ({
+    modifyComponent: { entity: e, component: 'Health', values: { hp: { [op]: [hp, DSL_PULSE] } } },
+  });
+  return [
+    // 1. Движение: чистая арифметика над двумя полями компонента — самый частый
+    //    вид работы контентной системы и нижняя граница стоимости сущности.
+    {
+      name: 'Drift',
+      order: 10,
+      query: { all: ['Position', 'Velocity'] },
+      as: 'e',
+      do: [
+        {
+          modifyComponent: {
+            entity: e,
+            component: 'Position',
+            values: {
+              x: { '+': [field('Position', 'x'), field('Velocity', 'x')] },
+              y: { '+': [field('Position', 'y'), field('Velocity', 'y')] },
+            },
+          },
+        },
+      ],
+    },
+    // 2. Ветвление: обе ветви живые на обоих размерах — здоровье колеблется
+    //    вокруг порога. Ветви действия `if` (ACT-1) здесь структурно одинаковы,
+    //    поэтому вычисленных узлов у системы поровну при любом исходе условия:
+    //    вклад её в счётчик выражений ПОСТОЯНЕН на сущность. Рядом с переменным
+    //    вкладом системы 3 он и нужен — набор оси держит оба.
+    {
+      name: 'Pulse',
+      order: 20,
+      query: { all: ['Health'] },
+      as: 'e',
+      do: [{ if: { cond: { '<': [hp, DSL_HALF] }, then: [pulse('+')], else: [pulse('-')] } }],
+    },
+    // 3. Запрос с фильтрами и структурная команда: выборка сужена и негативным
+    //    фильтром, и тегом (`ecs-foundation` QUERY-1), а тело добавляет
+    //    компонент — то есть работа идёт не только через запись поля. `else` у
+    //    действия `if` здесь нет вовсе: ACT-1 его не требует (в отличие от
+    //    одноимённого ОПЕРАТОРА выражений, у которого ветвь `else` обязательна,
+    //    EXPR-8), и потому число вычисленных узлов на сущность — свойство её
+    //    варианта и номера тика, а не константа. Переменный вклад в счётчик
+    //    выражений даёт именно эта система.
+    {
+      name: 'Charge',
+      order: 30,
+      query: { all: ['Health'], not: ['Tag'], withTag: 'Mote' },
+      as: 'e',
+      do: [
+        {
+          if: {
+            cond: { '>=': [hp, DSL_HALF] },
+            then: [{ addComponent: { entity: e, component: 'Tag', values: { atTick: { tick: [] } } } }],
+          },
+        },
+      ],
+    },
+    // 4. Эмиссия события по условию раз в два тика плюс снятие компонента:
+    //    шина тика — тоже работа контента (`eventsEmitted`, PERF-3), а снятие
+    //    возвращает нагрузку в исходное состояние, иначе выборка системы 3
+    //    высохла бы к третьему тику и ось мерила бы мёртвую систему.
+    {
+      name: 'Spark',
+      order: 40,
+      query: { all: ['Tag'] },
+      as: 'e',
+      do: [
+        {
+          if: {
+            cond: { bitTest: [{ tick: [] }, 0] },
+            then: [
+              { emitEvent: { type: 'DslSpark', data: { entity: e, atTick: field('Tag', 'atTick') } } },
+              { removeComponent: { entity: e, component: 'Tag' } },
+            ],
+          },
+        },
+      ],
+    },
+  ];
+}
+
+/**
+ * Сцена нагрузки на N сущностей: компоненты, единственный prefab и те же четыре
+ * системы. Всё, кроме расстановки, у размеров совпадает — это и есть условие
+ * «ось двигает ровно одну величину» (PERF-6).
+ *
+ * `Tag` в prefab'е не объявлен намеренно: он появляется и снимается командами
+ * (`ecs-foundation` CMD-4), и именно на нём держится негативный фильтр запроса.
+ */
+function dslScene(entities: number): SceneDef {
+  return {
+    capacity: DSL_CAPACITY,
+    components: [
+      { name: 'Position', fields: { x: 'fixed', y: 'fixed' } },
+      { name: 'Velocity', fields: { x: 'fixed', y: 'fixed' } },
+      { name: 'Health', fields: { hp: 'fixed' } },
+      { name: 'Tag', fields: { atTick: 'i32' } },
+    ],
+    prefabs: [
+      {
+        name: 'Mote',
+        tags: ['Mote'],
+        components: { Position: { x: 0, y: 0 }, Velocity: { x: 0, y: 0 }, Health: { hp: FIXED_ONE } },
+      },
+    ],
+    systems: dslSystems(),
+    initial: dslSpawns(entities),
+  };
+}
+
+/** Полный документ прогона нагрузки: сцена размера плюс длина прогона. */
+function dslLoad(entities: number): ScenarioDef {
+  return { name: `${DSL_SCALE}-${entities}`, seed: 20260904, ticks: DSL_TICKS, scene: dslScene(entities) };
+}
+
+/**
+ * Размер оси по числу: величина и документ прогона получаются из ОДНОГО числа,
+ * и разойтись им негде — расстановка сцены есть населённость мира целиком
+ * (спавнов и гибели у нагрузки нет вовсе).
+ */
+function dslSize(entities: number): AxisSize {
+  return { magnitude: entities, def: dslLoad(entities) };
+}
+
+/**
+ * Два размера оси «число сущностей, обрабатываемых JSON-системами» (SYS-1,
+ * PERF-6). Четырёхкратный разрыв — тот же, что у оси способностей: линейную
+ * работу evaluator'а он показывает ровным отношением, а любую суперлинейность
+ * (обход запроса на каждую обработанную сущность) — непропорциональным. Оба
+ * числа кратны числу вариантов: доля каждого варианта у размеров обязана
+ * совпадать, иначе ось двигала бы заодно состав вычисленных ветвей.
+ */
+export function dslScaleSizes(): { readonly small: AxisSize; readonly large: AxisSize } {
+  return { small: dslSize(64), large: dslSize(256) };
+}
+
+// --------------------------------------------- стоимость провода (PERF-12)
+//
+// Провод сервера — персональный снапшот каждому соединению после фильтра
+// видимости (`netcode` NET-12) и кодека (`netcode-transport` NTR-13). Стенд
+// здесь ОДИН на две нагрузки: записанные матчи (CLI-10) прогоняются тем же
+// `playMatch`, которым они и записаны, а ось числа клиентов поднимает такой же
+// loopback-матч на N соединений. Байты берутся из отчёта хоста (NTR-11), а не
+// повторным кодированием снапшота в тесте: второй кодек мерил бы себя (PERF-12).
+
+/** Имя документа оси провода. */
+export const WIRE_CLIENTS = 'wire-clients';
+
+/**
+ * Стоимость провода ОДНОГО слота (PERF-12). Источников у величин два:
+ * `snapshotBytes`, `snapshots` и `bytesOther` считает хост по соединению
+ * (NTR-11), `entitiesDelivered` и `eventsDelivered` — состав того, что клиент
+ * слота действительно принял. Поля перечислены по алфавиту — тем же порядком,
+ * каким они лягут в эталон.
+ *
+ * Наследование от плоского набора именованных счётчиков — то же, что у сводки
+ * тика: секция эталона обязана подставляться туда же, куда подставляются
+ * счётчики стадий, и проходить общую сортировку ключей.
+ */
+interface WireSlotCost extends Record<string, number> {
+  /**
+   * Байты соединения ПОМИМО персональных снапшотов: поток событий (NTR-15) и
+   * хендшейк (NTR-4). Хендшейк отчётом не выделяется и потому назван честно —
+   * это не «байты событий», а «байты всего остального»; он константен, и рост
+   * этой строки при неизменном числе соединений означает поток событий.
+   */
+  readonly bytesOther: number;
+  /** Сущности, попавшие в применённые слотом снапшоты, — размер выхода фильтра (NET-12). */
+  readonly entitiesDelivered: number;
+  /**
+   * Факты, доставленные слоту (NET-13, NTR-15). Считаются по потоку `Events`, а
+   * не по шине внутри снапшота: презентационная поверхность клиента шины не
+   * отдаёт вовсе (`PresentedState`), и единственный источник фактов для
+   * потребителя — этот поток.
+   */
+  readonly eventsDelivered: number;
+  /** Байты ушедших слоту персональных снапшотов (NTR-11). */
+  readonly snapshotBytes: number;
+  /** Число ушедших слоту персональных снапшотов (NTR-11). */
+  readonly snapshots: number;
+}
+
+/** Прогон провода: секции эталона по слоту и наблюдения стенда рядом с ними. */
+export interface WireRun {
+  /** Ключ — идентификатор игрока конфига матча (`p1`, `p2`, …). */
+  readonly slots: Readonly<Record<string, WireSlotCost>>;
+  /**
+   * Пропуски рассылки по слоту (NTR-22). В эталоне их нет и быть не должно:
+   * пропуск на стенде без очереди — дефект стенда, а не стоимость (PERF-12), и
+   * утверждает это тест.
+   */
+  readonly skipped: Readonly<Record<string, number>>;
+  /**
+   * Применённых слотом снапшотов — половина эталона, снятая на КЛИЕНТЕ, рядом с
+   * половиной, снятой на хосте (`snapshots`). Полем эталона не является: это
+   * сверка двух источников, а не стоимость.
+   */
+  readonly applied: Readonly<Record<string, number>>;
+}
+
+/**
+ * Состав ДОСТАВЛЕННОГО по слотам (PERF-12), считаемый по ходу матча.
+ *
+ * По ходу, а не по концу, и это не удобство, а единственная возможность —
+ * причём у обеих величин по своей причине. Снапшоты: буфер интерполяции держит
+ * последние, а не все (NET-3), и сумма после прогона складывалась бы из того,
+ * что уцелело. Факты: очередь фактов сливает КАЖДЫЙ шаг клиентского хоста
+ * (`ClientHost.step` → `takeEvents`, NTR-15), и к концу прогона в ней лежат
+ * только пачки последнего шага — «доставлено» пришлось бы считать по хвосту.
+ *
+ * Замер стоит между доставкой и следующим сливом: обе величины снимаются в
+ * конце итерации, когда доставка этого тика осела, а слив следующей итерации
+ * ещё не случился. Каждая пачка поэтому считается ровно один раз, повторы окон
+ * рассылки клиент отбрасывает сам курсором (NTR-15).
+ *
+ * Применённым считается снапшот, которого на прошлой итерации в `latest` не
+ * было: `latest` — ссылка на принятый кадр, и смена ссылки есть факт доставки.
+ */
+class DeliveredComposition {
+  private readonly last: (PresentedState | undefined)[];
+  private readonly entities: number[];
+  private readonly events: number[];
+  private readonly applied: number[];
+
+  constructor(slots: number) {
+    this.last = Array.from({ length: slots }, () => undefined);
+    this.entities = Array.from({ length: slots }, () => 0);
+    this.events = Array.from({ length: slots }, () => 0);
+    this.applied = Array.from({ length: slots }, () => 0);
+  }
+
+  /** Досчитывает слоты по итогу ИТЕРАЦИИ матча — доставка этого тика уже осела. */
+  observe(clients: readonly ConnectedClient[]): void {
+    for (const [slot, connected] of clients.entries()) {
+      // Факты считаются НЕЗАВИСИМО от смены состояния: единица потока — факт, а
+      // не кадр (NTR-15), и пачка вправе приехать к тику, состояние которого
+      // клиент уже держит.
+      for (const batch of connected.client.pendingEvents) {
+        this.events[slot] = this.events[slot]! + batch.events.length;
+      }
+      const latest = connected.client.latest;
+      if (latest === undefined || latest === this.last[slot]) continue;
+      this.last[slot] = latest;
+      this.applied[slot] = this.applied[slot]! + 1;
+      this.entities[slot] = this.entities[slot]! + coreWorld.listAlive(latest.world).length;
+    }
+  }
+
+  entitiesOf(slot: number): number {
+    return this.entities[slot]!;
+  }
+
+  eventsOf(slot: number): number {
+    return this.events[slot]!;
+  }
+
+  /** Применённых слотом снапшотов — вторая половина сверки с отчётом хоста. */
+  appliedOf(slot: number): number {
+    return this.applied[slot]!;
+  }
+}
+
+/**
+ * Сводит прогон в секции эталона: наблюдаемые хоста по соединению слота
+ * (NTR-11) плюс состав доставленного. Соединение слота берётся у сервера
+ * (`slotLease`), а не порядком подключения: слот назначается по имени игрока
+ * (`config.players.indexOf`), и порядок — не свойство провода.
+ */
+function wireRun(match: Harness, delivered: DeliveredComposition): WireRun {
+  const report = match.host.report();
+  const byConnection = new Map(report.connections.map((metrics) => [metrics.id, metrics]));
+  const slots: Record<string, WireSlotCost> = {};
+  const skipped: Record<string, number> = {};
+  const applied: Record<string, number> = {};
+  match.config.players.forEach((player, slot) => {
+    const connection = match.server.slotLease(slot).connection;
+    const metrics = connection === undefined ? undefined : byConnection.get(connection);
+    // Слот без живого соединения означает, что матч развалился на стенде:
+    // считать по нему нечего, и молчаливый ноль был бы эталоном пустоты.
+    if (metrics === undefined) {
+      throw new Error(`стенд провода: слот ${slot} ("${player}") не занят соединением к концу прогона`);
+    }
+    // Две половины секции приезжают с РАЗНЫХ сторон провода: байты и число
+    // ушедших снапшотов — с хоста (NTR-11), состав доставленного — с клиента.
+    // Сойтись они обязаны на общей величине: сколько хост отправил, столько
+    // клиент и применил. Расхождение означает, что одна из половин мерит не тот
+    // прогон, и состав доставленного в эталоне относится к другим байтам.
+    const applications = delivered.appliedOf(slot);
+    if (applications !== metrics.snapshots) {
+      throw new Error(
+        `стенд провода: слот ${slot} ("${player}") применил ${applications} снапшотов, ` +
+          `а хост отправил ${metrics.snapshots} (NTR-11)`,
+      );
+    }
+    slots[player] = {
+      bytesOther: metrics.bytes - metrics.snapshotBytes,
+      entitiesDelivered: delivered.entitiesOf(slot),
+      eventsDelivered: delivered.eventsOf(slot),
+      snapshotBytes: metrics.snapshotBytes,
+      snapshots: metrics.snapshots,
+    };
+    skipped[player] = metrics.snapshotsSkipped;
+    applied[player] = applications;
+  });
+  return { slots, skipped, applied };
+}
+
+/**
+ * Стоимость провода на ЗАПИСАННОМ матче (PERF-12): та же запись, тот же стенд,
+ * что у `matchGolden.test.ts`, — определение одно (`MATCH_RECORDINGS`).
+ */
+export async function playWire(name: string): Promise<WireRun> {
+  const recording = recordingOf(name);
+  // Слотов у стенда записи ровно два: `playMatch` поднимает клиентов `a` и `b`.
+  const delivered = new DeliveredComposition(2);
+  const match = await recording.play(({ a, b }) => {
+    delivered.observe([a, b]);
+  });
+  return wireRun(match, delivered);
+}
+
+// ------------------------------------- ось числа клиентов (PERF-6, PERF-12)
+
+/** Длина прогона оси — та же, что у записи `match-walk`: провод меряется, а не история. */
+const WIRE_TICKS = 24;
+/** Ввод оси — тот же непрерывный шаг вправо, одинаковый всем слотам. */
+const WIRE_WALK_UNTIL = 16;
+/**
+ * Ёмкость сцены оси: с запасом над большим размером и носителями сцены.
+ * Одна и та же у обоих размеров — иначе ось двигала бы заодно ёмкость мира,
+ * то есть вторую величину.
+ */
+const WIRE_CAPACITY = 32;
+/**
+ * Расстояние между линиями команд. БОЛЬШЕ радиуса обзора сцены (`fogScene`
+ * выдаёт герою `Vision` радиуса 1) — и это условие нагрузки, а не оформление:
+ * чужая команда обязана оставаться в тумане на ОБОИХ размерах, иначе фильтр
+ * ничего не вырезает и его отказ (сценарий PERF-12 «Фильтр перестал вырезать
+ * невидимое») эталон провода пройдёт зелёным.
+ */
+const WIRE_TEAM_GAP = 4;
+/**
+ * Шаг вдоль линии команды. На видимость он не влияет вовсе — свою команду
+ * сущность видит всегда (FOW-3, NET-15), — и нужен только затем, чтобы герои
+ * стояли врозь, а не друг в друге.
+ */
+const WIRE_ROW_STEP = 1;
+
+/** Один размер оси провода: число соединений матча и конфиг этого числа. */
+export interface WireSize {
+  /** Величина оси — число клиентов; героев в мире столько же (слот приходит со своим). */
+  readonly magnitude: number;
+  readonly config: MatchConfig;
+}
+
+/**
+ * Место героя слота: две линии команд напротив друг друга, по линии на команду,
+ * шаг вдоль линии — по номеру пары. Позиция есть чистая функция НОМЕРА СЛОТА,
+ * поэтому меньший размер оси — префикс большего запись в запись, и геометрия
+ * между размерами не разъезжается.
+ */
+function wireHeroAt(slot: number): { readonly x: number; readonly y: number } {
+  return {
+    x: fixed.fromInt((slot % 2) * WIRE_TEAM_GAP),
+    y: fixed.fromInt(Math.floor(slot / 2) * WIRE_ROW_STEP),
+  };
+}
+
+/**
+ * Конфиг матча на N слотов: арена дуэли С ТУМАНОМ (`fogScene`), N героев двумя
+ * линиями команд и N игроков, команды через одну. Всё, кроме числа слотов и
+ * порождённой им расстановки, совпадает у размеров запись в запись.
+ *
+ * Туман здесь — предмет замера, а не декорация: провод есть персональный
+ * снапшот ПОСЛЕ фильтра видимости (NET-12), и на сцене без масок фильтру нечего
+ * вырезать — он оставляет всем один и тот же мир, а эталон по слотам мерит одно
+ * число, записанное дважды. С туманом каждый слот получает свою команду и не
+ * получает чужую: линии стоят дальше радиуса обзора друг от друга, и снапшот
+ * слота ровно вдвое беднее мира.
+ */
+function wireClientsConfig(clients: number): MatchConfig {
+  return duelConfig({
+    name: `${WIRE_CLIENTS}-${clients}`,
+    scene: { ...fogScene(), capacity: WIRE_CAPACITY },
+    players: Array.from({ length: clients }, (_unused, slot) => `p${slot + 1}`),
+    // Точка зрения слота (NET-12) названа конфигом и обязана совпасть с командой
+    // его сущности в мире — иначе сборка матча откажет до первого тика.
+    teams: Array.from({ length: clients }, (_unused, slot) => slot % 2),
+    initial: Array.from({ length: clients }, (_unused, slot) => ({
+      prefab: 'Hero',
+      overrides: { Player: { slot }, Team: { id: slot % 2 }, Position: wireHeroAt(slot) },
+    })),
+  });
+}
+
+/**
+ * Два размера оси «число соединений одного матча» (PERF-6, PERF-12). Разрыв
+ * вчетверо, оба числа — в пределах продуктовых «до 10 игроков»: суммарные байты
+ * растут произведением «клиенты × сущности», и отношение L/S суммы против L/S
+ * оси (4) и есть то, ради чего ось заведена.
+ */
+export function wireClientsSizes(): { readonly small: WireSize; readonly large: WireSize } {
+  return {
+    small: { magnitude: 2, config: wireClientsConfig(2) },
+    large: { magnitude: 8, config: wireClientsConfig(8) },
+  };
+}
+
+/**
+ * Сток диагностики — СЕРВЕРНОМУ миру матча (DI-5): величины занятой памяти
+ * (PERF-8) и сводка стоимости тика снимаются с той стороны, которая тикает.
+ * Отметки ветви истории (DIAG-9) стенду не нужны — перемотки у него нет, — а
+ * отказов записи не бывает: сток тестовый, в файл не пишет.
+ */
+function benchTrace(sink: DiagnosticsSink): MatchTrace {
+  return { sink, mark: () => {}, failure: undefined };
+}
+
+/**
+ * Система-публикатор нагрузки фактов: событие на каждого героя каждый тик.
+ * Единственное, чем «говорящая» нагрузка отличается от «молчащей».
+ */
+const WIRE_PING_SYSTEM: SystemDef = {
+  name: 'Ping',
+  order: 20,
+  query: { all: ['Player'] },
+  as: 'e',
+  do: [{ emitEvent: { type: 'WirePing', data: { entity: { var: 'e' } } } }],
+};
+
+function wireEventsConfig(name: string, systems: readonly SystemDef[]): WireSize {
+  const scene = duelScene();
+  return {
+    magnitude: 2,
+    config: duelConfig({
+      name: `${WIRE_CLIENTS}-${name}`,
+      scene: { ...scene, systems: [...(scene.systems ?? []), ...systems] },
+    }),
+  };
+}
+
+/**
+ * ПАРА нагрузок провода, различающихся ровно публикацией фактов: дуэль на двух
+ * слотах с системой, публикующей событие на каждого героя каждый тик, и та же
+ * дуэль без неё.
+ *
+ * Заведена не ради эталона, а ради проверки счётчика `eventsDelivered`: на
+ * записанных матчах он законно ноль (события их сцены не порождают вовсе), и
+ * величина, которую ни одна нагрузка не двигает, зелёная одинаково и когда она
+ * верна, и когда сломана. Парой, а не одной нагрузкой, потому что байты потока
+ * фактов видны только РАЗНОСТЬЮ: `bytesOther` несёт ещё и хендшейк, и «больше
+ * нуля» у него верно и без единого факта.
+ *
+ * Тумана на этих сценах нет намеренно — в отличие от оси, где он предмет
+ * замера: здесь предмет — счёт фактов, и без фильтра событий (NET-13) каждый
+ * опубликованный факт видим обоим слотам, поэтому «доставлено» обязано сойтись
+ * с «опубликовано» точным равенством, а не неравенством.
+ */
+export function wireEventsSizes(): { readonly publishing: WireSize; readonly silent: WireSize } {
+  return {
+    publishing: wireEventsConfig('events', [WIRE_PING_SYSTEM]),
+    silent: wireEventsConfig('silent', []),
+  };
+}
+
+/**
+ * Прогон оси: loopback-матч на N клиентов с одинаковым вводом. Моста рендера у
+ * него нет намеренно — меряется провод, а не кадр, и восьмой презентационный
+ * тракт добавил бы к прогону работу, к проводу не относящуюся.
+ *
+ * Сток диагностики необязателен ровно по образцу прогона записи: гейту
+ * стоимости провода он не нужен (величины приезжают отчётом хоста), гейту
+ * памяти нужен — пики мира приезжают записью тика (PERF-8).
+ */
+export async function playWireClients(size: WireSize, diagnostics?: DiagnosticsSink): Promise<WireRun> {
+  const config =
+    diagnostics === undefined ? size.config : { ...size.config, trace: benchTrace(diagnostics) };
+  const build = {
+    ...(config.physics !== undefined ? { physics: config.physics } : {}),
+    ...(config.visibility !== undefined ? { visibility: config.visibility } : {}),
+  };
+  const fixture = harness(config);
+  const clients = config.players.map((player) =>
+    connectClient(fixture.hub, player, fixture.clock, config.scene, walkRight(WIRE_WALK_UNTIL), build),
+  );
+  const delivered = new DeliveredComposition(clients.length);
+  await settle();
+
+  for (let i = 0; i < WIRE_TICKS; i++) {
+    fixture.clock.ms += 1000 / TICK_RATE;
+    for (const connected of clients) connected.host.step();
+    await settle();
+    fixture.host.step();
+    await settle();
+    delivered.observe(clients);
+  }
+  return wireRun(fixture, delivered);
 }

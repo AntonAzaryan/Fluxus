@@ -1,0 +1,43 @@
+{
+  "axis": "clients",
+  "small": 2,
+  "large": 8,
+  "cost": {
+    "small": {
+      "wire": {
+        "p1": {
+          "bytesOther": 1244,
+          "entitiesDelivered": 72,
+          "eventsDelivered": 0,
+          "snapshotBytes": 24796,
+          "snapshots": 24
+        },
+        "total": {
+          "bytesOther": 2488,
+          "entitiesDelivered": 144,
+          "eventsDelivered": 0,
+          "snapshotBytes": 49624,
+          "snapshots": 48
+        }
+      }
+    },
+    "large": {
+      "wire": {
+        "p1": {
+          "bytesOther": 1682,
+          "entitiesDelivered": 144,
+          "eventsDelivered": 0,
+          "snapshotBytes": 35824,
+          "snapshots": 24
+        },
+        "total": {
+          "bytesOther": 13456,
+          "entitiesDelivered": 1152,
+          "eventsDelivered": 0,
+          "snapshotBytes": 287104,
+          "snapshots": 192
+        }
+      }
+    }
+  }
+}

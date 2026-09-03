@@ -381,8 +381,13 @@ const spawnBuff = (target: string, source: string, buffId: number): Record<strin
  * Радиус обзора мал намеренно: шаг за тик — `TICK_DELTA` (≈0.08), поэтому
  * уходящий вправо герой покидает обзор противника за десяток тиков, и «ушёл в
  * туман» наблюдается внутри короткого матча.
+ *
+ * Экспортируется затем, что на ней же стоит ось числа клиентов гейта стоимости
+ * (`performance-budget` PERF-12): провод режется фильтром видимости, и мерить
+ * его на сцене без тумана значило бы мерить фильтр, которому нечего вырезать.
+ * Вторая копия этой сцены рядом разошлась бы с первой молча.
  */
-function fogScene(): SceneDef {
+export function fogScene(): SceneDef {
   const scene = duelScene();
   const hero = scene.prefabs![0]!;
   return {
@@ -801,6 +806,22 @@ export interface PlayedMatch extends Harness {
 }
 
 /**
+ * Наблюдатель ИТЕРАЦИИ матча: зовётся в конце каждого шага цикла, когда
+ * доставка этого тика уже осела (`settle`), и получает оба клиента.
+ *
+ * Заведён затем, что состав ДОСТАВЛЕННОГО (`performance-budget` PERF-12)
+ * снимается только по ходу матча: буфер интерполяции держит последние
+ * снапшоты, а не все (NET-3), и по концу прогона сумму по применённым
+ * снапшотам сложить уже не из чего. Наблюдатель — чтение, а не второй стенд:
+ * цикл матча остаётся ОДИН, и стенд записи (CLI-10) со стендом провода
+ * разойтись не могут.
+ */
+export type MatchStepObserver = (clients: {
+  readonly a: ConnectedClient;
+  readonly b: ConnectedClient;
+}) => void;
+
+/**
  * Полный матч на N тиков: сервер, два клиента, мост рендера на стороне b.
  * Ручные шаги и loopback — без сокетов и таймеров (NTR-12).
  */
@@ -808,6 +829,7 @@ export async function playMatch(
   ticks: number,
   inputs: { a?: InputSource; b?: InputSource } = {},
   config: MatchConfig = duelConfig(),
+  onStep?: MatchStepObserver,
 ): Promise<PlayedMatch> {
   const fixture = harness(config);
   const scene = config.scene;
@@ -834,6 +856,7 @@ export async function playMatch(
     const discontinuity = b.client.takeDiscontinuity();
     const latest = b.client.latest;
     if (latest !== undefined) bridge.apply(latest, b.client.epoch, discontinuity);
+    onStep?.({ a, b });
   }
   return { ...fixture, a, b, bridge };
 }

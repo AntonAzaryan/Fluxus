@@ -1,0 +1,33 @@
+{
+  "axis": "abilityCasters",
+  "small": 25,
+  "large": 81,
+  "footprint": {
+    "small": {
+      "tick": {
+        "commandsPeak": 200,
+        "entitiesAlive": 113,
+        "entitiesFree": 50,
+        "eventsPeak": 25,
+        "navBytes": 0,
+        "navHeapCapacity": 0,
+        "tagEntries": 5,
+        "ticks": 24,
+        "worldBytes": 472064
+      }
+    },
+    "large": {
+      "tick": {
+        "commandsPeak": 648,
+        "entitiesAlive": 337,
+        "entitiesFree": 162,
+        "eventsPeak": 81,
+        "navBytes": 0,
+        "navHeapCapacity": 0,
+        "tagEntries": 5,
+        "ticks": 24,
+        "worldBytes": 472064
+      }
+    }
+  }
+}

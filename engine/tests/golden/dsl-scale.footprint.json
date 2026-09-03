@@ -1,0 +1,33 @@
+{
+  "axis": "dslEntities",
+  "small": 64,
+  "large": 256,
+  "footprint": {
+    "small": {
+      "tick": {
+        "commandsPeak": 128,
+        "entitiesAlive": 64,
+        "entitiesFree": 0,
+        "eventsPeak": 64,
+        "navBytes": 0,
+        "navHeapCapacity": 0,
+        "tagEntries": 64,
+        "ticks": 24,
+        "worldBytes": 16896
+      }
+    },
+    "large": {
+      "tick": {
+        "commandsPeak": 512,
+        "entitiesAlive": 256,
+        "entitiesFree": 0,
+        "eventsPeak": 256,
+        "navBytes": 0,
+        "navHeapCapacity": 0,
+        "tagEntries": 256,
+        "ticks": 24,
+        "worldBytes": 16896
+      }
+    }
+  }
+}
