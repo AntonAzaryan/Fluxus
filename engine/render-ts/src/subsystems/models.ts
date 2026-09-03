@@ -100,6 +100,7 @@ import {
 } from '@fluxus/assets';
 import type {
   EntityView,
+  FrameBudget,
   LightingSink,
   QualityDeclaration,
   QualityValues,
@@ -148,6 +149,7 @@ import { attachDetailed, rescaleCull } from './models/carrier/detailed.js';
 import { attachBatched } from './models/carrier/batched.js';
 import { releaseHolder, type ControllerOptions } from './models/carrier/support.js';
 import { Prewarmer, type ModelsPrewarm } from './models/prewarm.js';
+import { SpawnQueue } from './models/spawnQueue.js';
 import { nodePoseOf, type NodePose } from './models/nodePose.js';
 import {
   DEFAULT_FACING_RAD,
@@ -314,6 +316,21 @@ export class ModelsSubsystem implements RenderSubsystem, InstanceProxySource {
   private readonly controllerOptions: ControllerOptions;
   /** Прогрев программ и ассетов до первого кадра (FOW-8, REND-31). */
   private readonly prewarmer: Prewarmer;
+  /** Очередь отложенного монтирования инстансов волны спавна (REND-44). */
+  private readonly spawn = new SpawnQueue();
+  /**
+   * Фаза отложимой работы (REND-44) отработала В ЭТОМ кадре. Подсистема,
+   * которую крутят без сцены, фазы не видит вовсе — и доделывает отложенное
+   * покадровым обновлением, как делала бы без бюджета совсем.
+   */
+  private budgetedThisFrame = false;
+  /**
+   * Монтирование одной записи для очереди — ОДНО замыкание на подсистему, а не
+   * на вызов: кадровый путь не аллоцирует (REND-26).
+   */
+  private readonly mountOne = (record: InstanceRecord): void => {
+    this.mountVisual(this.requireCtx(), record);
+  };
   private readonly warnedKinds = new Set<string>();
   /**
    * Несёт ли доставленное состояние сущности маркер смерти (REND-4); null —
@@ -414,6 +431,11 @@ export class ModelsSubsystem implements RenderSubsystem, InstanceProxySource {
    * путём, каким сообщает в матче.
    */
   dispose(): void {
+    // Отложенное монтирование сносом ОТМЕНЯЕТСЯ, а не доделывается (REND-44):
+    // строить изображение записи, которая через строку уйдёт из пула, значит
+    // выделить ресурс, чтобы тут же его отдать. Сцена своё «доделать целиком»
+    // уже сделала — она зовёт `flushBudget` ПЕРЕД сносом.
+    this.spawn.clear();
     for (const pool of [this.instances, this.decorations]) {
       for (const record of pool.values()) this.remove(record);
       pool.clear();
@@ -769,8 +791,30 @@ export class ModelsSubsystem implements RenderSubsystem, InstanceProxySource {
    * зовут оба продюсера presentation-состояния, REND-11). Стоящий мир приходит
    * нулевым dt, и клипы замирают ровно потому, что кадр их не двигает.
    */
+  /**
+   * Отложимая тяжёлая работа под бюджетом кадра (REND-44): монтирование
+   * инстансов волны спавна. Фаза идёт ПЕРЕД покадровым обновлением, поэтому
+   * доехавший в ней инстанс рисуется тем же кадром, а не следующим.
+   *
+   * Ничего кадрового здесь нет и быть не должно: часов у фазы нет, а случиться
+   * в кадре она может и не успеть.
+   */
+  updateBudgeted(budget: FrameBudget): void {
+    this.budgetedThisFrame = true;
+    // Снесённая подсистема (REND-31) ничего не монтирует: контекста у неё нет.
+    if (this.ctx === null) return;
+    this.spawn.drain(budget, this.mountOne, this.options.camera);
+  }
+
   updateFrame(dt: number, alpha: number): void {
     const heightStep = this.requireCtx().config.heightStep;
+    // Фаза отложимой работы (REND-44) уже смонтировала, сколько успела, и
+    // остаток отложила ОСОЗНАННО — доделывать его здесь значило бы отменить
+    // бюджет. Подсистема же, которую крутят напрямую (вьюпорт редактора,
+    // стенды, тесты), фазы не видит вовсе: там очередь не наполняется, а этот
+    // сток остаётся страховкой на случай сцены, переставшей звать фазу.
+    if (this.budgetedThisFrame) this.budgetedThisFrame = false;
+    else this.spawn.flush(this.mountOne);
     const turnRate = this.options.turnRate ?? DEFAULT_TURN_RATE;
     const tiltRate = this.options.tiltRate ?? DEFAULT_TILT_RATE;
     const surface = this.options.surface?.current ?? null;
@@ -983,6 +1027,11 @@ export class ModelsSubsystem implements RenderSubsystem, InstanceProxySource {
    */
   refreshAssets(): void {
     const ctx = this.requireCtx();
+    // Смена поколения ассетов — СИНХРОННАЯ точка (REND-44, REND-1): она сносит
+    // кэши и монтирует инстансы заново, а запись в очереди построенного ещё не
+    // имеет — пересборка прошла бы мимо неё. Отложенное доделывается целиком
+    // здесь же, до сноса кэшей.
+    this.spawn.flush(this.mountOne);
     // Событие правки, а не кадр (ED-15): сток читается один раз, и счётчик
     // показывает цену — сколько инстансов пересобрано (PERF-3).
     const cost = costSink();
@@ -1168,6 +1217,11 @@ export class ModelsSubsystem implements RenderSubsystem, InstanceProxySource {
     if (next === this.manifest) return;
     this.manifest = next;
     const ctx = this.requireCtx();
+    // Переподача — СИНХРОННАЯ точка (REND-44): она пересобирает построенное из
+    // ассета, а у записи в очереди построенного ещё нет, и пересборка прошла бы
+    // мимо неё. Отложенное доделывается целиком здесь же — тем же правилом,
+    // каким его доделывает разрыв непрерывности.
+    this.spawn.flush(this.mountOne);
     // Переподача — событие правки документа (REND-17, ED-15), и сток читается
     // один раз на неё: цена переподачи — число пересобранных инстансов (PERF-3).
     const cost = costSink();
@@ -1601,12 +1655,22 @@ export class ModelsSubsystem implements RenderSubsystem, InstanceProxySource {
       dissolved: false,
       dissolveDelay: 0,
       dissolveDuration: 0,
+      pendingMount: false,
       publicView: null,
     };
     this.applyEntryParams(record);
     record.yaw = view.facingYaw + record.facingOffset;
 
-    this.mountVisual(ctx, record);
+    // Дорогая половина создания — монтирование изображения — вправе уехать под
+    // бюджет кадра (REND-44): волна спавна кладёт в очередь, а фаза отложимой
+    // работы достаёт из неё, пока есть время. Запись пула при этом уже готова:
+    // доставка применяется ЦЕЛИКОМ, и режется не она, а построение из ассета.
+    //
+    // Decoration сюда не попадает намеренно: его набор — документ авторинга
+    // (REND-18, PRES-2), и правка автора обязана быть видна в том же кадре
+    // (ED-15) — ровно то основание, по которому документный продюсер работает с
+    // неограниченным бюджетом.
+    if (decoration || !this.spawn.defer(record)) this.mountVisual(ctx, record);
     return record;
   }
 
@@ -1768,6 +1832,11 @@ export class ModelsSubsystem implements RenderSubsystem, InstanceProxySource {
   }
 
   private remove(record: InstanceRecord): void {
+    // Запись, ещё стоявшая в очереди монтирования (REND-44), уходит вместе с
+    // пометкой: монтировать исчезнувшую сущность не для чего, и очередь не
+    // должна держать мёртвую запись до своего прохода. Единственная точка,
+    // через которую запись покидает кадр, — здесь она и снимается.
+    this.spawn.cancel(record);
     // Исчезнувшая walkable-декорация забирает свой вклад из поля; подписчики
     // получают клетки под прежним bbox (REND-9, REND-18).
     if (record.decoration) this.options.surface?.setWalkable(record.entity, null);
