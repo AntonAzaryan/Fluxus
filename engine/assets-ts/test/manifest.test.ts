@@ -12,6 +12,7 @@ import {
   manifestLoader,
   resolveEffectByEvent,
   resolveEffectByKind,
+  resolveEffectByState,
   resolveLodThresholds,
   resolveParticlesByEvent,
   resolveParticlesByKind,
@@ -678,6 +679,72 @@ describe('validateManifest: секция транзиентных эффекто
       /effects\.byKind\.X\.radus: неизвестное поле/,
     );
     expectErrors({ entities: {}, effects: [] }, /effects: ожидался объект/);
+  });
+
+  it('ведение статом — закрытый состав с адресными находками (REND-23)', () => {
+    // Шар заряда каста живёт записью, а не модулем игровой сборки: окно
+    // доставленного стата, вынос вперёд, порог цвета и мигание передержки.
+    const record = {
+      primitive: 'sphere',
+      color: '#ff8a3c',
+      radius: 0.15,
+      alpha: 0.8,
+      height: 0.3,
+      offset: 0.45,
+      radiusFromStat: { stat: 'charge', min: 1, max: 61, from: 1, to: 2 },
+      colorAt: { phase: 0.5, color: '#ff7020' },
+      blink: { periodMs: 180, alpha: 0.4 },
+    };
+    const ok = validateManifest({ entities: {}, effects: { byState: { Charging: record } } });
+    expect(ok.ok).toBe(true);
+    if (!ok.ok) return;
+    expect(resolveEffectByState(ok.manifest, 'Charging')!.radiusFromStat!.stat).toBe('charge');
+    // Имя стата рендером не проверяется: словарь статов принадлежит сборке
+    // воркера (HUD-8), и второй его перечень здесь разошёлся бы молча.
+    expect(
+      validateManifest({
+        entities: {},
+        effects: {
+          byState: {
+            X: { ...record, radiusFromStat: { ...record.radiusFromStat, stat: 'чего-то-нет' } },
+          },
+        },
+      }).ok,
+    ).toBe(true);
+
+    const at = (over: Record<string, unknown>): Record<string, unknown> => ({
+      entities: {},
+      effects: { byState: { X: { ...record, ...over } } },
+    });
+    expectErrors(
+      at({ radiusFromStat: { stat: 'charge', max: 10, to: 2, mn: 1 } }),
+      /effects\.byState\.X\.radiusFromStat\.mn: неизвестное поле/,
+    );
+    expectErrors(
+      at({ radiusFromStat: { stat: '', max: 10, to: 2 } }),
+      /effects\.byState\.X\.radiusFromStat\.stat: обязательное поле/,
+    );
+    // Пустое окно — деление на ноль у потребителя; молчаливое приведение к
+    // границе спрятало бы опечатку автора.
+    expectErrors(
+      at({ radiusFromStat: { stat: 'charge', min: 5, max: 5, to: 2 } }),
+      /effects\.byState\.X\.radiusFromStat\.max: конец окна/,
+    );
+    expectErrors(at({ colorAt: { phase: 2, color: '#fff' } }), /colorAt\.phase: обязательное поле/);
+    expectErrors(at({ blink: { periodMs: 0, alpha: 0.4 } }), /blink\.periodMs: обязательное поле/);
+    expectErrors(at({ offset: 'вперёд' }), /effects\.byState\.X\.offset: ожидалось конечное число/);
+    // Порог цвета и мигание без окна привязать не к чему: фазы у записи нет.
+    expectErrors(
+      {
+        entities: {},
+        effects: {
+          byState: {
+            X: { primitive: 'sphere', color: '#fff', radius: 1, colorAt: { phase: 0.5, color: '#000' } },
+          },
+        },
+      },
+      /effects\.byState\.X\.colorAt: поле ведётся фазой окна/,
+    );
   });
 });
 

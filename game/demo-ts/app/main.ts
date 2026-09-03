@@ -96,7 +96,6 @@ import {
   STATE_COMPONENTS,
   STATS,
 } from './sim.js';
-import { createChargeBalls, type ChargeBalls } from './chargeBalls.js';
 import { createStealthTint, type StealthTint } from './stealthTint.js';
 import { attachBenchProbe, benchRequested, type BenchProbe, type BenchProbeHost } from './benchProbe.js';
 import {
@@ -491,13 +490,6 @@ let frameAim: number | null = null;
 let frameTarget: AimPoint | null = null;
 
 /**
- * Последний НЕПУСТОЙ прицел кадра: им целится шар заряда своего героя. Луч,
- * ушедший мимо арены, шар не гасит — заряд идёт, а направление у него
- * есть то же самое правило «последнего значения», что у сэмплера (INP-5).
- */
-let lastAim: number | null = null;
-
-/**
  * Прицел под курсором как НЕПРЕРЫВНЫЙ источник (INP-1): `KeyboardMouseSource`
  * владеет прицелом только в момент клика, а способностям с удержанием (захват
  * снаряда, заряд каста) направление нужно на каждом тике удержания — иначе
@@ -556,11 +548,12 @@ sampler.add(pointerAimSource);
 // ------------------------------------------------- превью каста (REND-28)
 //
 // Фигура шага рисуется ПОДСИСТЕМОЙ рендера, а не главным потоком: она читает то
-// же определение сцены, что и симуляция (ABIL-5), а рукописные `capturePreview`
-// и `chargeBalls` этой сборки на нём и держались — на втором описании тех же
-// способностей. Сборке остаётся ровно три шва: каталог определений в
-// конструктор, имена статов слотов (`extractor.ts`) и покадровый локальный
-// сэмпл ввода — тот же, что уезжает в тик.
+// же определение сцены, что и симуляция (ABIL-5), а рукописный `capturePreview`
+// этой сборки на нём и держался — на втором описании тех же способностей.
+// Сборке остаётся ровно три шва: каталог определений в конструктор, имена
+// статов слотов (`extractor.ts`) и покадровый локальный сэмпл ввода — тот же,
+// что уезжает в тик. Шар заряда каста ушёл тем же путём — записью
+// `effects.byState.Charging` манифеста (REND-23), а не модулем сборки.
 
 /**
  * Подсистема превью каста: регистрируется в `onReady` вместе с остальными —
@@ -568,14 +561,6 @@ sampler.add(pointerAimSource);
  * рисовать всё равно нечего (REND-28).
  */
 let abilityPreview: AbilityPreviewSubsystem | null = null;
-
-/**
- * Визуальная поверхность кадра (REND-9) — общая с подсистемами террейна,
- * моделей и эффектов; появляется вместе с сеткой в `onReady`. Шар заряда
- * садится на НЕЁ, а не на `pose.z` инстанса: в прыжке и рывке поза поднята
- * дугой манёвра (REND-12), а шар висит перед кастером на своей высоте.
- */
-let visualSurface: VisualSurfaceSource | null = null;
 
 /**
  * Проекция курсора на визуальную поверхность (REND-42): появляется вместе с
@@ -594,36 +579,6 @@ let cursorSurface: CursorSurface | null = null;
  * рендера. Сегодня в нём один герой: над ним стоит полоса здоровья HUD (HUD-10).
  */
 let screenAnchors: ScreenAnchors | null = null;
-
-/**
- * Точка пола под интерполированной позой инстанса. Горизонталь — ровно та
- * позиция, по которой решает тик (REND-2), высота — поверхность под ней.
- *
- * Отдаётся ОДНА переиспользуемая запись: функция зовётся по разу на каждый шар
- * заряда в кадре, а свежий объект на каждый вызов — мусор на кадре (та же
- * политика, что у `ndcScratch`/`hitScratch`). Значение читается сразу и между
- * кадрами не хранится.
- */
-const groundScratch = { x: 0, y: 0, z: 0 };
-function groundUnder(instance: { pose: { x: number; y: number; z: number } }): {
-  x: number;
-  y: number;
-  z: number;
-} {
-  const surface = visualSurface?.current ?? null;
-  const x = instance.pose.x;
-  const y = instance.pose.y;
-  groundScratch.x = x;
-  groundScratch.y = y;
-  groundScratch.z = surface === null ? instance.pose.z : surface.heightAt(x, y);
-  return groundScratch;
-}
-
-/**
- * Шары заряда каста: собираются в `main` ПОСЛЕ манифеста — цвет, базовый радиус
- * и высоту они берут из его записей `effects.byKind` (`chargeBalls.ts`).
- */
-let chargeBalls: ChargeBalls | null = null;
 
 /**
  * Подача стелс-состояний (FOW-13): свой невидимка — полупрозрачность, чужой
@@ -834,7 +789,6 @@ function sampleFrameInput(): void {
   const resolved = pointerX < 0 ? null : aimAtPointer(pointerX, pointerY);
   frameAim = resolved === null ? null : resolved.angle;
   frameTarget = resolved;
-  if (frameAim !== null) lastAim = frameAim;
 
   sampleCameraInput();
   pushInput();
@@ -922,8 +876,7 @@ function cameraFrame(dtSec: number): void {
 
 /**
  * Стадия `present`: покадровое обновление подсистем (`frame` — интерполяция
- * поз, отсечение, выбор уровня детализации). Шар заряда — следом и здесь же: он
- * садится на позу инстанса ЭТОГО кадра, не прошлого.
+ * поз, отсечение, выбор уровня детализации).
  *
  * Приёма доставки (`syncTick`) здесь НЕТ: подсистемам его раздаёт `RemoteHost`
  * на приход сообщения из воркера (SHELL-3), то есть между кадрами. Стоимость
@@ -932,7 +885,6 @@ function cameraFrame(dtSec: number): void {
  */
 function presentFrame(now: number): void {
   remote?.frame(now);
-  chargeBalls?.update();
   stealthTint?.update();
   // Отладочный слой ведёт себя сам: доставленное состояние и кадровые величины
   // он получает своей точкой у сцены (REND-27) — сразу после подсистем, то есть
@@ -1310,20 +1262,8 @@ async function main(): Promise<void> {
   const presentation = await loadPresentation();
   const fogEnabled = (sceneJson as unknown as SceneDef).fog === true;
   const fogConfig = resolveFogConfig(presentation?.fog);
-  // Шары заряда — после манифеста: цвет, базовый радиус и высоту они берут из
-  // записей `effects.byKind.Fireball`/`HeavyFireball`, то есть у тех самых
-  // снарядов, один из которых и улетит (`chargeBalls.ts`).
-  chargeBalls = createChargeBalls({
-    scene: scene3,
-    manifest,
-    entities: () => remote?.view?.entities,
-    instanceFor: (entity) => models?.instanceFor(entity) ?? null,
-    heroId: () => heroId,
-    lastAim: () => lastAim,
-    groundUnder,
-  });
-  // Подача стелса (FOW-13) — тем же входом, что шары заряда: доставка и
-  // инстансы ЭТОГО кадра; секция `stealth` парного документа — числа картинки.
+  // Подача стелса (FOW-13): доставка и инстансы ЭТОГО кадра; секция `stealth`
+  // парного документа — числа картинки.
   stealthTint = createStealthTint({
     entities: () => remote?.view?.entities,
     instanceFor: (entity) => models?.instanceFor(entity) ?? null,
@@ -1354,9 +1294,6 @@ async function main(): Promise<void> {
           ? { curvatureMapId: manifest.terrain.curvatureMap }
           : {}),
       });
-      // Та же поверхность — шару заряда: он садится на пол, а не на дугу
-      // манёвра инстанса.
-      visualSurface = surface;
       // И ей же разрешается курсор (REND-42): прицел ложится на тот пол, который
       // игрок видит. Второго разрешения курсора у страницы нет — инспектор
       // (picking, REND-15) стоит на той же проекции.
@@ -1476,9 +1413,11 @@ async function main(): Promise<void> {
       // — в манифесте (`effects`), кода сцены они не требуют. Список состояний
       // тот же, что у Extractor'а и диспетчера камеры (`sim.ts`): по нему
       // запись `effects.byState` находит свой бит доставленных состояний.
-      remote!.register(
-        new EffectsSubsystem(manifest, { surface, stateComponents: STATE_COMPONENTS }),
-      );
+      const effects = new EffectsSubsystem(manifest, {
+        surface,
+        stateComponents: STATE_COMPONENTS,
+      });
+      remote!.register(effects);
       // Частицы (REND-24) — после моделей: сокет эмиттера снимается с позы узла
       // инстанса, посаженного В ЭТОМ ЖЕ кадре, а не в прошлом. Источник узлов —
       // сама подсистема моделей (`sockets`), словарь состояний — тот же список
@@ -1679,6 +1618,7 @@ async function main(): Promise<void> {
         scene: scene3,
         camera,
         models,
+        effects,
         particles,
         fog: fogSubsystem,
       }).catch((e: unknown) => {

@@ -1,0 +1,69 @@
+/**
+ * Прогрев транзиентных эффектов (REND-23) — вынесенная механика
+ * `EffectsSubsystem.prewarm`, парная `particlePrewarm.ts`: перечисление записей
+ * манифеста и отбор ПРИМИТИВОВ, под которые греются узлы. Сам узел строит
+ * подсистема — пул, группа и материалы её собственность.
+ *
+ * Прогрев нужен ровно за тем же, за чем он нужен моделям: пул эффектов пуст до
+ * первой вспышки, и первый `FireballExploded` компилирует программу
+ * `MeshBasicMaterial{transparent}` прямо в кадре боя (замеры шапки
+ * `game/demo-ts/app/prewarm.ts` — 95–147 мс ожидания линковки). Ступень здесь
+ * одна, в отличие от моделей: ассетов у эффектов нет и ждать нечего.
+ */
+import type { VisualEffect, VisualManifest } from '@fluxus/assets';
+import type * as THREE from 'three';
+
+/**
+ * Результат прогрева подсистемы (REND-23): паркуемые корни для компиляции
+ * программ тёплой сценой. `finish()` возвращает прогретое в пул — в кадр тёплые
+ * узлы не входят и наблюдаемого состояния не меняют.
+ */
+export interface EffectsPrewarm {
+  /** Корни вне сцены — по одному на примитив манифеста. Рисовать их нельзя. */
+  readonly roots: readonly THREE.Object3D[];
+  finish(): void;
+}
+
+/**
+ * По одной записи на КАЖДЫЙ примитив манифеста, в документном порядке таблиц.
+ * Греется примитив, а не запись: цвет и альфа — уносы материала, а программу
+ * задаёт материал вместе с геометрией, и она у всех сфер одна.
+ */
+export function effectPrimitives(manifest: VisualManifest): readonly VisualEffect[] {
+  const effects = manifest.effects;
+  const seen = new Set<string>();
+  const records: VisualEffect[] = [];
+  for (const table of [effects?.byKind, effects?.byState, effects?.byEvent]) {
+    if (table === undefined) continue;
+    for (const record of Object.values(table)) {
+      if (seen.has(record.primitive)) continue;
+      seen.add(record.primitive);
+      records.push(record);
+    }
+  }
+  return records;
+}
+
+/**
+ * Прогрев по перечню примитивов: узел берётся у подсистемы (`acquire`) и
+ * возвращается ей же по `finish()`. Неизвестный примитив узла не даёт —
+ * `acquire` говорит об этом один раз и отдаёт null, как и в кадре.
+ */
+export function warmEffectNodes<N extends { readonly mesh: THREE.Object3D }>(
+  records: readonly VisualEffect[],
+  acquire: (record: VisualEffect) => N | null,
+  release: (node: N) => void,
+): EffectsPrewarm {
+  const warmed: N[] = [];
+  for (const record of records) {
+    const node = acquire(record);
+    if (node !== null) warmed.push(node);
+  }
+  return {
+    roots: warmed.map((node) => node.mesh),
+    finish: () => {
+      for (const node of warmed) release(node);
+      warmed.length = 0;
+    },
+  };
+}

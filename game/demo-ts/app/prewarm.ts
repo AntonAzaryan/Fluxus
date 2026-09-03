@@ -26,7 +26,12 @@
  * держит — ленивый путь монтажа с заглушкой (ASSET-4) остаётся как был.
  */
 import * as THREE from 'three';
-import type { FogSubsystem, ModelsSubsystem, ParticlesSubsystem } from '@fluxus/render';
+import type {
+  EffectsSubsystem,
+  FogSubsystem,
+  ModelsSubsystem,
+  ParticlesSubsystem,
+} from '@fluxus/render';
 
 export interface PrewarmOptions {
   readonly renderer: THREE.WebGLRenderer;
@@ -34,6 +39,13 @@ export interface PrewarmOptions {
   readonly scene: THREE.Scene;
   readonly camera: THREE.Camera;
   readonly models: ModelsSubsystem;
+  /**
+   * Транзиентные эффекты (REND-23): их пул пуст до первой вспышки, и первый
+   * `FireballExploded` компилировал программу `MeshBasicMaterial{transparent}`
+   * прямо в кадре боя. Прогрев берёт по узлу на примитив манифеста и
+   * возвращает их в пул.
+   */
+  readonly effects: EffectsSubsystem;
   readonly particles: ParticlesSubsystem;
   readonly fog: FogSubsystem | null;
 }
@@ -84,17 +96,24 @@ async function compileForFrameTargets(
 }
 
 export async function prewarmPresentation(options: PrewarmOptions): Promise<void> {
-  const { renderer, scene, camera, models, particles, fog } = options;
+  const { renderer, scene, camera, models, effects, particles, fog } = options;
   // Оба прогрева ждут исхода загрузки своих ассетов; не доехавшие виды
   // остаются ленивому пути и прогрев не держат.
-  const [warm] = await Promise.all([models.prewarm(), particles.prewarm()]);
+  const [warm, warmParticles] = await Promise.all([models.prewarm(), particles.prewarm()]);
+  // Эффекты ассетов не ждут вовсе — их прогрев синхронен (REND-23).
+  const warmEffects = effects.prewarm();
   const warmScene = new THREE.Scene();
   for (const root of warm.roots) warmScene.add(root);
+  for (const root of warmEffects.roots) warmScene.add(root);
   // Без тумана мир рисуется прямо на канвас, и второй цели у кадра нет.
   const worldTarget = fog === null ? null : new THREE.WebGLRenderTarget(1, 1);
   try {
     // Заливка тяжёлых текстур (VAT — мегабайты float) на GPU до первого кадра.
     for (const texture of warm.textures) renderer.initTexture(texture);
+    // Текстуры образцов частиц — тем же приёмом: `QuarksLoader` грузит картинки
+    // документа асинхронно, и заливка `fire-soft.png` иначе ложится на первый
+    // draw эмиттера.
+    for (const texture of warmParticles.textures) renderer.initTexture(texture);
     // Тёплые корни — с освещением настоящей сцены (третий аргумент).
     await compileForFrameTargets(renderer, worldTarget, warmScene, camera, scene);
     // Программы того, что уже в сцене: террейн, свет, батчи частиц прогрева.
@@ -108,11 +127,16 @@ export async function prewarmPresentation(options: PrewarmOptions): Promise<void
     // — прежние корни в ней дают попадания в кэш программ, а не работу.
     for (const root of await warm.anchoredRoots()) warmScene.add(root);
     await compileForFrameTargets(renderer, worldTarget, warmScene, camera, scene);
+    // Текстуры частиц, доехавшие уже во время прогрева, — той же второй
+    // ступенью: ждать их вместе с первой значило бы отдать застрявшей картинке
+    // прогрев батчей и VAT-текстур, которым она не нужна вовсе (ASSET-4).
+    for (const texture of await warmParticles.texturesReady()) renderer.initTexture(texture);
   } finally {
     // Цель прогрева больше не нужна: программы держат материалы, а не она —
     // у three ключ материала помнит ВСЕ его программы (`materialProperties.
     // programs`), и обе доживут до сноса материала, а не до сноса этой цели.
     worldTarget?.dispose();
     warm.finish();
+    warmEffects.finish();
   }
 }

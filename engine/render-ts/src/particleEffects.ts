@@ -26,6 +26,14 @@
  *
  * Битый документ и неразворачиваемый эффект — предупреждение один раз и пропуск
  * записи, а не отказ кадра (REND-24, ASSET-6).
+ *
+ * ponytail: покадровая работа самой библиотеки остаётся при ней и после того,
+ * как пуловые экземпляры сняты с регистрации в батче (`acquire`/`release`):
+ * `VFXBatch.update()` строит из своего множества систем два массива на батч на
+ * кадр (`Array.from(...).filter(...)`), а мировые матрицы эмиттера считаются в
+ * нём трижды. Работа теперь пропорциональна числу ЖИВЫХ экземпляров, а не
+ * размеру пула, и этого достаточно; остальное убирает обновление или замена
+ * библиотеки, а не наша обёртка.
  */
 import * as THREE from 'three';
 import {
@@ -33,15 +41,15 @@ import {
   ParticleEmitter,
   QuarksLoader,
   type BatchedRenderer,
-  type FunctionJSON,
   type FunctionValueGenerator,
-  type GeneratorMemory,
   type IEmitter,
   type ParticleSystem,
   type ValueGenerator,
+  type VFXBatch,
 } from 'three.quarks';
 import type { ParticleEffectDocument } from '@fluxus/assets';
 import type { WarnOnce } from './warnOnce.js';
+export { setInstanceDensity } from './particleDensity.js';
 import {
   footprintSink,
   own,
@@ -56,8 +64,12 @@ import {
  */
 const PARTICLE_EFFECTS_OWNER = 'particles.effects';
 
+/** Заглушка разрешения обещания до того, как исполнитель отдал `resolve`. */
+// eslint-disable-next-line @typescript-eslint/no-empty-function -- заглушка на один тик синхронного кода
+function noop(): void {}
+
 /** Генератор числа частиц — эмиссия во времени и счёт единовременного выброса. */
-type EmissionGenerator = ValueGenerator | FunctionValueGenerator;
+export type EmissionGenerator = ValueGenerator | FunctionValueGenerator;
 
 /**
  * Система частиц экземпляра и ДОКУМЕНТНЫЕ значения, которые с экземпляра
@@ -84,6 +96,14 @@ export interface EffectEntry {
   readonly pool: EffectInstance[];
   /** Сколько экземпляров заведено всего (пул + живые) — по нему видно пул. */
   created: number;
+  /**
+   * Картинки документа доехали (`onLoad` загрузчика библиотеки). Разбор
+   * документа синхронен, а его текстуры — нет: `ObjectLoader` грузит `images`
+   * асинхронно, и заливать текстуру на GPU (`WebGLRenderer.initTexture`) до
+   * этого момента нечего. Документ без картинок разрешает обещание тут же —
+   * `onLoad` зовётся синхронно ещё внутри разбора.
+   */
+  readonly images: Promise<void>;
 }
 
 /** Экземпляр эффекта: узел сцены плюс системы частиц, которыми он играет. */
@@ -127,8 +147,21 @@ export class ParticleEffectPool {
     // аллокация итератора на каждое взятие из пула. Без стока их быть не должно
     // вовсе (PERF-8, сценарий «Учёт без стока бесплатен»).
     if (footprintSink() !== undefined) peak('particlesPooled', this.created);
+    // Регистрация систем в батче — СОБЫТИЕ взятия, а не постоянство: батч
+    // перебирает свои системы каждый кадр (`VFXBatch.update` строит из них два
+    // массива), и отдыхающий в пуле экземпляр платил бы за это наравне с
+    // играющим — работой по размеру ПУЛА (REND-26). Батч при этом остаётся
+    // прежним: конвейер у эффекта один, и `addSystem` находит его по настройкам.
+    for (const played of instance.systems) this.batchRenderer.addSystem(played.system);
     parent.add(instance.object);
     instance.object.visible = true;
+    // Трансформ сбрасывается ЗДЕСЬ, а не у каждого потребителя: экземпляр
+    // приходит из пула с позой прошлого употребления, и сокетная оболочка
+    // оставляет на нём поворот КОСТИ (REND-24). Достанься такой экземпляр
+    // декорации или выстрелу, конус эмиссии оказался бы наклонён поворотом,
+    // которого в новой позе нет. Позицию ставит потребитель — она есть у всех.
+    instance.object.quaternion.identity();
+    instance.object.scale.setScalar(1);
     restartInstance(instance);
     return instance;
   }
@@ -138,7 +171,13 @@ export class ParticleEffectPool {
     // `stop()` гасит живые частицы и приостанавливает систему; приостановленная
     // система не симулируется, поэтому снятый со сцены экземпляр библиотека не
     // уничтожает и он доживает в пуле до следующего использования.
-    for (const entry of instance.systems) entry.system.stop();
+    for (const entry of instance.systems) {
+      entry.system.stop();
+      // Снятие с регистрации — пара к регистрации на взятии (см. `acquire`):
+      // покадровый перебор батча идёт по ЖИВЫМ экземплярам, а не по всем
+      // когда-либо созданным.
+      this.batchRenderer.deleteSystem(entry.system);
+    }
     instance.object.removeFromParent();
     instance.object.visible = false;
     instance.entry.pool.push(instance);
@@ -157,7 +196,11 @@ export class ParticleEffectPool {
    *   делят их с образцом (`ParticleSystem.clone` передаёт материал и геометрию
    *   ссылкой), поэтому образец отдаётся после экземпляров, а не до;
    * - и батчи, которые завёл рендерер: своего `dispose` у него нет, а у батча
-   *   (`VFXBatch`) есть, и держит он геометрию.
+   *   (`VFXBatch`) есть, но освобождает он ОДНУ геометрию. Два материала батча
+   *   — шейдерный, построенный `rebuildMaterial()`, и клон материала настроек
+   *   (`VFXBatch` делает его в конструкторе) — библиотека не отдаёт вовсе, и
+   *   без нашего `dispose` программа остаётся в кэше three навсегда: каждое
+   *   открытие сцены редактором (ED-15) теряло бы программу и два материала.
    */
   dispose(): void {
     for (const [doc, entry] of this.effects) {
@@ -174,24 +217,64 @@ export class ParticleEffectPool {
     for (const batch of [...this.batchRenderer.batches]) {
       batch.removeFromParent();
       batch.dispose();
+      disposeBatchMaterials(batch);
     }
     this.batchRenderer.batches.length = 0;
     this.batchRenderer.systemToBatchIndex.clear();
   }
 
+  /**
+   * Текстуры образцов, разобранных пулом (ASSET-14): вход
+   * `WebGLRenderer.initTexture` у прогрева. Заливка на GPU — работа первого
+   * draw'а, и в кадре боя она нам не нужна.
+   */
+  templateTextures(): readonly THREE.Texture[] {
+    const textures: THREE.Texture[] = [];
+    const seen = new Set<string>();
+    for (const entry of this.effects.values()) {
+      entry.template?.traverse((node) => {
+        collectTexture(textures, seen, textureOf(node));
+      });
+    }
+    return textures;
+  }
+
+  /**
+   * Те же текстуры, но ПОСЛЕ загрузки картинок документов (ASSET-4): разбор
+   * документа синхронен, а его `images` загрузчик библиотеки тянет асинхронно.
+   * Ждать этого обещания собирающий не обязан — прогрев тогда сделает меньше,
+   * но сделает.
+   */
+  texturesReady(): Promise<readonly THREE.Texture[]> {
+    const waits = [...this.effects.values()].map((entry) => entry.images);
+    return Promise.all(waits).then(() => this.templateTextures());
+  }
+
   private expand(id: string, doc: ParticleEffectDocument): EffectEntry {
     const known = this.effects.get(doc);
     if (known !== undefined) return known;
-    const entry: EffectEntry = { template: null, pool: [], created: 0 };
+    // Обещание картинок создаётся ДО разбора: `ObjectLoader.parse` зовёт
+    // `onLoad` синхронно, ещё внутри себя, когда картинок в документе нет.
+    let loaded: () => void = noop;
+    const images = new Promise<void>((resolve) => {
+      loaded = resolve;
+    });
+    const entry: EffectEntry = { template: null, pool: [], created: 0, images };
     this.effects.set(doc, entry);
     try {
-      entry.template = new QuarksLoader().parse(doc);
+      entry.template = new QuarksLoader().parse(doc, () => {
+        loaded();
+      });
       // Ресурсы GPU, объявленные ДОКУМЕНТОМ, инстанцировал загрузчик
       // библиотеки, а владеет ими пул (см. `releaseTemplate`) — учёт PERF-8
       // получает их здесь, потому что `new THREE.*` этому владению не
       // соответствует ни одной строкой: строит их чужой код.
       ownTemplateResources(entry.template, documentResources(doc));
     } catch (e) {
+      // Разбор оборвался — картинок этого документа не будет никогда, и
+      // обещание разрешается здесь: иначе ожидание прогрева повисло бы на
+      // документе, который и так пропущен.
+      loaded();
       this.warnOnce(
         `expand:${id}`,
         `render: эмиттерный ассет "${id}" не разворачивается (${e instanceof Error ? e.message : String(e)}) — запись пропущена (REND-24)`,
@@ -213,9 +296,8 @@ export class ParticleEffectPool {
       // вернувшийся в пул, был бы мёртв навсегда, а не готов к следующему
       // употреблению. Значение снимается с ЭКЗЕМПЛЯРА; документ не трогается.
       system.autoDestroy = false;
-      // Один батч-рендерер на сцену (REND-24): система регистрируется в нём один
-      // раз на всю жизнь экземпляра — и пока экземпляр лежит в пуле тоже.
-      this.batchRenderer.addSystem(system);
+      // Регистрации в батче здесь НЕТ: её делает `acquire` — экземпляр
+      // регистрируется на время употребления и снимается возвратом в пул.
       systems.push({
         system,
         looping: system.looping,
@@ -401,6 +483,110 @@ function releaseTemplate(template: THREE.Object3D, owned: Set<string>): void {
 }
 
 /**
+ * Материалы батча глазами учёта и сноса (REND-31, PERF-8). Их ДВА, и оба
+ * строит библиотека: шейдерный материал `rebuildMaterial()` (`batch.material`,
+ * поле `Mesh`) и клон материала настроек, который `VFXBatch` делает в
+ * конструкторе (`batch.settings.material`). Ни один не создан нашим
+ * `new THREE.*`, поэтому в учёт они попадают регистрацией ПО ФАКТУ появления
+ * батча — тем же приёмом, что ресурсы разобранного графа (`ownTemplateResources`).
+ */
+function batchMaterials(batch: VFXBatch): THREE.Material[] {
+  const shader = batch.material;
+  const list = Array.isArray(shader) ? [...shader] : [shader];
+  list.push(batch.settings.material);
+  return list;
+}
+
+/**
+ * Регистрирует материалы свежего батча в учёте памяти (PERF-8). Зовётся один
+ * раз на батч — там же, где батчам отключается луч (REND-15): новые батчи
+ * появляются по мере новых конвейеров отрисовки, а не при инициализации.
+ */
+export function ownBatchMaterials(batch: VFXBatch): void {
+  for (const material of batchMaterials(batch)) {
+    own('material', PARTICLE_EFFECTS_OWNER, material);
+  }
+}
+
+/**
+ * Отдаёт материалы батча (REND-31): `VFXBatch.dispose()` библиотеки освобождает
+ * только геометрию, и без этого прохода живое число материалов после сноса не
+ * сошлось бы с нулём (PERF-9).
+ */
+function disposeBatchMaterials(batch: VFXBatch): void {
+  for (const material of batchMaterials(batch)) material.dispose();
+}
+
+/** Текстура узла графа эффекта; null — текстуры у него нет. */
+function textureOf(node: THREE.Object3D): THREE.Texture | null {
+  if (node instanceof ParticleEmitter) return (node.system as ParticleSystem).texture ?? null;
+  if (!(node instanceof THREE.Mesh)) return null;
+  const mesh = node as THREE.Mesh;
+  const materials = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
+  for (const material of materials) {
+    const map = (material as THREE.MeshBasicMaterial).map;
+    if (map != null) return map;
+  }
+  return null;
+}
+
+/** Текстура в список — по одной на uuid: материал системы и меша законно делят её. */
+function collectTexture(
+  out: THREE.Texture[],
+  seen: Set<string>,
+  texture: THREE.Texture | null,
+): void {
+  if (texture === null || seen.has(texture.uuid)) return;
+  seen.add(texture.uuid);
+  out.push(texture);
+}
+
+/**
+ * Экземпляр перестаёт ЭМИТИРОВАТЬ, а живые частицы доживают (REND-24).
+ *
+ * Ответ на исчезновение источника оболочки: сущность ушла из доставленного
+ * состояния, состояние перестало доставляться. `stop()` библиотеки здесь не
+ * годится — это `restart() + pause()`, то есть мгновенная смерть всех живых
+ * частиц: след снаряда лопался бы в кадре попадания, а пыль падения — в кадре
+ * приземления, при том что модель той же сущности в этот момент угасает
+ * (FOW-8). Зацикливание снимается с ЭКЗЕМПЛЯРА, документ не трогается.
+ */
+export function endEmitInstance(instance: EffectInstance): void {
+  for (const entry of instance.systems) {
+    entry.system.looping = false;
+    entry.system.endEmit();
+  }
+}
+
+/**
+ * Догорающий экземпляр отжил: эмиссия кончилась у всех его систем и живых
+ * частиц не осталось.
+ *
+ * Признак отдельный от `instanceFinished` не по вкусу: у ЗАЦИКЛЕННОГО документа
+ * `emissionState.time` оборачивается внутри длительности, и условие
+ * «время эмиссии перевалило за длительность» для него не станет истиной
+ * никогда — догорающий факел не вернулся бы в пул вовсе.
+ */
+export function instanceEmissionDone(instance: EffectInstance): boolean {
+  for (const { system } of instance.systems) {
+    if (system.particleNum > 0) return false;
+    if (!(system as unknown as EmittingSystem).emitEnded) return false;
+  }
+  return true;
+}
+
+/**
+ * Система частиц глазами догорания: один рантайм-флаг, который библиотека
+ * объявляет приватным в типах (`ParticleSystem.emitEnded`), а `endEmit()` —
+ * публичным методом. Обход инкапсулирован здесь и только здесь, ровно как у
+ * шага (`SteppableSystem`): смена API при обновлении библиотеки бьётся в одной
+ * точке, а не расползается по подсистеме.
+ */
+interface EmittingSystem {
+  readonly emitEnded: boolean;
+}
+
+/**
  * Экземпляр с начала: живые частицы сбрасываются, симуляция снимается с паузы,
  * зацикленность возвращается к документной (её мог снять прошлый выстрел).
  */
@@ -408,95 +594,6 @@ export function restartInstance(instance: EffectInstance): void {
   for (const entry of instance.systems) {
     entry.system.looping = entry.looping;
     entry.system.restart();
-  }
-}
-
-/**
- * Плотность частиц экземпляра (`render-quality` QUAL-1, REND-24): множитель
- * поверх ДОКУМЕНТНОЙ эмиссии — и потоковой, и единовременных выбросов. Единица
- * возвращает документные генераторы теми же объектами: пресет «баланс» стоит
- * ровно столько же, сколько его отсутствие.
- *
- * Правится ЭКЗЕМПЛЯР, документ не трогается: он разделяется всеми экземплярами
- * эффекта (design D6), и множитель, записанный в него, копился бы на каждом
- * взятии из пула. Информации у игрока множитель не отнимает (QUAL-2): гуще или
- * реже — вопрос картинки, а не того, что в кадре есть.
- */
-export function setInstanceDensity(instance: EffectInstance, density: number): void {
-  for (const entry of instance.systems) {
-    entry.system.emissionOverTime = scaleEmission(entry.emission, density);
-    const bursts = entry.system.emissionBursts;
-    for (let i = 0; i < bursts.length; i++) {
-      const source = entry.bursts[i];
-      const burst = bursts[i];
-      if (source === undefined || burst === undefined) continue;
-      burst.count = scaleEmission(source, density);
-    }
-  }
-}
-
-/** Генератор документа под множителем; множитель 1 — он сам, без обёртки. */
-function scaleEmission(source: EmissionGenerator, density: number): EmissionGenerator {
-  if (density === 1) return source;
-  return source.type === 'function'
-    ? new ScaledFunction(source, density)
-    : new ScaledValue(source, density);
-}
-
-/** Множитель поверх постоянного генератора документа (`type: 'value'`). */
-class ScaledValue implements ValueGenerator {
-  readonly type = 'value';
-  private readonly source: ValueGenerator;
-  private readonly factor: number;
-
-  constructor(source: ValueGenerator, factor: number) {
-    this.source = source;
-    this.factor = factor;
-  }
-
-  startGen(memory: GeneratorMemory): void {
-    this.source.startGen(memory);
-  }
-
-  genValue(memory: GeneratorMemory): number {
-    return this.source.genValue(memory) * this.factor;
-  }
-
-  /** Сериализуется ДОКУМЕНТНОЕ значение: множитель — настройка, а не данные эффекта. */
-  toJSON(): FunctionJSON {
-    return this.source.toJSON();
-  }
-
-  clone(): ValueGenerator {
-    return new ScaledValue(this.source.clone(), this.factor);
-  }
-}
-
-/** То же для генератора, зависящего от фазы жизни системы (`type: 'function'`). */
-class ScaledFunction implements FunctionValueGenerator {
-  readonly type = 'function';
-  private readonly source: FunctionValueGenerator;
-  private readonly factor: number;
-
-  constructor(source: FunctionValueGenerator, factor: number) {
-    this.source = source;
-    this.factor = factor;
-  }
-
-  startGen(memory: GeneratorMemory): void {
-    this.source.startGen(memory);
-  }
-
-  genValue(memory: GeneratorMemory, t: number): number {
-    return this.source.genValue(memory, t) * this.factor;
-  }
-
-  toJSON(): FunctionJSON {
-    return this.source.toJSON();
-  }
-
-  clone(): FunctionValueGenerator {
-    return new ScaledFunction(this.source.clone(), this.factor);
   }
 }
 
@@ -527,8 +624,31 @@ interface SteppableSystem {
  *
  * Цикл здесь ИНДЕКСНЫЙ — по дисциплине аллокаций кадра (REND-26); почему
  * именно так, сказано над самим циклом.
+ *
+ * ## Два клампа шага, и они нормируют разное
+ *
+ * Часы кадра клампят модуль `dt` в 0.25 с (`FrameTiming.dt`, REND-25): это
+ * ограничение СКАЧКА часов презентации — затык главного потока не вправе
+ * телепортировать анимацию. Библиотека клампит свой шаг в 0.1 с внутри
+ * `ParticleSystem.update` (`ParticleSystem.ts`), и это её собственная защита от
+ * длинного шага, нам не принадлежащая. Числа намеренно НЕ сводятся к одному:
+ * после затыка в 250 мс вспышки уйдут на 250 мс, а частицы — на 100, и это
+ * расхождение картинки, а не дефект. Там, где шаг заведомо длиннее 0.1 с —
+ * догон возраста события (SHELL-4), — он режется на порции самим потребителем,
+ * а не подменой чужого клампа.
+ *
+ * ## Отсоединённый корень
+ *
+ * `ParticleSystem.update` библиотеки САМО-УНИЧТОЖАЕТСЯ, если корень эмиттера —
+ * не `Scene` (`currentParent.type !== 'Scene'` → `dispose()`): экземпляр
+ * снимается с батча и его эмиттер отцепляется навсегда, а `restart()` его уже
+ * не оживит. Отсоединённый экземпляр — обычное состояние пула, поэтому шаг
+ * такого просто пропускается: гасить пул одним неудачным кадром нельзя.
  */
 export function stepInstance(instance: EffectInstance, delta: number, warn: WarnOnce): void {
+  // Экземпляр вне сцены (в пуле, кадр после сноса) не шагается: библиотека
+  // уничтожила бы его насовсем, см. шапку.
+  if (instance.object.parent === null) return;
   const systems = instance.systems;
   /* eslint-disable-next-line @typescript-eslint/prefer-for-of --
    * Индексный цикл намеренно: шаг зовётся на КАЖДЫЙ эмиттер каждого кадра, а
@@ -545,6 +665,38 @@ export function stepInstance(instance: EffectInstance, delta: number, warn: Warn
       return;
     }
     system.update(delta);
+  }
+}
+
+/**
+ * Максимальная порция догона, секунды — тот самый кламп, который библиотека
+ * применяет к шагу молча (`ParticleSystem.update`). Догонять одним вызовом
+ * значило бы получить 0.1 с симуляции вместо запрошенного возраста.
+ */
+const AGE_CHUNK_SECONDS = 0.1;
+
+/**
+ * Потолок числа порций догона. Доставка, привёзшая события давних тиков (затык
+ * главного потока, скрытая вкладка), не вправе стоить кадру секунд симуляции
+ * частиц: дальше потолка выстрел просто начинается тем, чем успел стать.
+ */
+const MAX_AGE_CHUNKS = 20;
+
+/**
+ * Догон возраста экземпляра (REND-24, SHELL-4): выстрел, приехавший событием
+ * старого тика, обязан начаться уже прожившим своё расстояние — иначе пачка
+ * событий нескольких тиков началась бы и кончилась одним кадром.
+ *
+ * Догон идёт ШАГАМИ симуляции, а не подменой времени: собственного «перемотать
+ * систему на T» у библиотеки нет, а шаг она клампит (см. `stepInstance`),
+ * поэтому возраст режется на порции по {@link AGE_CHUNK_SECONDS}.
+ */
+export function ageInstance(instance: EffectInstance, seconds: number, warn: WarnOnce): void {
+  let left = Math.min(seconds, AGE_CHUNK_SECONDS * MAX_AGE_CHUNKS);
+  while (left > 0) {
+    const step = left > AGE_CHUNK_SECONDS ? AGE_CHUNK_SECONDS : left;
+    stepInstance(instance, step, warn);
+    left -= step;
   }
 }
 

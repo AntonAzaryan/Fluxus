@@ -937,10 +937,13 @@ describe('константная стоимость объявляется яв�
       values: undefined,
     });
 
+    // Пол множителя плотности ПОЛОЖИТЕЛЕН (REND-24, QUAL-2): эмиттер —
+    // изображение сущности, и пресет, обнуляющий его эмиссию, отнимал бы у
+    // игрока информацию.
     expect(shape('particles.density')).toEqual({
       semantics: 'value',
       default: 1,
-      min: 0,
+      min: 0.25,
       max: 4,
       values: undefined,
     });

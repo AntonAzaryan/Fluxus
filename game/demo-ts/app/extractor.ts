@@ -55,12 +55,12 @@ export const DEMO_STATS: readonly StatSource[] = Object.freeze([
   { name: STATS.navPathY, component: 'NpcAgent', field: 'pathY' },
   { name: STATS.navPathValid, component: 'NpcAgent', field: 'pathValid' },
   { name: STATS.navTarget, component: 'NpcAgent', field: 'target' },
-  // Входы шара заряда главного потока (`chargeBalls.ts`): величина заряда и
-  // направление прицела ЗАРЯЖАЮЩЕГО. Оба читаются с самого героя, а не с его
-  // сущности-слота: слот виден только своей стороне (NET-12), а шар заряда
-  // противника обязан быть виден (HUD-1). `Charging` есть только у того, кто
-  // заряжает, — у остальных записи молча нет, и это ровно тот сценарий, который
-  // описывает HUD-8.
+  // Входы шара заряда — записи `effects.byState.Charging` манифеста (REND-23):
+  // величина заряда и направление прицела ЗАРЯЖАЮЩЕГО. Оба читаются с самого
+  // героя, а не с его сущности-слота: слот виден только своей стороне
+  // (NET-12), а шар заряда противника обязан быть виден (HUD-1).
+  // `Charging` есть только у того, кто заряжает, — у остальных записи молча
+  // нет, и это ровно тот сценарий, который описывает HUD-8.
   { name: STATS.charge, component: 'Charging', field: 'ticks' },
   { name: STATS.aim, component: 'Input', field: 'aimDir' },
   // Свёртки стелса и детекции (FOW-3) — входы подачи стелса (`stealthTint.ts`,

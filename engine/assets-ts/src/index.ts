@@ -73,6 +73,9 @@ export type {
   DecorationVisual,
   SurfaceAlign,
   // секция транзиентных эффектов (`rendering` REND-23)
+  EffectBlink,
+  EffectColorAt,
+  EffectStatWindow,
   VisualEffect,
   VisualEffectsSection,
   // секция эмиттеров частиц (ASSET-14, `rendering` REND-24)
