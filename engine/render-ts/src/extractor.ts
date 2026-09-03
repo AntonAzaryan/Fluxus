@@ -26,9 +26,11 @@ import {
   LOCOMOTION_ROLL,
   POSITION_COMPONENT,
   TIME_SCALE_COMPONENT,
-  cellAt,
+  cellAtXY,
+  queryInto,
   world,
   type EntityId,
+  type QuerySpec,
   type TerrainGrid,
   type TickResult,
   type WorldMode,
@@ -42,6 +44,16 @@ import {
   type FlightPhaseSource,
   type StatSource,
 } from './statSources.js';
+import {
+  channelColumns,
+  growChannelColumns,
+  CHANNEL_COLUMNS,
+  ENTITY_LEVEL_OVERRIDE,
+  ENTITY_MOVING,
+  MAX_STATE_COMPONENTS,
+  STATE_BITS_SHIFT,
+  type ChannelArrayValue,
+} from './channelLayout.js';
 import { renderEventData } from './eventData.js';
 import type { RenderEvent } from './types.js';
 
@@ -69,31 +81,12 @@ const MANEUVER_DURATION_FIELD: Readonly<Record<number, string>> = {
 };
 
 /**
- * Колонок плоской формы НА СУЩНОСТЬ — множитель объёма, который экстракция
- * отдаёт каналу за тик (`extractChannelValues`, PERF-2): `id`, `kind`, `x`,
- * `y`, `level`, `flags`, `facingYaw`, `aimYaw`, `motion`, `motionPhase`,
- * `flightPhase`, `timeScale`, `statCount`. Ровно эти колонки перекладывает
- * кодек оболочки (`client-ts/src/codec.ts`, SHELL-3), поэтому число живёт здесь,
- * рядом с их объявлением: новая колонка правит его на той же правке, которой
- * заводится, — и подорожание доставки видно в диффе эталона стоимости.
- *
- * Экспортируется РАДИ СВЕРКИ: расхождение с раскладкой кодека стережёт тест на
- * стороне оболочки, где эта раскладка и живёт («сущность стоит каналу ровно
- * объявленных колонок», `client-ts/test/codec.test.ts`) — он берёт это число
- * отсюда, а не повторяет его своим. Повторённое в трёх местах, оно разошлось бы
- * молча: четыре колонки раскладки байтовые, и лишняя такая колонка прибавляет к
- * кадру ровно байт.
+ * Спецификация обхода живых сущностей: фильтров нет вовсе — отбор идёт по
+ * слотам мира в порядке QUERY-2, то есть в точности порядком `listAlive`.
+ * Константа модуля, а не литерал на тик: объект на извлечение был бы ровно той
+ * аллокацией, которую REND-26 запрещает пути извлечения.
  */
-export const CHANNEL_COLUMNS = 13;
-
-/** Бит колонки `flags`: скорость выше порога — состояние `move` (REND-4). */
-export const ENTITY_MOVING = 1;
-/** Бит колонки `flags`: у сущности override уровня (TERR-4) — наклон по поверхности не применяется (REND-10). */
-export const ENTITY_LEVEL_OVERRIDE = 2;
-/** Сдвиг битов состояний в колонке `flags`: бит i+STATE_BITS_SHIFT — i-я компонента `stateComponents`. */
-export const STATE_BITS_SHIFT = 2;
-/** Колонка `flags` — u8: биты 0..1 заняты, под состояния остаётся 6 бит. */
-const MAX_STATE_COMPONENTS = 6;
+const ALIVE_SPEC: QuerySpec = {};
 
 /**
  * Плоское presentation-состояние одного тика — то, что пересекает границу
@@ -109,6 +102,20 @@ export interface ExtractedTick {
   isReplay: boolean;
   /** Разрыв непрерывности мира (rewind/смена режима): всем сущностям snap (REND-2). */
   snapAll: boolean;
+  /**
+   * Сменилась ВЕТВЬ истории: реплеевый проход, рост эпохи (SHELL-7). Уже
+   * `snapAll` — но не наоборот: смена режима (пауза NTR-20, вход в перемотку)
+   * разрывает картинку, а ветвь оставляет ту же.
+   *
+   * Признак отдельный потому, что вопросы разные. `snapAll` спрашивает «рисовать
+   * ли этот тик без интерполяции» (REND-2), а этот — «принадлежит ли упакованный
+   * id той же сущности, что раньше»: перемотка откатывает счётчик поколений
+   * (NTR-16), и за стёртой ветвью тот же id достаётся ДРУГОЙ сущности. Всё, что
+   * помнит сущность по id между доставками (память курсов буфера, кэши видов и
+   * прицела здесь), гасится по нему, а не по всякому snap'у: пауза матча — не
+   * повод забыть, куда смотрел юнит.
+   */
+  branchChanged: boolean;
   /** Первый честный проход тика: события можно проигрывать (OBS-5). */
   freshEvents: boolean;
   count: number;
@@ -118,6 +125,20 @@ export interface ExtractedTick {
   x: Float32Array;
   y: Float32Array;
   level: Uint8Array;
+  /**
+   * Уровень СУЩНОСТИ — тот, которым её видит симуляция (TERR-4, `levelOf`):
+   * значение `LevelOverride`, если он есть, иначе уровень клетки под позицией.
+   * Отличается от `level` ровно у тех, у кого override и стоит: прыгающий
+   * (LOC-5) и летящий (LOC-6) остаются на уровне взлёта до приземления.
+   *
+   * Колонка вторая, а не вместо `level`, потому что потребители разные: картинке
+   * нужен уровень КЛЕТКИ — по нему инстанс садится на поверхность (REND-7),
+   * считает наклон (REND-10) и высоту дуги (REND-12); маске тумана нужен
+   * уровень наблюдателя — по нему режется reveal и решают тени рёбер (FOW-9,
+   * PHYS-13). Кормить маску клеточным уровнем значило бы светить с плато,
+   * которого симуляция наблюдателю не отдала.
+   */
+  simLevel: Uint8Array;
   flags: Uint8Array;
   facingYaw: Float32Array;
   aimYaw: Float32Array;
@@ -223,14 +244,18 @@ export interface ExtractorConfig {
   readonly stats?: readonly StatSource[];
 }
 
+/**
+ * Поля формы, которыми владеет таблица колонок (`channelLayout.ts`): тип
+ * выводится ИЗ САМОЙ формы — второго списка имён здесь нет. Секции статов
+ * попадают в него вместе с колонками, но заводит их сам `Extractor` — по числу
+ * объявленных статов, а не по таблице.
+ */
+type ChannelColumnFields = {
+  [K in keyof ExtractedTick as ExtractedTick[K] extends ChannelArrayValue ? K : never]: ExtractedTick[K];
+};
+
 const EMPTY_EVENTS: readonly RenderEvent[] = [];
 const EMPTY_DELTA: readonly number[] = [];
-
-/** Направление последнего каста сущности и тик, на котором оно поставлено. */
-interface AimEntry {
-  yaw: number;
-  tick: number;
-}
 
 export class Extractor {
   private readonly kindOf: (state: WorldState, entity: EntityId) => string | null;
@@ -252,8 +277,11 @@ export class Extractor {
   private readonly kindIndexOf = new Map<string, number>();
   /** Тип сущности вычисляется один раз: generation в ID делает кэш безопасным. */
   private readonly kinds = new Map<EntityId, number>();
-  private readonly aim = new Map<EntityId, AimEntry>();
+  /** Направление последнего каста сущности и тик, на котором оно поставлено. */
+  private readonly aim = new Map<EntityId, { yaw: number; tick: number }>();
   private readonly seen = new Set<EntityId>();
+  /** Буфер обхода живых сущностей: растёт только вместе со сценой (REND-26). */
+  private alive = new Float64Array(0);
 
   private hasTick = false;
   private prevTick = 0;
@@ -284,26 +312,17 @@ export class Extractor {
     this.grid = config.terrainGrid;
     this.mirror = this.grid === undefined ? null : new FloorMirror(this.grid);
     this.out = {
+      // Колонки заводятся ПУСТЫМИ по таблице (`channelLayout.ts`) — тем же
+      // перечнем, каким их растит `ensureCapacity`: второго списка имён нет.
+      ...(channelColumns(0) as unknown as ChannelColumnFields),
       tick: 0,
       mode: 'Running',
       isReplay: false,
       snapAll: false,
+      branchChanged: false,
       freshEvents: false,
       count: 0,
-      id: new Float64Array(0),
-      kind: new Int32Array(0),
-      x: new Float32Array(0),
-      y: new Float32Array(0),
-      level: new Uint8Array(0),
-      flags: new Uint8Array(0),
-      facingYaw: new Float32Array(0),
-      aimYaw: new Float32Array(0),
-      motion: new Uint8Array(0),
-      motionPhase: new Float32Array(0),
-      flightPhase: new Float32Array(0),
-      timeScale: new Float32Array(0),
       statNames: this.stats.names,
-      statCount: new Uint8Array(0),
       statIndex: new Int32Array(0),
       statValue: new Float64Array(0),
       statPairs: 0,
@@ -336,7 +355,21 @@ export class Extractor {
     // движением, а не чередой телепортов (REND-2, REND-25). Убывающий номер
     // тика сам по себе snap'а не даёт и давать не должен.
     const snapAll = result.isReplay || modeChanged;
+    // Смена ВЕТВИ истории — только реплеевый проход (рост эпохи оболочки,
+    // SHELL-7): за стёртой ветвью перемотка откатывает счётчик поколений
+    // (NTR-16), и упакованный id достаётся другой сущности. Смена режима ветвь
+    // не меняет — пауза матча (NTR-20) память по id обнулять не повод.
+    const branchChanged = result.isReplay;
     const freshEvents = tickAdvanced && !result.isReplay && result.mode === 'Running';
+
+    // Кэши, ключённые по id, переживают ровно одну ветвь истории: за стёртой
+    // тот же id — уже другая сущность, и унаследованный вид (в том числе `−1`,
+    // «не рисуется») или чужое направление каста держались бы до её смерти.
+    // Снаряды спавнятся постоянно, и слот переиспользуется на первых же тиках.
+    if (branchChanged) {
+      this.kinds.clear();
+      this.aim.clear();
+    }
 
     const events = this.copyEvents(result);
     if (freshEvents) this.captureAim(state, result.tick, events);
@@ -364,6 +397,7 @@ export class Extractor {
     out.mode = result.mode;
     out.isReplay = result.isReplay;
     out.snapAll = snapAll;
+    out.branchChanged = branchChanged;
     out.freshEvents = freshEvents;
     out.events = events;
     out.floorDelta = floorDelta;
@@ -395,15 +429,16 @@ export class Extractor {
     const seen = this.seen;
     seen.clear();
 
-    const alive = world.listAlive(state);
-    this.ensureCapacity(alive.length);
+    const scanned = this.listAlive(state);
+    this.ensureCapacity(scanned);
     let count = 0;
     out.statPairs = 0;
     // Индекс слотов способностей на кадр (ABIL-1): статы слотовой формы
     // адресуют спутника владельца, и искать его на каждую запись каждой
     // сущности значило бы обходить слоты по разу на стат.
     this.stats.beginFrame(state);
-    for (const entity of alive) {
+    for (let i = 0; i < scanned; i++) {
+      const entity = this.alive[i]!;
       if (!world.hasComponent(state, entity, POSITION_COMPONENT)) continue;
       seen.add(entity);
       this.copyEntity(state, entity, count, tick);
@@ -412,12 +447,26 @@ export class Extractor {
     out.count = count;
 
     for (const id of this.kinds.keys()) {
-      if (!seen.has(id)) {
-        this.kinds.delete(id);
-        this.aim.delete(id);
-      }
+      if (seen.has(id)) continue;
+      this.kinds.delete(id);
+      this.aim.delete(id);
     }
-    return alive.length;
+    return scanned;
+  }
+
+  /**
+   * Живые сущности в ПЕРЕИСПОЛЬЗУЕМЫЙ буфер, порядком QUERY-2 — тем же, каким
+   * их отдаёт `listAlive` ядра. Именно `listAlive` здесь и стоял: он выделяет
+   * массив размером в мир на КАЖДОЕ извлечение, то есть ровно ту аллокацию,
+   * которую REND-26 запрещает пути извлечения. Отбор без фильтров даёт тот же
+   * состав и тот же порядок, а буфер растёт только при росте сцены (×1.5,
+   * как колонки).
+   */
+  private listAlive(state: WorldState): number {
+    const count = queryInto(state, ALIVE_SPEC, this.alive);
+    if (count <= this.alive.length) return count;
+    this.alive = new Float64Array(Math.max(16, Math.ceil(count * 1.5)));
+    return queryInto(state, ALIVE_SPEC, this.alive);
   }
 
   /** Одна сущность в колонки плоской формы под индексом `count`. */
@@ -432,8 +481,19 @@ export class Extractor {
     out.kind[count] = this.resolveKind(state, entity);
     out.x[count] = fx / FIXED_ONE;
     out.y[count] = fy / FIXED_ONE;
-    out.level[count] =
-      this.grid === undefined ? 0 : this.grid.levels[cellAt(this.grid, { x: fx, y: fy })]!;
+    // Уровень КЛЕТКИ под сущностью — вход посадки и наклона (REND-7, REND-10).
+    // Клетка спрашивается раздёрнутыми координатами: `Vec2` здесь был бы
+    // объектом на сущность на тик (REND-26).
+    const cellLevel = this.grid === undefined ? 0 : this.grid.levels[cellAtXY(this.grid, fx, fy)]!;
+    out.level[count] = cellLevel;
+    // Уровень СУЩНОСТИ — тот, которым её видит симуляция: правило `levelOf`
+    // ядра (TERR-4, ARENA-6) — override приоритетнее клетки. Повторено здесь
+    // одной строкой намеренно: мира на main-стороне нет (SHELL-1), а тащить
+    // `TerrainApi` через границу потоков ради одного `hasComponent` дороже, чем
+    // повторить его условие. Читает эту колонку маска тумана (FOW-9).
+    out.simLevel[count] = world.hasComponent(state, entity, LEVEL_OVERRIDE_COMPONENT)
+      ? world.getField(state, entity, LEVEL_OVERRIDE_COMPONENT, 'level')
+      : cellLevel;
 
     let moving = false;
     let yaw = Number.NaN;
@@ -479,23 +539,12 @@ export class Extractor {
     return flags;
   }
 
+  /** Рост колонок — по таблице плоской формы (`channelLayout.ts`), не строкой на колонку. */
   private ensureCapacity(n: number): void {
     const out = this.out;
     if (out.id.length >= n) return;
     const capacity = Math.max(16, Math.ceil(n * 1.5));
-    out.id = new Float64Array(capacity);
-    out.kind = new Int32Array(capacity);
-    out.x = new Float32Array(capacity);
-    out.y = new Float32Array(capacity);
-    out.level = new Uint8Array(capacity);
-    out.flags = new Uint8Array(capacity);
-    out.facingYaw = new Float32Array(capacity);
-    out.aimYaw = new Float32Array(capacity);
-    out.motion = new Uint8Array(capacity);
-    out.motionPhase = new Float32Array(capacity);
-    out.flightPhase = new Float32Array(capacity);
-    out.timeScale = new Float32Array(capacity);
-    out.statCount = new Uint8Array(capacity);
+    growChannelColumns(out as unknown as Record<string, ChannelArrayValue>, capacity);
     // Худший случай — все статы у всех сущностей; перевыделение идёт вместе с
     // прочими колонками, то есть только при росте сцены (SHELL-3).
     out.statIndex = new Int32Array(capacity * this.stats.size);

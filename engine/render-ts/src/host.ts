@@ -20,7 +20,7 @@
  */
 import { world, type EntityId, type TickObserver, type TickResult, type WorldState } from '@fluxus/core';
 import { Extractor } from './extractor.js';
-import { ViewBuffer } from './viewBuffer.js';
+import { ViewBuffer, tickStreamFrame } from './viewBuffer.js';
 import { PresentationStage, type PresentationProducer } from './stage.js';
 import type { RenderContext, RenderHostConfig, RenderSubsystem, TickView } from './types.js';
 
@@ -89,13 +89,14 @@ export class RenderHost implements TickObserver, PresentationProducer {
    * Кадр: dt и альфа между двумя последними тиками, затем `updateFrame`
    * подсистем в порядке регистрации (REND-2, REND-8). `now` — миллисекунды
    * тех же часов, что `config.clock`. Пока presentation-состояние наполняет
-   * другой продюсер (режим правки, REND-11), кадр не рисуется: подсистемы уже
-   * ведёт он.
+   * другой продюсер (режим правки, REND-11), кадр не рисуется — подсистемы уже
+   * ведёт он, — а часы кадра сбрасываются, чтобы первый кадр после возвращения
+   * не доигрывал накопленный простой.
+   *
+   * Тело общее с `RemoteHost.frame` (`client-shell` SHELL-2): продюсер потока
+   * тиков у них один, и разница только в том, откуда приехал тик.
    */
   frame(now?: number): void {
-    if (!this.presentation.isActive(this)) return;
-    const timing = now === undefined ? this.buffer.frame() : this.buffer.frame(now);
-    if (timing === null) return;
-    this.presentation.frame(timing.dt, timing.alpha, timing.realDt);
+    tickStreamFrame(this.presentation, this, this.buffer, now);
   }
 }

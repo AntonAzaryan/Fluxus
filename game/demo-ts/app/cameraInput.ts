@@ -23,10 +23,9 @@
  * край работает как работал — там открепляться уже не от чего, и панорама краем
  * экрана остаётся основным способом вести камеру.
  */
-import { edgePanAxes, type CameraMode } from '@fluxus/render';
+import { createEdgePanAxes, edgePanAxes, type CameraMode, type EdgePanAxes } from '@fluxus/render';
 
-/** Общий литерал покоя: функция зовётся покадрово и мусора не оставляет. */
-const IDLE: { readonly x: number; readonly y: number } = Object.freeze({ x: 0, y: 0 });
+export { createEdgePanAxes, type EdgePanAxes };
 
 export interface EdgePanRect {
   readonly left: number;
@@ -46,8 +45,16 @@ export interface EdgePanFrame {
   readonly margin: number;
 }
 
-/** Оси панорамы краем экрана для этого кадра; `{0, 0}` — край не считается. */
-export function demoEdgePan(frame: EdgePanFrame): { readonly x: number; readonly y: number } {
-  if (frame.pointerOverHud || frame.mode === 'follow') return IDLE;
-  return edgePanAxes(frame.pointerX, frame.pointerY, frame.rect, frame.margin);
+/**
+ * Оси панорамы краем экрана для этого кадра в запись вызывающего; `{0, 0}` —
+ * край не считается. Запись, а не свежий литерал: функция зовётся покадрово, и
+ * мусора кадровый путь оставлять не должен (REND-26).
+ */
+export function demoEdgePan(frame: EdgePanFrame, out: EdgePanAxes = createEdgePanAxes()): EdgePanAxes {
+  if (frame.pointerOverHud || frame.mode === 'follow') {
+    out.x = 0;
+    out.y = 0;
+    return out;
+  }
+  return edgePanAxes(frame.pointerX, frame.pointerY, frame.rect, frame.margin, out);
 }

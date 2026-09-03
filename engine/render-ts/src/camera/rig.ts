@@ -23,11 +23,19 @@
  * (TERR-6) и переподачи нет ни разу, а в редакторе автор правит геометрию и
  * меняет размеры арены, не теряя ни режима, ни зума, ни вида.
  */
+import { framingDistance } from './framing.js';
+import { CameraFly } from './fly.js';
+import { CameraPathPlayer, type CameraPath } from './path.js';
 import type { CameraInput } from './input.js';
 
 // ---------------------------------------------------------------- контракты
 
-export type CameraMode = 'follow' | 'free' | 'fly';
+/**
+ * Режимы конвейера (CAM-2) плюс кинематографический путь (CAM-10). Путь —
+ * режим, а не вход, по тому же основанию, что и fly: он позу ПРОИЗВОДИТ, а не
+ * ведёт уже существующую, и панорамирование с зумом в это время не действуют.
+ */
+export type CameraMode = 'follow' | 'free' | 'fly' | 'path';
 
 /**
  * Логическая поза камеры (CAM-1): позиция глаза и углы взгляда.
@@ -228,13 +236,15 @@ export class CameraRig {
    */
   private lastTargetX: number | null = null;
   private lastTargetY: number | null = null;
-  /** Fly-состояние; за пределами fly не используется. */
-  private flyX = 0;
-  private flyY = 0;
-  private flyZ = 0;
-  private flyYaw: number;
-  private flyPitch: number;
-  private flySpeed: number;
+  /**
+   * Проигрыватель кинематографического пути (CAM-10) и режим, из которого путь
+   * запущен: по концу конвейер возвращается в него — доигравший путь камеру
+   * удерживать не вправе.
+   */
+  private readonly player = new CameraPathPlayer();
+  private pathReturn: CameraMode = 'free';
+  /** Состояние облёта (CAM-2); за пределами fly не используется (`fly.ts`). */
+  private readonly fly: CameraFly;
 
   /** Переиспользуемая поза (CAM-1): валидна до следующего `update`. */
   private readonly pose: CameraPose;
@@ -247,9 +257,7 @@ export class CameraRig {
     this.targetY = options.startY ?? 0;
     this.desiredDistance = this.config.distance;
     this.distance = this.config.distance;
-    this.flyYaw = this.config.yaw;
-    this.flyPitch = this.config.pitch;
-    this.flySpeed = this.config.flySpeed;
+    this.fly = new CameraFly(this.config);
     this.pose = {
       posX: 0,
       posY: 0,
@@ -302,46 +310,13 @@ export class CameraRig {
    * своим `zoomSmoothing`. Телепорт точки наблюдения при сглаженной дистанции
    * перелётом не является: половина кадра прыгала бы, половина приезжала.
    *
-   * Геометрия. Точка наземного прямоугольника, отстоящая от центра на `s` вдоль
-   * направления взгляда, лежит в кадровых координатах на глубине `s·cos p + d`
-   * и на высоте `s·sin p` (p — наклон, d — дистанция). Условие «попадает в
-   * вертикальный угол» упирается первым у ближнего края (s < 0), откуда
-   * `d ≥ h·(sin p / tan v + cos p)`. Поперёк взгляда высоты нет, а глубина у
-   * ближнего края наименьшая, откуда `d ≥ w / tan h + h·cos p`. Ограничивающим
-   * берётся больший из двух: тот габарит, который упирается первым.
+   * Геометрия дистанции — чистая функция чисел (`framing.ts`): состояния рига
+   * она не читает, а кламп по инжектированным границам и выбор «мгновенно или
+   * перелётом» остаются здесь.
    */
   frameBounds(request: CameraFraming): void {
-    const cfg = this.config;
     const rect = request.rect;
-    // Полуразмеры прямоугольника в осях кадра: прямоугольник задан в мировых
-    // осях, а упирается он в углы кадра, повёрнутого на `yaw`. Опорная функция
-    // прямоугольника вдоль оси и даёт полуразмер вдоль неё.
-    const halfX = Math.abs(rect.maxX - rect.minX) / 2;
-    const halfY = Math.abs(rect.maxY - rect.minY) / 2;
-    const cosYaw = Math.abs(Math.cos(cfg.yaw));
-    const sinYaw = Math.abs(Math.sin(cfg.yaw));
-    const along = cosYaw * halfX + sinYaw * halfY;
-    const across = sinYaw * halfX + cosYaw * halfY;
-
-    const tanV = Math.tan(((cfg.fovDeg / 2) * Math.PI) / 180);
-    const cosPitch = Math.cos(cfg.pitch);
-    const sinPitch = Math.sin(cfg.pitch);
-    const vertical = tanV > 0 ? along * (sinPitch / tanV + cosPitch) : along;
-    // Пропорции кадра — от потребителя, и негодные (кадр нулевого размера) не
-    // повод отдать NaN: горизонталь тогда не ограничивает, а вертикаль считается
-    // как считалась. Спрашивать размеры конвейеру всё равно негде (CAM-1).
-    const tanH = Number.isFinite(request.aspect) && request.aspect > 0 ? tanV * request.aspect : 0;
-    const horizontal = tanH > 0 ? across / tanH + along * cosPitch : 0;
-
-    // Кламп теми же пределами, что зум (CAM-4): прямоугольник, не влезающий на
-    // предельной дистанции, показывается настолько целиком, насколько пределы
-    // позволяют, и отказом это не является — нужен обзор шире, это настройка
-    // пределов в конфиге (CAM-1), а не обход клампа кадрированием.
-    const distance = clamp(
-      Math.max(vertical, horizontal),
-      cfg.minDistance,
-      cfg.maxDistance,
-    );
+    const distance = framingDistance(this.config, rect, request.aspect);
 
     // Центр клампится по ИНЖЕКТИРОВАННЫМ границам (CAM-3, CAM-7): кадрируют по
     // аргументу, а клампят по инжектированному — поданный прямоугольник границ
@@ -374,7 +349,41 @@ export class CameraRig {
     return this.modeState === 'fly';
   }
 
-  /** Высота поверхности под точкой наблюдения — плоскость прицельного луча сборки. */
+  /**
+   * Запуск кинематографического пути (CAM-10): режим `path`, время с нуля.
+   * Режим, из которого путь запущен, запоминается — по концу конвейер вернётся
+   * в него: доигравший путь удерживать камеру MUST NOT.
+   *
+   * Запуск из fly возвращает в fly: облёт — явный переключатель (CAM-2), и путь
+   * его не отменяет.
+   */
+  playPath(path: CameraPath): void {
+    if (this.modeState !== 'path') this.pathReturn = this.modeState;
+    this.player.start(path);
+    this.modeState = 'path';
+    // Разовые перелёты пути не нужны: позу он производит целиком сам.
+    this.framing = false;
+    this.recentering = false;
+  }
+
+  /** Остановка пути (CAM-10): возврат в режим, из которого он был запущен. */
+  stopPath(): void {
+    if (this.modeState !== 'path') return;
+    this.player.stop();
+    this.modeState = this.pathReturn;
+  }
+
+  /** Секунды, пройденные текущим путём; вне режима `path` — 0 (вход панели и тестов). */
+  get pathTime(): number {
+    return this.modeState === 'path' ? this.player.time : 0;
+  }
+
+  /**
+   * Высота поверхности под точкой наблюдения (CAM-2) — наблюдаемая величина
+   * конвейера. Прицельным лучом сборки она больше не является: курсор
+   * разрешается проекцией на визуальную поверхность (`rendering` REND-42), а не
+   * плоскостью этой высоты.
+   */
   get groundZ(): number {
     return this.targetZ;
   }
@@ -394,10 +403,16 @@ export class CameraRig {
    * накладываются поверх отдельным слоем (CAM-6).
    */
   update(input: CameraInput, dt: number, target: FollowTarget | null): CameraPose {
+    // Путь прерывается вводом ДО кадра режима (CAM-10): автор, взявший камеру
+    // в руки, получает её ТЕМ ЖЕ кадром, а не следующим, — и тот же ввод, каким
+    // он её забрал, действует на восстановленный режим сразу.
+    if (this.modeState === 'path' && this.pathInterrupted(input)) this.stopPath();
     if (input.flyToggle) this.toggleFly();
 
-    if (this.modeState === 'fly') {
-      this.updateFly(input, dt);
+    if (this.modeState === 'path') {
+      this.updatePath(dt);
+    } else if (this.modeState === 'fly') {
+      this.fly.update(input, dt, this.pose);
     } else {
       this.updateGrounded(input, dt, target);
     }
@@ -419,13 +434,16 @@ export class CameraRig {
     const panActive = panX !== 0 || panY !== 0 || input.dragDX !== 0 || input.dragDY !== 0;
     this.applyModeTransitions(input, target, panActive);
     this.applyZoom(input, dt);
+    // Решение «точка наблюдения прыгнула» родит только follow (CAM-5); free и
+    // fly не порождают его никогда — там порог не действует вовсе.
+    let jumped = false;
     if (this.modeState === 'follow' && target !== null) {
-      this.advanceFollow(target, dt);
+      jumped = this.advanceFollow(target, dt);
     } else {
       this.advanceFree(input, panX, panY, dt, target);
     }
     this.clampToBounds();
-    this.advanceGroundHeight(target, dt);
+    this.advanceGroundHeight(jumped, dt);
     this.writeGroundedPose();
   }
 
@@ -442,6 +460,16 @@ export class CameraRig {
       this.modeState = 'free';
       this.recentering = false;
       this.framing = false;
+    }
+    // Явное открепление (CAM-8): follow → free-RTS, не двигая ни точки
+    // наблюдения, ни дистанции. Разовые перелёты оно НЕ гасит — открепление и
+    // заводится ради того, чтобы перелёт кадрирования стал возможен: в follow
+    // точку наблюдения каждый кадр переписывает цель, и кадрирование там
+    // инертно. Ввод панорамирования гасит их по-прежнему (CAM-3) — это
+    // отдельное правило, и открепление его не отменяет.
+    if (input.detach) {
+      this.modeState = 'free';
+      this.recentering = false;
     }
     if (input.followToggle && target !== null) {
       this.modeState = 'follow';
@@ -475,16 +503,23 @@ export class CameraRig {
    * признаку И смещению цели больше `snapDistance` (CAM-1): «подпороговый
    * телепорт инстанс снапит, а камера доводит сглаживанием — она следует за
    * целью, а не рисует её».
+   *
+   * Возвращает САМО РЕШЕНИЕ — прыгнула точка наблюдения или доехала. По нему, а
+   * не по сырому признаку, снапается и высота (CAM-5): признак приходит рендером
+   * и в free-RTS, и в fly, где порог не действует вовсе, а половина позы,
+   * приезжающая плавно, и половина, прыгающая, — это и есть тот «проезд», от
+   * которого требование избавляет.
    */
-  private advanceFollow(target: FollowTarget, dt: number): void {
+  private advanceFollow(target: FollowTarget, dt: number): boolean {
     if (target.snap && this.targetJumped(target)) {
       this.targetX = target.x;
       this.targetY = target.y;
-      return;
+      return true;
     }
     const s = ease(this.config.followSmoothing, dt);
     this.targetX += (target.x - this.targetX) * s;
     this.targetY += (target.y - this.targetY) * s;
+    return false;
   }
 
   /**
@@ -557,13 +592,21 @@ export class CameraRig {
   }
 
   /**
-   * Высота — уровень клифа под точкой наблюдения (CAM-2), не z цели; snap цели
-   * протаскивает и высоту без проезда.
+   * Высота — уровень клифа под точкой наблюдения (CAM-2), не z цели.
+   *
+   * Снапается она по РЕШЕНИЮ follow-режима (`jumped`), а не по сырому признаку
+   * разрыва: признак — род разрыва, поднятый рендером (REND-2), и он приезжает
+   * в любом режиме. Прыжок по нему означал бы, что `snapAll` доставки (перемотка,
+   * реплей) двигает Z во free-RTS, где CAM-5 велит камере не реагировать вовсе,
+   * а подпороговый телепорт в follow сглаживает XY и прыгает Z.
+   *
+   * Первый кадр (`hasGround === false`) исключением не является и решением не
+   * считается: сглаживать тогда не от чего.
    */
-  private advanceGroundHeight(target: FollowTarget | null, dt: number): void {
+  private advanceGroundHeight(jumped: boolean, dt: number): void {
     if (this.groundHeightAt === null) return;
     const ground = this.groundHeightAt(this.targetX, this.targetY);
-    if (!this.hasGround || (target?.snap ?? false)) {
+    if (!this.hasGround || jumped) {
       this.targetZ = ground;
       this.hasGround = true;
       return;
@@ -624,50 +667,64 @@ export class CameraRig {
       return;
     }
     // Вход: полёт стартует из текущей позы, чтобы не было скачка.
-    this.flyX = this.pose.posX;
-    this.flyY = this.pose.posY;
-    this.flyZ = this.pose.posZ;
-    this.flyYaw = this.pose.yaw;
-    this.flyPitch = this.pose.pitch;
+    this.fly.enter(this.pose);
     this.modeState = 'fly';
   }
 
-  private updateFly(input: CameraInput, dt: number): void {
-    const cfg = this.config;
-    // Колесо в fly — скорость полёта, не дистанция (CAM-4).
-    if (input.wheelSteps !== 0) {
-      this.flySpeed = clamp(
-        this.flySpeed * Math.pow(cfg.flySpeedStep, -input.wheelSteps),
-        cfg.flySpeedMin,
-        cfg.flySpeedMax,
-      );
+  /**
+   * Кадр кинематографического пути (CAM-10): поза целиком из данных пути,
+   * панорамирование и зум не действуют. Прерывается тем же вводом, каким
+   * панорама открепляет follow (CAM-2): автор, взявший камеру в руки, получает
+   * её немедленно; по концу пути конвейер возвращается в прежний режим.
+   */
+  private updatePath(dt: number): void {
+    const pose = this.player.advance(dt);
+    if (pose === null) {
+      this.stopPath();
+      return;
     }
-    this.flyYaw -= input.lookDX * cfg.lookSensitivity;
-    this.flyPitch = clamp(
-      this.flyPitch + input.lookDY * cfg.lookSensitivity,
-      -Math.PI / 2 + 0.05,
-      Math.PI / 2 - 0.05,
+    this.targetX = pose.x;
+    this.targetY = pose.y;
+    this.distance = pose.distance;
+    this.desiredDistance = pose.distance;
+    // Высота точки наблюдения — по поверхности, как во всех наземных режимах
+    // (CAM-2): путь ведёт горизонталь, а не вертикаль арены.
+    this.advanceGroundHeight(true, dt);
+    this.writePathPose(pose.yaw, pose.pitch, pose.fovDeg);
+    if (!this.player.active) this.stopPath();
+  }
+
+  /**
+   * Ввод, забирающий камеру у пути (CAM-10) — тот же, каким панорама открепляет
+   * follow (CAM-2), плюс явные переключатели режимов: поза, которую производит
+   * путь, чужому решению о режиме не подчиняется, и разрешается это в пользу
+   * автора.
+   *
+   * Поза при этом остаётся там, где путь её оставил: возврат идёт с неё, без
+   * скачка, — точка наблюдения и дистанция пути становятся действующими.
+   */
+  private pathInterrupted(input: CameraInput): boolean {
+    return (
+      this.panAxis(input.panX + input.edgeX) !== 0 ||
+      this.panAxis(input.panY + input.edgeY) !== 0 ||
+      input.dragDX !== 0 ||
+      input.dragDY !== 0 ||
+      input.detach ||
+      input.followToggle ||
+      input.flyToggle
     );
+  }
 
-    const cosP = Math.cos(this.flyPitch);
-    // Векторы взгляда: forward — куда смотрим, right — вбок в плоскости XY.
-    const fx = Math.cos(this.flyYaw) * cosP;
-    const fy = Math.sin(this.flyYaw) * cosP;
-    const fz = -Math.sin(this.flyPitch);
-    const rx = Math.sin(this.flyYaw);
-    const ry = -Math.cos(this.flyYaw);
-    const step = this.flySpeed * dt;
-    this.flyX += (fx * input.moveY + rx * input.moveX) * step;
-    this.flyY += (fy * input.moveY + ry * input.moveX) * step;
-    this.flyZ += (fz * input.moveY + input.moveZ) * step;
-
+  /** Поза орбитальной камеры по величинам пути (CAM-10) — те же оси, что у CAM-1. */
+  private writePathPose(yaw: number, pitch: number, fovDeg: number): void {
     const pose = this.pose;
-    pose.posX = this.flyX;
-    pose.posY = this.flyY;
-    pose.posZ = this.flyZ;
-    pose.yaw = this.flyYaw;
-    pose.pitch = this.flyPitch;
+    const forwardXY = Math.cos(pitch);
+    pose.posX = this.targetX - Math.cos(yaw) * forwardXY * this.distance;
+    pose.posY = this.targetY - Math.sin(yaw) * forwardXY * this.distance;
+    pose.posZ = this.targetZ + Math.sin(pitch) * this.distance;
+    pose.yaw = yaw;
+    pose.pitch = pitch;
     pose.roll = 0;
-    pose.fovDeg = cfg.fovDeg;
+    pose.fovDeg = fovDeg;
   }
 }

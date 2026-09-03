@@ -42,6 +42,7 @@ import type { BatchSkinLoader } from '../../model/batchSkins.js';
 import type { VatMaterial } from '../../model/vatMaterial.js';
 import type { NormalizedModel } from '@fluxus/assets';
 import type { TiltVector } from '../../model/surfaceAlign.js';
+import type { SurfaceNormal } from '../../visualSurface.js';
 
 /**
  * Видимая поза инстанса (REND-3): преобразование, которым он нарисован в этом
@@ -529,6 +530,19 @@ export interface InstanceRecord {
    * снимается он вместе с инстансом или со сменой яруса кастера.
    */
   blobCaster: BlobCaster | null;
+  /**
+   * Опора кадра под инстансом — высота поверхности и её нормаль в точке
+   * (REND-30, вход `poseOfBlob`). Считается там же, где поза кадра, и только
+   * при живом носителе пятна: инстанс без него за выборку поверхности не платит.
+   *
+   * Отдельно от `pos`, потому что это РАЗНЫЕ величины: в позу входят дуга
+   * манёвра, полёт и снижение при провале (REND-12), а опора — то, над чем
+   * инстанс в этот момент находится. Нормаль — свойство той же точки, и берётся
+   * она тем же правилом, каким сажается сам инстанс: walkable-инстанс — по
+   * террейн-форме, все прочие — по полю целиком (REND-9).
+   */
+  seatZ: number;
+  readonly seatNormal: SurfaceNormal;
   /** Публичный вид инстанса; строится лениво и живёт с инстансом (REND-17). */
   publicView: ModelInstanceView | null;
 }

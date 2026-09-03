@@ -60,6 +60,10 @@ const EFFECT_FIELDS = [
   'curve',
   'height',
   'verticalOffset',
+  'offset',
+  'radiusFromStat',
+  'colorAt',
+  'blink',
 ] as const;
 
 /** Числовые поля записи эффекта и их границы; вне границ — ошибка документа. */
@@ -70,8 +74,10 @@ const EFFECT_NUMBERS: readonly { readonly name: string; readonly min?: number; r
   { name: 'alphaTo', min: 0, max: 1 },
   { name: 'durationMs', min: 0 },
   // Подъём может быть отрицательным (эффект под ногами): границы у него нет,
-  // и требуется от него ровно конечность числа.
+  // и требуется от него ровно конечность числа. Вынос вперёд по курсу прицела
+  // (REND-23) — по той же причине: отрицательный выносит назад.
   { name: 'height' },
+  { name: 'offset' },
 ];
 
 /**
@@ -98,6 +104,110 @@ function validateEffect(v: unknown, path: string, errors: string[]): void {
   validateEffectNumbers(v, path, errors);
   if ('verticalOffset' in v) {
     validateVerticalOffset(v.verticalOffset, `${path}.verticalOffset`, errors);
+  }
+  validateStatDriven(v, path, errors);
+}
+
+/** Поля окна стата (REND-23) — они же перечень допустимых ключей. */
+const STAT_WINDOW_FIELDS = ['stat', 'min', 'max', 'from', 'to'] as const;
+/** Поля порога цвета и мигания. */
+const COLOR_AT_FIELDS = ['phase', 'color'] as const;
+const BLINK_FIELDS = ['periodMs', 'alpha'] as const;
+
+/**
+ * Ведение записи доставленным статом (REND-23): окно значений, порог цвета и
+ * мигание за концом окна. Имя стата не проверяется — словарь статов принадлежит
+ * конфигурации сборки воркера (`match-hud` HUD-8), и второй его перечень здесь
+ * разошёлся бы с ним молча; проверяется ровно структура и числа.
+ *
+ * Порог цвета и мигание без окна смысла не имеют: фазы, к которой они привязаны,
+ * без окна не существует, и молчаливое игнорирование выдало бы автору
+ * работающую запись за нерабочую.
+ */
+function validateStatDriven(v: Record<string, unknown>, path: string, errors: string[]): void {
+  if ('radiusFromStat' in v) validateStatWindow(v.radiusFromStat, `${path}.radiusFromStat`, errors);
+  for (const field of ['colorAt', 'blink'] as const) {
+    if (!(field in v) || 'radiusFromStat' in v) continue;
+    errors.push(
+      `${path}.${field}: поле ведётся фазой окна radiusFromStat, а окна в записи нет`,
+    );
+  }
+  if ('colorAt' in v) validateColorAt(v.colorAt, `${path}.colorAt`, errors);
+  if ('blink' in v) validateBlink(v.blink, `${path}.blink`, errors);
+}
+
+function validateStatWindow(v: unknown, path: string, errors: string[]): void {
+  if (!isRecord(v)) {
+    errors.push(`${path}: ожидался объект { stat, max, to, min?, from? }, получено ${typeName(v)}`);
+    return;
+  }
+  closedKeys(v, path, STAT_WINDOW_FIELDS, errors);
+  if (typeof v.stat !== 'string' || v.stat.length === 0) {
+    errors.push(
+      `${path}.stat: обязательное поле — имя доставленного стата (непустая строка), получено ${typeName(v.stat)}`,
+    );
+  }
+  for (const field of ['max', 'to'] as const) {
+    if (!isFiniteNumber(v[field])) {
+      errors.push(`${path}.${field}: обязательное поле — конечное число, получено ${typeName(v[field])}`);
+    }
+  }
+  for (const field of ['min', 'from'] as const) {
+    if (field in v && !isFiniteNumber(v[field])) {
+      errors.push(`${path}.${field}: ожидалось конечное число, получено ${typeName(v[field])}`);
+    }
+  }
+  validateStatWindowRanges(v, path, errors);
+}
+
+/** Границы окна и множителей: отрицательный радиус и пустое окно — ошибки. */
+function validateStatWindowRanges(
+  v: Record<string, unknown>,
+  path: string,
+  errors: string[],
+): void {
+  for (const field of ['from', 'to'] as const) {
+    const value = v[field];
+    if (isFiniteNumber(value) && value < 0) {
+      errors.push(
+        `${path}.${field}: ожидался неотрицательный множитель радиуса, получено ${String(value)}`,
+      );
+    }
+  }
+  // Пустое окно — деление на ноль у потребителя, и молчаливое приведение к
+  // границе спрятало бы опечатку автора: конец окна обязан быть строго дальше
+  // его начала.
+  const min = isFiniteNumber(v.min) ? v.min : 0;
+  if (isFiniteNumber(v.max) && v.max <= min) {
+    errors.push(`${path}.max: конец окна обязан быть строго больше начала (${String(min)}), получено ${String(v.max)}`);
+  }
+}
+
+function validateColorAt(v: unknown, path: string, errors: string[]): void {
+  if (!isRecord(v)) {
+    errors.push(`${path}: ожидался объект { phase, color }, получено ${typeName(v)}`);
+    return;
+  }
+  closedKeys(v, path, COLOR_AT_FIELDS, errors);
+  if (!isFiniteNumber(v.phase) || v.phase < 0 || v.phase > 1) {
+    errors.push(`${path}.phase: обязательное поле — доля окна в [0..1], получено ${typeName(v.phase)}`);
+  }
+  if (typeof v.color !== 'string' || v.color.length === 0) {
+    errors.push(`${path}.color: обязательное поле — непустая строка, получено ${typeName(v.color)}`);
+  }
+}
+
+function validateBlink(v: unknown, path: string, errors: string[]): void {
+  if (!isRecord(v)) {
+    errors.push(`${path}: ожидался объект { periodMs, alpha }, получено ${typeName(v)}`);
+    return;
+  }
+  closedKeys(v, path, BLINK_FIELDS, errors);
+  if (!isFiniteNumber(v.periodMs) || v.periodMs <= 0) {
+    errors.push(`${path}.periodMs: обязательное поле — положительный период в мс, получено ${typeName(v.periodMs)}`);
+  }
+  if (!isFiniteNumber(v.alpha) || v.alpha < 0 || v.alpha > 1) {
+    errors.push(`${path}.alpha: обязательное поле — множитель альфы в [0..1], получено ${typeName(v.alpha)}`);
   }
 }
 

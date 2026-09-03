@@ -1487,6 +1487,10 @@ export class ModelsSubsystem implements RenderSubsystem, InstanceProxySource {
       deathLock: false,
       lightCarrier: null,
       blobCaster: null,
+      // Опора до первого кадра — мировой ноль с вертикальной нормалью; позы
+      // инстанс ещё не получил, и пятна ему всё равно не полагается (`posed`).
+      seatZ: 0,
+      seatNormal: { x: 0, y: 0, z: 1 },
       publicView: null,
     };
     this.applyEntryParams(record);

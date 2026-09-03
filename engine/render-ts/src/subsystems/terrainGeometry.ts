@@ -292,6 +292,12 @@ interface WallPoint {
  * прямоугольник. Владелец — клетка с меньшей координатой по нормали ребра
  * (`cellA`), поэтому владение — разбиение: объединение стенок всех чанков даёт
  * ровно `grid.cliffs` и ни одного отрезка дважды.
+ *
+ * `edges` — уже отобранный перечень отрезков (раскладка по чанкам-владельцам,
+ * посчитанная ОДИН раз на доставку сетки). Не задан — обходятся все отрезки
+ * арены: прямой вызов генератора (редактор, тесты) остаётся таким, каким был.
+ * Проверка `bounds` при заданном перечне не снимается: владение отрезком — одно
+ * правило, а не два, и предподсчёт обязан давать ровно тот же результат.
  */
 export function buildWallGeometry(
   grid: TerrainGrid,
@@ -299,6 +305,7 @@ export function buildWallGeometry(
   surface?: VisualSurface,
   bounds?: CellRect,
   tessellation: number = DEFAULT_CURVATURE_TESSELLATION,
+  edges: readonly TerrainGrid['cliffs'][number][] = grid.cliffs,
 ): TerrainGeometryData {
   const cost = costSink(); // один раз на вызов — как у пола (PERF-3)
   const positions: number[] = [];
@@ -306,19 +313,8 @@ export function buildWallGeometry(
   // Приём `tileSize` — та же точка входной границы, что у пола (REND-1, TERR-2).
   const tile = grid.tileSize / FIXED_ONE;
   const steps = Math.max(1, Math.floor(tessellation));
-  const wall: WallEdge = {
-    cellA: 0,
-    cellB: 0,
-    fromNodeX: 0,
-    fromNodeY: 0,
-    toNodeX: 0,
-    toNodeY: 0,
-    fx: 0,
-    fy: 0,
-    tx: 0,
-    ty: 0,
-  };
-  for (const edge of grid.cliffs) {
+  const wall = emptyWallEdge();
+  for (const edge of edges) {
     readWallCells(grid, edge, wall);
     if (outsideBounds(grid, bounds, wall.cellA)) continue;
     readWallEnds(grid, edge, wall);
@@ -349,6 +345,27 @@ function readWallCells(grid: TerrainGrid, edge: TerrainGrid['cliffs'][number], o
   const x = Math.round(Math.min(edge.from.x, edge.to.x) / grid.tileSize);
   out.cellA = (y - 1) * grid.width + x;
   out.cellB = y * grid.width + x;
+}
+
+/** Пустая запись разбора: одна форма на оба скретча — разбора отрезка два. */
+function emptyWallEdge(): WallEdge {
+  return { cellA: 0, cellB: 0, fromNodeX: 0, fromNodeY: 0, toNodeX: 0, toNodeY: 0, fx: 0, fy: 0, tx: 0, ty: 0 };
+}
+
+/** Скретч разбора отрезка для владельца — вызов не аллоцирует. */
+const OWNER_EDGE = emptyWallEdge();
+
+/**
+ * Клетка-ВЛАДЕЛЕЦ cliff-отрезка — та же `cellA`, по которой `buildWallGeometry`
+ * отбирает отрезки чанка. Экспорт нужен подсистеме: разложив отрезки по
+ * чанкам-владельцам один раз на доставку сетки, она перестаёт обходить все
+ * обрывы арены на каждую пересборку чанка (стоимость мазка кисти — O(обрывы)
+ * вместо O(обрывы) на КАЖДЫЙ помеченный чанк). Правило владения при этом одно:
+ * здесь оно читается тем же `readWallCells`, а не набирается заново.
+ */
+export function cliffOwnerCell(grid: TerrainGrid, edge: TerrainGrid['cliffs'][number]): number {
+  readWallCells(grid, edge, OWNER_EDGE);
+  return OWNER_EDGE.cellA;
 }
 
 /** Узлы сетки на концах отрезка и их мировые координаты во float (REND-1). */
@@ -495,6 +512,12 @@ function wallSpan(out: WallPoint, hA: number, hB: number): void {
  * Высота угла клетки `cell` в узле сетки (nodeX, nodeY). Экспорт — для
  * генератора юбки (`terrainSkirt.ts`): кромка юбки обязана считаться теми же
  * выборками, что кромка стенки (REND-9), а не их копией.
+ *
+ * Без поля высота берётся из `cornerLevels`, а НЕ из плоского уровня клетки:
+ * у рампы углы подняты к проходимому соседу (TERR-5), и пол с юбкой стоят
+ * именно на них. Плоский уровень оставлял бы кромку стенки ниже кромки пола —
+ * щель на рампе над обрывом в два уровня и выше; достижимо это только в сборке
+ * без источника поверхности, но правило пола там то же самое.
  */
 export function cornerHeight(
   grid: TerrainGrid,
@@ -504,14 +527,12 @@ export function cornerHeight(
   nodeX: number,
   nodeY: number,
 ): number {
-  if (surface === undefined) return grid.levels[cell]! * heightStep;
   const cx = cell % grid.width;
   const cy = Math.floor(cell / grid.width);
-  const heights = surface.cornerHeights(cx, cy);
   // Индекс угла по смещению узла от клетки: (0,0)→c00, (1,0)→c10, (1,1)→c11, (0,1)→c01.
-  const dx = nodeX - cx;
-  const dy = nodeY - cy;
-  return heights[dy === 0 ? dx : 3 - dx]!;
+  const corner = nodeY - cy === 0 ? nodeX - cx : 3 - (nodeX - cx);
+  if (surface === undefined) return cornerLevels(grid, cx, cy)[corner]! * heightStep;
+  return surface.cornerHeights(cx, cy)[corner]!;
 }
 
 /**
@@ -528,6 +549,16 @@ export function sampleWallSide(
   wx: number,
   wy: number,
 ): number {
-  if (surface === undefined) return grid.levels[cell]! * heightStep;
-  return surface.terrainFormHeightInCell(cell % grid.width, Math.floor(cell / grid.width), wx, wy);
+  const cx = cell % grid.width;
+  const cy = Math.floor(cell / grid.width);
+  if (surface !== undefined) return surface.terrainFormHeightInCell(cx, cy, wx, wy);
+  // Поля нет — билинейная площадка по углам `cornerLevels`, тем же правилом,
+  // что у `cornerHeight`: плоский уровень разошёлся бы с полом рампы.
+  const tile = grid.tileSize / FIXED_ONE;
+  const u = Math.min(Math.max(wx / tile - cx, 0), 1);
+  const v = Math.min(Math.max(wy / tile - cy, 0), 1);
+  const [c00, c10, c11, c01] = cornerLevels(grid, cx, cy);
+  const level =
+    c00 * (1 - u) * (1 - v) + c10 * u * (1 - v) + c11 * u * v + c01 * (1 - u) * v;
+  return level * heightStep;
 }

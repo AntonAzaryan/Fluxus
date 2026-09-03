@@ -12,6 +12,7 @@ import {
   manifestLoader,
   resolveEffectByEvent,
   resolveEffectByKind,
+  resolveEffectByState,
   resolveLodThresholds,
   resolveParticlesByEvent,
   resolveParticlesByKind,
@@ -679,6 +680,72 @@ describe('validateManifest: секция транзиентных эффекто
     );
     expectErrors({ entities: {}, effects: [] }, /effects: ожидался объект/);
   });
+
+  it('ведение статом — закрытый состав с адресными находками (REND-23)', () => {
+    // Шар заряда каста живёт записью, а не модулем игровой сборки: окно
+    // доставленного стата, вынос вперёд, порог цвета и мигание передержки.
+    const record = {
+      primitive: 'sphere',
+      color: '#ff8a3c',
+      radius: 0.15,
+      alpha: 0.8,
+      height: 0.3,
+      offset: 0.45,
+      radiusFromStat: { stat: 'charge', min: 1, max: 61, from: 1, to: 2 },
+      colorAt: { phase: 0.5, color: '#ff7020' },
+      blink: { periodMs: 180, alpha: 0.4 },
+    };
+    const ok = validateManifest({ entities: {}, effects: { byState: { Charging: record } } });
+    expect(ok.ok).toBe(true);
+    if (!ok.ok) return;
+    expect(resolveEffectByState(ok.manifest, 'Charging')!.radiusFromStat!.stat).toBe('charge');
+    // Имя стата рендером не проверяется: словарь статов принадлежит сборке
+    // воркера (HUD-8), и второй его перечень здесь разошёлся бы молча.
+    expect(
+      validateManifest({
+        entities: {},
+        effects: {
+          byState: {
+            X: { ...record, radiusFromStat: { ...record.radiusFromStat, stat: 'чего-то-нет' } },
+          },
+        },
+      }).ok,
+    ).toBe(true);
+
+    const at = (over: Record<string, unknown>): Record<string, unknown> => ({
+      entities: {},
+      effects: { byState: { X: { ...record, ...over } } },
+    });
+    expectErrors(
+      at({ radiusFromStat: { stat: 'charge', max: 10, to: 2, mn: 1 } }),
+      /effects\.byState\.X\.radiusFromStat\.mn: неизвестное поле/,
+    );
+    expectErrors(
+      at({ radiusFromStat: { stat: '', max: 10, to: 2 } }),
+      /effects\.byState\.X\.radiusFromStat\.stat: обязательное поле/,
+    );
+    // Пустое окно — деление на ноль у потребителя; молчаливое приведение к
+    // границе спрятало бы опечатку автора.
+    expectErrors(
+      at({ radiusFromStat: { stat: 'charge', min: 5, max: 5, to: 2 } }),
+      /effects\.byState\.X\.radiusFromStat\.max: конец окна/,
+    );
+    expectErrors(at({ colorAt: { phase: 2, color: '#fff' } }), /colorAt\.phase: обязательное поле/);
+    expectErrors(at({ blink: { periodMs: 0, alpha: 0.4 } }), /blink\.periodMs: обязательное поле/);
+    expectErrors(at({ offset: 'вперёд' }), /effects\.byState\.X\.offset: ожидалось конечное число/);
+    // Порог цвета и мигание без окна привязать не к чему: фазы у записи нет.
+    expectErrors(
+      {
+        entities: {},
+        effects: {
+          byState: {
+            X: { primitive: 'sphere', color: '#fff', radius: 1, colorAt: { phase: 0.5, color: '#000' } },
+          },
+        },
+      },
+      /effects\.byState\.X\.colorAt: поле ведётся фазой окна/,
+    );
+  });
 });
 
 describe('validateManifest: раздел decoration-видов (ASSET-9)', () => {
@@ -1188,5 +1255,101 @@ describe('resolveVisualClaim: кто рисует вид без модельно
     });
     expect(resolveVisualClaim(value, 'Shielded')).toBeNull();
     expect(resolveVisualClaim(value, 'Exploded')).toBeNull();
+  });
+});
+
+/**
+ * ASSET-17: секция путей задаёт ЗНАЧЕНИЯ, состав каналов ключа и перечень
+ * сглаживаний принадлежат коду камеры (CAM-10) и приезжают описанием — своего
+ * перечня у теста нет по той же причине, по какой его нет у модуля ассетов.
+ */
+describe('validateManifest: секция путей камеры (ASSET-17)', () => {
+  const entities = { x: { model: 'm.mdx' } };
+  const description = {
+    channels: [
+      { name: 'x', required: true },
+      { name: 'y', required: true },
+      { name: 'distance', required: false, min: 0 },
+    ],
+    easings: ['linear', 'easeInOut'],
+  };
+  const checked = (section: unknown) =>
+    validateManifest({ entities, cameraPaths: section }, { cameraPaths: description });
+
+  const opener = {
+    keys: [
+      { x: 0, y: 0, duration: 2, easing: 'easeInOut' },
+      { x: 10, y: 4, distance: 20 },
+    ],
+  };
+
+  it('манифест без секции валиден — путей у сборки просто нет', () => {
+    const result = validateManifest({ entities });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.manifest.cameraPaths).toBeUndefined();
+    expect(result.warnings).toEqual([]);
+  });
+
+  it('путь из ключей с длительностями и сглаживанием проходит и типизируется', () => {
+    const result = checked({ opener });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.manifest.cameraPaths!.opener!.keys).toHaveLength(2);
+    expect(result.warnings).toEqual([]);
+  });
+
+  it('незнакомый канал ключа — предупреждение и пропуск (симметрия с ASSET-8, ASSET-10)', () => {
+    const result = checked({ p: { keys: [{ x: 0, y: 0, roll: 1 }] } });
+    expect(result.ok).toBe(true);
+    expect(result.warnings).toHaveLength(1);
+    expect(result.warnings[0]).toMatch(/cameraPaths\.p\.keys\[0\]\.roll/);
+  });
+
+  it('незнакомое сглаживание — предупреждение: будет линейное', () => {
+    const result = checked({ p: { keys: [{ x: 0, y: 0, easing: 'бросок' }] } });
+    expect(result.ok).toBe(true);
+    expect(result.warnings[0]).toMatch(/easing/);
+  });
+
+  it('ключ без точки наблюдения — адресный отказ с именем пути и номером ключа', () => {
+    const result = checked({ opener: { keys: [{ x: 0, y: 0, duration: 1 }, { y: 4 }] } });
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.errors.some((e) => e.includes('cameraPaths.opener.keys[1].x'))).toBe(true);
+  });
+
+  it('структура проверяется строго и без описания: путь без ключей, негодная длительность', () => {
+    expectErrors({ entities, cameraPaths: 5 }, /cameraPaths: ожидался объект/);
+    expectErrors({ entities, cameraPaths: { p: { keys: [] } } }, /cameraPaths\.p\.keys/);
+    expectErrors(
+      { entities, cameraPaths: { p: { keys: [{ x: 0, y: 0, duration: 0 }, { x: 1, y: 1 }] } } },
+      /cameraPaths\.p\.keys\[0\]\.duration/,
+    );
+    // Длительность обязательна у всех ключей, кроме последнего: идти после
+    // него некуда, а между прочими отрезок существует.
+    expectErrors(
+      { entities, cameraPaths: { p: { keys: [{ x: 0, y: 0 }, { x: 1, y: 1 }] } } },
+      /keys\[0\]\.duration: длительность/,
+    );
+    expectErrors({ entities, cameraPaths: { p: { keys: [{ x: 0, y: 0 }], loop: 'да' } } }, /loop/);
+    expectErrors({ entities, cameraPaths: { p: { keys: [{ x: 0, y: 'край' }] } } }, /keys\[0\]\.y/);
+  });
+
+  it('значение вне границ описания — ошибка, а не предупреждение: границы осмысленности', () => {
+    const result = checked({ p: { keys: [{ x: 0, y: 0, distance: -5 }] } });
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.errors[0]).toMatch(/distance/);
+  });
+
+  it('без описания состав каналов не проверяется вовсе: своего перечня у валидации нет', () => {
+    const result = validateManifest({ entities, cameraPaths: { p: { keys: [{ roll: 1 }] } } });
+    expect(result.ok).toBe(true);
+    expect(result.warnings).toEqual([]);
+  });
+
+  it('незнакомый ключ записи пути — ошибка закрытого состава', () => {
+    expectErrors({ entities, cameraPaths: { p: { keys: [{ x: 0, y: 0 }], speed: 2 } } }, /speed/);
   });
 });

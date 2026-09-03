@@ -35,6 +35,17 @@ export interface CameraInput {
   centerHeld: boolean;
   /** Переключатель залипающего follow (фронт). */
   followToggle: boolean;
+  /**
+   * Явное открепление от follow-цели (фронт, CAM-8): переход в free-RTS без
+   * движения точки наблюдения и без гашения разовых перелётов.
+   *
+   * Отдельный вход, а не побочное действие кадрирования: в follow точку
+   * наблюдения каждый кадр переписывает цель, и кадрирование там инертно, — а
+   * подделывать ради этого ввод панорамирования нельзя, потому что панорама
+   * открепляет ЗАОДНО с движением камеры (CAM-2) и гасит те самые перелёты
+   * (CAM-3), ради которых её и подделали бы.
+   */
+  detach: boolean;
   /** Переключатель fly-режима (фронт). */
   flyToggle: boolean;
   /** Fly: осмотр мышью, px за кадр. */
@@ -58,6 +69,7 @@ export function createCameraInput(): CameraInput {
     centerTap: false,
     centerHeld: false,
     followToggle: false,
+    detach: false,
     flyToggle: false,
     lookDX: 0,
     lookDY: 0,
@@ -74,6 +86,7 @@ export function resetCameraInput(input: CameraInput): void {
   input.wheelSteps = 0;
   input.centerTap = false;
   input.followToggle = false;
+  input.detach = false;
   input.flyToggle = false;
   input.lookDX = 0;
   input.lookDY = 0;
@@ -82,27 +95,53 @@ export function resetCameraInput(input: CameraInput): void {
 /** Зажим в отрезок — общая мера осей сэмпла: они живут в [-1, 1]. */
 const clamp = (v: number, lo: number, hi: number): number => Math.min(Math.max(v, lo), hi);
 
+/** Оси edge-pan — запись вызывающего: она заводится один раз, не на кадр. */
+export interface EdgePanAxes {
+  x: number;
+  y: number;
+}
+
+export function createEdgePanAxes(): EdgePanAxes {
+  return { x: 0, y: 0 };
+}
+
+/**
+ * Запись по умолчанию — одна на модуль. Вызывающий, не давший своей, получает
+ * ЕЁ, и результат валиден до следующего вызова: тот же контракт, что у
+ * переиспользуемых записей рендера (`PickHit`, поза камеры). Своя запись нужна
+ * тому, кто держит оси дольше одного выражения.
+ */
+const SHARED: EdgePanAxes = createEdgePanAxes();
+
 /**
  * Edge-pan по положению указателя относительно прямоугольника канваса:
  * [-1..1] по осям, 0 вне зоны `margin` и за пределами прямоугольника.
  * Ось Y экранная (вниз) конвертируется в мировую (вверх).
+ *
+ * Пишет в запись и её же возвращает: функция зовётся каждым кадром сборки, и
+ * свежий объектный литерал на кадр был бы аллокацией кадрового пути (REND-26) —
+ * той самой, которую пул сэмпла ввода и заводился избежать. Запись без
+ * аргумента общая (`SHARED`), и результат тогда валиден до следующего вызова.
  */
 export function edgePanAxes(
   pointerX: number,
   pointerY: number,
   rect: { left: number; top: number; width: number; height: number },
   margin: number,
-): { x: number; y: number } {
+  out: EdgePanAxes = SHARED,
+): EdgePanAxes {
+  out.x = 0;
+  out.y = 0;
   const px = pointerX - rect.left;
   const py = pointerY - rect.top;
-  if (px < 0 || py < 0 || px > rect.width || py > rect.height || margin <= 0) {
-    return { x: 0, y: 0 };
-  }
+  if (px < 0 || py < 0 || px > rect.width || py > rect.height || margin <= 0) return out;
   let x = 0;
   let y = 0;
   if (px < margin) x = px / margin - 1;
   else if (px > rect.width - margin) x = 1 - (rect.width - px) / margin;
   if (py < margin) y = 1 - py / margin;
   else if (py > rect.height - margin) y = (rect.height - py) / margin - 1;
-  return { x: clamp(x, -1, 1), y: clamp(y, -1, 1) };
+  out.x = clamp(x, -1, 1);
+  out.y = clamp(y, -1, 1);
+  return out;
 }

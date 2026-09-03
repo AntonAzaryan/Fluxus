@@ -8,6 +8,7 @@
   "lighting.maxLocalLights": 2,
   "postprocess.bloom": false,
   "postprocess.lut": false,
+  "postprocess.antialias": 0,
   "water.rippleSources": 0,
   "water.detailLayers": 2,
   "water.depthTexelsPerCell": 2

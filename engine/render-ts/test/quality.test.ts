@@ -387,6 +387,59 @@ describe('валидация документа пресета против ре
     expect(lever.applied.length).toBe(1);
   });
 
+  /**
+   * Реестр собирается из деклараций подсистем СЦЕНЫ, и документ пресета описывает
+   * возможности СБОРКИ: на сцене без тумана `fog.maskResolution` — не опечатка, а
+   * ручка подсистемы, которую сборка умеет построить и здесь не построила
+   * (QUAL-1, находка P-7 аудита рендера).
+   */
+  it('ручка объявленного, но не построенного владельца отказом не является (QUAL-1)', () => {
+    // Реестр без тумана: те же подсистемы, что у сцены, минус его.
+    const assets = makeAssets();
+    const ctx: RenderContext = {
+      scene: new THREE.Scene(),
+      assets: assets.service,
+      config: { heightStep: 0.5 },
+    };
+    const stage = new PresentationStage(ctx).register(new TerrainSubsystem(flatGrid()));
+    const controller = new QualityController(stage, {});
+    const doc = { 'fog.maskResolution': 4, 'terrain.curvatureTessellation': 2 };
+
+    // Без перечня объявляемого — прежнее поведение: адресный отказ.
+    const closed = validateQualityPreset(doc, controller.knobs);
+    expect(closed.ok).toBe(false);
+    if (closed.ok) throw new Error('ожидался отказ');
+    expect(closed.errors[0]).toContain('fog.maskResolution');
+
+    // С перечнем — документ принят целиком, и ручка построенного террейна в нём
+    // по-прежнему проверена.
+    expect(controller.validateAgainst(['fog'], doc).ok).toBe(true);
+  });
+
+  it('владелец объявлен И построен — неизвестное имя в его неймспейсе остаётся опечаткой', () => {
+    const knobsWithFog = sceneKnobs();
+    const result = validateQualityPreset({ 'fog.maskResolutoin': 4 }, knobsWithFog, ['fog']);
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error('ожидался отказ');
+    expect(result.errors[0]).toContain('fog.maskResolutoin');
+  });
+
+  it('значение ручки объявленного владельца проверяет его регистрация, а не пропуск состава', () => {
+    const stage = makeStage();
+    // Документ применён до появления подсистемы: состава реестр ещё не знает.
+    const controller = new QualityController(stage, { 'fog.lever': 99 });
+    expect(controller.validateAgainst(['fog']).ok).toBe(true);
+    // ...а её регистрация негодное значение отвергает адресно.
+    expect(() => stage.register(probe('fog', 'lever', 4))).toThrow(/fog\.lever/);
+  });
+
+  it('пустой перечень объявляемого — прежнее поведение до последней буквы', () => {
+    const knobs = sceneKnobs();
+    const withEmpty = validateQualityPreset({ 'ghost.lever': 1 }, knobs, []);
+    const without = validateQualityPreset({ 'ghost.lever': 1 }, knobs);
+    expect(withEmpty).toEqual(without);
+  });
+
   it('текущий документ проверяется против собранного реестра целиком', () => {
     const stage = makeStage();
     stage.register(probe('fog', 'lever', 4));
@@ -884,10 +937,13 @@ describe('константная стоимость объявляется яв�
       values: undefined,
     });
 
+    // Пол множителя плотности ПОЛОЖИТЕЛЕН (REND-24, QUAL-2): эмиттер —
+    // изображение сущности, и пресет, обнуляющий его эмиссию, отнимал бы у
+    // игрока информацию.
     expect(shape('particles.density')).toEqual({
       semantics: 'value',
       default: 1,
-      min: 0,
+      min: 0.25,
       max: 4,
       values: undefined,
     });

@@ -66,7 +66,6 @@
  */
 import {
   QualityController,
-  validateQualityPreset,
   type PresentationStage,
   type QualityPreset,
 } from '@fluxus/render';
@@ -91,6 +90,24 @@ export const QUALITY_PRESETS: Readonly<Record<QualityPresetName, QualityPreset>>
 
 /** Ключ хранения выбора; выбор переживает перезагрузку страницы, а не матч. */
 export const QUALITY_STORAGE_KEY = 'demo.quality';
+
+/**
+ * Подсистемы, которые СБОРКА демо умеет построить, но строит не на всякой сцене
+ * (QUAL-1). Документы пресетов написаны про сборку, а реестр ручек складывается
+ * из деклараций подсистем ЭТОЙ сцены — и на сцене без тумана `performance`
+ * отвергался бы целиком из-за одной ручки `fog.maskResolution`, молча уводя
+ * игрока на запасной уровень качества.
+ *
+ * Здесь только туман: он строится по `fog: true` конфига сцены (`main.ts`), а
+ * остальные подсистемы демо регистрируются всегда — вода без секции `water`
+ * просто не рисует ничего, но ручки объявляет. Подсистема превью каста в этот
+ * перечень не входит намеренно: она условна, но ручек не объявляет вовсе, и
+ * имени её здесь стоять не за чем.
+ *
+ * Перечень — ВЛАДЕЛЬЦЫ, а не имена ручек: имена принадлежат движку, и второй их
+ * список расходился бы с первым молча при появлении новой ручки тумана.
+ */
+export const DEMO_DECLARABLE_SUBSYSTEMS: readonly string[] = ['fog'];
 
 /**
  * Имя пресета из чего угодно: незнакомое (чужая запись, документ, которого
@@ -206,7 +223,11 @@ export function createDemoQuality(
   const controller = new QualityController(stage);
   const refused = new Set<QualityPresetName>();
   for (const name of QUALITY_PRESET_NAMES) {
-    const result = validateQualityPreset(QUALITY_PRESETS[name], controller.knobs);
+    // Против ОБЪЯВЛЯЕМОГО, а не только против собранного (QUAL-1): ручка
+    // подсистемы, которую сборка умеет построить и на этой сцене не построила,
+    // отказом не является — её значение проверит регистрация подсистемы там,
+    // где она есть.
+    const result = controller.validateAgainst(DEMO_DECLARABLE_SUBSYSTEMS, QUALITY_PRESETS[name]);
     if (result.ok) continue;
     refused.add(name);
     warn(

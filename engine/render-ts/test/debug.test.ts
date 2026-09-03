@@ -10,6 +10,7 @@
  */
 import { describe, expect, it, vi } from 'vitest';
 import * as THREE from 'three';
+import { validateCurvatureMap, type TerrainCurvatureMap } from '@fluxus/assets';
 import {
   FogSubsystem,
   ModelsSubsystem,
@@ -32,6 +33,7 @@ import {
   type TickView,
 } from '../src/index.js';
 import {
+  buildFogMask,
   flatGrid,
   makeEntityView,
   makeRenderContext,
@@ -421,6 +423,73 @@ describe('RDBG-7: дамп кадра', () => {
     expect(section.entities.truncated).toBe(true);
     // Агрегат считается по ВСЕМ, а не по показанным.
     expect(section.entityCount).toBe(10);
+  });
+
+  it('два дампа одного доставленного состояния маски совпадают телом секции (RDBG-7)', () => {
+    // Перестройка маски идёт ПОРЦИЯМИ КАДРОВ, а рассеивание — кадрами
+    // рассеивания: величины, выведенные из них, воспроизводимыми не бывают и
+    // обязаны уезжать в часовую секцию, иначе всякий дифф разбора — шум.
+    const stage = new PresentationStage(makeRenderContext());
+    const layer = new RenderDebugLayer(stage);
+    const fog = new FogSubsystem({
+      grid: flatGrid(),
+      stats: { visionRadius: 'vision', team: 'team' },
+      hero: () => 1,
+      config: { resolution: 4, edgeWidth: 1.5 },
+    });
+    stage.register(fog);
+    layer.setEnabled('fog.mask', true);
+    const heroAt = (x: number, y: number): TickView =>
+      makeTickView(
+        [
+          makeEntityView(1, {
+            currX: x,
+            currY: y,
+            stats: new Map([
+              ['team', 0],
+              ['vision', 3],
+            ]),
+          }),
+        ],
+        { statNames: ['team', 'vision'] },
+      );
+    const lit = (raster: Uint8Array): number =>
+      raster.reduce((count, value) => (value > 0 ? count + 1 : count), 0);
+
+    // Первая маска доигрывается целиком: показанная равна целевой.
+    const producer = { name: 'test' };
+    stage.publish(producer, heroAt(2.5, 2.5));
+    buildFogMask(fog);
+    fog.updateFrame(10, 0);
+
+    // Герой ушёл в другой угол: прежде вскрытая зона ЗАКРЫВАЕТСЯ, и её тексели
+    // ползут к нулю кадрами — показанный растр всё это время «вскрытее»
+    // целевого. Здесь прежняя проба и врала: она считала долю по показанному.
+    const moved = heroAt(6.5, 6.5);
+    stage.publish(producer, moved);
+    buildFogMask(fog, 1 / 60);
+    fog.updateFrame(1 / 60, 0);
+
+    const shown = fog.postPass.mask.image.data as Uint8Array;
+    expect(lit(shown)).toBeGreaterThan(lit(fog.visibility.data));
+
+    layer.frame(frameState(moved));
+    const first = layer.dump();
+    for (let frame = 0; frame < 3; frame++) fog.updateFrame(1 / 60, 0);
+    layer.frame(frameState(moved));
+    const second = layer.dump();
+
+    // Тело секции — от доставленного состояния, и два дампа его совпадают.
+    expect(second.sections['fog.mask']).toEqual(first.sections['fog.mask']);
+    const section = first.sections['fog.mask'] as { revealedFraction: number };
+    expect(section.revealedFraction).toBeCloseTo(
+      lit(fog.visibility.data) / fog.visibility.data.length,
+      9,
+    );
+    // Кадровые величины названы — но в часовой секции.
+    expect(Object.keys(first.clock)).toContain('fog.mask.rebuildCount');
+    expect(first.clock['fog.mask.dissolving']).toBe(1);
+    expect(JSON.stringify(first.sections['fog.mask'])).not.toContain('dissolving');
   });
 
   it('маска в дамп растром не едет: разрешение, прямоугольник и число текселей', () => {
@@ -925,5 +994,205 @@ describe('render.memory: живые ресурсы рендерера (RDBG-1, R
     // «Не измерено» и «ноль живых» — разные утверждения: нулём числа набора
     // читались бы как отсутствие ресурсов (RDBG-7).
     expect(probeOf(layer)?.noData).toContain('renderer.info.memory');
+  });
+});
+
+// ------------------------------- клетка на визуальной поверхности (RDBG-3)
+
+function curvatureMap(width: number, height: number, rows: number[][]): TerrainCurvatureMap {
+  const result = validateCurvatureMap({ width, height, rows });
+  if (!result.ok) throw new Error(result.errors.join('; '));
+  return result.map;
+}
+
+/**
+ * Полигон словаря лежит НА визуальной поверхности (REND-9), а не на её хорде.
+ * Строителей у «клетки на поверхности» было два разной точности — наложения
+ * дробили клетку по тесселяции, отладка сэмплировала одни вершины, — и правило
+ * у них теперь общее (`surfaceCells.ts`).
+ */
+describe('RDBG-3: полигон ложится на визуальную поверхность (REND-9)', () => {
+  /** Слой над сеткой с кривизной; `draw` рисует ровно одну клетку полигоном. */
+  function paintCell(
+    curvature: TerrainCurvatureMap | null,
+    cellX: number,
+    cellY: number,
+  ): { layer: RenderDebugLayer; scene: THREE.Scene; surface: VisualSurfaceSource } {
+    const scene = new THREE.Scene();
+    const context = { ...makeRenderContext(), scene };
+    const grid = flatGrid(3);
+    const surface = new VisualSurfaceSource(grid);
+    surface.init(context);
+    if (curvature !== null) surface.setCurvature(curvature);
+    const layer = new RenderDebugLayer(new PresentationStage(context), { scene, surface });
+    layer.register<DebugProbe>({
+      id: 'x.cell',
+      probe: () => ({}),
+      draw: (_probe, out) => {
+        out.polygon(
+          [cellX, cellY, cellX + 1, cellY, cellX + 1, cellY + 1, cellX, cellY + 1],
+          0xffffff,
+        );
+      },
+    });
+    layer.setEnabled('x.cell', true);
+    layer.frame(frameState(null));
+    return { layer, scene, surface };
+  }
+
+  /** Слой над сеткой с кривизной; `draw` рисует то, что просит тест. */
+  function paintShape(
+    curvature: TerrainCurvatureMap | null,
+    draw: (out: DebugDraw) => void,
+  ): { layer: RenderDebugLayer; surface: VisualSurfaceSource } {
+    const scene = new THREE.Scene();
+    const context = { ...makeRenderContext(), scene };
+    const grid = flatGrid(3);
+    const surface = new VisualSurfaceSource(grid);
+    surface.init(context);
+    if (curvature !== null) surface.setCurvature(curvature);
+    const layer = new RenderDebugLayer(new PresentationStage(context), { scene, surface });
+    layer.register<DebugProbe>({ id: 'x.shape', probe: () => ({}), draw: (_p, out) => { draw(out); } });
+    layer.setEnabled('x.shape', true);
+    layer.frame(frameState(null));
+    return { layer, surface };
+  }
+
+  it('плоская клетка идёт быстрым путём: два треугольника, как и было', () => {
+    const { layer } = paintCell(null, 1, 1);
+    expect(layer.vertexCount).toBe(6);
+  });
+
+  /**
+   * Окружность и диск ложатся на поверхность тем же правилом дробления, что и
+   * полигон (`surfaceCells.ts`): двух строителей «фигура на поверхности» разной
+   * точности у слоя больше нет.
+   */
+  it('окружность и диск на клетке с кривизной дробятся тем же правилом, что полигон', () => {
+    const curvature = curvatureMap(3, 3, [
+      [14, 14, 14, 14],
+      [7, 7, 7, 7],
+      [0, 0, 0, 0],
+      [0, 0, 0, 0],
+    ]);
+    const flat = paintShape(null, (out) => { out.circle(1.5, 1.5, 0.4, 0xffffff); });
+    const curved = paintShape(curvature, (out) => { out.circle(1.5, 1.5, 0.4, 0xffffff); });
+    // На плоской арене звено остаётся одним отрезком, на кривизне — дробится.
+    expect(curved.layer.vertexCount).toBeGreaterThan(flat.layer.vertexCount);
+
+    const flatDisc = paintShape(null, (out) => { out.disc(1.5, 1.5, 0.4, 0xffffff); });
+    const curvedDisc = paintShape(curvature, (out) => { out.disc(1.5, 1.5, 0.4, 0xffffff); });
+    expect(curvedDisc.layer.vertexCount).toBeGreaterThan(flatDisc.layer.vertexCount);
+  });
+
+  it('клетка с кривизной дробится, и вершины лежат на поле, а не на веере сквозь холм', () => {
+    // Северный ряд узлов поднят: внутри клетки (1,1) поле квадратично по Y.
+    const curvature = curvatureMap(3, 3, [
+      [14, 14, 14, 14],
+      [7, 7, 7, 7],
+      [0, 0, 0, 0],
+      [0, 0, 0, 0],
+    ]);
+    const { layer, scene, surface } = paintCell(curvature, 1, 1);
+    expect(surface.current!.hasCellCurvature(1, 1)).toBe(true);
+    // Дробление есть: одной парой треугольников клетка больше не рисуется.
+    expect(layer.vertexCount).toBeGreaterThan(6);
+
+    // Каждая вершина стоит на поле (с общим подъёмом наложения над ним).
+    const triangles = [...scene.children[0]!.children].find(
+      (child) => (child as THREE.Mesh).type === 'Mesh',
+    ) as THREE.Mesh;
+    const position = triangles.geometry.getAttribute('position') as THREE.BufferAttribute;
+    const count = triangles.geometry.drawRange.count;
+    let lifted = 0;
+    for (let i = 0; i < count; i += 1) {
+      const x = position.getX(i);
+      const y = position.getY(i);
+      const z = position.getZ(i);
+      const field = surface.current!.heightAt(x, y);
+      // Вершина стоит на поле с общим подъёмом наложения над ним; хорда сквозь
+      // холм ушла бы от поля куда дальше этого подъёма.
+      expect(Math.abs(z - field)).toBeLessThan(0.1);
+      if (field > 1e-6) lifted += 1;
+    }
+    // Тест не вырожден: часть вершин стоит ВЫШЕ нуля, то есть на самом холме.
+    expect(lifted).toBeGreaterThan(0);
+  });
+});
+
+// ------------------------------------- точка освобождения слоя (REND-31)
+
+describe('REND-31: снос отладочного слоя отдаёт его ресурсы', () => {
+  /** Все геометрии, материалы и текстуры поддерева — вход шпионов сноса. */
+  function resourcesOf(root: THREE.Object3D): {
+    geometries: THREE.BufferGeometry[];
+    materials: THREE.Material[];
+    textures: THREE.Texture[];
+  } {
+    const geometries: THREE.BufferGeometry[] = [];
+    const materials: THREE.Material[] = [];
+    const textures: THREE.Texture[] = [];
+    root.traverse((child) => {
+      const mesh = child as Partial<THREE.Mesh>;
+      if (mesh.geometry !== undefined) geometries.push(mesh.geometry);
+      const material = mesh.material as THREE.Material | undefined;
+      if (material === undefined) return;
+      materials.push(material);
+      const map = (material as { map?: THREE.Texture | null }).map;
+      if (map !== undefined && map !== null) textures.push(map);
+    });
+    return { geometries, materials, textures };
+  }
+
+  it('носители и растровые плашки отданы, группа снята со сцены (ED-15)', () => {
+    const scene = new THREE.Scene();
+    const layer = new RenderDebugLayer(new PresentationStage(makeRenderContext()), { scene });
+    layer.register<DebugProbe>({
+      id: 'x.everything',
+      probe: () => ({}),
+      draw: (_probe, out) => {
+        out.point(1, 1, 1, 0xffffff);
+        out.segment(0, 0, 0, 1, 1, 1, 0xffffff);
+        out.polygon([0, 0, 1, 0, 1, 1], 0xffffff);
+        out.raster(
+          {
+            raster: true,
+            texels: new Uint8Array(4),
+            widthTexels: 2,
+            heightTexels: 2,
+            worldX: 0, worldY: 0, worldZ: 0,
+            worldWidth: 2, worldHeight: 2,
+          },
+          0xffffff,
+        );
+      },
+    });
+    layer.setEnabled('x.everything', true);
+    layer.frame(frameState(null));
+    expect(scene.children).toHaveLength(1);
+
+    const { geometries, materials, textures } = resourcesOf(scene.children[0]!);
+    // Три носителя плюс плашка растра.
+    expect(geometries.length).toBeGreaterThanOrEqual(4);
+    expect(materials.length).toBeGreaterThanOrEqual(4);
+    expect(textures).toHaveLength(1);
+    const spies = [...geometries, ...materials, ...textures].map((resource) =>
+      vi.spyOn(resource, 'dispose'),
+    );
+
+    layer.dispose();
+    for (const spy of spies) expect(spy).toHaveBeenCalledTimes(1);
+    expect(scene.children).toHaveLength(0);
+  });
+
+  it('снос идемпотентен: повторный вызов ресурс дважды не отдаёт', () => {
+    const scene = new THREE.Scene();
+    const layer = new RenderDebugLayer(new PresentationStage(makeRenderContext()), { scene });
+    layer.register(stubSource('x.quiet'));
+    layer.setEnabled('x.quiet', true);
+    layer.frame(frameState(null));
+    layer.dispose();
+    expect(() => { layer.dispose(); }).not.toThrow();
+    expect(scene.children).toHaveLength(0);
   });
 });

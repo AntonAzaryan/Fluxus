@@ -6,7 +6,12 @@
  * имя — а не молчит и не ломается на первой доставке.
  */
 import type { HudActionDecl } from './actions.js';
-import type { HudComposition, HudCompositionEntry, HudParams } from './composition.js';
+import type {
+  HudComposition,
+  HudCompositionEntry,
+  HudParams,
+  HudWorldAnchor,
+} from './composition.js';
 import type { HudDeliveredState } from './delivery.js';
 import type { HudWidgetKind } from './widget.js';
 import { isHudZone, type HudZoneName } from './zones.js';
@@ -85,6 +90,8 @@ export interface ResolvedHudEntry {
   readonly params: HudParams;
   readonly bindings: readonly ResolvedHudBinding[];
   readonly actions: readonly ResolvedHudAction[];
+  /** Размещение по мировому якорю (HUD-10); нет — виджет живёт в зоне. */
+  readonly anchor?: HudWorldAnchor;
 }
 
 export interface ResolvedHudComposition {
@@ -125,7 +132,24 @@ function resolveEntry(
       throw new Error(`${where}: неизвестное действие "${name}" в слоте "${slot}"`);
     }
   });
-  return { source: entry, kind, zone: entry.zone, params: entry.params ?? NO_PARAMS, bindings, actions };
+  const anchor = entry.anchor;
+  // Слот якоря обязан быть объявлен биндингом ЭТОЙ записи: иначе сущность
+  // указать нечем, и виджет молча висел бы скрытым — ровно та ошибка, которую
+  // резолв ловит до монтирования (HUD-4, HUD-10).
+  if (anchor !== undefined && !bindings.some((binding) => binding.slot === anchor.entity)) {
+    throw new Error(
+      `${where}: якорь ссылается на слот "${anchor.entity}", которого нет среди биндингов записи`,
+    );
+  }
+  return {
+    source: entry,
+    kind,
+    zone: entry.zone,
+    params: entry.params ?? NO_PARAMS,
+    bindings,
+    actions,
+    ...(anchor !== undefined ? { anchor } : {}),
+  };
 }
 
 /**

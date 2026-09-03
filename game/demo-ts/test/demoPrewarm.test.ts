@@ -12,7 +12,15 @@
  */
 import { describe, expect, it } from 'vitest';
 import * as THREE from 'three';
-import type { FogSubsystem, ModelsPrewarm, ModelsSubsystem, ParticlesSubsystem } from '@fluxus/render';
+import type {
+  EffectsPrewarm,
+  EffectsSubsystem,
+  FogSubsystem,
+  ModelsPrewarm,
+  ModelsSubsystem,
+  ParticlesPrewarm,
+  ParticlesSubsystem,
+} from '@fluxus/render';
 import { prewarmPresentation } from '../app/prewarm.js';
 
 /** Что и подо что компилировалось: имя сцены и вид связанной цели кадра. */
@@ -25,6 +33,7 @@ function makeRig(withFog: boolean): {
   compiles: CompileRecord[];
   run: () => Promise<void>;
   anchored: THREE.Object3D;
+  effectRoot: THREE.Object3D;
 } {
   const compiles: CompileRecord[] = [];
   const scene = new THREE.Scene();
@@ -58,13 +67,34 @@ function makeRig(withFog: boolean): {
     finish: () => {},
   };
   const models = { prewarm: () => Promise.resolve(warm) } as unknown as ModelsSubsystem;
-  const particles = { prewarm: () => Promise.resolve() } as unknown as ParticlesSubsystem;
+  const warmParticles: ParticlesPrewarm = {
+    textures: [],
+    texturesReady: () => Promise.resolve([]),
+  };
+  const particles = {
+    prewarm: () => Promise.resolve(warmParticles),
+  } as unknown as ParticlesSubsystem;
+  // Прогрев эффектов (REND-23) синхронен — ассетов у них нет; корень его тёплой
+  // сцены такой же паркуемый, как у моделей.
+  const effectRoot = new THREE.Object3D();
+  const warmEffects: EffectsPrewarm = { roots: [effectRoot], finish: () => {} };
+  const effects = { prewarm: () => warmEffects } as unknown as EffectsSubsystem;
   const fog = withFog ? ({ postPass: { scene: postScene } } as unknown as FogSubsystem) : null;
 
   return {
     compiles,
     anchored,
-    run: () => prewarmPresentation({ renderer, scene, camera: new THREE.Camera(), models, particles, fog }),
+    effectRoot,
+    run: () =>
+      prewarmPresentation({
+        renderer,
+        scene,
+        camera: new THREE.Camera(),
+        models,
+        effects,
+        particles,
+        fog,
+      }),
   };
 }
 
@@ -98,6 +128,16 @@ describe('прогрев демо компилируется под цель к�
     expect(rig.anchored.parent).not.toBeNull();
     const warmCompiles = rig.compiles.filter((record) => record.scene === 'тёплая сцена');
     expect(warmCompiles.length).toBe(4); // две ступени × две цели кадра
+  });
+
+  it('тёплый корень эффектов входит в первую же ступень (REND-23)', async () => {
+    // Пул эффектов пуст до первой вспышки, и первый `FireballExploded`
+    // компилировал программу `MeshBasicMaterial{transparent}` в кадре боя.
+    // Прогретый узел обязан попасть в ТУ ЖЕ тёплую сцену, что корни моделей, —
+    // иначе его программу никто не соберёт.
+    const rig = makeRig(true);
+    await rig.run();
+    expect(rig.effectRoot.parent).not.toBeNull();
   });
 
   it('без тумана цель кадра одна — канвас: мир рисуется прямо в него', async () => {

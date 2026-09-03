@@ -11,7 +11,12 @@
  * паузы — обратным каналом `RemoteHost.control`; клик миникарты — presentation-
  * действие контракта камеры, сообщений воркеру не порождает.
  */
-import type { AssetService, VisualManifest } from '@fluxus/assets';
+import {
+  WATER_EMPTY_CELL,
+  type AssetService,
+  type PresentationScene,
+  type VisualManifest,
+} from '@fluxus/assets';
 import {
   HudActionsFacade,
   HudOverlayHost,
@@ -28,6 +33,7 @@ import {
   minimapWidgetKind,
   pauseOverlayKind,
   runtimeKind,
+  type HudAnchorSource,
   type HudCameraContract,
   type HudComposition,
   type HudControlChannel,
@@ -35,6 +41,9 @@ import {
   type HudEntityView,
   HudIcons,
   type MinimapFogSource,
+  type MinimapFootprint,
+  type MinimapTerrainGrid,
+  type MinimapTerrainLayers,
   type MinimapTerrainSource,
 } from '@fluxus/hud';
 import { COOLDOWN_ABILITIES, RESPAWN_EVENT, STATS } from './sim.js';
@@ -212,6 +221,13 @@ export function demoHudComposition(capabilities: DemoShellCapabilities): HudComp
         params: {
           width: 180,
           height: 180,
+          // Слои подложки (HUD-6) — ДАННЫЕ этой игры, а не константы движка:
+          // палитра по индексу уровня, цвета воды и следов декораций. Арена
+          // дуэли двухуровневая, поэтому цветов два; третий уровень, появись
+          // он, прижмётся к последнему цвету — и это видно в документе.
+          levelPalette: ['#343b46', '#454e5c'],
+          waterColor: '#1d5a6b',
+          decorationColor: '#5a6070',
           markers: {
             markers: {
               Hero: {
@@ -265,13 +281,137 @@ export function demoHudComposition(capabilities: DemoShellCapabilities): HudComp
         bindings: { hero: 'hero.entity' },
       },
       {
-        // Полоса здоровья под портретом — та же зона, следующая запись.
+        // Полоса здоровья — НАД ГЕРОЕМ по мировому якорю (HUD-10), а не под
+        // портретом: место на экране ей даёт проекция, которую публикует рендер
+        // (`rendering` REND-41), и идёт она вместе с камерой. Зона записи
+        // остаётся её домом в композиции; смещение поднимает полосу над
+        // макушкой на десяток пикселей, чтобы она не села на неё вплотную.
+        //
+        // Виджет тот же, что стоял в зоне, и кода его это не коснулось ни
+        // строкой: размещение объявлено записью (HUD-4, HUD-10).
         widget: 'hp-bar',
         zone: 'bottom-left',
         params: { stat: STATS.hp, maxStat: STATS.hpMax },
         bindings: { entity: 'hero.entity' },
+        anchor: { entity: 'entity', offsetY: -10 },
       },
     ],
+  };
+}
+
+// --------------------------------------------- слои подложки миникарты (HUD-6)
+
+/**
+ * Маска клеток воды по секции `water` парного документа (PRES-2 → REND-35).
+ * Считает её СБОРКА, а не миникарта: HUD — наблюдатель доставленного (HUD-1), и
+ * второй читатель документа рядом с рендером разошёлся бы с ним (HUD-6).
+ *
+ * Алфавит карты берётся у модуля ассетов (`WATER_EMPTY_CELL`) — второго его
+ * определения не заводится. Карта, не ложащаяся на сетку, слоем не становится:
+ * рисовать воду не там, где она есть, хуже, чем не рисовать вовсе.
+ */
+export function demoWaterMask(
+  presentation: PresentationScene | null,
+  grid: MinimapTerrainGrid | null,
+): Uint8Array | null {
+  const rows = presentation?.water?.cells;
+  if (rows === undefined || grid === null) return null;
+  if (rows.length !== grid.height) return null;
+  const mask = new Uint8Array(grid.width * grid.height);
+  for (let y = 0; y < grid.height; y++) {
+    const row = rows[y] ?? '';
+    if (row.length !== grid.width) return null;
+    for (let x = 0; x < grid.width; x++) {
+      mask[y * grid.width + x] = row[x] === WATER_EMPTY_CELL ? 0 : 1;
+    }
+  }
+  return mask;
+}
+
+/** Что сборке нужно от рендера, чтобы посчитать следы декораций (REND-3, REND-18). */
+export interface DemoDecorationSource {
+  /** ID инстанса по ключу записи документа; undefined — ключа в наборе нет. */
+  entityOf(key: string): number | undefined;
+  /** Видимый инстанс: поза и границы — то, чем рендер декорацию и рисует. */
+  instanceFor(
+    entity: number,
+    decoration: boolean,
+  ): { readonly pose: { readonly x: number; readonly y: number; readonly scale: number };
+       readonly bounds: { readonly minX: number; readonly minY: number; readonly maxX: number; readonly maxY: number } | null } | null;
+}
+
+/**
+ * Следы статических декораций для миникарты (HUD-6): позиция и радиус берутся
+ * из НАРИСОВАННОГО инстанса — рендер отдаёт то, что уже посчитал, и второго
+ * источника размеров у схемы нет.
+ *
+ * `ready === false` — модель хотя бы одной декорации ещё грузится (ASSET-4), и
+ * список стоит пересчитать позже: до прихода границ радиуса не существует.
+ */
+export function demoDecorationFootprints(
+  count: number,
+  source: DemoDecorationSource,
+): { footprints: MinimapFootprint[]; ready: boolean } {
+  const footprints: MinimapFootprint[] = [];
+  let ready = true;
+  for (let index = 0; index < count; index++) {
+    const entity = source.entityOf(`#${String(index)}`);
+    if (entity === undefined) continue;
+    const view = source.instanceFor(entity, true);
+    const bounds = view?.bounds ?? null;
+    if (view === null || bounds === null) {
+      ready = false;
+      continue;
+    }
+    // Радиус — половина большей стороны габаритов: схема показывает, ГДЕ стоит
+    // препятствие, а не как оно повёрнуто.
+    const radius =
+      (Math.max(bounds.maxX - bounds.minX, bounds.maxY - bounds.minY) / 2) * view.pose.scale;
+    footprints.push({ x: view.pose.x, y: view.pose.y, radius });
+  }
+  return { footprints, ready };
+}
+
+/**
+ * Источник сетки и слоёв для миникарты (HUD-6): сетка — handshake (SHELL-5),
+ * слои — то, что сборка уже держит для рендера. Геттеры, а не снимок: сетка
+ * приезжает handshake'ом позже сборки HUD, а границы декораций — вместе с их
+ * моделями (ASSET-4), и пересчёт идёт ровно до того, как все они приедут.
+ */
+export function createDemoMinimapSource(options: {
+  readonly terrain: MinimapTerrainSource;
+  readonly presentation: PresentationScene | null;
+  readonly decorations: DemoDecorationSource | null;
+}): MinimapTerrainSource {
+  let water: Uint8Array | null = null;
+  let waterGrid: MinimapTerrainGrid | null = null;
+  let footprints: MinimapFootprint[] | null = null;
+  const count = options.presentation?.decorations.length ?? 0;
+  const layers: MinimapTerrainLayers = {
+    get water(): Uint8Array | null {
+      const grid = options.terrain.terrain;
+      if (grid !== waterGrid) {
+        waterGrid = grid;
+        water = demoWaterMask(options.presentation, grid);
+      }
+      return water;
+    },
+    get decorations(): readonly MinimapFootprint[] | null {
+      const source = options.decorations;
+      if (source === null || count === 0) return null;
+      if (footprints !== null) return footprints;
+      const built = demoDecorationFootprints(count, source);
+      // Готовый список кэшируется, недособранный — нет: модели декораций ещё
+      // грузятся, и следующий кадр посчитает его полнее (ASSET-4).
+      if (built.ready) footprints = built.footprints;
+      return built.footprints;
+    },
+  };
+  return {
+    get terrain(): MinimapTerrainGrid | null {
+      return options.terrain.terrain;
+    },
+    layers,
   };
 }
 
@@ -307,6 +447,12 @@ export interface DemoHudOptions {
    * вида (FOW-7, FOW-10). Сцена без тумана источника не передаёт.
    */
   readonly fog?: MinimapFogSource;
+  /**
+   * Источник мировых якорей (HUD-10) — служба рендера (`rendering` REND-41).
+   * Нет источника — якорные виджеты монтируются скрытыми: HUD без рендера
+   * (headless-прогон, тест композиции) обязан собираться.
+   */
+  readonly anchors?: HudAnchorSource;
 }
 
 export interface DemoHud {
@@ -418,6 +564,11 @@ export function createDemoHud(options: DemoHudOptions): DemoHud {
     camera: options.camera,
     control: options.control,
   });
-  const runtime = new HudRuntime({ registry, host, actions: facade });
+  const runtime = new HudRuntime({
+    registry,
+    host,
+    actions: facade,
+    ...(options.anchors !== undefined ? { anchors: options.anchors } : {}),
+  });
   return { runtime, facade, root: host.root };
 }

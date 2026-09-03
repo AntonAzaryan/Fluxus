@@ -11,7 +11,7 @@
  */
 import { describe, expect, it } from 'vitest';
 import * as THREE from 'three';
-import { LOCOMOTION_AIRBORNE } from '@fluxus/core';
+import { FIXED_ONE, LOCOMOTION_AIRBORNE, createTerrainGrid } from '@fluxus/core';
 import {
   validateCurvatureMap,
   validatePresentationScene,
@@ -128,6 +128,39 @@ function depthTexels(water: WaterSubsystem, body = 0): Float32Array {
   const texture = view.material.uniforms.tDepth!.value as THREE.DataTexture;
   const data = texture.image.data as Uint16Array;
   return Float32Array.from(data, (half) => THREE.DataUtils.fromHalfFloat(half));
+}
+
+/**
+ * Глубина в мировой точке БИЛИНЕЙНОЙ выборкой — ровно то, что читает фрагмент:
+ * текстура заведена с `LinearFilter` и `ClampToEdgeWrapping` (design D1).
+ * Точечная выборка `depthAt` о берегe у стены не скажет ничего: значение
+ * последнего водяного текселя положительно и до правки, а отбрасывается
+ * полоса воды МЕЖДУ его центром и кромкой меша — там, где смесь с соседом.
+ */
+function depthBilinear(water: WaterSubsystem, wx: number, wy: number, body = 0): number {
+  const view = water.drawnBodies[body]!;
+  const rect = view.material.uniforms.uDepthRect!.value as THREE.Vector4;
+  const texture = view.material.uniforms.tDepth!.value as THREE.DataTexture;
+  const width = texture.image.width;
+  const height = texture.image.height;
+  const data = depthTexels(water, body);
+  // Центр текселя i лежит в (i + 0.5) / размер — та же схема адресации, что у GL.
+  const px = ((wx - rect.x) / rect.z) * width - 0.5;
+  const py = ((wy - rect.y) / rect.w) * height - 0.5;
+  const x0 = Math.floor(px);
+  const y0 = Math.floor(py);
+  const fx = px - x0;
+  const fy = py - y0;
+  const at = (x: number, y: number): number =>
+    data[
+      Math.min(Math.max(y, 0), height - 1) * width + Math.min(Math.max(x, 0), width - 1)
+    ]!;
+  return (
+    at(x0, y0) * (1 - fx) * (1 - fy) +
+    at(x0 + 1, y0) * fx * (1 - fy) +
+    at(x0, y0 + 1) * (1 - fx) * fy +
+    at(x0 + 1, y0 + 1) * fx * fy
+  );
 }
 
 /** Глубина в мировой точке — та же выборка, что делает фрагмент (design D1). */
@@ -1079,3 +1112,249 @@ function deckPlacement(x: number, y: number) {
   };
   return { x, y, yaw: 0, tiltFactor: 0, tiltMaxRad: null, scale: 1, model };
 }
+
+// ------------------------- стена уровня против берега: дилатация за телом (T-1)
+
+/**
+ * Арена 8×8 с плато уровня 1 столбцами x = 3..4 и полом нулевого уровня по обе
+ * стороны от него — форма демо-реки в миниатюре: два рукава воды, а между ними
+ * плато, стоящее ВНУТРИ охвата тела. Именно из-за него у покрытия появляются
+ * тексели, мешу не принадлежащие: bbox прямоуголен, а тело — нет.
+ */
+function plateauGrid() {
+  return createTerrainGrid({
+    width: 8,
+    height: 8,
+    tileSize: FIXED_ONE,
+    levels: Array.from({ length: 8 }, () => '00011000'),
+    flags: Array.from({ length: 8 }, () => '........'),
+  });
+}
+
+/** Два рукава одного тела по обе стороны плато; плато — вырез карты. */
+const RIVER_CELLS = Array.from({ length: 8 }, () => '000..000');
+
+/**
+ * Урез 0.25 уровня: над полом нулевого уровня глубина положительна
+ * (0.25 × шаг), над плато уровня 1 — отрицательна (−0.75 × шаг). Ни кривизны,
+ * ни рамп: перепад стоит ровно на границе клеток, как ему и полагается (TERR-5).
+ */
+function river(): PresentationWater {
+  return {
+    cells: RIVER_CELLS,
+    bodies: [{ surfaceLevel: 0.25, shallowColor: '#4db8c4', deepColor: '#16505e' }],
+  };
+}
+
+function riverRig(): Rig {
+  const ctx: RenderContext = { ...makeRenderContext(), config: { heightStep: STEP } };
+  const warnings: string[] = [];
+  const grid = plateauGrid();
+  const water = new WaterSubsystem({
+    grid,
+    config: river(),
+    surface: new VisualSurfaceSource(grid),
+    warn: (message) => warnings.push(message),
+  });
+  water.init(ctx);
+  water.updateFrame(0, 0);
+  return { ctx, water, warnings, surface: undefined };
+}
+
+describe('REND-35: тексель за телом — не берег, а стена', () => {
+  it('глубина в 0.05 от внутреннего обрыва положительна: полоса у стены не отброшена', () => {
+    const { water } = riverRig();
+    // Клетка 2 — вода нулевого уровня, клетка 3 — плато уровня 1; обрыв на x = 3.
+    // Проверяется точка ВНУТРИ меша, в 0.05 мировой единицы от его кромки.
+    expect(depthBilinear(water, 3 - 0.05, 4.5)).toBeGreaterThan(0);
+    // И у второй стены — со стороны большего x (клетка 5 против плато 4).
+    expect(depthBilinear(water, 5 + 0.05, 4.5)).toBeGreaterThan(0);
+    // Дилатация не делает воду шире меша и не трогает клетки тела: в самом
+    // теле глубина осталась ровно «урез − поле» (REND-35).
+    expect(depthAt(water, 1.5, 4.5)).toBeCloseTo(0.25 * STEP, 3);
+  });
+
+  it('берег ВНУТРИ тела остаётся линией пересечения уреза полем', () => {
+    // Дно рукавов поднято до уровня уреза и выше: клетка тела с полем выше
+    // уреза обязана остаться сушей — правило дилатации к клеткам тела не
+    // применяется, иначе карта воды рисовала бы берег вместо поля.
+    const ctx: RenderContext = { ...makeRenderContext(), config: { heightStep: STEP } };
+    const grid = plateauGrid();
+    const water = new WaterSubsystem({
+      grid,
+      // Урез ниже пола обоих рукавов: воды нет нигде, но и стены нет — это берег.
+      config: { cells: RIVER_CELLS, bodies: [{ surfaceLevel: -0.1, shallowColor: '#4db8c4', deepColor: '#16505e' }] },
+      surface: new VisualSurfaceSource(grid),
+    });
+    water.init(ctx);
+    water.updateFrame(0, 0);
+    for (const depth of depthTexels(water)) expect(depth).toBeLessThanOrEqual(0);
+  });
+
+  it('раскладка выравнена по байту: нечётная ширина ряда не роняет загрузку', () => {
+    // Ряд текстуры — «ширина bbox × плотность» текселей по ДВА байта: при
+    // нечётном произведении выравнивание рядов по четыре (умолчание
+    // `THREE.Texture`) отвергает `texImage2D`, и вода исчезает молча — ни
+    // предупреждения, ни фрагмента. Нечётная ширина достижима данными: потолок
+    // плотности 1 приходит пресетом (QUAL-1), bbox тела — картой.
+    //
+    // `DataTexture` в three 0.185.1 ставит единицу сама, и тест здесь не
+    // ловит дефект, а ЗАКРЕПЛЯЕТ инвариант: значение выставлено явно, и смена
+    // умолчания библиотеки либо переход на обычную `Texture` покраснеет здесь,
+    // а не пустой водой в кадре.
+    const odd = Array.from({ length: 8 }, () => '0000000.');
+    const ctx: RenderContext = { ...makeRenderContext(), config: { heightStep: STEP } };
+    const grid = flatGrid();
+    for (const density of [1, 3]) {
+      const water = new WaterSubsystem({
+        grid,
+        config: { cells: odd, bodies: [{ surfaceLevel: 1, shallowColor: '#4db8c4', deepColor: '#16505e' }] },
+      });
+      water.init(ctx);
+      water.applyQuality(new Map([[WATER_DEPTH_TEXELS_PER_CELL, density]]));
+      const texture = water.drawnBodies[0]!.material.uniforms.tDepth!.value as THREE.DataTexture;
+      expect(texture.image.width % 2, `плотность ${density}`).toBe(1);
+      expect(texture.unpackAlignment, `плотность ${density}`).toBe(1);
+    }
+  });
+});
+
+// ------------------------------- выбитый пол под водой (REND-35, TERR-6, T-10)
+
+describe('REND-35: клетка без пола — глубина не положительна', () => {
+  it('доставка выбивает пол под телом: тексели клетки уходят в ноль', () => {
+    const { water } = riverRig();
+    expect(depthAt(water, 1.5, 4.5)).toBeGreaterThan(0);
+
+    // Мутация пола (TERR-6) приезжает дельтой доставки — тем же каналом, каким
+    // её читает террейн.
+    const grid = plateauGrid();
+    const floorBits = new Uint8Array(grid.floor);
+    const cell = 4 * grid.width + 1;
+    floorBits[cell] = 0;
+    water.syncTick(makeTickView([], { floorBits, floorChangedCells: [cell] }));
+    water.updateFrame(0, 0);
+    expect(depthAt(water, 1.5, 4.5)).toBe(0);
+    // Соседняя клетка с полом воды не теряет: дыра — своя клетка, не окрестность.
+    expect(depthAt(water, 2.5, 4.5)).toBeGreaterThan(0);
+
+    // Вернувшийся пол возвращает и воду — глубина снова производна от поля.
+    floorBits[cell] = 1;
+    water.syncTick(makeTickView([], { floorBits, floorChangedCells: [cell] }));
+    water.updateFrame(0, 0);
+    expect(depthAt(water, 1.5, 4.5)).toBeCloseTo(0.25 * STEP, 3);
+  });
+
+  it('сетка документа возвращает пол превью: applyGrid сверяется со своей копией (ED-9)', () => {
+    const { water } = riverRig();
+    const grid = plateauGrid();
+    const cell = 4 * grid.width + 1;
+    const floorBits = new Uint8Array(grid.floor);
+    floorBits[cell] = 0;
+    water.syncTick(makeTickView([], { floorBits, floorChangedCells: [cell] }));
+    water.updateFrame(0, 0);
+    expect(depthAt(water, 1.5, 4.5)).toBe(0);
+
+    // Та же сетка документа: пол в ней на месте, и вода обязана вернуться.
+    water.applyGrid(plateauGrid());
+    water.updateFrame(0, 0);
+    expect(depthAt(water, 1.5, 4.5)).toBeCloseTo(0.25 * STEP, 3);
+  });
+});
+
+// --------------------------- сборка без источника поверхности: applyGrid (T-4)
+
+describe('REND-35: сборка без источника поверхности следует за уровнями сетки', () => {
+  it('applyGrid при тех же размерах перезаливает глубину по новым уровням', () => {
+    const ctx: RenderContext = { ...makeRenderContext(), config: { heightStep: STEP } };
+    const water = new WaterSubsystem({
+      grid: flatGrid(),
+      config: { cells: RIVER_CELLS, bodies: [{ surfaceLevel: 0.5, shallowColor: '#4db8c4', deepColor: '#16505e' }] },
+    });
+    water.init(ctx);
+    water.updateFrame(0, 0);
+    expect(depthAt(water, 1.5, 4.5)).toBeCloseTo(0.5 * STEP, 3);
+
+    // Кисть уровней подняла всю арену на уровень (ED-10): поле выросло, воды
+    // не осталось. Источника, который сказал бы об этом телам, здесь нет —
+    // подсистема обязана пометить их сама, иначе глубина осталась бы от
+    // прежней арены до первой правки кривизны.
+    water.applyGrid(
+      createTerrainGrid({
+        width: 8,
+        height: 8,
+        tileSize: FIXED_ONE,
+        levels: Array.from({ length: 8 }, () => '1'.repeat(8)),
+        flags: Array.from({ length: 8 }, () => '.'.repeat(8)),
+      }),
+    );
+    water.updateFrame(0, 0);
+    expect(depthAt(water, 1.5, 4.5)).toBeCloseTo(-0.5 * STEP, 3);
+  });
+});
+
+// ------------------------------------------- снос подсистемы (REND-31, T-7)
+
+describe('REND-31: снесённая подсистема воды не строит и не метит', () => {
+  it('правка поверхности после сноса не доходит до подсистемы', () => {
+    const surface = surfaceWithBasin();
+    const { water } = makeRig({ config: basin(), surface });
+    water.updateFrame(0, 0);
+    water.dispose();
+    expect(water.drawnBodies).toEqual([]);
+
+    // Кисть кривизны после сноса: подписки уже нет, и метить нечего.
+    const counters = createCostCounters();
+    withCostSink(counters, () => {
+      surface.setCurvature(null);
+      water.updateFrame(0.016, 0.5);
+    });
+    expect(counters.waterDepthTexels).toBe(0);
+    expect(counters.waterBodiesDrawn).toBe(0);
+  });
+
+  it('секция, поданная после сноса, не строит мешей в чужую сцену', () => {
+    const rig = makeRig({ config: basin() });
+    const meshes = () => rig.ctx.scene.children.filter((node) => node.name.startsWith('water:body'));
+    expect(meshes()).toHaveLength(1);
+
+    rig.water.dispose();
+    expect(meshes()).toHaveLength(0);
+    rig.water.applyConfig(basin({ surfaceLevel: 0.5 }));
+    expect(rig.water.drawnBodies).toEqual([]);
+    expect(meshes()).toHaveLength(0);
+  });
+});
+
+// ------------------------------------------ тени на воде (REND-30, 4.2.12)
+
+describe('REND-30: вода читает теневые карты сцены', () => {
+  it('фрагмент собран с теневым чанком три и гасит свет тенью', () => {
+    for (const textured of [false, true]) {
+      for (const ripples of [0, 8]) {
+        const where = `detail=${textured ? 'textured' : 'procedural'} ripples=${ripples}`;
+        const source = waterFragmentShader(textured, ripples);
+        // Объявления теневых сэмплеров и координат кладёт штатный чанк — своей
+        // теневой карты у воды нет и быть не должно (REND-8).
+        expect(source, where).toContain('#include <shadowmap_pars_fragment>');
+        expect(source, where).toContain('getShadow( directionalShadowMap[ i ]');
+        // Выборка стоит ПОД защитой препроцессора: сцена без теней её не платит.
+        expect(source, where).toContain('#if defined( USE_SHADOWMAP ) && ( UNROLLED_LOOP_INDEX < NUM_DIR_LIGHT_SHADOWS )');
+        // Тень гасит и диффузный свет, и блик: искра в тени — та же ложь.
+        expect(source, where).toContain('lit *= shade;');
+      }
+    }
+  });
+
+  it('вершинный шейдер считает координаты теневой карты, а меш объявлен приёмником', () => {
+    const { water } = makeRig({ config: basin() });
+    const body = water.drawnBodies[0]!;
+    expect(body.material.vertexShader).toContain('#include <shadowmap_pars_vertex>');
+    expect(body.material.vertexShader).toContain('#include <shadowmap_vertex>');
+    // Чанку нужна мировая позиция ровно этим именем.
+    expect(body.material.vertexShader).toContain('vec4 worldPosition = modelMatrix');
+    expect(body.mesh.receiveShadow).toBe(true);
+    // Кастером вода не становится: плоскость на урезе тени не отбрасывает.
+    expect(body.mesh.castShadow).toBe(false);
+  });
+});

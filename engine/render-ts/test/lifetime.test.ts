@@ -29,6 +29,7 @@ import {
   ParticlesSubsystem,
   PostprocessSubsystem,
   PresentationStage,
+  RenderDebugLayer,
   TerrainSubsystem,
   ViewBuffer,
   VisualSurfaceSource,
@@ -40,6 +41,7 @@ import {
   geometryFromMesh,
   withCostSink,
   withFootprintSink,
+  type DebugProbe,
   type RenderContext,
   type RenderFootprint,
   type RenderSubsystem,
@@ -547,6 +549,42 @@ describe('снос подсистемы частиц отдаёт разобра
     subsystem.dispose();
     for (const spy of spies) expect(spy).toHaveBeenCalledTimes(1);
   });
+
+  it('материалы батчей библиотеки тоже отдаются: их два, и dispose() батча их не трогает (V-3)', () => {
+    // `SpriteBatch.dispose()` три.quarks освобождает ОДНУ геометрию. Шейдерный
+    // материал `rebuildMaterial()` и клон материала настроек остаются, а с ними
+    // остаётся в кэше three и скомпилированная программа: каждое открытие сцены
+    // редактором (ED-15) теряло бы программу и два материала.
+    const assets = makeAssets();
+    const scene = new THREE.Scene();
+    const ctx: RenderContext = { scene, assets: assets.service, config: { heightStep: 0.5 } };
+    const manifest: VisualManifest = {
+      entities: {},
+      particles: { byKind: { Flame: { effect: SUB_EFFECT } } },
+    };
+    const subsystem = new ParticlesSubsystem(manifest, { warn: () => {} });
+    subsystem.init(ctx);
+    assets.resolve('particle-effect', SUB_EFFECT, subEffectDoc());
+    subsystem.syncTick(makeTickView([makeEntityView(HERO, { kind: 'Flame' })]));
+    subsystem.updateFrame(1 / 60, 1);
+
+    const batchRoot = scene.getObjectByName('particle-batches')!;
+    expect(batchRoot.children.length).toBeGreaterThan(0);
+    const spies: ReturnType<typeof vi.spyOn>[] = [];
+    for (const batch of batchRoot.children) {
+      const mesh = batch as THREE.Mesh & { settings: { material: THREE.Material } };
+      const shader = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
+      for (const material of [...shader, mesh.settings.material]) {
+        spies.push(vi.spyOn(material, 'dispose'));
+      }
+    }
+    // Материалов ровно два на батч: шейдерный и клон материала настроек.
+    expect(spies).toHaveLength(batchRoot.children.length * 2);
+
+    subsystem.dispose();
+
+    for (const spy of spies) expect(spy).toHaveBeenCalledTimes(1);
+  });
 });
 
 describe('снос подсистемы моделей (REND-31)', () => {
@@ -773,6 +811,13 @@ function cycleWater(size: number): PresentationWater {
 interface CycleStand {
   readonly stage: PresentationStage;
   /**
+   * Отладочный слой (`render-debug` RDBG-1) — ВЛАДЕЛЕЦ `debug` в учёте (PERF-8).
+   * Он не подсистема (REND-27), и `stage.dispose` его не видит: снимает его та
+   * же сборка, что снимает вьюпорт (ED-15). В цикле он потому и стоит — без
+   * него владелец `debug` не проверялся бы инвариантом вовсе.
+   */
+  readonly debug: RenderDebugLayer;
+  /**
    * Приём доставки цикла (SHELL-2). Доставки идут ЧЕРЕЗ него, а не мимо:
    * величины состояния приёмника (`viewRecords`, `viewFacingMemory`) — часть
    * того, что цикл обязан вернуть, и стенд без него проверял бы только
@@ -813,11 +858,34 @@ function buildCycleStand(): CycleStand {
     .register(new ParticlesSubsystem(manifest, { warn }))
     .register(new EffectsSubsystem(manifest, { warn }))
     .register(new OverlaySubsystem());
+  // Отладочный слой рядом со списком подсистем (REND-27) с ВКЛЮЧЁННЫМ
+  // источником: выключенный не заводит ни одной плашки, и цикл проверял бы
+  // только носители, созданные конструктором.
+  const debug = new RenderDebugLayer(stage, { scene: ctx.scene, surface });
+  debug.register<DebugProbe>({
+    id: 'cycle.overlay',
+    probe: () => ({}),
+    draw: (_probe, out) => {
+      out.polygon([0, 0, 1, 0, 1, 1, 0, 1], 0xffffff);
+      out.raster(
+        {
+          raster: true,
+          texels: new Uint8Array(4),
+          widthTexels: 2,
+          heightTexels: 2,
+          worldX: 0, worldY: 0, worldZ: 0,
+          worldWidth: 2, worldHeight: 2,
+        },
+        0xffffff,
+      );
+    },
+  });
+  debug.setEnabled('cycle.overlay', true);
   // Ассеты приезжают ПОСЛЕ регистрации — тем же путём, что в игре (ASSET-4):
   // подсистемы успевают завести заглушки, а потом получают настоящие данные.
   assets.resolve('model', CYCLE_MODEL, makeModel());
   assets.resolve('particle-effect', CYCLE_EFFECT, subEffectDoc());
-  return { stage, buffer: new ViewBuffer({ tickSeconds: 1 / 60, clock: () => 0 }) };
+  return { stage, debug, buffer: new ViewBuffer({ tickSeconds: 1 / 60, clock: () => 0 }) };
 }
 
 /**
@@ -857,7 +925,19 @@ describe('PERF-9: цикл сборки и сноса тракта не оста
         // Учёт обязан был увидеть работу цикла: пустой сток прошёл бы проверку
         // ниже молча, и инвариант стерёг бы пустоту.
         expect(Object.keys(footprintLive(sink)).length, 'учёт пуст').toBeGreaterThan(0);
+        // Владелец `debug` в цикле ЖИВОЙ — иначе инвариант ниже проверял бы для
+        // него пустоту, а находка аудита ровно в том и была, что слоя в нём нет.
+        expect(footprintLive(sink).debug, 'владелец debug').toEqual(
+          expect.objectContaining({ geometry: expect.any(Number) as unknown as number }),
+        );
+        expect(
+          Object.values(footprintLive(sink).debug ?? {}).reduce((sum, count) => sum + count, 0),
+          'живых ресурсов отладочного слоя',
+        ).toBeGreaterThan(0);
 
+        // Слой снимается ВМЕСТЕ со вьюпортом, а не сценой подсистем: своей
+        // точки в `stage.dispose` у него нет и быть не должно (REND-27).
+        stand.debug.dispose();
         stand.stage.dispose();
 
         // Ноль — по КАЖДОМУ владельцу и виду: текст находки называет подсистему
@@ -874,5 +954,75 @@ describe('PERF-9: цикл сборки и сноса тракта не оста
         else expect(state, `цикл ${String(cycle + 1)}`).toEqual(first);
       }
     });
+  });
+});
+
+// ------------------- владелец текстуры в учёте памяти (PERF-8, T-8)
+
+describe('PERF-8: текстуру записывает тот, кто ею владеет', () => {
+  const image = { width: 1, height: 1, format: 'rgba8' as const, pixels: new Uint8Array(4) };
+
+  it('деталь воды учтена владельцем water, а не model', () => {
+    const sink = createFootprint();
+    const assets = makeAssets();
+    const grid = flatGrid(8);
+    let before = 0;
+    withFootprintSink(sink, () => {
+      const water = new WaterSubsystem({
+        grid,
+        config: {
+          cells: Array.from({ length: 8 }, () => '0'.repeat(8)),
+          bodies: [
+            {
+              surfaceLevel: 0.5,
+              shallowColor: '#4db8c4',
+              deepColor: '#16505e',
+              detail: {
+                source: 'textured',
+                normalMap: 'visuals/water-normal.png',
+                foamNoise: 'visuals/water-foam.png',
+              },
+            },
+          ],
+        },
+        warn: () => {},
+      });
+      water.init({
+        scene: new THREE.Scene(),
+        assets: assets.service,
+        config: { heightStep: 0.5 },
+      });
+      // Глубинная текстура тела уже учтена подсистемой — считается ПРИРОСТ от
+      // приезда карт детали, а не итог.
+      before = footprintLive(sink).water?.texture ?? 0;
+      assets.resolve('texture', 'visuals/water-normal.png', image);
+      assets.resolve('texture', 'visuals/water-foam.png', image);
+    });
+    const live = footprintLive(sink);
+    // Две карты детали — обе за подсистемой воды: в эталоне памяти деталь воды
+    // обязана стоять своей строкой, а не растить строку моделей.
+    expect((live.water?.texture ?? 0) - before).toBe(2);
+    expect(live.model?.texture ?? 0).toBe(0);
+  });
+
+  it('покрытие террейна учтено владельцем terrain, а не model', () => {
+    const sink = createFootprint();
+    const assets = makeAssets();
+    const grid = flatGrid(8);
+    withFootprintSink(sink, () => {
+      const terrain = new TerrainSubsystem(grid, {
+        chunkSize: 8,
+        floorCover: { texture: 'visuals/grass.png', period: 4 },
+      });
+      terrain.init({
+        scene: new THREE.Scene(),
+        assets: assets.service,
+        config: { heightStep: 0.5 },
+      });
+      assets.resolve('texture', 'visuals/grass.png', image);
+    });
+    const live = footprintLive(sink);
+    expect(live.terrain?.texture).toBe(1);
+    expect(live.model?.texture ?? 0).toBe(0);
   });
 });

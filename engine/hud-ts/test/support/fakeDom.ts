@@ -14,10 +14,31 @@ export class FakeElement {
 
   /** Счётчик записей текста — тест `setText` проверяет «пишем только изменение». */
   textWrites = 0;
+  /** То же для инлайн-стиля: якорное размещение обязано писать только изменение (HUD-10). */
+  styleWrites = 0;
 
   private text: string | null = '';
   private readonly attributes = new Map<string, string>();
+  private readonly properties = new Map<string, string>();
   private readonly listeners = new Map<string, ((event: unknown) => void)[]>();
+
+  /**
+   * Инлайн-стиль ровно той поверхностью, которой пользуется исполнитель
+   * композиции (HUD-10): свойство пишется точечно, а не пере-рендером узла.
+   * Общий словарь с атрибутом `style`: в настоящем DOM это одна декларация, и
+   * фейк, разошедшийся с ним здесь, врал бы о том, что виджет видит.
+   */
+  readonly style = {
+    setProperty: (name: string, value: string): void => {
+      this.properties.set(name, value);
+      this.styleWrites += 1;
+      this.attributes.set(
+        'style',
+        [...this.properties].map(([key, item]) => `${key}: ${item}`).join('; '),
+      );
+    },
+    getPropertyValue: (name: string): string => this.properties.get(name) ?? '',
+  };
 
   constructor(tag: string) {
     this.tag = tag;
@@ -44,6 +65,14 @@ export class FakeElement {
 
   setAttribute(name: string, value: string): void {
     this.attributes.set(name, value);
+    if (name !== 'style') return;
+    // Атрибут `style` и точечная запись свойства — одна декларация (см. `style`).
+    this.properties.clear();
+    for (const declaration of value.split(';')) {
+      const at = declaration.indexOf(':');
+      if (at <= 0) continue;
+      this.properties.set(declaration.slice(0, at).trim(), declaration.slice(at + 1).trim());
+    }
   }
 
   getAttribute(name: string): string | null {

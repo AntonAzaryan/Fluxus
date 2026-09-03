@@ -146,8 +146,18 @@ export type { DecorationInstance } from './decorations.js';
 
 // Половины хоста по границе потоков (client-shell SHELL-2): Extractor —
 // воркер-сторона (единственный читатель мира), ViewBuffer — main-сторона.
-export { Extractor, CHANNEL_COLUMNS, ENTITY_MOVING, ENTITY_LEVEL_OVERRIDE } from './extractor.js';
+export { Extractor } from './extractor.js';
 export type { ExtractedTick, ExtractorConfig } from './extractor.js';
+export {
+  channelColumns,
+  channelColumnsOf,
+  growChannelColumns,
+  CHANNEL_COLUMNS,
+  CHANNEL_LAYOUT,
+  ENTITY_LEVEL_OVERRIDE,
+  ENTITY_MOVING,
+} from './channelLayout.js';
+export type { ChannelArray, ChannelArrayValue, ChannelColumn } from './channelLayout.js';
 // Перевод нагрузки события на входной границе (REND-1). Наружу уходит потому,
 // что производителей событий у рендера два, и второй — сетевая оболочка
 // (SHELL-4): факты с провода входят в рендер мимо `Extractor`, и перевод у них
@@ -156,71 +166,18 @@ export { renderEventData } from './eventData.js';
 // Объявляемые сборкой источники величин: фаза полёта (REND-12) и статы (HUD-8).
 export { MAX_STATS } from './statSources.js';
 export type { FlightPhaseSource, StatSource } from './statSources.js';
-export { ViewBuffer } from './viewBuffer.js';
+export { ViewBuffer, interpolateYaw, tickStreamFrame } from './viewBuffer.js';
 export type { FrameTiming, ViewBufferConfig } from './viewBuffer.js';
 
-// Камера (capability camera): rig режимов и вход кадрирования, слой эффектов,
-// диспетчер по манифесту, общее применение позы к THREE-камере.
-export { CameraRig, DEFAULT_CAMERA_CONFIG } from './camera/rig.js';
-export type {
-  CameraBounds,
-  CameraConfig,
-  CameraFraming,
-  CameraMode,
-  CameraPose,
-  CameraRigOptions,
-  CameraSources,
-  FollowTarget,
-} from './camera/rig.js';
-// Сэмпл ввода камеры и edge-pan — вход рига, заполняемый обвязкой окна (CAM-1).
-export { createCameraInput, resetCameraInput, edgePanAxes } from './camera/input.js';
-export type { CameraInput } from './camera/input.js';
-// Источник поверхности и границ камеры над сеткой террейна (CAM-2, CAM-7).
-export { terrainGroundApi } from './camera/terrainSource.js';
-export type { TerrainCameraSource } from './camera/terrainSource.js';
-export {
-  EffectStack,
-  SwayEffect,
-  TraumaShake,
-  defaults,
-  valueNoise,
-  DEFAULT_SHAKE,
-  DEFAULT_SWAY,
-  SHAKE_TYPE,
-  SWAY_TYPE,
-} from './camera/effects.js';
-export type {
-  CameraEffect,
-  CameraEffectType,
-  ImpulseEffect,
-  ImpulseEffectType,
-  LastingEffect,
-  LastingEffectType,
-  PoseOffset,
-  ShakeParams,
-  SwayParams,
-} from './camera/effects.js';
-// Машинное описание типов эффектов (CAM-9) — единственный перечень типов:
-// по нему строит эффекты слой, проверяет секцию валидация манифеста (ASSET-8)
-// и рисует таблицы редактор (ED-14).
-export { CAMERA_EFFECTS_DESCRIPTION, CAMERA_EFFECT_TYPES } from './camera/effectTypes.js';
-// Машинный адрес конфига камеры (CAM-1): перечень параметров для валидации
-// секции манифеста (ASSET-10) и сборка частичного конфига из неё.
-export {
-  CAMERA_CONFIG_DESCRIPTION,
-  CAMERA_CONFIG_PARAMS,
-  cameraConfigFromManifest,
-} from './camera/config.js';
-export type { CameraConfigFromManifestOptions } from './camera/config.js';
-export type { CameraEffectsCatalog } from './camera/effectTypes.js';
-export { CameraEffectsDirector } from './camera/director.js';
-export type { CameraEffectsDirectorOptions } from './camera/director.js';
-export { applyCameraPose } from './camera/apply.js';
+// Камера (capability camera) — своим барьером (`camera/index.ts`): режимы и
+// вход кадрирования, наблюдение и путь (CAM-10), слой эффектов, диспетчер по
+// манифесту, общее применение позы к THREE-камере.
+export * from './camera/index.js';
 
 // Визуальная поверхность террейна (REND-9, REND-10): хелпер, общий для
 // подсистем террейна и моделей, и его источник с загрузкой карты кривизны.
-export { cornerLevels, createVisualSurface } from './visualSurface.js';
-export type { MutableVisualSurface, SurfaceNormal, VisualSurface } from './visualSurface.js';
+export { clampIndex, cornerLevels, createVisualSurface, levelFieldSampler } from './visualSurface.js';
+export type { HeightSampler, MutableVisualSurface, SurfaceNormal, VisualSurface } from './visualSurface.js';
 export { VisualSurfaceSource } from './surfaceSource.js';
 export type { SurfaceChangeListener, VisualSurfaceSourceOptions } from './surfaceSource.js';
 export { tiltTarget, smoothTilt, orientFromTiltYaw } from './model/surfaceAlign.js';
@@ -238,7 +195,13 @@ export type { ManeuverEnds } from './model/verticalOffset.js';
 export { TerrainSubsystem } from './subsystems/terrain.js';
 export type { TerrainOptions } from './subsystems/terrain.js';
 export type { TerrainCover, TerrainUvMapping } from './subsystems/terrainCover.js';
-export { buildFloorGeometry, buildWallGeometry } from './subsystems/terrainGeometry.js';
+export {
+  buildFloorGeometry,
+  buildWallGeometry,
+  cliffOwnerCell,
+  cornerHeight,
+  sampleWallSide,
+} from './subsystems/terrainGeometry.js';
 export { toBufferGeometry } from './subsystems/terrainMesh.js';
 export { buildSkirtGeometry, SKIRT_BOTTOMLESS_Z } from './subsystems/terrainSkirt.js';
 export type { CellRect, TerrainGeometryData } from './subsystems/terrainGeometry.js';
@@ -278,6 +241,7 @@ export { FogDirtyBlocks } from './fog/dirty.js';
 // (FOW-7) — сборка передаёт его подсистеме тумана опцией `post`.
 export {
   PostprocessSubsystem,
+  POSTPROCESS_ANTIALIAS,
   POSTPROCESS_BLOOM,
   POSTPROCESS_BLOOM_RESOLUTION,
   POSTPROCESS_LUT,
@@ -286,6 +250,7 @@ export type { PostprocessOptions } from './subsystems/postprocess.js';
 export { DEFAULT_POSTPROCESS_CONFIG, resolvePostprocessConfig } from './postprocess/config.js';
 export type { PostprocessRenderConfig, ToneMappingOperator } from './postprocess/config.js';
 export { BLOOM_LEVELS } from './postprocess/passes.js';
+export { DEFAULT_ANTIALIAS_SAMPLES } from './postprocess/chain.js';
 
 // Подсистема воды (REND-35, REND-36): тела воды из секции `water` парного
 // документа (PRES-2), глубина — производная единого поля высот (REND-9), рябь —
@@ -316,8 +281,14 @@ export { WATER_RENDER_ORDER, WaterBodyView } from './water/body.js';
 export type { WaterBodyLimits, WaterBodyOptions } from './water/body.js';
 export { greedyRects, waterGeometryOf, waterRegionsOf } from './water/region.js';
 export type { WaterGeometryData, WaterRect, WaterRegion } from './water/region.js';
-export { depthTexelRect, fillWaterDepth, levelFieldSampler, waterDepthLayout } from './water/depth.js';
-export type { WaterDepthLayout, WaterFieldSampler } from './water/depth.js';
+export { depthTexelRect, fillWaterDepth, waterDepthLayout } from './water/depth.js';
+export type {
+  WaterDepthCells,
+  WaterDepthFill,
+  WaterDepthLayout,
+  WaterFieldSampler,
+  WaterTexelRect,
+} from './water/depth.js';
 export { WaterRippleField } from './water/ripples.js';
 export type { WaterRippleOptions, WaterRippleSource } from './water/ripples.js';
 export { createWaterMaterial, waterFragmentShader } from './water/material.js';
@@ -359,6 +330,7 @@ export type {
 // манифеста — оболочки от доставленного состояния и вспышки от событий.
 export { EffectsSubsystem } from './subsystems/effects.js';
 export type { EffectsOptions } from './subsystems/effects.js';
+export type { EffectsPrewarm } from './subsystems/effectsPrewarm.js';
 
 // Подсистема превью каста (REND-28): что заденет способность, если подтвердить
 // её сейчас. Два входа и только два — скомпилированный каталог определений при
@@ -377,7 +349,7 @@ export type { AbilitySlotStatNames, AbilityStepStatNames } from './subsystems/ab
 // ассетов (ASSET-14) — оболочки от доставленного состояния, one-shot'ы от
 // событий и decoration-эмиттеры, все в одном батч-рендерере сцены.
 export { ParticlesSubsystem } from './subsystems/particles.js';
-export type { ParticlesOptions, SocketSource } from './subsystems/particles.js';
+export type { ParticlesOptions, ParticlesPrewarm, SocketSource } from './subsystems/particles.js';
 
 // Сервисы вьюпорта редактора: picking по видимому изображению (REND-15) и
 // служебные наложения подсистемой рендера (REND-16). Игровой клиент ни того, ни
@@ -390,6 +362,23 @@ export type {
   PickProxyVisitor,
   ViewportPickingOptions,
 } from './picking.js';
+// Мировые якоря инстансов (REND-41): проекция точки над нарисованным инстансом
+// в координаты кадра — вход экранного слоя (`match-hud` HUD-10). Проекцию
+// считает рендер той же посадкой позы, которой нарисован кадр (CAM-1).
+export { ScreenAnchors } from './screenAnchors.js';
+export type {
+  AnchorInstanceSource,
+  AnchorRequest,
+  ScreenAnchor,
+  ScreenAnchorsOptions,
+  ScreenViewport,
+} from './screenAnchors.js';
+
+// Проекция курсора на визуальную поверхность (REND-42): общая под picking'ом
+// (REND-15) и прямой вход игрового клиента — прицел ложится на тот пол, который
+// игрок видит, а не на плоскость под камерой.
+export { CursorSurface, DEFAULT_CURSOR_CELL_STEPS } from './cursorSurface.js';
+export type { CursorSurfaceOptions } from './cursorSurface.js';
 // Контракты наведения: их разделяют сервис и марш по полю высот (REND-15).
 export { createPickRay } from './pickContracts.js';
 export type { PickHit, PickKind, PickRay, ViewportPoint } from './pickContracts.js';

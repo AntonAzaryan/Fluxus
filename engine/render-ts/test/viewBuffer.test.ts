@@ -11,7 +11,7 @@
 import { describe, expect, it } from 'vitest';
 import { LOCOMOTION_NORMAL } from '@fluxus/core';
 import { type ExtractedTick } from '../src/index.js';
-import { FACING_MEMORY_LIMIT, ViewBuffer } from '../src/viewBuffer.js';
+import { FACING_MEMORY_LIMIT, ViewBuffer, interpolateYaw } from '../src/viewBuffer.js';
 
 /**
  * Сущность доставки стенда: курс `NaN` — стоит, число — идёт этим курсом.
@@ -22,6 +22,8 @@ interface Delivered {
   readonly id: number;
   readonly facing: number;
   readonly pace?: number;
+  /** Индекс вида в словаре доставки; не задан — `−1`, сущность не рисуется. */
+  readonly kind?: number;
 }
 
 /**
@@ -32,20 +34,28 @@ function extOf(
   tick: number,
   entities: readonly Delivered[],
   snapAll = false,
+  /**
+   * Смена ветви истории. По умолчанию совпадает со `snapAll` — так выглядит
+   * реплеевая доставка; разрыв БЕЗ смены ветви (пауза матча, NTR-20) тесты
+   * называют явным `false`.
+   */
+  branchChanged = snapAll,
 ): ExtractedTick {
   const count = entities.length;
   return {
     tick,
     mode: 'Running' as const,
-    isReplay: snapAll,
+    isReplay: branchChanged,
     snapAll,
+    branchChanged,
     freshEvents: true,
     count,
     id: Float64Array.from(entities, (entity) => entity.id),
-    kind: new Int32Array(count).fill(-1),
+    kind: Int32Array.from(entities, (entity) => entity.kind ?? -1),
     x: new Float32Array(count),
     y: new Float32Array(count),
     level: new Uint8Array(count),
+    simLevel: new Uint8Array(count),
     flags: new Uint8Array(count),
     facingYaw: Float32Array.from(entities, (entity) => entity.facing),
     aimYaw: new Float32Array(count).fill(Number.NaN),
@@ -175,5 +185,112 @@ describe('ViewBuffer: персональная шкала времени сущ�
     // Аура отпустила — темп вернулся к обычному тем же путём.
     buffer.apply(extOf(3, [{ id: 5, facing: 0 }]));
     expect(paceOf(buffer, 5)).toBe(1);
+  });
+});
+
+// ---- change `fog-observer-inputs`: ветвь истории, вид записи и пара курсов
+
+describe('ViewBuffer: память курса гасит СМЕНА ВЕТВИ, а не всякий разрыв (SHELL-7)', () => {
+  const HEADING = -2.1;
+
+  it('пауза матча память не трогает: юнит возвращается из тумана прежним курсом', () => {
+    const buffer = new ViewBuffer({ tickSeconds: 1 / 60, clock: () => 0 });
+    buffer.apply(extOf(1, [{ id: 5, facing: HEADING }]));
+    // Сущность в тумане: её записи нет, курс живёт только в памяти.
+    buffer.apply(extOf(2, []));
+    // Пауза (NTR-20): смена режима — разрыв картинки (`snapAll`), но ветвь
+    // истории та же, и упакованные id принадлежат тем же сущностям.
+    buffer.apply(extOf(3, [], true, false));
+    buffer.apply(extOf(4, [{ id: 5, facing: Number.NaN }]));
+    expect(buffer.view.entities.get(5)?.facingYaw).toBeCloseTo(HEADING, 6);
+  });
+
+  it('смена ветви память стирает: за стёртой ветвью id принадлежит другой сущности', () => {
+    const buffer = new ViewBuffer({ tickSeconds: 1 / 60, clock: () => 0 });
+    buffer.apply(extOf(1, [{ id: 5, facing: HEADING }]));
+    buffer.apply(extOf(2, []));
+    buffer.apply(extOf(3, [], true, true));
+    buffer.apply(extOf(4, [{ id: 5, facing: Number.NaN }]));
+    // Ноль — курс сущности, о которой ничего не известно: помнить чужой было бы
+    // разворотом новорождённого по чужому следу (NTR-16).
+    expect(buffer.view.entities.get(5)?.facingYaw).toBe(0);
+  });
+});
+
+describe('ViewBuffer: живой id со сменившимся видом пересоздаёт запись (NTR-16)', () => {
+  it('после разрыва переиспользованный id получает СВОЙ вид, а не прежний', () => {
+    const buffer = new ViewBuffer({ tickSeconds: 1 / 60, clock: () => 0 });
+    const ext = (tick: number, kind: number, snapAll = false): ExtractedTick => {
+      const flat = extOf(tick, [{ id: 5, facing: 0, kind }], snapAll);
+      return { ...flat, kindTable: ['Fireball', 'Hero'] };
+    };
+    buffer.apply(ext(1, 0));
+    expect(buffer.view.entities.get(5)?.kind).toBe('Fireball');
+
+    // Разрыв ветви: тот же упакованный id — уже другая сущность (снаряды
+    // спавнятся постоянно, слот переиспользуется на первых же тиках). Вид
+    // записи неизменен на всю её жизнь, поэтому запись обязана пересоздаться.
+    buffer.apply(ext(2, 1, true));
+    expect(buffer.view.entities.get(5)?.kind).toBe('Hero');
+    // Пересозданная запись — появившаяся: snap без интерполяции (REND-2).
+    expect(buffer.view.entities.get(5)?.spawned).toBe(true);
+    expect(buffer.view.entities.get(5)?.snap).toBe(true);
+  });
+
+  it('тот же вид на разрыве запись не пересоздаёт', () => {
+    const buffer = new ViewBuffer({ tickSeconds: 1 / 60, clock: () => 0 });
+    const ext = (tick: number, snapAll = false): ExtractedTick => {
+      const flat = extOf(tick, [{ id: 5, facing: 0, kind: 0 }], snapAll);
+      return { ...flat, kindTable: ['Fireball'] };
+    };
+    buffer.apply(ext(1));
+    const record = buffer.view.entities.get(5);
+    buffer.apply(ext(2, true));
+    expect(buffer.view.entities.get(5)).toBe(record);
+    expect(buffer.view.entities.get(5)?.spawned).toBe(false);
+  });
+});
+
+describe('ViewBuffer: курс — пара двух последних доставленных тиков (REND-2)', () => {
+  it('пара скользит по доставленным тикам, а стоящая сущность её не двигает', () => {
+    const buffer = new ViewBuffer({ tickSeconds: 1 / 60, clock: () => 0 });
+    const view = () => buffer.view.entities.get(5)!;
+    buffer.apply(extOf(1, [{ id: 5, facing: 0.5 }]));
+    // Появление — разрыв: пара схлопнута, кадр ставит курс мгновенно.
+    expect(view().prevFacingYaw).toBeCloseTo(0.5, 6);
+    expect(view().facingYaw).toBeCloseTo(0.5, 6);
+
+    buffer.apply(extOf(2, [{ id: 5, facing: 1.5 }]));
+    expect(view().prevFacingYaw).toBeCloseTo(0.5, 6);
+    expect(view().facingYaw).toBeCloseTo(1.5, 6);
+
+    // Встала: `NaN` — «курс не менять». Пара обязана остаться прежней, иначе
+    // остановка сама по себе доворачивала бы юнита.
+    buffer.apply(extOf(3, [{ id: 5, facing: Number.NaN }]));
+    expect(view().prevFacingYaw).toBeCloseTo(1.5, 6);
+    expect(view().facingYaw).toBeCloseTo(1.5, 6);
+  });
+
+  it('разрыв непрерывности схлопывает пару, как схлопывает позицию', () => {
+    const buffer = new ViewBuffer({ tickSeconds: 1 / 60, clock: () => 0 });
+    const view = () => buffer.view.entities.get(5)!;
+    buffer.apply(extOf(1, [{ id: 5, facing: 0 }]));
+    buffer.apply(extOf(2, [{ id: 5, facing: 1 }]));
+    buffer.apply(extOf(3, [{ id: 5, facing: 3 }], true));
+    expect(view().snap).toBe(true);
+    expect(view().prevFacingYaw).toBeCloseTo(3, 6);
+    expect(view().facingYaw).toBeCloseTo(3, 6);
+  });
+
+  it('интерполяция идёт по КРАТЧАЙШЕЙ дуге, а не через всю окружность', () => {
+    // Курс живёт на окружности: с +3.0 на −3.0 ближняя дуга — 2π − 6 ≈ 0.28
+    // радиана ЧЕРЕЗ ±π, а линейная интерполяция прошла бы 6 радиан в обратную
+    // сторону, развернув сущность длинной стороной.
+    expect(interpolateYaw(3, -3, 0.5)).toBeCloseTo(Math.PI, 9);
+    expect(interpolateYaw(3, -3, 1)).toBeCloseTo(3 + (2 * Math.PI - 6), 9);
+    // Внутри одного оборота — обычная линейная доля.
+    expect(interpolateYaw(0.5, 1.5, 0)).toBeCloseTo(0.5, 9);
+    expect(interpolateYaw(0.5, 1.5, 1)).toBeCloseTo(1.5, 9);
+    expect(interpolateYaw(0.5, 1.5, 0.25)).toBeCloseTo(0.75, 9);
   });
 });

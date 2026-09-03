@@ -33,7 +33,7 @@
       },
       "particles.effects": {
         "geometry": 1,
-        "material": 1
+        "material": 3
       },
       "postprocess": {
         "geometry": 1,
@@ -81,7 +81,7 @@
       },
       "particles.effects": {
         "geometry": 1,
-        "material": 1
+        "material": 3
       },
       "postprocess": {
         "geometry": 1,

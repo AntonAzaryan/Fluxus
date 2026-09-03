@@ -54,9 +54,9 @@ import { costSink, type RenderCostCounters } from '../cost.js';
 import {
   buildFloorGeometry,
   buildWallGeometry,
-  type CellRect,
   type TerrainGeometryData,
 } from './terrainGeometry.js';
+import { TerrainChunkMap } from './terrainChunks.js';
 import { toBufferGeometry } from './terrainMesh.js';
 import { TerrainCoverLoader, type TerrainCover, type TerrainUvMapping } from './terrainCover.js';
 import { buildSkirtGeometry } from './terrainSkirt.js';
@@ -125,22 +125,6 @@ const DEFAULT_SKIRT_COLOR = 0x453a2f;
  * камера не заглядывала под нижнюю кромку на аренах масштаба демо (48×48).
  */
 const DEFAULT_SKIRT_DEPTH = 8;
-/**
- * Радиус влияния правки клетки в клетках. Уровень клетки виден на расстоянии
- * одной клетки — угол усредняется по смежным (REND-9), а угол рампы тянется к
- * проходимому соседу (TERR-5); стенка же читает углы ОБЕИХ своих клеток, и
- * дальняя из них отстоит от правки ещё на клетку. Отсюда двойка: она задаёт
- * область инвалидации, а не пересчёта — чанк всё равно один и тот же.
- */
-const SHAPE_RADIUS = 2;
-
-/**
- * Радиус влияния мутации пола (TERR-6): сам пол виден только в своей клетке,
- * но юбка обрыва (REND-7) стоит на рёбрах с СОСЕДЯМИ — выбитая клетка меняет
- * юбку четырёх смежных, и дальше собственной клетки их рёбра не уходят.
- */
-const FLOOR_RADIUS = 1;
-
 export class TerrainSubsystem implements RenderSubsystem {
   readonly name = 'terrain';
 
@@ -154,6 +138,8 @@ export class TerrainSubsystem implements RenderSubsystem {
   private readonly shadows: ShadowCasterSink | undefined;
 
   private ctx: RenderContext | null = null;
+  /** Отписка от источника поверхности; снос обязан её снять (REND-31). */
+  private unsubscribeSurface: (() => void) | null = null;
   private heightStep = 1;
   /** Плотность разбиения клеток с кривизной — параметр рендера (REND-9). */
   private tessellation = DEFAULT_CURVATURE_TESSELLATION;
@@ -164,12 +150,11 @@ export class TerrainSubsystem implements RenderSubsystem {
   private ceiling = Number.POSITIVE_INFINITY;
   /** Собственная копия карты пола: presentation-состояние может жить без террейна. */
   private floor: Uint8Array;
-  private chunksX: number;
-  private chunksY: number;
+  /** Раскладка арены по чанкам и пометки к пересборке (`terrainChunks.ts`). */
+  private chunks: TerrainChunkMap;
   private floorMeshes: (THREE.Mesh | null)[] = [];
   private wallMeshes: (THREE.Mesh | null)[] = [];
   private skirtMeshes: (THREE.Mesh | null)[] = [];
-  private readonly dirtyChunks = new Set<number>();
   private floorMaterial: THREE.MeshStandardMaterial | null = null;
   private wallMaterial: THREE.MeshStandardMaterial | null = null;
   private skirtMaterial: THREE.MeshStandardMaterial | null = null;
@@ -188,8 +173,7 @@ export class TerrainSubsystem implements RenderSubsystem {
     const covers = { floor: options.floorCover, wall: options.wallCover };
     this.covers = new TerrainCoverLoader(covers, options.warn);
     this.floor = new Uint8Array(grid.floor);
-    this.chunksX = Math.ceil(grid.width / this.chunkSize);
-    this.chunksY = Math.ceil(grid.height / this.chunkSize);
+    this.chunks = new TerrainChunkMap(grid, this.chunkSize);
   }
 
   init(ctx: RenderContext): void {
@@ -237,20 +221,20 @@ export class TerrainSubsystem implements RenderSubsystem {
     // правкой документа (ED-10, ED-11); в первом случае меняется вся, во втором
     // — перечисленные клетки, и пересобираются только их чанки.
     this.surfaceSource?.init(ctx);
-    this.surfaceSource?.onChange((cells, walkableOnly) => {
+    this.unsubscribeSurface = this.surfaceSource?.onChange((cells, walkableOnly) => {
       // Walkable-вклад геометрию террейна не меняет (REND-9): настил рисует меш
       // декорации, и пересборка квадов под его клетками дала бы те же квады.
       if (walkableOnly === true) return;
       // Приход поверхности — свой вход, и сток читается один раз на него
       // (PERF-3): дальше только сложения в захваченную переменную.
       const cost = costSink();
-      if (cells === null) this.markAllChunks(cost);
-      else for (const cell of cells) this.markShapeCell(cell, cost);
-    });
+      if (cells === null) this.chunks.markAll(cost);
+      else for (const cell of cells) this.chunks.markShape(cell, cost);
+    }) ?? null;
 
     const cost = costSink();
     this.allocateChunks();
-    this.markAllChunks(cost);
+    this.chunks.markAll(cost);
     this.flushDirty(cost);
   }
 
@@ -265,7 +249,13 @@ export class TerrainSubsystem implements RenderSubsystem {
     this.floorMeshes = [];
     this.wallMeshes = [];
     this.skirtMeshes = [];
-    this.dirtyChunks.clear();
+    this.chunks.clear();
+    // Подписка на источник поверхности снимается, и контекст сцены забывается:
+    // снесённая подсистема не метит чанков и не строит мешей в чужую сцену.
+    // Сам источник сюда не входит — он приходит опцией сборки и принадлежит ей.
+    this.unsubscribeSurface?.();
+    this.unsubscribeSurface = null;
+    this.ctx = null;
     this.floorMaterial?.dispose();
     this.floorMaterial = null;
     this.wallMaterial?.dispose();
@@ -303,6 +293,9 @@ export class TerrainSubsystem implements RenderSubsystem {
     }
 
     this.grid = next;
+    // Другая сетка — другие cliff-отрезки: раскладка по чанкам считается заново
+    // ровно здесь, на доставке, а не при пересборке чанка.
+    this.chunks.setGrid(next);
     const cost = costSink(); // один раз на доставку сетки (PERF-3)
     const shape: number[] = [];
     const cells = next.width * next.height;
@@ -314,12 +307,26 @@ export class TerrainSubsystem implements RenderSubsystem {
         this.floor[cell] = next.floor[cell]!;
         // Высот и стенок пол не меняет (TERR-6), но юбка соседей следует за
         // его границей (REND-7) — метится окрестность FLOOR_RADIUS.
-        this.markCellRadius(cell, FLOOR_RADIUS, cost);
+        this.chunks.markFloor(cell, cost);
       }
     }
-    for (const cell of shape) this.markShapeCell(cell, cost);
     // Поверхность стоит на той же сетке — уровни и рампы ей тоже изменились.
+    // Её уведомление (REND-9) метит клетки формы САМО, и отметить их ещё и
+    // здесь значило бы посчитать одну правку дважды: пересборка от этого одна,
+    // а `terrainChunksMarked` показывал бы вдвое больше работы, чем сделано.
+    // Сама подсистема метит их только тогда, когда услышать уведомление некому.
+    const delegated = this.surfaceDelegated();
     this.surfaceSource?.setGrid(next, shape);
+    if (!delegated) for (const cell of shape) this.chunks.markShape(cell, cost);
+  }
+
+  /**
+   * Метит ли чанки формы за подсистему источник поверхности. До `init`
+   * подписки ещё нет, после сноса её уже нет — в обоих случаях метить некому,
+   * и подсистема делает это сама.
+   */
+  private surfaceDelegated(): boolean {
+    return this.surfaceSource !== undefined && this.unsubscribeSurface !== null;
   }
 
   /** Визуальная поверхность для генераторов; undefined — плоские ступени. */
@@ -335,11 +342,13 @@ export class TerrainSubsystem implements RenderSubsystem {
     for (const cell of view.floorChangedCells) {
       this.floor[cell] = view.floorBits[cell]!;
       // Окрестность FLOOR_RADIUS: юбка обрыва соседей следует за границей пола.
-      this.markCellRadius(cell, FLOOR_RADIUS, cost);
+      this.chunks.markFloor(cell, cost);
     }
   }
 
   updateFrame(_dt: number, _alpha: number): void {
+    // Снесённая подсистема (REND-31) кадром ничего не строит и ничего не считает.
+    if (this.ctx === null) return;
     // Пересборка затронутых чанков — не позже следующего кадра (REND-7, ED-15).
     // Кадр стоящей сцены пометок не находит и не платит ничем: счётчики
     // пересборки остаются нулевыми (PERF-2).
@@ -411,7 +420,7 @@ export class TerrainSubsystem implements RenderSubsystem {
     // Смена пресета — событие, и цена его видна тем же счётчиком, что цена
     // кадра: пересобирается вся геометрия арены (QUAL-1, PERF-3).
     const cost = costSink();
-    this.markAllChunks(cost);
+    this.chunks.markAll(cost);
     this.flushDirty(cost);
   }
 
@@ -437,54 +446,34 @@ export class TerrainSubsystem implements RenderSubsystem {
   }
 
   private flushDirty(cost: RenderCostCounters | undefined): void {
-    if (this.dirtyChunks.size === 0) return;
-    if (cost !== undefined) cost.terrainChunksRebuilt += this.dirtyChunks.size;
-    for (const chunk of this.dirtyChunks) this.rebuildChunk(chunk);
-    this.dirtyChunks.clear();
+    if (this.chunks.clean) return;
+    // Чанк, помеченный обеими причинами, пересобирается ОДИН раз и считается
+    // один раз: пометок бывает больше пересборок, наоборот — никогда. Пометка
+    // «только пол» стенок не трогает: их меш и его место в реестре теневых
+    // кастеров переживают выбитую клетку (TERR-6, TERR-5).
+    let rebuilt = 0;
+    for (const chunk of this.chunks.shape) {
+      rebuilt++;
+      this.rebuildChunk(chunk, true);
+    }
+    for (const chunk of this.chunks.floor) {
+      if (this.chunks.shape.has(chunk)) continue;
+      rebuilt++;
+      this.rebuildChunk(chunk, false);
+    }
+    if (cost !== undefined) cost.terrainChunksRebuilt += rebuilt;
+    this.chunks.clear();
     // Чанков в сетке (PERF-8): величина растёт площадью арены и мельчанием
     // чанка, а не частотой пересборок — снимается после неё, когда геометрия
     // чанков уже построена.
-    peak('terrainChunks', this.chunksX * this.chunksY);
+    peak('terrainChunks', this.chunks.count);
   }
 
   private allocateChunks(): void {
-    const count = this.chunksX * this.chunksY;
+    const count = this.chunks.count;
     this.floorMeshes = new Array<THREE.Mesh | null>(count).fill(null);
     this.wallMeshes = new Array<THREE.Mesh | null>(count).fill(null);
     this.skirtMeshes = new Array<THREE.Mesh | null>(count).fill(null);
-  }
-
-  private markAllChunks(cost: RenderCostCounters | undefined): void {
-    const count = this.chunksX * this.chunksY;
-    if (cost !== undefined) cost.terrainChunksMarked += count;
-    for (let chunk = 0; chunk < count; chunk++) this.dirtyChunks.add(chunk);
-  }
-
-  /** Инвалидация окрестности правки уровня/рампы — все чанки в радиусе SHAPE_RADIUS. */
-  private markShapeCell(cell: number, cost: RenderCostCounters | undefined): void {
-    this.markCellRadius(cell, SHAPE_RADIUS, cost);
-  }
-
-  /** Пометка чанков всех клеток в радиусе `radius` от правки. */
-  private markCellRadius(
-    cell: number,
-    radius: number,
-    cost: RenderCostCounters | undefined,
-  ): void {
-    const { width, height } = this.grid;
-    const x = cell % width;
-    const y = Math.floor(cell / width);
-    const cx0 = Math.floor(Math.max(x - radius, 0) / this.chunkSize);
-    const cx1 = Math.floor(Math.min(x + radius, width - 1) / this.chunkSize);
-    const cy0 = Math.floor(Math.max(y - radius, 0) / this.chunkSize);
-    const cy1 = Math.floor(Math.min(y + radius, height - 1) / this.chunkSize);
-    // Правка одной клетки метит окрестность (SHAPE_RADIUS), и повторные пометки
-    // соседних клеток считаются: каждая — свой поиск в множестве, а пересборок
-    // от них не прибавляется (их считает `terrainChunksRebuilt`).
-    if (cost !== undefined) cost.terrainChunksMarked += (cx1 - cx0 + 1) * (cy1 - cy0 + 1);
-    for (let cy = cy0; cy <= cy1; cy++) {
-      for (let cx = cx0; cx <= cx1; cx++) this.dirtyChunks.add(cy * this.chunksX + cx);
-    }
   }
 
   /**
@@ -513,33 +502,29 @@ export class TerrainSubsystem implements RenderSubsystem {
     this.clearMeshes(true);
     this.grid = next;
     this.floor = new Uint8Array(next.floor);
-    this.chunksX = Math.ceil(next.width / this.chunkSize);
-    this.chunksY = Math.ceil(next.height / this.chunkSize);
+    this.chunks = new TerrainChunkMap(next, this.chunkSize);
     this.allocateChunks();
-    this.dirtyChunks.clear();
-    // Поверхность собирается заново под новые размеры и зовёт подписчиков.
+    // Поверхность собирается заново под новые размеры и зовёт подписчиков —
+    // её уведомление и метит все чанки (REND-9), поэтому подсистема метит их
+    // сама только там, где источника нет либо он ещё/уже не подписан.
     this.surfaceSource?.setGrid(next);
-    this.markAllChunks(costSink());
+    if (!this.surfaceDelegated()) this.chunks.markAll(costSink());
   }
 
-  private chunkOfCell(cell: number): number {
-    const x = cell % this.grid.width;
-    const y = Math.floor(cell / this.grid.width);
-    return Math.floor(y / this.chunkSize) * this.chunksX + Math.floor(x / this.chunkSize);
-  }
-
-  private rebuildChunk(chunk: number): void {
+  /**
+   * Пересборка чанка. `shape === false` — причиной была только мутация пола
+   * (TERR-6): пол и юбка пересобираются, стенки обрывов остаются прежним мешем
+   * — cliff-геометрию ядро выводит из карты УРОВНЕЙ (TERR-5), и пол её изменить
+   * не может. Заодно у стенок сохраняется место в реестре теневых кастеров, и
+   * кэшированная карта теней не устаревает от выбитой клетки.
+   */
+  private rebuildChunk(chunk: number, shape: boolean): void {
     const ctx = this.ctx;
     if (ctx === null || this.floorMaterial === null || this.wallMaterial === null) return;
 
-    const cx = chunk % this.chunksX;
-    const cy = Math.floor(chunk / this.chunksX);
-    const rect: CellRect = {
-      x0: cx * this.chunkSize,
-      y0: cy * this.chunkSize,
-      w: this.chunkSize,
-      h: this.chunkSize,
-    };
+    const cx = chunk % this.chunks.countX;
+    const cy = Math.floor(chunk / this.chunks.countX);
+    const rect = this.chunks.rect(chunk);
 
     this.floorMeshes[chunk] = this.swapMesh(
       this.floorMeshes[chunk] ?? null,
@@ -559,14 +544,23 @@ export class TerrainSubsystem implements RenderSubsystem {
       true,
       this.covers.floorMapping,
     );
-    this.wallMeshes[chunk] = this.swapMesh(
-      this.wallMeshes[chunk] ?? null,
-      buildWallGeometry(this.grid, this.heightStep, this.surface, rect, this.tessellation),
-      this.wallMaterial,
-      `terrain:walls:${cx},${cy}`,
-      true,
-      this.covers.wallMapping,
-    );
+    if (shape) {
+      this.wallMeshes[chunk] = this.swapMesh(
+        this.wallMeshes[chunk] ?? null,
+        buildWallGeometry(
+          this.grid,
+          this.heightStep,
+          this.surface,
+          rect,
+          this.tessellation,
+          this.chunks.cliffsOf(chunk),
+        ),
+        this.wallMaterial,
+        `terrain:walls:${cx},${cy}`,
+        true,
+        this.covers.wallMapping,
+      );
+    }
     if (this.skirtMaterial === null) return;
     this.skirtMeshes[chunk] = this.swapMesh(
       this.skirtMeshes[chunk] ?? null,

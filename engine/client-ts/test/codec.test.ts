@@ -47,6 +47,7 @@ function syntheticTick(overrides: Partial<ExtractedTick> = {}): ExtractedTick {
     mode: 'Running',
     isReplay: false,
     snapAll: false,
+    branchChanged: false,
     freshEvents: true,
     count,
     id: zeros((n) => new Float64Array(n)),
@@ -54,6 +55,7 @@ function syntheticTick(overrides: Partial<ExtractedTick> = {}): ExtractedTick {
     x: zeros((n) => new Float32Array(n)),
     y: zeros((n) => new Float32Array(n)),
     level: zeros((n) => new Uint8Array(n)),
+    simLevel: zeros((n) => new Uint8Array(n)),
     flags: zeros((n) => new Uint8Array(n)),
     facingYaw: zeros((n) => new Float32Array(n)),
     aimYaw: zeros((n) => new Float32Array(n)),
@@ -120,10 +122,11 @@ describe('кодек: roundtrip эквивалентен прямому вызо
 
     const floorDelta = [0, 0, 3, 0];
     const buffer = new ArrayBuffer(requiredBytes(ext.count, 2));
-    writeTick(buffer, ext, { snapAll: true, freshEvents: false, floorDelta });
+    writeTick(buffer, ext, { snapAll: true, branchChanged: true, freshEvents: false, floorDelta });
     const wire = readTick(buffer, [], []);
 
     expect(wire.snapAll).toBe(true);
+    expect(wire.branchChanged).toBe(true);
     expect(wire.freshEvents).toBe(false);
     expect([...(wire.floorDelta as Uint32Array)]).toEqual(floorDelta);
     expect(wire.tick).toBe(ext.tick);
@@ -191,9 +194,9 @@ describe('кодек: значения на границах раскладки 
   it('PERF-2: сущность стоит каналу ровно объявленных колонок', () => {
     // Ширины колонок плоской формы в байтах, в порядке секций раскладки: `id`
     // (f64), семь f32 (`x`, `y`, `facingYaw`, `aimYaw`, `motionPhase`,
-    // `flightPhase`, `timeScale`), `kind` (i32) и четыре байтовых (`level`,
-    // `flags`, `motion`, `statCount`).
-    const columnBytes = [8, 4, 4, 4, 4, 4, 4, 4, 4, 1, 1, 1, 1];
+    // `flightPhase`, `timeScale`), `kind` (i32) и пять байтовых (`level`,
+    // `simLevel`, `flags`, `motion`, `statCount`).
+    const columnBytes = [8, 4, 4, 4, 4, 4, 4, 4, 4, 1, 1, 1, 1, 1];
     const perEntity = columnBytes.reduce((total, width) => total + width, 0);
 
     // Счётчик стоимости доставки (`extractChannelValues` рендера) множит число
@@ -204,9 +207,9 @@ describe('кодек: значения на границах раскладки 
     expect(columnBytes).toHaveLength(CHANNEL_COLUMNS);
     // Шаг — ВОСЕМЬ сущностей от пустого кадра: полный размер выровнен по восьми
     // байтам, и разности на малых шагах глотают дополнение (пара сущностей даёт
-    // те же 88 и при 43, и при 45 байтах на сущность). Восемь сущностей — 8×44,
-    // кратное восьми при верной ширине и не кратное при ошибке в байт: лишняя
-    // байтовая колонка (а их в раскладке четыре) краснит эту строку.
+    // те же 88 и при 43, и при 45 байтах на сущность). Восемь сущностей — 8×45,
+    // и ошибка в байт на сущность видна здесь целыми восемью: лишняя байтовая
+    // колонка (а их в раскладке пять) краснит эту строку.
     expect(requiredBytes(8, 0) - requiredBytes(0, 0)).toBe(8 * perEntity);
   });
 

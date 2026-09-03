@@ -776,6 +776,11 @@ describe('ParticlesSubsystem: экземпляр — не образец (REND-2
       frames(subsystem, 12);
       subsystem.syncDecorations(new Map());
       expect(subsystem.activeCount).toBe(0);
+      // Снятое размещение прекращает эмиссию, а живые частицы доживают
+      // (REND-24): экземпляр возвращается в пул сам, и следующее употребление
+      // берёт ЕГО, а не заводит второй.
+      frames(subsystem, 12);
+      expect(subsystem.dyingCount, `догорание ${take + 1}`).toBe(0);
     }
     // Экземпляр всё это время один и тот же — он и вернулся в пул живым.
     expect(subsystem.pooledCount).toBe(1);
@@ -1044,5 +1049,222 @@ describe('stepInstance: рантайм-API шага систем библиот�
     group.updateMatrixWorld();
     for (let i = 0; i < 10; i++) stepInstance(instance, 0, () => {});
     expect(instanceParticles(instance)).toBe(0);
+  });
+});
+
+// ---------------------------------------------------------------- находки §2.6
+
+/** Стенд пула вне подсистемы: батч-рендерер, группа сцены и сам пул. */
+function makePoolRig() {
+  const scene = new THREE.Scene();
+  const batchRenderer = new BatchedRenderer();
+  scene.add(batchRenderer);
+  const group = new THREE.Group();
+  scene.add(group);
+  const warnings: string[] = [];
+  const pool = new ParticleEffectPool(batchRenderer, (_key, message) => warnings.push(message));
+  return { scene, batchRenderer, group, pool, warnings };
+}
+
+describe('ParticleEffectPool: трансформ и регистрация в батче — V-5, V-8', () => {
+  it('взятие из пула сбрасывает кватернион и масштаб прошлого употребления', () => {
+    // Сокетная оболочка копирует на экземпляр мировой поворот КОСТИ. Достанься
+    // такой экземпляр декорации или выстрелу, конус эмиссии оказался бы
+    // наклонён поворотом, которого в новой позе нет.
+    const { pool, group } = makePoolRig();
+    const first = pool.acquire(TORCH, torchDoc, group)!;
+    first.object.quaternion.setFromAxisAngle(new THREE.Vector3(0, 1, 0), Math.PI / 3);
+    first.object.scale.setScalar(4.5);
+    pool.release(first);
+
+    const again = pool.acquire(TORCH, torchDoc, group)!;
+    expect(again).toBe(first); // тот же экземпляр — пул работает
+    expect(again.object.quaternion.equals(new THREE.Quaternion())).toBe(true);
+    expect(again.object.scale.x).toBe(1);
+  });
+
+  it('в батче зарегистрированы ЖИВЫЕ экземпляры, а не весь пул', () => {
+    // `VFXBatch.update()` перебирает своё множество систем каждый кадр; пуловые
+    // экземпляры платили бы за это наравне с играющими — работой по размеру
+    // пула (REND-26).
+    const { pool, group, batchRenderer } = makePoolRig();
+    const instance = pool.acquire(TORCH, torchDoc, group)!;
+    const systems = instance.systems.length;
+    expect(systems).toBeGreaterThan(0);
+    expect(batchRenderer.systemToBatchIndex.size).toBe(systems);
+
+    pool.release(instance);
+    expect(batchRenderer.systemToBatchIndex.size).toBe(0);
+    // Батч остаётся: конвейер никуда не делся, и следующее взятие попадёт в него.
+    const batches = batchRenderer.batches.length;
+    expect(batches).toBeGreaterThan(0);
+
+    const again = pool.acquire(TORCH, torchDoc, group)!;
+    expect(batchRenderer.systemToBatchIndex.size).toBe(systems);
+    expect(batchRenderer.batches).toHaveLength(batches);
+    expect(again).toBe(instance);
+  });
+});
+
+describe('stepInstance: отсоединённый корень не убивает экземпляр — V-11', () => {
+  it('шаг экземпляра вне сцены пропускается, и пул остаётся живым', () => {
+    // `ParticleSystem.update` библиотеки само-уничтожается, если корень эмиттера
+    // — не `Scene`: экземпляр снимается с батча навсегда, и `restart()` его уже
+    // не оживит. Отсоединённый экземпляр — обычное состояние пула.
+    const { pool, group, warnings } = makePoolRig();
+    const instance = pool.acquire(TORCH, torchDoc, group)!;
+    pool.release(instance); // снят со сцены — parent === null
+
+    stepInstance(instance, 0.1, (_key, message) => warnings.push(message));
+
+    const again = pool.acquire(TORCH, torchDoc, group)!;
+    expect(again).toBe(instance);
+    group.updateMatrixWorld();
+    stepInstance(again, 0.1, (_key, message) => warnings.push(message));
+    stepInstance(again, 0.1, (_key, message) => warnings.push(message));
+    expect(instanceParticles(again)).toBeGreaterThan(0);
+    expect(warnings).toEqual([]);
+  });
+
+  it('корень подсистемы обязан быть сценой: иначе громкий отказ на сборке', () => {
+    const assets = makeAssets();
+    const subsystem = new ParticlesSubsystem(makeManifest(), { warn: () => {} });
+    expect(() => {
+      subsystem.init({
+        // Группа вместо сцены — ровно тот случай, в котором библиотека молча
+        // убивает пул на первом же кадре.
+        scene: new THREE.Group() as unknown as THREE.Scene,
+        assets: assets.service,
+        config: { heightStep: 1 },
+      });
+    }).toThrow(/THREE.Scene/);
+  });
+});
+
+describe('ParticlesSubsystem: оболочка гаснет — частицы доживают (REND-24) — V-2', () => {
+  it('уход состояния прекращает эмиссию, а живые частицы доживают своё', () => {
+    const { subsystem } = makeRig();
+    const poisoned = makeEntityView(1, { kind: 'Hero', states: POISONED });
+    subsystem.syncTick(makeTickView([poisoned]));
+    frames(subsystem, 3);
+    const before = subsystem.particleCount;
+    expect(before).toBeGreaterThan(0);
+
+    // Состояние перестало доставляться — оболочки не стало.
+    subsystem.syncTick(makeTickView([makeEntityView(1, { kind: 'Hero', states: 0 })]));
+    expect(subsystem.activeCount).toBe(0);
+    // …но выпущенные частицы никуда не делись: они догорают.
+    expect(subsystem.dyingCount).toBe(1);
+    expect(subsystem.particleCount).toBe(before);
+
+    // Дальше частицы только убывают: эмиссия прекращена, и новых не появляется.
+    // Первый кадр после гашения ещё выбрасывает накопленный библиотекой остаток
+    // (`waitEmiting` последнего шага) — это residue, а не эмиссия.
+    frames(subsystem, 1);
+    const counts: number[] = [];
+    for (let i = 0; i < 5; i++) {
+      frames(subsystem, 1);
+      counts.push(subsystem.particleCount);
+    }
+    expect(counts[0]).toBeGreaterThan(0);
+    for (let i = 1; i < counts.length; i++) {
+      expect(counts[i]).toBeLessThanOrEqual(counts[i - 1]!);
+    }
+
+    // И догорев, экземпляр возвращается в пул сам.
+    frames(subsystem, 40);
+    expect(subsystem.dyingCount).toBe(0);
+    expect(subsystem.particleCount).toBe(0);
+  });
+
+  it('разрыв непрерывности гасит догорающих немедленно (REND-2)', () => {
+    const { subsystem } = makeRig();
+    subsystem.syncTick(makeTickView([makeEntityView(1, { kind: 'Hero', states: POISONED })]));
+    frames(subsystem, 3);
+    subsystem.syncTick(makeTickView([makeEntityView(1, { kind: 'Hero', states: 0 })]));
+    expect(subsystem.dyingCount).toBe(1);
+
+    subsystem.syncTick(makeTickView([], { snapAll: true }));
+
+    expect(subsystem.dyingCount).toBe(0);
+    expect(subsystem.particleCount).toBe(0);
+  });
+
+  it('разрыв, в котором сущность и исчезла, догорающих не оставляет (REND-2)', () => {
+    // Гашение обязано идти ПОСЛЕ сведения: эта же доставка убирает сущность, и
+    // её оболочка уходит в догорающие ровно в ней. Погаси мы их раньше —
+    // догорающий пережил бы разрыв непрерывности.
+    const { subsystem } = makeRig();
+    subsystem.syncTick(makeTickView([makeEntityView(1, { kind: 'Hero', states: POISONED })]));
+    frames(subsystem, 3);
+    expect(subsystem.particleCount).toBeGreaterThan(0);
+
+    subsystem.syncTick(makeTickView([], { snapAll: true }));
+
+    expect(subsystem.dyingCount).toBe(0);
+    expect(subsystem.particleCount).toBe(0);
+  });
+
+  it('снос подсистемы догорающих не теряет (REND-31)', () => {
+    const { subsystem, scene } = makeRig();
+    subsystem.syncTick(makeTickView([makeEntityView(1, { kind: 'Hero', states: POISONED })]));
+    frames(subsystem, 3);
+    subsystem.syncTick(makeTickView([makeEntityView(1, { kind: 'Hero', states: 0 })]));
+    expect(subsystem.dyingCount).toBe(1);
+
+    subsystem.dispose();
+
+    expect(subsystem.dyingCount).toBe(0);
+    expect(scene.children).toHaveLength(0);
+  });
+});
+
+describe('ParticlesSubsystem: возраст события доставки (REND-24, SHELL-4) — V-1', () => {
+  it('выстрел старого тика приходит уже сыгравшим часть своей длительности', () => {
+    const assets = makeAssets();
+    assets.resolve('particle-effect', TORCH, torchDoc);
+    assets.resolve('particle-effect', BURST, burstDoc);
+    const scene = new THREE.Scene();
+    const subsystem = new ParticlesSubsystem(makeManifest(), {
+      stateComponents: STATE_COMPONENTS,
+      tickSeconds: 0.1,
+      warn: () => {},
+    });
+    subsystem.init({ scene, assets: assets.service, config: { heightStep: 1 } });
+
+    // Свежее событие того же тика: ни одного кадра ещё не было — частиц нет.
+    subsystem.syncTick(
+      makeTickView([], {
+        tick: 5,
+        freshEvents: true,
+        events: [{ type: 'FireballExploded', tick: 5, data: { x: 0, y: 0 } }],
+      }),
+    );
+    expect(subsystem.particleCount).toBe(0);
+
+    // А событие тика 1 приезжает с возрастом 400 мс и догоняет его шагами.
+    subsystem.syncTick(
+      makeTickView([], {
+        tick: 5,
+        freshEvents: true,
+        events: [{ type: 'FireballExploded', tick: 1, data: { x: 3, y: 3 } }],
+      }),
+    );
+    expect(subsystem.particleCount).toBeGreaterThan(0);
+  });
+});
+
+describe('ParticlesSubsystem: пол ручки плотности (QUAL-2 через QUAL-3) — V-4', () => {
+  it('byKind-эмиттер эмитит на минимуме ручки: зона урона не исчезает', () => {
+    const { subsystem } = makeRig();
+    const knob = subsystem.quality().knobs.find((entry) => entry.name === 'particles.density')!;
+    // Ноль ручка принимать не вправе: эмиттер — изображение сущности (REND-37).
+    expect(knob.min).toBeGreaterThan(0);
+
+    subsystem.applyQuality(new Map([['particles.density', knob.min!]]));
+    subsystem.syncTick(makeTickView([makeEntityView(1, { kind: 'Hero', states: POISONED })]));
+    frames(subsystem, 6);
+
+    expect(subsystem.particleCount).toBeGreaterThan(0);
   });
 });

@@ -15,9 +15,10 @@
 import {
   ABILITY_SLOT_COMPONENT,
   FIXED_ONE,
-  query,
+  queryInto,
   world,
   type EntityId,
+  type QuerySpec,
   type WorldState,
 } from '@fluxus/core';
 
@@ -52,6 +53,13 @@ export interface StatSource {
 
 /** Сколько статов вмещает колонка `statCount` (u8) на одну сущность. */
 export const MAX_STATS = 255;
+
+/**
+ * Выборка сущностей-слотов способностей (ABIL-1) — константа модуля, а не
+ * литерал на кадр: индекс слотов строится каждый тик, и объект спецификации на
+ * вызов был бы аллокацией, которую REND-26 запрещает пути извлечения.
+ */
+const SLOT_SPEC: QuerySpec = { all: [ABILITY_SLOT_COMPONENT] };
 
 /**
  * Фаза полёта сущности (REND-12): `(total − оставшееся) / total` по записи
@@ -95,16 +103,34 @@ export class StatReader {
    * стоил бы обхода всех слотов на каждую запись конфигурации.
    */
   private readonly slots = new Map<number, Map<number, EntityId>>();
+  /**
+   * Запас внутренних словарей: `beginFrame` возвращает их сюда очищенными и
+   * берёт обратно вместо создания новых. Плоский ключ «владелец × 256 + слот»
+   * не годится — упакованный `EntityId` доходит до 2^48 (`ecs/entityIndex.ts`),
+   * и произведение вышло бы за точную целочисленную область double, молча
+   * слив двух владельцев в один ключ. Словарь на владельца НА КАДР был именно
+   * той аллокацией, которую REND-26 запрещает; переиспользованный не стоит
+   * ничего.
+   */
+  private readonly spareSlots: Map<number, EntityId>[] = [];
+  /** Буфер выборки слотов: растёт только вместе со сценой (REND-26). */
+  private slotIds = new Float64Array(0);
   /** Объявлен ли хоть один стат слотовой формы — иначе индекс не нужен вовсе. */
   private readonly usesSlots: boolean;
   /**
-   * Множитель поля: `fixed` приезжает в Q16.16 и делится на границе (REND-1),
-   * `i32`/`entity` — целое и едет как есть. Тип берётся из СХЕМЫ компонента
-   * (ECS-3), а не из конфигурации: спрашивать автора сборки о том, что уже
-   * написано в схеме, значило бы завести второй источник правды. Кэш ленивый —
-   * заполняется на первом чтении, когда мир уже собран.
+   * Множитель поля ПО ИНДЕКСУ ЗАПИСИ конфигурации: `fixed` приезжает в Q16.16
+   * и делится на границе (REND-1), `i32`/`entity` — целое и едет как есть. Тип
+   * берётся из СХЕМЫ компонента (ECS-3), а не из конфигурации: спрашивать
+   * автора сборки о том, что уже написано в схеме, значило бы завести второй
+   * источник правды.
+   *
+   * Массив, а не словарь по строковому ключу `компонент.поле`: ключ собирался
+   * бы на каждую пару «сущность × запись» каждый тик — строка на величину, то
+   * есть мусор, растущий с числом сущностей (REND-26). Индекс записи известен
+   * обходу и так. `NaN` — множитель ещё не разрешён: схема читается на первом
+   * чтении, когда мир уже собран.
    */
-  private readonly scale = new Map<string, number>();
+  private readonly scale: Float64Array;
 
   constructor(sources: readonly StatSource[]) {
     if (sources.length > MAX_STATS) {
@@ -115,6 +141,7 @@ export class StatReader {
     this.sources = sources;
     this.names = sources.map((source) => source.name);
     this.usesSlots = sources.some((source) => source.slotIndex !== undefined);
+    this.scale = new Float64Array(sources.length).fill(Number.NaN);
   }
 
   /**
@@ -123,18 +150,34 @@ export class StatReader {
    */
   beginFrame(state: WorldState): void {
     if (!this.usesSlots) return;
+    // Внутренние словари уходят в запас очищенными — на устоявшейся сцене
+    // индекс не заводит ни одного объекта (REND-26).
+    for (const byIndex of this.slots.values()) {
+      byIndex.clear();
+      this.spareSlots.push(byIndex);
+    }
     this.slots.clear();
     if (world.componentSchema(state, ABILITY_SLOT_COMPONENT) === undefined) return;
-    for (const slot of query(state, { all: [ABILITY_SLOT_COMPONENT] })) {
+    const found = this.listSlots(state);
+    for (let i = 0; i < found; i++) {
+      const slot = this.slotIds[i]!;
       const owner = world.getField(state, slot, ABILITY_SLOT_COMPONENT, 'owner');
       const index = world.getField(state, slot, ABILITY_SLOT_COMPONENT, 'slotIndex');
       let byIndex = this.slots.get(owner);
       if (byIndex === undefined) {
-        byIndex = new Map();
+        byIndex = this.spareSlots.pop() ?? new Map<number, EntityId>();
         this.slots.set(owner, byIndex);
       }
       byIndex.set(index, slot);
     }
+  }
+
+  /** Слоты способностей в переиспользуемый буфер; растёт только со сценой. */
+  private listSlots(state: WorldState): number {
+    const count = queryInto(state, SLOT_SPEC, this.slotIds);
+    if (count <= this.slotIds.length) return count;
+    this.slotIds = new Float64Array(Math.max(8, Math.ceil(count * 1.5)));
+    return queryInto(state, SLOT_SPEC, this.slotIds);
   }
 
   /** Сколько записей объявлено — по ним считается ёмкость секций пар. */
@@ -157,22 +200,21 @@ export class StatReader {
       if (!world.hasComponent(state, host, source.component)) continue;
       out.statIndex[out.statPairs] = i;
       out.statValue[out.statPairs] =
-        world.getField(state, host, source.component, source.field) * this.scaleOf(state, source);
+        world.getField(state, host, source.component, source.field) * this.scaleOf(state, i);
       out.statPairs++;
       count++;
     }
     out.statCount[index] = count;
   }
 
-  /** Множитель поля по его типу в схеме компонента (ECS-3): `fixed` → мировые единицы. */
-  private scaleOf(state: WorldState, source: StatSource): number {
-    const key = `${source.component}.${source.field}`;
-    let scale = this.scale.get(key);
-    if (scale === undefined) {
-      const type = world.componentSchema(state, source.component)?.fields[source.field];
-      scale = type === 'fixed' ? 1 / FIXED_ONE : 1;
-      this.scale.set(key, scale);
-    }
+  /** Множитель записи `i` по типу её поля в схеме компонента (ECS-3): `fixed` → мировые единицы. */
+  private scaleOf(state: WorldState, i: number): number {
+    const cached = this.scale[i]!;
+    if (!Number.isNaN(cached)) return cached;
+    const source = this.sources[i]!;
+    const type = world.componentSchema(state, source.component)?.fields[source.field];
+    const scale = type === 'fixed' ? 1 / FIXED_ONE : 1;
+    this.scale[i] = scale;
     return scale;
   }
 }

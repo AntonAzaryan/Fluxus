@@ -15,13 +15,15 @@ import * as THREE from 'three';
 import { FIXED_ONE, type TerrainGrid } from '@fluxus/core';
 import type { VisualSurface } from '../visualSurface.js';
 import type { OverlayGrid } from './overlayItems.js';
+import { cellSubdivisions } from '../surfaceCells.js';
 import { own } from '../footprint.js';
 
 /**
  * Заливка набора клеток; null — рисовать нечего (все клетки вне сетки).
  * Клетка без кривизны и без walkable-накрытия идёт быстрым путём по своим
  * углам; накрытая или изогнутая — разбиением по выборке поля (REND-9): в такой
- * клетке высота не выводится из углов.
+ * клетке высота не выводится из углов. Само правило дробления — общее
+ * (`surfaceCells.ts`): второй его копии у отладочного рисовальщика больше нет.
  */
 export function cellsGeometry(
   cells: readonly number[],
@@ -37,11 +39,12 @@ export function cellsGeometry(
     if (cell < 0 || cell >= grid.width * grid.height) continue;
     const x = cell % grid.width;
     const y = Math.floor(cell / grid.width);
-    if (!surface.hasCellCurvature(x, y) && !surface.hasCellWalkable(x, y)) {
+    const divisions = cellSubdivisions(surface, x, y, tessellation);
+    if (divisions === 1) {
       pushFlatCell(positions, indices, surface, x, y, tile, lift);
       continue;
     }
-    pushDividedCell(positions, indices, surface, x, y, tile, lift, tessellation);
+    pushDividedCell(positions, indices, surface, x, y, tile, lift, divisions);
   }
   if (indices.length === 0) return null;
   const geometry = own('geometry', 'overlays', new THREE.BufferGeometry());
@@ -144,8 +147,10 @@ function pushCellOutline(
   const y0 = y * tile;
   const x1 = (x + 1) * tile;
   const y1 = (y + 1) * tile;
-  // Как у ячеек: под walkable-поверхностью контур идёт выборкой поля (REND-9).
-  if (!surface.hasCellCurvature(x, y) && !surface.hasCellWalkable(x, y)) {
+  // Как у ячеек: под walkable-поверхностью контур идёт выборкой поля (REND-9),
+  // и правило дробления у них общее (`surfaceCells.ts`).
+  const divisions = cellSubdivisions(surface, x, y, tessellation);
+  if (divisions === 1) {
     const [h00, h10, h11, h01] = surface.cornerHeights(x, y);
     const z00 = h00 + lift;
     const z10 = h10 + lift;
@@ -160,10 +165,10 @@ function pushCellOutline(
     return;
   }
   // Рёбра в том же порядке: юг (y0), восток (x1), север (y1), запад (x0).
-  pushOutlineEdge(out, surface, x, y, lift, tessellation, x0, y0, x1, y0);
-  pushOutlineEdge(out, surface, x, y, lift, tessellation, x1, y0, x1, y1);
-  pushOutlineEdge(out, surface, x, y, lift, tessellation, x1, y1, x0, y1);
-  pushOutlineEdge(out, surface, x, y, lift, tessellation, x0, y1, x0, y0);
+  pushOutlineEdge(out, surface, x, y, lift, divisions, x0, y0, x1, y0);
+  pushOutlineEdge(out, surface, x, y, lift, divisions, x1, y0, x1, y1);
+  pushOutlineEdge(out, surface, x, y, lift, divisions, x1, y1, x0, y1);
+  pushOutlineEdge(out, surface, x, y, lift, divisions, x0, y1, x0, y0);
 }
 
 /** Ребро контура ломаной по полю: `tessellation` отрезков вместо одного. */

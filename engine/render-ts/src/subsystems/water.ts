@@ -27,6 +27,7 @@ import {
 } from '@fluxus/assets';
 import { costSink } from '../cost.js';
 import { textureFromImage } from '../model/skins.js';
+import { levelFieldSampler } from '../visualSurface.js';
 import type { VisualSurfaceSource } from '../surfaceSource.js';
 import type {
   QualityDeclaration,
@@ -42,7 +43,7 @@ import {
   type WaterBodyConfig,
   type WaterRenderConfig,
 } from '../water/config.js';
-import { levelFieldSampler, type WaterFieldSampler } from '../water/depth.js';
+import type { WaterFieldSampler } from '../water/depth.js';
 import { waterRegionsOf } from '../water/region.js';
 
 /**
@@ -98,6 +99,14 @@ export class WaterSubsystem implements RenderSubsystem {
   private current: WaterRenderConfig | null;
   private ctx: RenderContext | null = null;
   private heightStep = 1;
+  /**
+   * Собственная копия карты пола (TERR-6) — та же причина, что у террейна:
+   * мутация приезжает дельтой тика, а сетка документа её снимает (ED-9), и
+   * сверять надо с СОБСТВЕННЫМ состоянием, а не с прежней сеткой.
+   */
+  private floor: Uint8Array;
+  /** Отписка от источника поверхности; снос обязан её снять (REND-31). */
+  private unsubscribeSurface: (() => void) | null = null;
   private readonly bodies: WaterBodyView[] = [];
   private view: TickView | null = null;
   /** Презентационные часы воды (REND-25): идут со знаком хода мира. */
@@ -128,6 +137,7 @@ export class WaterSubsystem implements RenderSubsystem {
       });
     // Приём `tileSize` — точка входной границы рендера (REND-1, TERR-2).
     this.tile = options.grid.tileSize / FIXED_ONE;
+    this.floor = new Uint8Array(options.grid.floor);
   }
 
   /** Тела в кадре — вход тестов и диагностики (REND-35). */
@@ -146,9 +156,10 @@ export class WaterSubsystem implements RenderSubsystem {
     // секции означала бы воду, навсегда отставшую от дна (REND-35).
     // Сам вызов идемпотентен: его делают все, кто пользуется источником.
     this.surfaceSource?.init(ctx);
-    this.surfaceSource?.onChange((cells) => {
-      this.invalidate(cells);
-    });
+    this.unsubscribeSurface =
+      this.surfaceSource?.onChange((cells) => {
+        this.invalidate(cells);
+      }) ?? null;
     this.requestTextures();
     this.build();
   }
@@ -162,6 +173,13 @@ export class WaterSubsystem implements RenderSubsystem {
     this.clearBodies();
     this.releaseTextures(() => false);
     this.warned.clear();
+    // Подписка на источник поверхности снимается, и контекст сцены забывается:
+    // снесённая подсистема не метит тел, а поданная после сноса секция не
+    // строит мешей в чужую сцену (REND-31). Сам источник сюда не входит — он
+    // приходит опцией сборки и принадлежит ей, а не подсистеме (REND-8).
+    this.unsubscribeSurface?.();
+    this.unsubscribeSurface = null;
+    this.ctx = null;
   }
 
   /**
@@ -171,8 +189,18 @@ export class WaterSubsystem implements RenderSubsystem {
    */
   syncTick(view: TickView): void {
     this.view = view;
-    if (!view.snapAll) return;
-    for (const body of this.bodies) body.resetRipples();
+    if (view.snapAll) for (const body of this.bodies) body.resetRipples();
+    // Мутация пола (TERR-6) меняет глубину: под выбитой клеткой дна нет, и
+    // вода там не рисуется (REND-35). Карта — своя копия, дельта — та же, что
+    // читает террейн: два потребителя одного канала, не два источника правды.
+    if (view.floorBits === null || view.floorChangedCells.length === 0) return;
+    const { width } = this.grid;
+    for (const cell of view.floorChangedCells) {
+      this.floor[cell] = view.floorBits[cell]!;
+      const x = cell % width;
+      const y = Math.floor(cell / width);
+      for (const body of this.bodies) body.markCell(x, y);
+    }
   }
 
   /**
@@ -191,7 +219,7 @@ export class WaterSubsystem implements RenderSubsystem {
     let sources = 0;
     let quads = 0;
     for (const body of this.bodies) {
-      texels += body.flush(field);
+      texels += body.flush(field, this.floor);
       sources += body.updateFrame(this.clock, this.view, alpha, dt);
       quads += body.quads;
     }
@@ -218,10 +246,20 @@ export class WaterSubsystem implements RenderSubsystem {
       next.height === previous.height &&
       next.tileSize === previous.tileSize
     ) {
+      // Пол документа возвращает мутацию превью (ED-9, TERR-6): сверяется с
+      // СОБСТВЕННОЙ копией, как у террейна, — поэтому повторная подача той же
+      // сетки не пустая операция.
+      this.applyFloor(next.floor);
+      // Сборка БЕЗ источника поверхности (REND-35): полем служит уровень
+      // (REND-7), новые уровни уже читаются `field()`, а сказать телам о смене
+      // поля некому — источника, который метит клетки, здесь нет. Глубина иначе
+      // осталась бы от прежней арены до первой правки кривизны.
+      if (this.surfaceSource === undefined) for (const body of this.bodies) body.markAll();
       return;
     }
     // Приём `tileSize` — вторая точка той же входной границы (REND-1, TERR-2).
     this.tile = next.tileSize / FIXED_ONE;
+    this.floor = new Uint8Array(next.floor);
     // Причина «карта не ложится на сетку» названа размерами сетки: другая арена
     // — другой повод, и молчать о нём нельзя (REND-35).
     this.warned.clear();
@@ -351,6 +389,22 @@ export class WaterSubsystem implements RenderSubsystem {
       return levelFieldSampler(this.grid, this.heightStep);
     }
     return (wx, wy) => surface.heightAt(wx, wy);
+  }
+
+  /**
+   * Пол сетки документа против собственной копии (TERR-6, ED-9): разошедшиеся
+   * клетки метятся телам — под выбитой клеткой воды нет, а вернувшийся пол
+   * возвращает и её.
+   */
+  private applyFloor(next: Uint8Array): void {
+    const { width } = this.grid;
+    for (let cell = 0; cell < next.length; cell++) {
+      if (this.floor[cell] === next[cell]) continue;
+      this.floor[cell] = next[cell]!;
+      const x = cell % width;
+      const y = Math.floor(cell / width);
+      for (const body of this.bodies) body.markCell(x, y);
+    }
   }
 
   /** Изменение поля (REND-9, REND-14): помеченные клетки — на перезаполнение. */
@@ -513,7 +567,9 @@ export class WaterSubsystem implements RenderSubsystem {
           return;
         }
         if (state.status !== 'ready' || this.textures.get(id) !== null) return;
-        const texture = textureFromImage(state.data, 'normal');
+        // Владелец текстуры — подсистема воды, а не модели (PERF-8): в эталоне
+        // памяти деталь воды обязана стоять своей строкой.
+        const texture = textureFromImage(state.data, 'normal', this.name);
         // Деталь воды тайлится по мировым координатам — иначе tileable-карта
         // размазалась бы на весь водоём одним экземпляром.
         texture.wrapS = THREE.RepeatWrapping;

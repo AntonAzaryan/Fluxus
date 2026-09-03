@@ -53,10 +53,21 @@ const FALLOFF_POWER = 2;
  * Подъём пятна над точкой опоры инстанса, мировые единицы. Пятно лежит на
  * террейне, а террейн — та же геометрия, что рисует пол: без подъёма два
  * ко-планарных треугольника дерутся за глубину (z-fighting) и пятно мерцает.
- * Величина мала намеренно — на склоне пятно обязано читаться прижатым к земле;
- * `polygonOffset` материала добивает случаи, где подъёма не хватает.
+ * Величина мала намеренно — пятно обязано читаться прижатым к земле.
+ *
+ * Подъём идёт ВДОЛЬ НОРМАЛИ опоры, а не по вертикали, и вместе с поворотом
+ * квада по той же нормали делает величину независимой от уклона: подъём по
+ * вертикали на склоне θ отрывал бы пятно от земли на `подъём / cos θ`, а
+ * горизонтальный круг вообще уходил бы в грунт уже в `подъём / tg θ` от центра.
  */
 const LIFT_WORLD_UNITS = 0.02;
+
+/**
+ * Локальная нормаль квада пятна: `PlaneGeometry` лежит в плоскости XY, и его
+ * нормаль — +Z. От неё поворотом (`setFromUnitVectors`) считается ориентация
+ * инстанса по нормали опоры.
+ */
+const QUAD_NORMAL = new THREE.Vector3(0, 0, 1);
 
 /** Начальная ёмкость инстанс-меша: типовой арене хватает без единого роста. */
 const INITIAL_CAPACITY = 32;
@@ -120,7 +131,8 @@ export class BlobShadowField {
   private readonly position = new THREE.Vector3();
   private readonly quaternion = new THREE.Quaternion();
   private readonly scale = new THREE.Vector3();
-  private readonly pose: BlobCasterPose = { x: 0, y: 0, z: 0 };
+  private readonly normal = new THREE.Vector3();
+  private readonly pose: BlobCasterPose = { x: 0, y: 0, z: 0, nx: 0, ny: 0, nz: 1 };
 
   constructor() {
     this.material = own(
@@ -131,8 +143,11 @@ export class BlobShadowField {
         color: 0x000000,
         transparent: true,
         depthWrite: false,
-        // Пятно ко-планарно полу: смещение глубины — вторая линия обороны после
-        // подъёма над опорой, для склонов и мелких карт глубины.
+        // Пятно почти ко-планарно полу: смещение глубины гасит остаток
+        // z-fighting'а на дальних текселях карты глубины, где подъёма в 0.02
+        // мировых единицы уже не хватает разрешению буфера. Геометрического
+        // пересечения со склоном оно НЕ лечит и лечить не может — там работают
+        // поворот квада по нормали опоры и подъём вдоль неё.
         polygonOffset: true,
         polygonOffsetFactor: -1,
         polygonOffsetUnits: -1,
@@ -192,7 +207,19 @@ export class BlobShadowField {
     for (const caster of casters) {
       if (!caster.pose(this.pose)) continue;
       const diameter = Math.max(0, caster.radius) * 2;
-      this.position.set(this.pose.x, this.pose.y, this.pose.z + LIFT_WORLD_UNITS);
+      // Ориентация — по нормали опоры (REND-30): на склоне пятно ложится
+      // плашмя, а не режется грунтом. Вырожденную нормаль (её у поверхности не
+      // бывает, но контракт записи её не запрещает) заменяет вертикаль:
+      // нормировать ноль нечем, и квад тогда остаётся горизонтальным.
+      this.normal.set(this.pose.nx, this.pose.ny, this.pose.nz);
+      if (this.normal.lengthSq() > 0) this.normal.normalize();
+      else this.normal.copy(QUAD_NORMAL);
+      this.quaternion.setFromUnitVectors(QUAD_NORMAL, this.normal);
+      // Подъём — вдоль той же нормали: по вертикали он на склоне отрывал бы
+      // пятно от земли тем сильнее, чем круче уклон.
+      this.position
+        .set(this.pose.x, this.pose.y, this.pose.z)
+        .addScaledVector(this.normal, LIFT_WORLD_UNITS);
       this.scale.set(diameter, diameter, 1);
       this.matrix.compose(this.position, this.quaternion, this.scale);
       mesh.setMatrixAt(written, this.matrix);

@@ -317,3 +317,209 @@ function validateEffectAgainstDescription(
     }
   }
 }
+
+// ------------------------------------- пути камеры (ASSET-17, `camera` CAM-10)
+
+/**
+ * Секция кинематографических путей камеры (ASSET-17): «имя пути → путь».
+ * Значения принадлежат документу; состав каналов ключа, их границы и перечень
+ * имён сглаживания — коду камеры (CAM-10) и приезжают сюда описанием. Своего
+ * перечня у модуля ассетов нет и быть не должно — по тем же основаниям, по
+ * каким его нет у секций ASSET-8 и ASSET-10.
+ */
+export type CameraPathsSection = Record<string, CameraPathDef>;
+
+/** Один путь: ключи и признак кольца. */
+export interface CameraPathDef {
+  readonly keys: readonly CameraPathKeyDef[];
+  /** Путь идёт по кругу, пока его не остановят (CAM-10); нет — false. */
+  readonly loop?: boolean;
+}
+
+/**
+ * Ключ пути: каналы позы плюс длительность до СЛЕДУЮЩЕГО ключа и имя
+ * сглаживания параметра отрезка. Открытая запись, потому что перечень каналов
+ * нормирует код камеры, а не формат.
+ */
+export interface CameraPathKeyDef {
+  /** Секунды до следующего ключа; у последнего ключа не читается. */
+  readonly duration?: number;
+  /** Имя сглаживания из описания (CAM-10); нет — линейное. */
+  readonly easing?: string;
+  readonly [channel: string]: number | string | undefined;
+}
+
+/**
+ * Канал ключа: имя, обязательность и границы осмысленности (CAM-10). Границы —
+ * не окно вкуса: камера знает, что дистанция положительна, но не знает, какой
+ * облёт уместен на этой арене (механизм против политики).
+ */
+export interface CameraPathChannelSpec {
+  readonly name: string;
+  readonly required: boolean;
+  readonly min?: number;
+  readonly max?: number;
+}
+
+/** Машинное описание пути (CAM-10) — вход валидации секции (ASSET-17). */
+export interface CameraPathDescription {
+  readonly channels: readonly CameraPathChannelSpec[];
+  readonly easings: readonly string[];
+}
+
+/** Служебные поля ключа, каналами не являющиеся. */
+const PATH_KEY_META: readonly string[] = ['duration', 'easing'];
+const PATH_KEYS: readonly string[] = ['keys', 'loop'];
+
+/**
+ * Секция путей камеры (ASSET-17). Структура проверяется всегда и строго: путь
+ * без ключей, ключ без точки наблюдения и неположительная длительность —
+ * ошибки, а не предупреждения; такой документ не о пути, а об опечатке.
+ *
+ * Знание о СОСТАВЕ каналов и перечне сглаживаний приходит только описанием
+ * (CAM-10). Канал и имя сглаживания, им не объявленные, — предупреждение и
+ * пропуск: та же граница переживания манифестом кода, что у ASSET-8 и ASSET-10.
+ */
+export function validateCameraPaths(
+  section: unknown,
+  errors: string[],
+  warnings: string[],
+  description: CameraPathDescription | undefined,
+): void {
+  const root = 'cameraPaths';
+  if (!isRecord(section)) {
+    errors.push(`${root}: ожидался объект «имя пути → путь», получено ${typeName(section)}`);
+    return;
+  }
+  for (const [name, path] of Object.entries(section)) {
+    validateOnePath(path, `${root}.${name}`, errors, warnings, description);
+  }
+}
+
+function validateOnePath(
+  path: unknown,
+  at: string,
+  errors: string[],
+  warnings: string[],
+  description: CameraPathDescription | undefined,
+): void {
+  if (!isRecord(path)) {
+    errors.push(`${at}: ожидалась запись пути, получено ${typeName(path)}`);
+    return;
+  }
+  closedKeys(path, at, PATH_KEYS, errors);
+  if (path.loop !== undefined && typeof path.loop !== 'boolean') {
+    errors.push(`${at}.loop: ожидался флаг, получено ${typeName(path.loop)}`);
+  }
+  const keys = path.keys;
+  if (!Array.isArray(keys) || keys.length === 0) {
+    errors.push(`${at}.keys: ожидался непустой список ключей пути`);
+    return;
+  }
+  keys.forEach((key, index) => {
+    validatePathKey(key, `${at}.keys[${String(index)}]`, index === keys.length - 1, errors, warnings, description);
+  });
+}
+
+function validatePathKey(
+  key: unknown,
+  at: string,
+  last: boolean,
+  errors: string[],
+  warnings: string[],
+  description: CameraPathDescription | undefined,
+): void {
+  if (!isRecord(key)) {
+    errors.push(`${at}: ожидалась запись ключа, получено ${typeName(key)}`);
+    return;
+  }
+  validateKeyTiming(key, at, last, errors, warnings, description);
+  validateKeyChannels(key, at, errors, warnings, description);
+}
+
+/** Длительность до следующего ключа и имя сглаживания параметра отрезка (CAM-10). */
+function validateKeyTiming(
+  key: Record<string, unknown>,
+  at: string,
+  last: boolean,
+  errors: string[],
+  warnings: string[],
+  description: CameraPathDescription | undefined,
+): void {
+  // Длительность последнего ключа не читается — идти после него некуда, — но
+  // названная негодной остаётся опечаткой и на нём.
+  if (key.duration !== undefined) {
+    if (!isFiniteNumber(key.duration) || key.duration <= 0) {
+      errors.push(
+        `${at}.duration: ожидалось положительное число секунд, получено ${typeName(key.duration)}`,
+      );
+    }
+  } else if (!last) {
+    errors.push(`${at}.duration: длительность до следующего ключа обязательна`);
+  }
+  if (key.easing === undefined) return;
+  if (typeof key.easing !== 'string') {
+    errors.push(`${at}.easing: ожидалось имя сглаживания, получено ${typeName(key.easing)}`);
+    return;
+  }
+  if (description !== undefined && !description.easings.includes(key.easing)) {
+    warnings.push(
+      `${at}.easing: сглаживание "${key.easing}" камере неизвестно — будет линейное ` +
+        `(допустимы: ${description.easings.join(', ')})`,
+    );
+  }
+}
+
+/** Канал вне описания: предупреждение и пропуск — манифест переживает код. */
+function warnUnknownChannel(
+  at: string,
+  channel: string,
+  warnings: string[],
+  description: CameraPathDescription,
+): void {
+  warnings.push(
+    `${at}.${channel}: канал камерой не объявлен — он будет пропущен ` +
+      `(допустимы: ${description.channels.map((one) => one.name).join(', ')})`,
+  );
+}
+
+/** Значение канала против границ осмысленности описания (CAM-10). */
+function checkChannelRange(
+  at: string,
+  spec: CameraPathChannelSpec,
+  value: number,
+  errors: string[],
+): void {
+  const low = spec.min !== undefined && value < spec.min;
+  const high = spec.max !== undefined && value > spec.max;
+  if (!low && !high) return;
+  errors.push(
+    `${at}.${spec.name}: значение ${String(value)} вне допустимого диапазона ` +
+      `[${String(spec.min ?? '-∞')}, ${String(spec.max ?? '+∞')}]`,
+  );
+}
+
+/** Каналы позы ключа: числовая природа, объявленность описанием и границы (CAM-10). */
+function validateKeyChannels(
+  key: Record<string, unknown>,
+  at: string,
+  errors: string[],
+  warnings: string[],
+  description: CameraPathDescription | undefined,
+): void {
+  for (const [channel, value] of Object.entries(key)) {
+    if (PATH_KEY_META.includes(channel)) continue;
+    if (!isFiniteNumber(value)) {
+      errors.push(`${at}.${channel}: канал ключа — конечное число, получено ${typeName(value)}`);
+      continue;
+    }
+    const spec = description?.channels.find((one) => one.name === channel);
+    if (spec !== undefined) checkChannelRange(at, spec, value, errors);
+    else if (description !== undefined) warnUnknownChannel(at, channel, warnings, description);
+  }
+  for (const spec of description?.channels ?? []) {
+    if (spec.required && !isFiniteNumber(key[spec.name])) {
+      errors.push(`${at}.${spec.name}: обязательный канал ключа не назван либо не число`);
+    }
+  }
+}

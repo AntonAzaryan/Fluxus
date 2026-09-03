@@ -20,16 +20,19 @@
  * решает тик, ровно как превью кисти вьюпорта (REND-16).
  */
 import * as THREE from 'three';
+import { FIXED_ONE } from '@fluxus/core';
 import type { DebugColor, DebugDraw, DebugPose, DebugRaster } from './contract.js';
 import type { VisualSurfaceSource } from '../surfaceSource.js';
+import { carrier, upload, type Carrier } from './carriers.js';
+import { disposeRasterPlane, rasterPlaneOf, type RasterPlane } from './rasterPlane.js';
+import { areaSubdivisions } from '../surfaceCells.js';
+import { DEFAULT_CURVATURE_TESSELLATION } from '../types.js';
 import { own } from '../footprint.js';
 
 /** Сегментов на окружность и диск: контур читается, а вершин остаётся немного. */
 const CIRCLE_SEGMENTS = 32;
 /** Подъём наложения над поверхностью, чтобы оно не спорило с полом по глубине. */
 const SURFACE_LIFT = 0.03;
-/** Стартовая ёмкость буферов в вершинах; растёт удвоением, не на кадр. */
-const INITIAL_VERTICES = 256;
 /**
  * Рёбра коробки парами индексов углов. Номер угла — битовая маска осей:
  * бит 0 — X по максимуму, бит 1 — Y, бит 2 — Z. Четыре ребра нижней грани,
@@ -41,65 +44,17 @@ const BOX_EDGES: readonly (readonly [number, number])[] = [
   [0, 4], [1, 5], [2, 6], [3, 7],
 ];
 
-/** Растущий буфер вершин с цветом: позиции и цвета в паре, длина — в вершинах. */
-class VertexBuffer {
-  positions: Float32Array = new Float32Array(INITIAL_VERTICES * 3);
-  colors: Float32Array = new Float32Array(INITIAL_VERTICES * 3);
-  count = 0;
-
-  reset(): void {
-    this.count = 0;
-  }
-
-  push(x: number, y: number, z: number, color: DebugColor): void {
-    if ((this.count + 1) * 3 > this.positions.length) this.grow();
-    const at = this.count * 3;
-    this.positions[at] = x;
-    this.positions[at + 1] = y;
-    this.positions[at + 2] = z;
-    this.colors[at] = ((color >> 16) & 0xff) / 255;
-    this.colors[at + 1] = ((color >> 8) & 0xff) / 255;
-    this.colors[at + 2] = (color & 0xff) / 255;
-    this.count += 1;
-  }
-
-  private grow(): void {
-    const positions = new Float32Array(this.positions.length * 2);
-    positions.set(this.positions);
-    this.positions = positions;
-    const colors = new Float32Array(this.colors.length * 2);
-    colors.set(this.colors);
-    this.colors = colors;
-  }
-}
-
-/** Один носитель: геометрия, её атрибуты и объект сцены. */
-interface Carrier {
-  readonly buffer: VertexBuffer;
-  readonly geometry: THREE.BufferGeometry;
-  readonly object: THREE.Object3D;
-  /** Ёмкость атрибутов в вершинах — по ней видно, что буфер перерос их. */
-  capacity: number;
-}
-
-/** Плашка растрового источника: своя текстура и свой квад. */
-interface RasterPlane {
-  readonly mesh: THREE.Mesh;
-  readonly texture: THREE.DataTexture;
-  /** Растр текстуры: своя копия слоя, а не буфер подсистемы (RDBG-2). */
-  readonly texels: Uint8Array;
-  readonly material: THREE.MeshBasicMaterial;
-  readonly geometry: THREE.PlaneGeometry;
-  readonly widthTexels: number;
-  readonly heightTexels: number;
-  used: boolean;
-}
-
 export interface DebugPainterOptions {
   /** Сцена наложений; нет — слой не рисует вовсе (headless-дамп, RDBG-2). */
   readonly scene?: THREE.Scene;
   /** Визуальная поверхность (REND-9): на неё ложатся окружности, диски и полигоны. */
   readonly surface?: VisualSurfaceSource;
+  /**
+   * Подшагов на клетку при укладке полигона на поверхность (REND-9) — то же
+   * число, которым дробит клетку геометрия террейна и наложений; умолчание —
+   * умолчание конфига рендера.
+   */
+  readonly tessellation?: number;
 }
 
 /**
@@ -114,6 +69,8 @@ export class DebugPainter implements DebugDraw {
   private readonly triangles: Carrier;
   private readonly rasters = new Map<string, RasterPlane>();
   private attached = false;
+  /** Ресурсы отданы: повторный `dispose` не отдаёт их дважды (учёт PERF-8 считает разность). */
+  private disposed = false;
   /** Растровый источник текущего примитива — по нему плашка находит свою. */
   private rasterOwner = '';
 
@@ -167,49 +124,40 @@ export class DebugPainter implements DebugDraw {
     // Наложения рисуются ПОВЕРХ изображения (RDBG-5): глубина не тестируется,
     // но и не пишется — кадр под ними остаётся нетронутым.
     this.lines = carrier(
-      (geometry) =>
-        new THREE.LineSegments(
-          geometry,
-          own(
-            'material',
-            'debug',
-            new THREE.LineBasicMaterial({ vertexColors: true, depthTest: false, depthWrite: false }),
-          ),
-        ),
+      own(
+        'material',
+        'debug',
+        new THREE.LineBasicMaterial({ vertexColors: true, depthTest: false, depthWrite: false }),
+      ),
+      (geometry, material) => new THREE.LineSegments(geometry, material),
     );
     this.points = carrier(
-      (geometry) =>
-        new THREE.Points(
-          geometry,
-          own(
-            'material',
-            'debug',
-            new THREE.PointsMaterial({
-              vertexColors: true,
-              size: 6,
-              sizeAttenuation: false,
-              depthTest: false,
-              depthWrite: false,
-            }),
-          ),
-        ),
+      own(
+        'material',
+        'debug',
+        new THREE.PointsMaterial({
+          vertexColors: true,
+          size: 6,
+          sizeAttenuation: false,
+          depthTest: false,
+          depthWrite: false,
+        }),
+      ),
+      (geometry, material) => new THREE.Points(geometry, material),
     );
     this.triangles = carrier(
-      (geometry) =>
-        new THREE.Mesh(
-          geometry,
-          own(
-            'material',
-            'debug',
-            new THREE.MeshBasicMaterial({
-              vertexColors: true,
-              transparent: true,
-              opacity: 0.28,
-              depthWrite: false,
-              side: THREE.DoubleSide,
-            }),
-          ),
-        ),
+      own(
+        'material',
+        'debug',
+        new THREE.MeshBasicMaterial({
+          vertexColors: true,
+          transparent: true,
+          opacity: 0.28,
+          depthWrite: false,
+          side: THREE.DoubleSide,
+        }),
+      ),
+      (geometry, material) => new THREE.Mesh(geometry, material),
     );
     for (const one of [this.lines, this.points, this.triangles]) this.group.add(one.object);
   }
@@ -245,9 +193,7 @@ export class DebugPainter implements DebugDraw {
     for (const [id, plane] of this.rasters) {
       if (plane.used) continue;
       this.group.remove(plane.mesh);
-      plane.geometry.dispose();
-      plane.material.dispose();
-      plane.texture.dispose();
+      disposeRasterPlane(plane);
       this.rasters.delete(id);
     }
     this.syncAttachment();
@@ -257,6 +203,33 @@ export class DebugPainter implements DebugDraw {
   clear(): void {
     this.begin();
     this.commit();
+  }
+
+  /**
+   * Точка освобождения рисовальщика (REND-31, ED-15): три носителя со своими
+   * геометриями и материалами плюс плашки растровых источников. Без неё каждый
+   * снос вьюпорта редактора терял бы их — учёт (PERF-8) видит владельца `debug`,
+   * а инвариант PERF-9 требует, чтобы живых после сноса не осталось.
+   *
+   * Идемпотентна: повторный `dispose` не отдаёт ресурс дважды.
+   */
+  dispose(): void {
+    if (this.disposed) return;
+    this.disposed = true;
+    const scene = this.options.scene;
+    if (this.attached && scene !== undefined) scene.remove(this.group);
+    this.attached = false;
+    for (const one of [this.lines, this.points, this.triangles]) {
+      this.group.remove(one.object);
+      one.geometry.dispose();
+      one.material.dispose();
+      one.buffer.reset();
+    }
+    for (const plane of this.rasters.values()) {
+      this.group.remove(plane.mesh);
+      disposeRasterPlane(plane);
+    }
+    this.rasters.clear();
   }
 
   // ------------------------------------------------------------- примитивы
@@ -286,49 +259,67 @@ export class DebugPainter implements DebugDraw {
     if (closed && count > 2) this.pushEdge(points, count - 1, 0, color);
   }
 
+  /**
+   * Окружность НА визуальной поверхности (REND-9). Звено между сегментами
+   * дробится тем же правилом, что и полигон (`surfaceCells.ts`): на клетке с
+   * кривизной прямое звено режет холм насквозь ровно так же, как резал его
+   * плоский веер полигона.
+   */
   circle(x: number, y: number, radius: number, color: DebugColor): void {
-    let px = 0;
-    let py = 0;
-    for (let i = 0; i <= CIRCLE_SEGMENTS; i += 1) {
+    const steps = this.areaSteps(x - radius, y - radius, x + radius, y + radius);
+    let px = x + radius;
+    let py = y;
+    for (let i = 1; i <= CIRCLE_SEGMENTS; i += 1) {
       const angle = (i / CIRCLE_SEGMENTS) * Math.PI * 2;
       const qx = x + Math.cos(angle) * radius;
       const qy = y + Math.sin(angle) * radius;
-      if (i > 0) {
-        this.lines.buffer.push(px, py, this.heightAt(px, py), color);
-        this.lines.buffer.push(qx, qy, this.heightAt(qx, qy), color);
-      }
+      this.pushSurfaceEdge(px, py, qx, qy, steps, color);
       px = qx;
       py = qy;
     }
   }
 
+  /**
+   * Диск НА визуальной поверхности (REND-9): сектор — треугольник, и ложится он
+   * тем же дроблением, что и треугольник полигона.
+   */
   disc(x: number, y: number, radius: number, color: DebugColor): void {
+    const steps = this.areaSteps(x - radius, y - radius, x + radius, y + radius);
     for (let i = 0; i < CIRCLE_SEGMENTS; i += 1) {
       const a = (i / CIRCLE_SEGMENTS) * Math.PI * 2;
       const b = ((i + 1) / CIRCLE_SEGMENTS) * Math.PI * 2;
-      const ax = x + Math.cos(a) * radius;
-      const ay = y + Math.sin(a) * radius;
-      const bx = x + Math.cos(b) * radius;
-      const by = y + Math.sin(b) * radius;
-      this.triangles.buffer.push(x, y, this.heightAt(x, y), color);
-      this.triangles.buffer.push(ax, ay, this.heightAt(ax, ay), color);
-      this.triangles.buffer.push(bx, by, this.heightAt(bx, by), color);
+      this.pushSurfaceTriangle(
+        x, y,
+        x + Math.cos(a) * radius, y + Math.sin(a) * radius,
+        x + Math.cos(b) * radius, y + Math.sin(b) * radius,
+        steps,
+        color,
+      );
     }
   }
 
+  /**
+   * Выпуклый полигон НА визуальной поверхности (REND-9). Сэмплировать одни
+   * вершины нельзя: клетка с кривизной вышла бы плоским веером сквозь холм, а
+   * клеточная заливка наложений (REND-16) ту же клетку дробит по тесселяции —
+   * два разной точности строителя «клетка на поверхности» и были находкой
+   * аудита. Правило дробления здесь общее с ней (`surfaceCells.ts`); дробление
+   * одно на весь полигон — разное у соседних треугольников оставило бы щель.
+   */
   polygon(points: readonly number[], color: DebugColor): void {
     const count = Math.floor(points.length / 2);
     if (count < 3) return;
+    const steps = this.polygonSteps(points, count);
     const ax = points[0]!;
     const ay = points[1]!;
     for (let i = 1; i + 1 < count; i += 1) {
-      const bx = points[i * 2]!;
-      const by = points[i * 2 + 1]!;
-      const cx = points[(i + 1) * 2]!;
-      const cy = points[(i + 1) * 2 + 1]!;
-      this.triangles.buffer.push(ax, ay, this.heightAt(ax, ay), color);
-      this.triangles.buffer.push(bx, by, this.heightAt(bx, by), color);
-      this.triangles.buffer.push(cx, cy, this.heightAt(cx, cy), color);
+      this.pushSurfaceTriangle(
+        ax, ay,
+        points[i * 2]!, points[i * 2 + 1]!,
+        points[(i + 1) * 2]!, points[(i + 1) * 2 + 1]!,
+        steps,
+        color,
+      );
     }
   }
 
@@ -376,6 +367,113 @@ export class DebugPainter implements DebugDraw {
     return (surface === null ? 0 : surface.heightAt(x, y)) + SURFACE_LIFT;
   }
 
+  /** Делений стороны для полигона — по прямоугольнику, который он накрывает. */
+  private polygonSteps(points: readonly number[], count: number): number {
+    let minX = points[0]!;
+    let maxX = minX;
+    let minY = points[1]!;
+    let maxY = minY;
+    for (let i = 1; i < count; i += 1) {
+      const x = points[i * 2]!;
+      const y = points[i * 2 + 1]!;
+      if (x < minX) minX = x;
+      if (x > maxX) maxX = x;
+      if (y < minY) minY = y;
+      if (y > maxY) maxY = y;
+    }
+    return this.areaSteps(minX, minY, maxX, maxY);
+  }
+
+  /**
+   * Делений стороны для мирового прямоугольника (`surfaceCells.ts`) — одно
+   * правило на все наложения, лежащие на поверхности: полигон, окружность и
+   * диск дробятся им одинаково. Поверхности нет — плоскость нуля, дробить нечего.
+   */
+  private areaSteps(minX: number, minY: number, maxX: number, maxY: number): number {
+    const source = this.options.surface;
+    const surface = source?.current ?? null;
+    if (source === undefined || surface === null) return 1;
+    const grid = source.terrain;
+    // Приём сетки — точка входной границы рендера (REND-1, TERR-2).
+    const tile = grid.tileSize / FIXED_ONE;
+    return areaSubdivisions(
+      surface,
+      grid,
+      tile,
+      minX, minY, maxX, maxY,
+      this.options.tessellation ?? DEFAULT_CURVATURE_TESSELLATION,
+    );
+  }
+
+  /** Звено ломаной на поверхности: `steps` подшагов вместо одного (REND-9). */
+  private pushSurfaceEdge(
+    ax: number,
+    ay: number,
+    bx: number,
+    by: number,
+    steps: number,
+    color: DebugColor,
+  ): void {
+    let px = ax;
+    let py = ay;
+    for (let i = 1; i <= steps; i += 1) {
+      const t = i / steps;
+      const qx = ax + (bx - ax) * t;
+      const qy = ay + (by - ay) * t;
+      this.lines.buffer.push(px, py, this.heightAt(px, py), color);
+      this.lines.buffer.push(qx, qy, this.heightAt(qx, qy), color);
+      px = qx;
+      py = qy;
+    }
+  }
+
+  /**
+   * Треугольник, положенный на поверхность барицентрическим дроблением:
+   * `P(u, v) = A + (B − A)·u + (C − A)·v`, вершины подтреугольников — на поле.
+   * `steps === 1` — прежний путь по трём вершинам, и плоская арена от дробления
+   * не дорожает ни на вершину.
+   */
+  private pushSurfaceTriangle(
+    ax: number,
+    ay: number,
+    bx: number,
+    by: number,
+    cx: number,
+    cy: number,
+    steps: number,
+    color: DebugColor,
+  ): void {
+    if (steps <= 1) {
+      this.pushSurfacePoint(ax, ay, color);
+      this.pushSurfacePoint(bx, by, color);
+      this.pushSurfacePoint(cx, cy, color);
+      return;
+    }
+    const ux = (bx - ax) / steps;
+    const uy = (by - ay) / steps;
+    const vx = (cx - ax) / steps;
+    const vy = (cy - ay) / steps;
+    for (let j = 0; j < steps; j += 1) {
+      for (let i = 0; i + j < steps; i += 1) {
+        const x0 = ax + ux * i + vx * j;
+        const y0 = ay + uy * i + vy * j;
+        this.pushSurfacePoint(x0, y0, color);
+        this.pushSurfacePoint(x0 + ux, y0 + uy, color);
+        this.pushSurfacePoint(x0 + vx, y0 + vy, color);
+        // Вторая половина параллелограмма — везде, кроме внешнего ряда.
+        if (i + j + 1 >= steps) continue;
+        this.pushSurfacePoint(x0 + ux, y0 + uy, color);
+        this.pushSurfacePoint(x0 + ux + vx, y0 + uy + vy, color);
+        this.pushSurfacePoint(x0 + vx, y0 + vy, color);
+      }
+    }
+  }
+
+  /** Вершина треугольника на поверхности: высоту берёт само поле (REND-9). */
+  private pushSurfacePoint(x: number, y: number, color: DebugColor): void {
+    this.triangles.buffer.push(x, y, this.heightAt(x, y), color);
+  }
+
   private pushEdge(points: readonly number[], a: number, b: number, color: DebugColor): void {
     this.lines.buffer.push(points[a * 3]!, points[a * 3 + 1]!, points[a * 3 + 2]!, color);
     this.lines.buffer.push(points[b * 3]!, points[b * 3 + 1]!, points[b * 3 + 2]!, color);
@@ -389,50 +487,10 @@ export class DebugPainter implements DebugDraw {
     }
     if (existing !== undefined) {
       this.group.remove(existing.mesh);
-      existing.geometry.dispose();
-      existing.material.dispose();
-      existing.texture.dispose();
+      disposeRasterPlane(existing);
     }
-    // Одноканальный растр: цвет плашки задаёт источник, яркость — сам тексель.
-    const texels = new Uint8Array(raster.widthTexels * raster.heightTexels);
-    const texture = own(
-      'texture',
-      'debug',
-      new THREE.DataTexture(
-        texels,
-        raster.widthTexels,
-        raster.heightTexels,
-        THREE.RedFormat,
-        THREE.UnsignedByteType,
-      ),
-    );
-    texture.minFilter = THREE.LinearFilter;
-    texture.magFilter = THREE.NearestFilter;
-    texture.unpackAlignment = 1;
-    const material = own(
-      'material',
-      'debug',
-      new THREE.MeshBasicMaterial({
-        map: texture,
-        transparent: true,
-        opacity: 0.55,
-        depthWrite: false,
-      }),
-    );
-    const geometry = own('geometry', 'debug', new THREE.PlaneGeometry(1, 1));
-    const mesh = new THREE.Mesh(geometry, material);
-    mesh.name = `render-debug:${id}`;
-    const plane: RasterPlane = {
-      mesh,
-      texture,
-      texels,
-      material,
-      geometry,
-      widthTexels: raster.widthTexels,
-      heightTexels: raster.heightTexels,
-      used: true,
-    };
-    this.group.add(mesh);
+    const plane = rasterPlaneOf(id, raster);
+    this.group.add(plane.mesh);
     this.rasters.set(id, plane);
     return plane;
   }
@@ -447,37 +505,4 @@ export class DebugPainter implements DebugDraw {
     else scene.remove(this.group);
     this.attached = wanted;
   }
-}
-
-function carrier(build: (geometry: THREE.BufferGeometry) => THREE.Object3D): Carrier {
-  const geometry = own('geometry', 'debug', new THREE.BufferGeometry());
-  geometry.setAttribute('position', new THREE.BufferAttribute(new Float32Array(INITIAL_VERTICES * 3), 3));
-  geometry.setAttribute('color', new THREE.BufferAttribute(new Float32Array(INITIAL_VERTICES * 3), 3));
-  const object = build(geometry);
-  object.frustumCulled = false;
-  object.renderOrder = 3;
-  return { buffer: new VertexBuffer(), geometry, object, capacity: INITIAL_VERTICES };
-}
-
-/**
- * Атрибуты носителя из буфера. Пока ёмкость достаточна — одна запись в
- * существующий массив и сдвиг диапазона отрисовки; переросший буфер заводит
- * атрибуты заново, и это редкость, а не кадровая работа.
- */
-function upload(one: Carrier): void {
-  const buffer = one.buffer;
-  if (buffer.count > one.capacity) {
-    one.capacity = buffer.positions.length / 3;
-    one.geometry.setAttribute('position', new THREE.BufferAttribute(buffer.positions, 3));
-    one.geometry.setAttribute('color', new THREE.BufferAttribute(buffer.colors, 3));
-  } else {
-    const position = one.geometry.getAttribute('position') as THREE.BufferAttribute;
-    const color = one.geometry.getAttribute('color') as THREE.BufferAttribute;
-    (position.array as Float32Array).set(buffer.positions.subarray(0, buffer.count * 3));
-    (color.array as Float32Array).set(buffer.colors.subarray(0, buffer.count * 3));
-    position.needsUpdate = true;
-    color.needsUpdate = true;
-  }
-  one.geometry.setDrawRange(0, buffer.count);
-  one.object.visible = buffer.count > 0;
 }

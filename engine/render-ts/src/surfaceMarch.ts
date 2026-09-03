@@ -11,7 +11,7 @@
  */
 import { FIXED_ONE, type TerrainGrid } from '@fluxus/core';
 import type { VisualSurfaceSource } from './surfaceSource.js';
-import type { VisualSurface } from './visualSurface.js';
+import { clampIndex, type VisualSurface } from './visualSurface.js';
 import type { MutablePickHit, PickRay } from './pickContracts.js';
 import { EPS_DIR, SLAB_RANGE, slabAxis } from './slab.js';
 
@@ -293,10 +293,12 @@ function axisNext(
   return t + ((cell + (step > 0 ? 1 : 0)) * tile - p) / dir;
 }
 
-/** Индекс клетки в пределах сетки: точка за ней прижимается к крайней клетке. */
-export function clampIndex(value: number, size: number): number {
-  return Math.min(Math.max(value, 0), size - 1);
-}
+/**
+ * Кламп клетки — общий с полем (`visualSurface.ts`), а не своя копия: марш и
+ * поверхность обязаны одинаково понимать «точка за краем арены». Реэкспорт
+ * держит адрес, по которому его берут соседи по наведению (`picking.ts`).
+ */
+export { clampIndex };
 
 /**
  * Попадание в поверхность: точка, клетка, признак отсутствия пола (REND-15).

@@ -10,7 +10,7 @@
   },
   "extract": {
     "extractCalls": 60,
-    "extractChannelValues": 2040,
+    "extractChannelValues": 2160,
     "extractEntitiesCopied": 120,
     "extractEntitiesScanned": 120,
     "extractEvents": 0,
@@ -56,9 +56,9 @@
       "terrainChunksRebuilt": 60,
       "terrainFloorQuads": 107280,
       "terrainSkirtQuads": 9720,
-      "terrainWallQuads": 15360,
+      "terrainWallQuads": 0,
       "waterBodiesDrawn": 60,
-      "waterDepthTexels": 4096,
+      "waterDepthTexels": 8108,
       "waterQuads": 240,
       "waterRippleSources": 0
     },
@@ -115,11 +115,11 @@
       "terrainChunksRebuilt": 60,
       "terrainFloorQuads": 290880,
       "terrainSkirtQuads": 13680,
-      "terrainWallQuads": 30720,
+      "terrainWallQuads": 0,
       "waterBodiesDrawn": 60,
-      "waterDepthTexels": 16384,
+      "waterDepthTexels": 32432,
       "waterQuads": 240,
-      "waterRippleSources": 87
+      "waterRippleSources": 81
     },
     "syncTick": {
       "fogEntitiesScanned": 120,

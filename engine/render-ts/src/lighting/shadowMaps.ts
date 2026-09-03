@@ -51,21 +51,20 @@ const DEPTH_BIAS_TEXELS = 1;
  * отбрасывать тень внутрь экрана.
  *
  * Матрицы теневой камеры производны от позы источника и его цели, и three
- * сводит их только в теневом проходе — здесь они сводятся явно, потому что
- * спрашивают их ДО кадра. Пишет в поданные пирамиду и матрицу: на кадр у этого
- * расчёта своих объектов быть не должно (REND-26).
+ * сводит их только в теневом проходе — здесь этот пересчёт вызывается явно,
+ * потому что пирамиду спрашивают ДО кадра. Считает её сам three
+ * (`updateMatrices` заодно обновляет и пирамиду своей карты, с оглядкой на
+ * систему координат и обратную глубину бэкенда), здесь она лишь копируется в
+ * поданную: своего объекта на кадр обход не требует (REND-26).
  */
 export function shadowCameraFrustum(
   light: THREE.DirectionalLight,
   out: THREE.Frustum,
-  scratch: THREE.Matrix4,
 ): THREE.Frustum {
   light.updateMatrixWorld();
   light.target.updateMatrixWorld();
   light.shadow.updateMatrices(light);
-  const camera = light.shadow.camera;
-  scratch.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse);
-  return out.setFromProjectionMatrix(scratch);
+  return out.copy(light.shadow.getFrustum());
 }
 
 /**

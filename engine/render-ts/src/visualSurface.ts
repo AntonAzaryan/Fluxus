@@ -54,6 +54,41 @@ import { CURVATURE_SCALE, type TerrainCurvatureMap } from '@fluxus/assets';
 import type { WalkableField } from './walkableSurface.js';
 
 /**
+ * Индекс клетки в пределах сетки: точка за краем прижимается к крайней клетке
+ * (как TERR-4). ОДНА запись этого клампа на весь рендер — марш picking'а
+ * (REND-15), реестр walkable (REND-9), поле по уровням (REND-7) и поверхность
+ * камеры (CAM-2) адресуют клетку одним правилом; разойдись копии, «за краем
+ * арены» означало бы у соседей разное.
+ */
+export function clampIndex(value: number, size: number): number {
+  return Math.min(Math.max(value, 0), size - 1);
+}
+
+/** Выборка высоты поля в мировой точке — общий вид у всех потребителей поля. */
+export type HeightSampler = (wx: number, wy: number) => number;
+
+/**
+ * Поле высот ПО УРОВНЯМ (REND-7) — та же опорная высота, что у вертикального
+ * смещения инстанса (REND-12): уровень клетки под точкой × шаг высоты; ни
+ * кривизны, ни walkable-вкладов в ней нет. Единственная реализация этой
+ * выборки: ею живут сборки БЕЗ источника визуальной поверхности — глубина воды
+ * (REND-35) и поверхность камеры (CAM-2), — и второй копии формулы быть не
+ * должно, иначе «высота под точкой» значила бы у них разное.
+ *
+ * Сетка живёт ССЫЛКОЙ: доставка сетки (REND-14) приезжает новым объектом, и
+ * потребитель заводит новую выборку, а не правит эту.
+ */
+export function levelFieldSampler(grid: TerrainGrid, heightStep: number): HeightSampler {
+  // Приём `tileSize` — точка входной границы рендера (REND-1, TERR-2).
+  const tile = grid.tileSize / FIXED_ONE;
+  return (wx, wy) => {
+    const x = clampIndex(Math.floor(wx / tile), grid.width);
+    const y = clampIndex(Math.floor(wy / tile), grid.height);
+    return grid.levels[y * grid.width + x]! * heightStep;
+  };
+}
+
+/**
  * Уровни четырёх углов клетки в порядке [c00, c10, c11, c01] (x,y → x+1,y →
  * x+1,y+1 → x,y+1). У обычной клетки все углы на её уровне; у рампы рёбра,
  * смежные с проходимым перепадом в единицу (TERR-5), тянутся к уровню соседа —
@@ -307,8 +342,8 @@ export function createVisualSurface(
   const locate = (wx: number, wy: number): void => {
     const gx = wx / tile;
     const gy = wy / tile;
-    const cx = Math.min(Math.max(Math.floor(gx), 0), width - 1);
-    const cy = Math.min(Math.max(Math.floor(gy), 0), height - 1);
+    const cx = clampIndex(Math.floor(gx), width);
+    const cy = clampIndex(Math.floor(gy), height);
     scratch.cx = cx;
     scratch.cy = cy;
     scratch.cell = cy * width + cx;
@@ -323,8 +358,8 @@ export function createVisualSurface(
    * разные точки одной клетки (REND-9).
    */
   const locateInCell = (cellX: number, cellY: number, wx: number, wy: number): void => {
-    const cx = Math.min(Math.max(cellX, 0), width - 1);
-    const cy = Math.min(Math.max(cellY, 0), height - 1);
+    const cx = clampIndex(cellX, width);
+    const cy = clampIndex(cellY, height);
     scratch.cx = cx;
     scratch.cy = cy;
     scratch.cell = cy * width + cx;

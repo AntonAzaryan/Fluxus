@@ -12,6 +12,7 @@ import type { VisualSurface, SurfaceNormal } from '../../visualSurface.js';
 import { orientFromTiltYaw, smoothTilt, tiltTarget, type TiltVector } from '../../model/surfaceAlign.js';
 import { advanceFall, jumpArc, jumpBase, maneuverEnds, type ManeuverEnds } from '../../model/verticalOffset.js';
 import { smoothYaw } from '../../model/boneControl.js';
+import { interpolateYaw } from '../../viewBuffer.js';
 import { arcHeightOf, isAirborne, type InstanceRecord } from './instanceRecord.js';
 
 // Переиспользуемые между кадрами объекты — аллокаций на инстанс на кадр нет.
@@ -62,10 +63,22 @@ export function poseInstance(
     y,
     base + arcPrev + (arcCurr - arcPrev) * t + flightArc + record.fallOffset,
   );
+  // Опора под инстансом — вход контактного пятна (REND-30): её надо снять
+  // ЗДЕСЬ, где известны и точка кадра, и правило посадки, а не пересчитывать
+  // вторым проходом в `blobCastersPosed`.
+  captureSeat(record, x, y, base, surface, walkableSeat);
 
   // Курс: цель из данных тика, доворот сглажен по кадрам; при snap —
   // мгновенно. Поправка на перёд модели — своя у каждой записи (REND-13).
-  const targetYaw = view.facingYaw + record.facingOffset;
+  //
+  // Цель — ИНТЕРПОЛИРОВАННЫЙ курс пары доставленных тиков (REND-2), а не курс
+  // последнего: между доставками сущность поворачивается так же непрерывно, как
+  // перемещается, и брать конец пары значило бы гнать доворот к цели, которой
+  // мир достигнет только следующим тиком. Дуга — кратчайшая (`interpolateYaw`):
+  // курс живёт на окружности. Сглаживание кадра остаётся сверху — оно про
+  // плавность картинки, а не про то, куда сущность смотрит в мире.
+  const targetYaw =
+    interpolateYaw(view.prevFacingYaw ?? view.facingYaw, view.facingYaw, t) + record.facingOffset;
   record.yaw = record.snapPending
     ? targetYaw
     : smoothYaw(record.yaw, targetYaw, turnRate, settle);
@@ -148,4 +161,48 @@ function poseTilt(
     return;
   }
   smoothTilt(record.tilt, SCRATCH_TILT, tiltRate, settle);
+}
+
+/**
+ * Опора кадра под инстансом — высота поверхности и её нормаль (REND-30, вход
+ * `poseOfBlob`). Считается только при живом носителе пятна: выборка поверхности
+ * стоит работы, а инстансу без носителя она не нужна ни для чего.
+ *
+ * Наземный инстанс уже стоит на опоре — её посчитал `baseHeightOf`, и второй
+ * выборки высоты здесь не делается. У летящего (REND-12) поза и опора расходятся:
+ * `baseHeightOf` ведёт его по прямой между высотами отрыва и приземления, а
+ * пятно обязано лежать на поверхности ПОД ним — там его и берём.
+ *
+ * Правило посадки — то же, каким сажается сам инстанс (REND-9):
+ * walkable-инстанс читает террейн-форму без walkable-вкладов, все прочие — поле
+ * целиком. Нет поверхности либо override уровня (TERR-4) — опорой служит
+ * посчитанная позой высота, а нормалью вертикаль: наклонять пятно не по чему.
+ */
+function captureSeat(
+  record: InstanceRecord,
+  x: number,
+  y: number,
+  base: number,
+  surface: VisualSurface | null,
+  walkableSeat: boolean,
+): void {
+  if (record.blobCaster === null) return;
+  const normal = record.seatNormal;
+  // Порядок ветвей — тот же, что у `baseHeightOf`: манёвр решается ПЕРЕД
+  // override уровня, иначе опора летящего разошлась бы с его же позой.
+  const airborne = surface !== null && isAirborne(record.view);
+  if (surface === null || (!airborne && record.view.levelOverride)) {
+    record.seatZ = base;
+    normal.x = 0;
+    normal.y = 0;
+    normal.z = 1;
+    return;
+  }
+  if (walkableSeat) {
+    record.seatZ = airborne ? surface.terrainFormHeightAt(x, y) : base;
+    surface.terrainFormNormalAt(x, y, normal);
+    return;
+  }
+  record.seatZ = airborne ? surface.heightAt(x, y) : base;
+  surface.normalAt(x, y, normal);
 }

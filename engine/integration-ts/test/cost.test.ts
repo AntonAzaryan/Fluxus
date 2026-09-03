@@ -411,9 +411,10 @@ describe('PERF-4: голден-гейт стоимости на записанн
     const bench = matchBench(BENCH_PRESETS.performance);
 
     // Реестр стенда собран из деклараций ЕГО подсистем (design D1) в порядке
-    // регистрации: пост-обработка (три ручки — выключатель bloom, потолок
-    // разрешения его пирамиды и выключатель LUT, REND-34), освещение (три
-    // ручки — две теневые и потолок локальных источников, REND-33), туман,
+    // регистрации: пост-обработка (четыре ручки — выключатель bloom, потолок
+    // разрешения его пирамиды, выключатель LUT и число сэмплов цели сцены,
+    // REND-34), освещение (три ручки — две теневые и потолок локальных
+    // источников, REND-33), туман,
     // террейн, вода (три ручки — источники ряби, слои детали и плотность
     // выборки глубины, REND-35), модели (две ручки), частицы. Подсистема
     // позиций ручек не имеет и в реестре не появляется — реестр собирается из
@@ -422,6 +423,7 @@ describe('PERF-4: голден-гейт стоимости на записанн
       'postprocess.bloom',
       'postprocess.bloomResolution',
       'postprocess.lut',
+      'postprocess.antialias',
       'lighting.shadowMode',
       'lighting.shadowMapSize',
       'lighting.maxLocalLights',
@@ -539,8 +541,12 @@ describe('PERF-4: работа освещения, моделей, частиц,
     expect(run.render.terrainChunksMarked).toBe(2 * ticks);
     expect(run.render.terrainChunksRebuilt).toBe(ticks);
     expect(run.render.terrainFloorQuads).toBeGreaterThan(0);
-    // Укрытия арены дают cliff-отрезки, и стенки строятся вместе с полом (TERR-5).
-    expect(run.render.terrainWallQuads).toBeGreaterThan(0);
+    // А стенки обрывов мутация пола не двигает ВОВСЕ: cliff-геометрию ядро
+    // выводит из карты УРОВНЕЙ (TERR-5), и пол в неё не входит (TERR-6). Чанк,
+    // помеченный только полом, пересобирает пол и юбку, а меш стенок переживает
+    // пересборку вместе со своим местом в реестре теневых кастеров. Ноль здесь
+    // — величина, а не пропуск проверки: работа, которой в кадре больше нет.
+    expect(run.render.terrainWallQuads).toBe(0);
   });
 
   it('QUAL-4: пресеты расходятся на работе моделей и террейна, состав доставки — нет', () => {
@@ -558,8 +564,12 @@ describe('PERF-4: работа освещения, моделей, частиц,
     // плотности, стенки — линейно, поэтому вдвое больший потолок дорожает полу
     // сильнее, чем стенкам.
     expect(ultra.terrainFloorQuads).toBeGreaterThan(2 * performance.terrainFloorQuads);
-    expect(ultra.terrainWallQuads).toBeGreaterThan(performance.terrainWallQuads);
-    expect(ultra.terrainWallQuads).toBeLessThanOrEqual(2 * performance.terrainWallQuads);
+    // Стенок в записи не пересобирается ни одной ни при одном пресете: их повод
+    // — правка ФОРМЫ, а единственная работа террейна в матче — импульс пола
+    // (TERR-6). Линейный рост кромки от потолка меряется там, где стенки
+    // действительно строятся, — на сборке арены (ось `terrainTessellation`).
+    expect(ultra.terrainWallQuads).toBe(0);
+    expect(performance.terrainWallQuads).toBe(0);
     // Пересборок при этом столько же: потолок меняет ЦЕНУ пересборки, а не её
     // повод — поводом остаётся мутация пола (TERR-6).
     expect(ultra.terrainChunksRebuilt).toBe(performance.terrainChunksRebuilt);
@@ -692,9 +702,28 @@ describe('PERF-6: оси масштабирования бенч-нагрузк�
     // потолок дорожает полу БОЛЬШЕ чем вдвое — плоские клетки чанка платят
     // по-прежнему один квад, и потому не ровно вчетверо.
     expect(fine.terrainFloorQuads).toBeGreaterThan(2 * coarse.terrainFloorQuads);
-    // Кромка обрыва разбивается вдоль, а не по площади: рост не больше двойного.
-    expect(fine.terrainWallQuads).toBeGreaterThan(coarse.terrainWallQuads);
-    expect(fine.terrainWallQuads).toBeLessThanOrEqual(2 * coarse.terrainWallQuads);
+    // В ДОСТАВКЕ стенок нет ни одной: её повод — мутация пола, а пол
+    // cliff-геометрию изменить не может (TERR-6, TERR-5).
+    expect(coarse.terrainWallQuads).toBe(0);
+    expect(fine.terrainWallQuads).toBe(0);
+    // Линейный рост кромки от потолка виден там, где стенки СТРОЯТСЯ, — на
+    // пересборке арены сменой пресета (QUAL-1): она метит все чанки формой, и
+    // клетка с кривизной делит и пол (по площади), и кромку стенки под ним
+    // (вдоль). Замер идёт от ДРУГОГО потолка: тот же документ пересборки не
+    // вызывает вовсе — потолок не изменился.
+    const atCeiling = (from: typeof axis.small, to: typeof axis.small): RenderCostCounters => {
+      const bench = benchFor(from);
+      const counters = createCostCounters();
+      withCostSink(counters, () => {
+        bench.quality.apply(to.preset!);
+      });
+      return counters;
+    };
+    const coarseBuild = atCeiling(axis.large, axis.small);
+    const fineBuild = atCeiling(axis.small, axis.large);
+    expect(fineBuild.terrainFloorQuads).toBeGreaterThan(2 * coarseBuild.terrainFloorQuads);
+    expect(fineBuild.terrainWallQuads).toBeGreaterThan(coarseBuild.terrainWallQuads);
+    expect(fineBuild.terrainWallQuads).toBeLessThanOrEqual(2 * coarseBuild.terrainWallQuads);
     // Пересобранных чанков столько же: потолок меняет цену пересборки, а не её
     // повод — им остаётся импульс пола стенда (TERR-6).
     expect(fine.terrainChunksRebuilt).toBe(coarse.terrainChunksRebuilt);

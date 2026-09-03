@@ -86,6 +86,12 @@ function observerView(
   team: number,
   vision: number,
   level = 0,
+  /**
+   * Уровень СИМУЛЯЦИИ (TERR-4): не задан — совпадает с уровнем клетки. Задают
+   * его порознь ровно тогда, когда у сущности стоит `LevelOverride`: прыжок
+   * (LOC-5), полёт (LOC-6).
+   */
+  simLevel = level,
 ): EntityView {
   return makeEntityView(id, {
     currX: x,
@@ -94,6 +100,7 @@ function observerView(
     prevY: y,
     currLevel: level,
     prevLevel: level,
+    simLevel,
     stats: new Map([
       [STATS.team, team],
       [STATS.visionRadius, vision],
@@ -1276,5 +1283,248 @@ describe('бюджетная перестройка маски и коалеси
     );
 
     expect(budgeted.visibility.data).toEqual(snapped.visibility.data);
+  });
+});
+
+// -------- change `fog-observer-inputs`: вход маски = величины симуляции
+
+describe('F-1: уровень наблюдателя — уровень СИМУЛЯЦИИ, а не клетки под ним (FOW-9)', () => {
+  /**
+   * Герой прыгнул с уровня 0 на плато уровня 1: `LevelOverride` держит уровень
+   * взлёта до приземления (LOC-5), и симуляция всё это время считает его
+   * НИЖНИМ наблюдателем — плато отфильтровано, его рёбра заслоняют обзор
+   * (FOW-5, PHYS-13). Маска обязана считать так же: кормить её уровнем клетки
+   * значило бы выключить срез по высоте и подсветить верхний этаж на эти тики
+   * — расхождение в сторону света, которое FOW-9 запрещает.
+   */
+  it('наблюдатель с override уровня 0 над клеткой уровня 1 не открывает верхний ярус', () => {
+    const make = (simLevel: number): FogSubsystem => {
+      const fog = new FogSubsystem({
+        grid: gridWithRamp(),
+        stats: STATS,
+        hero: () => 1,
+        config: { edgeWidth: STAND_EDGE },
+      });
+      fog.init(makeRenderContext());
+      // Клетка (5.5, 1.5) — верхний ярус: уровень клетки 1. Прыгающий герой
+      // висит над ней, но override держит его на 0.
+      fog.syncTick(makeTickView([observerView(1, 5.5, 1.5, 0, 3, 1, simLevel)]));
+      buildFogMask(fog);
+      return fog;
+    };
+
+    // Уровень симуляции 0: пол уровня 1 строго выше наблюдателя — под туманом.
+    expect(make(0).visibility.valueAt(5.5, 1.5)).toBe(0);
+    // Тот же наблюдатель, приземлившийся (override снят, уровень 1): открыт.
+    expect(make(1).visibility.valueAt(5.5, 1.5)).toBe(1);
+  });
+
+  it('без уровня симуляции продюсер читается уровнем клетки: документный набор', () => {
+    // Размещённый объект документа (REND-11) уровня симуляции не несёт вовсе,
+    // и подсистема обязана работать по `currLevel`, а не по нулю.
+    const fog = new FogSubsystem({
+      grid: gridWithRamp(),
+      stats: STATS,
+      hero: () => 1,
+      config: { edgeWidth: STAND_EDGE },
+    });
+    fog.init(makeRenderContext());
+    const view = makeEntityView(1, {
+      currX: 5.5,
+      currY: 1.5,
+      prevX: 5.5,
+      prevY: 1.5,
+      currLevel: 1,
+      prevLevel: 1,
+      stats: new Map([
+        [STATS.team, 0],
+        [STATS.visionRadius, 3],
+      ]),
+    });
+    expect(view.simLevel).toBeUndefined();
+    fog.syncTick(makeTickView([view]));
+    buildFogMask(fog);
+    expect(fog.visibility.valueAt(5.5, 1.5)).toBe(1);
+  });
+});
+
+describe('F-3: смена разрешения маски не снимает туман (FOW-9)', () => {
+  function builtSubsystem(): FogSubsystem {
+    const fog = new FogSubsystem({
+      grid: flatGrid(),
+      stats: STATS,
+      hero: () => 1,
+      config: { edgeWidth: STAND_EDGE, resolution: 8 },
+      createCanvas: fogCanvasFactory(),
+    });
+    fog.init(makeRenderContext());
+    fog.syncTick(makeTickView([observerView(1, 4, 4, 0, 3)]));
+    buildFogMask(fog);
+    // Рассеивание доигрывается одним большим шагом: показанная маска — целевая.
+    fog.updateFrame(10, 0);
+    return fog;
+  }
+
+  it('кадр сразу после смены разрешения идёт с маскирующим проходом и весь под туманом', () => {
+    const fog = builtSubsystem();
+    expect(fog.shownAt(4, 4)).toBe(1);
+
+    // Пресет `performance` клампит разрешение вниз прямо в матче.
+    fog.applyConfig({ edgeWidth: STAND_EDGE, resolution: 4 });
+
+    const renderer = new RendererSpy();
+    fog.render(renderer, new THREE.PerspectiveCamera());
+    // Два прохода — сцена в цель и маскирующий поверх: маска существует, и
+    // кадр без неё не уходит (прежде здесь был ОДИН проход, прямой рендер).
+    expect(renderer.rendered).toHaveLength(2);
+    // Показанная маска — нули: весь мир под туманом, консервативное состояние.
+    expect(fog.shownAt(4, 4)).toBe(0);
+  });
+
+  it('перестройка идёт под бюджетом кадра и НЕ ждёт доставки', () => {
+    const fog = builtSubsystem();
+    const rebuilds = fog.rebuilds;
+    fog.applyConfig({ edgeWidth: STAND_EDGE, resolution: 4 });
+
+    // Ни одной новой доставки: в замороженном мире её и не будет.
+    buildFogMask(fog);
+    expect(fog.rebuilds).toBeGreaterThan(rebuilds);
+    expect(fog.visibility.texelsPerUnit).toBe(4);
+    expect(fog.visibility.valueAt(4, 4)).toBe(1);
+    // Рассеивание доигрывает показанную маску до целевой.
+    fog.updateFrame(10, 0);
+    expect(fog.shownAt(4, 4)).toBe(1);
+  });
+
+  it('маска, не строившаяся ни разу, остаётся непостроенной: смена разрешения её не выдумывает', () => {
+    const fog = new FogSubsystem({
+      grid: flatGrid(),
+      stats: STATS,
+      hero: () => 1,
+      config: { resolution: 8 },
+    });
+    fog.init(makeRenderContext());
+    fog.applyConfig({ resolution: 4 });
+    const renderer = new RendererSpy();
+    fog.render(renderer, new THREE.PerspectiveCamera());
+    // Прямой рендер, ни одного лишнего прохода (design D3).
+    expect(renderer.rendered).toHaveLength(1);
+    expect(fog.fog).toBeNull();
+  });
+});
+
+describe('F-4: маска публикует ПОКРЫТЫЙ прямоугольник, а не прямоугольник террейна', () => {
+  it('нецелое `rect × разрешение`: отображение шейдера сходится с CPU у дальнего края', () => {
+    // Пять клеток при разрешении 1.5 текселя на единицу: 7.5 текселей, то есть
+    // ровно тот случай, ради которого число текселей ОКРУГЛЯЕТСЯ, — растр
+    // покрывает 8/1.5 единиц вместо пяти.
+    const grid = createTerrainGrid({
+      width: 5,
+      height: 5,
+      tileSize: 65536,
+      levels: Array.from({ length: 5 }, () => '00000'),
+      flags: Array.from({ length: 5 }, () => '.....'),
+    });
+    const mask = new VisibilityMask(fogRectOf(grid), 1.5);
+    expect(mask.width).toBe(8);
+    // Прямоугольник террейна — 5 единиц, покрытие растра — 8/1.5 единиц.
+    expect(mask.rect.width).toBe(5);
+    expect(mask.covered.width).toBeCloseTo(8 / 1.5, 9);
+
+    // Отображение шейдера (`postPass.ts`): мировой прямоугольник → [0, 1] → тексель.
+    const shaderTexel = (worldX: number, rect: { x: number; width: number }): number => {
+      const u = (worldX - rect.x) / rect.width;
+      return Math.min(mask.width - 1, Math.floor(u * mask.width));
+    };
+    // Отображение CPU (`mask.valueAt`): мировая единица × разрешение.
+    const cpuTexel = (worldX: number): number =>
+      Math.floor((worldX - mask.rect.x) * mask.texelsPerUnit);
+
+    // По покрытому прямоугольнику шейдер сходится с CPU ВЕЗДЕ, а по
+    // прямоугольнику террейна — расходится у дальнего края: сдвиг накапливается
+    // с координатой и доходит до текселя.
+    const points = [0.1, 1.4, 2.4, 3.4, 4.4, 4.9];
+    for (const x of points) {
+      expect(shaderTexel(x, mask.covered)).toBe(cpuTexel(x));
+    }
+    expect(points.some((x) => shaderTexel(x, mask.rect) !== cpuTexel(x))).toBe(true);
+  });
+
+  it('слой миникарты растягивается по покрытому прямоугольнику и следует за разрешением', () => {
+    const fog = new FogSubsystem({
+      grid: flatGrid(),
+      stats: STATS,
+      hero: () => 1,
+      // 8 × 1.1 = 8.8 текселя: округление до девяти двигает покрытие.
+      config: { edgeWidth: STAND_EDGE, resolution: 1.1 },
+      createCanvas: fogCanvasFactory(),
+    });
+    fog.init(makeRenderContext());
+    fog.syncTick(makeTickView([observerView(1, 4, 4, 0, 3)]));
+    buildFogMask(fog);
+    const layer = fog.fog;
+    expect(layer?.world.width).toBeCloseTo(fog.visibility.covered.width, 9);
+    expect(layer?.world.width).not.toBe(8);
+
+    fog.applyConfig({ edgeWidth: STAND_EDGE, resolution: 4 });
+    // Объект слоя стабилен (design D6), а покрытие уже новое.
+    expect(fog.fog?.world.width).toBe(8);
+  });
+});
+
+describe('F-7: команда игрока — константа матча, залатченная первым чтением (FOW-11)', () => {
+  it('герой ушёл из доставки — маска продолжает следовать за союзником', () => {
+    let hero: number | null = 1;
+    const fog = new FogSubsystem({
+      grid: flatGrid(),
+      stats: STATS,
+      hero: () => hero,
+      config: { edgeWidth: STAND_EDGE },
+      createCanvas: fogCanvasFactory(),
+    });
+    fog.init(makeRenderContext());
+    fog.syncTick(makeTickView([observerView(1, 2, 2, 0, 3), observerView(3, 2, 2, 0, 3)]));
+    buildFogMask(fog);
+    expect(fog.visibility.valueAt(6, 6)).toBe(0);
+
+    // Герой погиб: его нет ни в доставке, ни у сборки. Союзник дошёл до угла —
+    // маска обязана открыться там, иначе устаревшие reveal показывают
+    // освещённый пол там, где у команды зрения уже нет (FOW-11).
+    hero = null;
+    fog.syncTick(makeTickView([observerView(3, 6, 6, 0, 3)]));
+    buildFogMask(fog);
+    expect(fog.visibility.valueAt(6, 6)).toBe(1);
+    expect(fog.visibility.valueAt(2, 2)).toBe(0);
+  });
+
+  it('команду не читали ни разу — прежняя маска остаётся как есть', () => {
+    const fog = new FogSubsystem({
+      grid: flatGrid(),
+      stats: STATS,
+      hero: () => null,
+      config: { edgeWidth: STAND_EDGE },
+    });
+    fog.init(makeRenderContext());
+    fog.syncTick(makeTickView([observerView(3, 6, 6, 0, 3)]));
+    fog.updateFrame(1 / 60, 0);
+    expect(fog.rebuilds).toBe(0);
+  });
+});
+
+describe('F-8: цель кадра тумана мультисэмплится наравне с цепочкой (REND-34)', () => {
+  it('промежуточная цель заведена с samples', () => {
+    const fog = new FogSubsystem({
+      grid: flatGrid(),
+      stats: STATS,
+      hero: () => 1,
+      config: { edgeWidth: STAND_EDGE },
+    });
+    fog.init(makeRenderContext());
+    fog.syncTick(makeTickView([observerView(1, 4, 4, 0, 3)]));
+    buildFogMask(fog);
+    fog.render(new RendererSpy(), new THREE.PerspectiveCamera());
+    // Цель без `samples` молча снимала бы антиалиасинг рёбер со всего кадра:
+    // первая же построенная маска делала картинку хуже, чем без тумана.
+    expect(fog.postPass.target?.samples).toBe(4);
   });
 });

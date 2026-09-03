@@ -164,7 +164,9 @@ export class TerrainCoverLoader {
         if (state.status !== 'ready') return;
         let texture = this.textures.get(id);
         if (texture === undefined) {
-          texture = textureFromImage(state.data, 'base');
+          // Владелец — подсистема террейна, а не модели (PERF-8): покрытие
+          // арены обязано стоять в эталоне памяти своей строкой.
+          texture = textureFromImage(state.data, 'base', 'terrain');
           // Покрытие тайлится по мировым координатам, а под изометрией период
           // занимает десятки пикселей: без мипов текстура сворачивается в шум
           // (`DataTexture` мипов не строит и берёт ближайший тексель).

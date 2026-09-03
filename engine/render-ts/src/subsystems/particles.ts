@@ -84,44 +84,53 @@ import {
   type ParticleEffectDocument,
   type VisualManifest,
 } from '@fluxus/assets';
-import type { EntityView, QualityDeclaration, QualityValues, RenderContext, RenderSubsystem, TickView } from '../types.js';
+import type { EntityView, QualityDeclaration, QualityValues, RenderContext, RenderEvent, RenderSubsystem, TickView } from '../types.js';
 import { costSink, type RenderCostCounters } from '../cost.js';
 import type { VisualSurfaceSource } from '../surfaceSource.js';
 import {
   ParticleEffectPool,
+  ageInstance,
   instanceFinished,
   instanceParticles,
+  ownBatchMaterials,
   restartInstance,
   setInstanceDensity,
   stepInstance,
   type EffectInstance,
 } from '../particleEffects.js';
+import { DyingInstances } from './particleDying.js';
 import { dropSocketCache, type SocketSource } from '../particleSockets.js';
 import { createWarnOnce, type WarnOnce } from '../warnOnce.js';
 import { effectIdsOf, settleEffects } from './particlePrewarm.js';
 import {
-  poseEmitterShell,
+  createEmitterShellSet,
   publicShell,
-  shellKey,
   stepShells,
   type EmitterRecord,
-  type Shell,
+  type EmitterShell,
 } from './particleShell.js';
 import {
-  createShellPose,
+  ShellSet,
   createStateReader,
+  eventAgeSeconds,
   eventPointOf,
+  shellKey,
+  stateTableNames,
+  syncShellSources,
   type EventPoint,
   type StateReader,
 } from './shellSupport.js';
 
 export type { SocketSource } from '../particleSockets.js';
 
-/** Пустой список имён состояний — чтобы тик без таблицы `byState` не аллоцировал. */
-const NO_STATE_NAMES: readonly string[] = [];
-
 /** Вид эмиттерного ассета в реестре загрузчиков (ASSET-14). */
 const EFFECT_ASSET_KIND = 'particle-effect';
+
+/**
+ * Шаг тика по умолчанию, секунды — знаменатель возраста события (REND-24,
+ * SHELL-4). Величина сборки, а не рендера: подсистеме её называет опция.
+ */
+const DEFAULT_TICK_SECONDS = 1 / 60;
 
 /**
  * Ручка качества подсистемы (`render-quality` QUAL-1): множитель плотности
@@ -130,6 +139,15 @@ const EFFECT_ASSET_KIND = 'particle-effect';
  * (design D3).
  */
 const PARTICLES_DENSITY = 'particles.density';
+
+/**
+ * Пол множителя плотности (QUAL-2 через QUAL-3). Ноль ручка принимать не
+ * вправе: эмиттер — ИЗОБРАЖЕНИЕ сущности (REND-37), и запись, у которой кроме
+ * него ничего нет (зона урона босса), при нулевой эмиссии исчезла бы с экрана
+ * — а состав доступной игроку информации от качества картинки не зависит.
+ * Вчетверо реже документа — заметно дешевле и по-прежнему видимо.
+ */
+const PARTICLES_DENSITY_MIN = 0.25;
 
 export interface ParticlesOptions {
   /**
@@ -151,8 +169,29 @@ export interface ParticlesOptions {
    * задан», и дальше по конвейеру он и едет им же (`poseEmitterShell`).
    */
   readonly sockets?: SocketSource | undefined;
+  /**
+   * Длительность тика сборки в секундах — знаменатель возраста, с которым
+   * выстрел стартует, когда доставка привозит события нескольких тиков
+   * (SHELL-4). Не задана — {@link DEFAULT_TICK_SECONDS}.
+   */
+  readonly tickSeconds?: number;
   /** Куда писать предупреждения; по умолчанию console.warn. */
   readonly warn?: (message: string) => void;
+}
+
+/**
+ * Результат прогрева подсистемы (REND-24): текстуры образцов для заливки на GPU
+ * до первого кадра. Корней прогрев не отдаёт — образцы и батчи уже стоят в
+ * сцене подсистемы и компилируются вместе с ней.
+ */
+export interface ParticlesPrewarm {
+  /** Текстуры уже разобранных образцов — вход `WebGLRenderer.initTexture`. */
+  readonly textures: readonly THREE.Texture[];
+  /**
+   * Те же текстуры после загрузки картинок документов (ASSET-4). Ждать этого
+   * собирающий не обязан: прогрев тогда сделает меньше, но сделает.
+   */
+  texturesReady(): Promise<readonly THREE.Texture[]>;
 }
 
 /** Запрошенный эмиттерный ассет; `doc` пуст, пока он едет либо недоступен. */
@@ -186,24 +225,25 @@ export class ParticlesSubsystem implements RenderSubsystem {
   /** Скольким батчам уже отключён луч (REND-15); новые появляются по мере эффектов. */
   private shieldedBatches = 0;
 
-  /** Оболочки presentation-состояния по ключу «сущность + источник». */
-  private readonly shells = new Map<string, Shell>();
+  /** Оболочки presentation-состояния — общий набор (`shellSupport.ts`). */
+  private readonly shells: ShellSet<EmitterRecord, EffectInstance, EmitterShell>;
   /**
    * Оболочки декораций — ВТОРОЙ и независимый набор (REND-18): смена продюсера
    * гасит presentation-состояние, а декорации гасить нельзя.
    */
-  private readonly decorationShells = new Map<string, Shell>();
-  /** Переиспользуемый набор живых ключей: сведение без аллокаций на кадр. */
-  private readonly liveShells = new Set<string>();
+  private readonly decorationShells: ShellSet<EmitterRecord, EffectInstance, EmitterShell>;
   /** Проигрываемые выстрелы; отыгравшие возвращаются в пул тем же проходом. */
   private shots: EffectInstance[] = [];
+  /**
+   * ДОГОРАЮЩИЕ экземпляры погасших оболочек (REND-24, `particleDying.ts`):
+   * источник исчез, эмиссия прекращена, а живые частицы доживают своё время.
+   */
+  private readonly dying = new DyingInstances();
 
   /** Документы эффектов по asset id (ASSET-3, ASSET-6). */
   private readonly assets = new Map<string, EffectAsset>();
   /** Разворачивание документов и пул экземпляров (`particleEffects.ts`). */
   private readonly pool: ParticleEffectPool;
-  /** Переиспользуемая поза оболочки: аллокаций на оболочку на кадр нет. */
-  private readonly pose = createShellPose();
 
   /** Последнее доставленное состояние: по нему считается поза кадра (REND-2). */
   private view: TickView | null = null;
@@ -213,6 +253,14 @@ export class ParticlesSubsystem implements RenderSubsystem {
   private decorations: ReadonlyMap<EntityId, EntityView> | null = null;
   /** Множитель плотности от пресета качества (QUAL-1); 1 — эмиссия документа. */
   private density = 1;
+  /** Длительность тика сборки — знаменатель возраста события (SHELL-4). */
+  private readonly tickSeconds: number;
+
+  /** Резолверы записей таблиц: строятся один раз, а не на каждую доставку. */
+  private readonly byKind = (kind: string): EmitterRecord | undefined =>
+    resolveParticlesByKind(this.manifest, kind);
+  private readonly byState = (name: string): EmitterRecord | undefined =>
+    resolveParticlesByState(this.manifest, name);
 
   constructor(manifest: VisualManifest, options: ParticlesOptions = {}) {
     this.manifest = manifest;
@@ -225,14 +273,34 @@ export class ParticlesSubsystem implements RenderSubsystem {
         `render: состояние "${name}" не зеркалируется Extractor'ом (stateComponents) — эмиттер не появится (REND-24)`,
       );
     });
+    this.tickSeconds = options.tickSeconds ?? DEFAULT_TICK_SECONDS;
     this.group.name = 'particles';
     this.batchRenderer.name = 'particle-batches';
     this.pool = new ParticleEffectPool(this.batchRenderer, (key, message) => {
       this.warnOnce(key, message);
     });
+    // Набор оболочек — общий механизм (`shellSupport.ts`); своё у подсистемы
+    // ровно три ответа, и собраны они в одном месте (`particleShell.ts`).
+    const hooks = {
+      acquire: (effect: string) => this.acquire(effect, costSink()),
+      retire: (instance: EffectInstance) => { this.retire(instance); },
+      sockets: () => this.options.sockets,
+      warnOnce: this.warnOnce,
+    };
+    this.shells = createEmitterShellSet(false, hooks);
+    this.decorationShells = createEmitterShellSet(true, hooks);
   }
 
   init(ctx: RenderContext): void {
+    // Корень подсистемы обязан быть НАСТОЯЩЕЙ сценой: `ParticleSystem.update`
+    // библиотеки само-уничтожает систему, у которой корень эмиттера — не
+    // `Scene` (см. шапку `stepInstance`), и пул тогда мёртв навсегда. Провал
+    // здесь громкий и на сборке, а не молчаливой потерей частиц в кадре.
+    if (!(ctx.scene as Partial<THREE.Scene>).isScene) {
+      throw new Error(
+        'ParticlesSubsystem: корень подсистемы обязан быть THREE.Scene — библиотека частиц уничтожает системы вне сцены (REND-24)',
+      );
+    }
     this.ctx = ctx;
     // Общий с подсистемами террейна и моделей источник поверхности; init идемпотентен.
     this.options.surface?.init(ctx);
@@ -250,10 +318,13 @@ export class ParticlesSubsystem implements RenderSubsystem {
     this.dropShots();
     // Оболочки заканчиваются ТЕМ ЖЕ путём, что при сведении: пустое множество
     // живых ключей гасит их все, и второго «удалить всё» не заводится.
-    const none = this.liveShells;
-    none.clear();
-    for (const shells of [this.shells, this.decorationShells]) this.sweep(shells, none);
+    this.shells.clear();
+    this.decorationShells.clear();
+    // Догорающие, которых сведение только что и породило, — в пул: их доживание
+    // кончилось сносом, а не концом эмиссии (REND-31).
+    this.dying.dropAll((instance) => { this.pool.release(instance); });
     this.pool.dispose();
+    this.shieldedBatches = 0;
     this.batchRenderer.removeFromParent();
     this.group.removeFromParent();
   }
@@ -269,14 +340,21 @@ export class ParticlesSubsystem implements RenderSubsystem {
     // он мерит. Без стока это одно сравнение на весь обход.
     const cost = costSink();
     this.view = view;
-    if (view.snapAll) this.dropShots();
     this.syncShells(view, cost);
-    if (view.snapAll) this.restartShells();
+    if (view.snapAll) {
+      // Гашение — ПОСЛЕ сведения, а не до: сама эта доставка вправе убрать
+      // сущность, и её оболочка уходит в догорающие ровно здесь (REND-24).
+      // Погаси мы их раньше, догорающий, рождённый этим же сведением, пережил
+      // бы разрыв непрерывности — а гасить он обязан всё нарисованное (REND-2).
+      this.dropShots();
+      this.dying.dropAll((instance) => { this.pool.release(instance); });
+      this.restartShells();
+    }
     if (!view.freshEvents) return;
     for (const event of view.events) {
       const record = resolveParticlesByEvent(this.manifest, event.type);
       if (record === undefined) continue;
-      this.spawnShot(record.effect, record.scale ?? 1, event.data, view, cost);
+      this.spawnShot(record.effect, record.scale ?? 1, event, view, cost);
     }
   }
 
@@ -288,15 +366,20 @@ export class ParticlesSubsystem implements RenderSubsystem {
   syncDecorations(entities: ReadonlyMap<EntityId, EntityView>): void {
     const cost = costSink();
     this.decorations = entities;
-    const live = this.liveShells;
-    live.clear();
+    const set = this.decorationShells;
+    set.begin();
+    let synced = 0;
     for (const view of entities.values()) {
       if (view.kind === null) continue;
       const record = resolveVisualEmitter(this.manifest, view.kind);
       if (record === undefined) continue;
-      this.ensureShell(this.decorationShells, view, 'deco', record, live, true, cost);
+      synced++;
+      set.ensure(view, 'deco', record);
     }
-    this.sweep(this.decorationShells, live);
+    set.sweep();
+    // Сведение источника — работа доставки (PERF-2): считаются источники С
+    // ЗАПИСЬЮ, а не весь состав набора.
+    if (cost !== undefined) cost.particlesShellsSynced += synced;
   }
 
   updateFrame(dt: number, alpha: number): void {
@@ -319,11 +402,15 @@ export class ParticlesSubsystem implements RenderSubsystem {
     // переход картинки: он идёт общими часами, тем более что сущность-источник
     // вправе не пережить тик своего события (REND-38).
     for (const shot of this.shots) stepInstance(shot, step, this.warnOnce);
+    // Догорающие экземпляры погасших оболочек — теми же общими часами и по той
+    // же причине: сущности за ними уже нет (REND-24, REND-38).
+    this.dying.step(step, this.warnOnce);
     // И один проход по батчам — ровно то, чем `BatchedRenderer.update`
     // заканчивает свой цикл: батчирование от по-эмиттерного темпа не меняется
     // (REND-24), число батчей по-прежнему растёт с числом конвейеров.
     for (const batch of this.batchRenderer.batches) batch.update();
     this.collectShots(cost);
+    this.dying.collect((instance) => { this.pool.release(instance); }, cost);
     this.shieldBatches();
   }
 
@@ -359,7 +446,7 @@ export class ParticlesSubsystem implements RenderSubsystem {
    * Не доехавший документ прогрев не держит (ASSET-4): его запись сыграет
    * прежним ленивым путём.
    */
-  prewarm(): Promise<void> {
+  prewarm(): Promise<ParticlesPrewarm> {
     const ctx = this.ctx;
     if (ctx === null) throw new Error('ParticlesSubsystem: init() не вызван (REND-8)');
     // Сбор ссылок и ожидание исхода загрузки — `particlePrewarm.ts`; здесь
@@ -370,7 +457,12 @@ export class ParticlesSubsystem implements RenderSubsystem {
       effectIdsOf(this.manifest),
       (id) => this.document(id) !== null,
       (id) => { this.warmEffect(id); },
-    );
+    ).then(() => ({
+      // Текстуры образцов — вход `initTexture` прогрева: заливка на GPU у
+      // документа с картинкой (`fire-soft.png`) иначе ложится на первый draw.
+      textures: this.pool.templateTextures(),
+      texturesReady: () => this.pool.texturesReady(),
+    }));
   }
 
   /** Развёртка, клон и батч эффекта — и сразу в пул, не сыграв ни кадра. */
@@ -399,7 +491,7 @@ export class ParticlesSubsystem implements RenderSubsystem {
           cost: 'живые частицы: множитель эмиссии каждого эмиттера — вершины батчей и покадровая симуляция библиотеки (REND-24)',
           semantics: 'value',
           default: 1,
-          min: 0,
+          min: PARTICLES_DENSITY_MIN,
           max: 4,
         },
       ],
@@ -418,11 +510,18 @@ export class ParticlesSubsystem implements RenderSubsystem {
     for (const shell of this.shells.values()) setInstanceDensity(shell.instance, density);
     for (const shell of this.decorationShells.values()) setInstanceDensity(shell.instance, density);
     for (const shot of this.shots) setInstanceDensity(shot, density);
+    // Догорающим множитель не ставится: эмиссии у них уже нет, а множитель
+    // правит именно её (QUAL-1).
   }
 
   /** Сколько эмиттеров играет сейчас — вход отладки и тестов. */
   get activeCount(): number {
     return this.shells.size + this.decorationShells.size + this.shots.length;
+  }
+
+  /** Сколько экземпляров догорает сейчас (REND-24) — вход отладки и тестов. */
+  get dyingCount(): number {
+    return this.dying.size;
   }
 
   /** Сколько экземпляров заведено всего (пул + живые): по нему видно, что пул работает. */
@@ -445,7 +544,10 @@ export class ParticlesSubsystem implements RenderSubsystem {
     for (const shell of this.shells.values()) total += instanceParticles(shell.instance);
     for (const shell of this.decorationShells.values()) total += instanceParticles(shell.instance);
     for (const shot of this.shots) total += instanceParticles(shot);
-    return total;
+    // Догорающие считаются наравне: они НАРИСОВАНЫ (REND-24), и «частиц живо
+    // сейчас» без них было бы неправдой — ровно той, из-за которой мгновенное
+    // гашение оболочки и выглядело нормальным.
+    return total + this.dying.particles;
   }
 
   /**
@@ -457,11 +559,9 @@ export class ParticlesSubsystem implements RenderSubsystem {
     entity: EntityId,
     source?: string,
   ): { readonly effect: string; readonly object: THREE.Object3D } | null {
-    if (source !== undefined) return publicShell(this.shells.get(shellKey(entity, source)));
-    for (const [key, shell] of this.shells) {
-      if (key.startsWith(`${String(entity)}|`)) return publicShell(shell);
-    }
-    return null;
+    return publicShell(
+      source === undefined ? this.shells.first(entity) : this.shells.get(shellKey(entity, source)),
+    );
   }
 
   /** Эмиттер размещённой декорации (REND-18); нумерация набора своя. */
@@ -474,91 +574,35 @@ export class ParticlesSubsystem implements RenderSubsystem {
   // ------------------------------------------------------------- оболочки
 
   private syncShells(view: TickView, cost: RenderCostCounters | undefined): void {
-    const live = this.liveShells;
-    live.clear();
-    const states = this.manifest.particles?.byState;
     // Имена таблицы состояний снимаются один раз на МАНИФЕСТ (кэш до
-    // переподачи, REND-17), а не на доставку. Пустой словарь сборки —
-    // ЛЕГАЛЬНАЯ сборка без доставленных состояний (вьюпорт редактора: тика в
-    // кадре правки нет, ED-15), а не забытая прокидка: оболочек состояния в
-    // ней не бывает по построению, и таблица пропускается целиком — молча.
-    // Предупреждает `hasState` о другом: о списке, который есть, но
-    // названного состояния не несёт.
-    const stateNames = (this.stateNames ??=
-      states === undefined || this.stateComponents.length === 0
-        ? NO_STATE_NAMES
-        : Object.keys(states));
-    for (const entityView of view.entities.values()) {
-      if (entityView.kind !== null) {
-        const record = resolveParticlesByKind(this.manifest, entityView.kind);
-        if (record !== undefined) {
-          this.ensureShell(this.shells, entityView, `kind:${entityView.kind}`, record, live, false, cost);
-        }
-      }
-      for (const name of stateNames) {
-        if (!this.hasState(entityView, name)) continue;
-        const record = resolveParticlesByState(this.manifest, name);
-        if (record === undefined) continue;
-        this.ensureShell(this.shells, entityView, `state:${name}`, record, live, false, cost);
-      }
-    }
-    this.sweep(this.shells, live);
+    // переподачи, REND-17), а не на доставку; пустой словарь сборки — законная
+    // сборка без доставленных состояний, и таблица пропускается молча
+    // (`stateTableNames`, та же трактовка, что у эффектов).
+    const stateNames = (this.stateNames ??= stateTableNames(
+      this.manifest.particles?.byState,
+      this.stateComponents,
+    ));
+    const synced = syncShellSources(
+      this.shells,
+      view.entities.values(),
+      stateNames,
+      this.hasState,
+      this.byKind,
+      this.byState,
+    );
+    // Сведение источника — работа доставки (PERF-2): считаются источники С
+    // ЗАПИСЬЮ, а не весь состав доставки.
+    if (cost !== undefined) cost.particlesShellsSynced += synced;
   }
 
-  /** Оболочки, не помеченные живыми в этом сведении, гаснут и уходят в пул. */
-  private sweep(shells: Map<string, Shell>, live: ReadonlySet<string>): void {
-    for (const [key, shell] of shells) {
-      if (live.has(key)) continue;
-      this.pool.release(shell.instance);
-      shells.delete(key);
-    }
-  }
-
-  /** Создаёт оболочку источника либо обновляет существующую; помечает её живой. */
-  private ensureShell(
-    shells: Map<string, Shell>,
-    view: EntityView,
-    source: string,
-    record: EmitterRecord,
-    live: Set<string>,
-    decoration: boolean,
-    cost: RenderCostCounters | undefined,
-  ): void {
-    // Сведение источника — работа доставки (PERF-2): вызов на каждый источник
-    // каждой сущности С ЗАПИСЬЮ, а не на весь состав доставки.
-    if (cost !== undefined) cost.particlesShellsSynced++;
-    const key = shellKey(view.id, source);
-    let shell = shells.get(key);
-    // Другой эффект в записи — другой ассет и другой экземпляр: играть его
-    // прежним нечем, и это не «мигание» (REND-17).
-    if (shell !== undefined && shell.effect !== record.effect) {
-      this.pool.release(shell.instance);
-      shells.delete(key);
-      shell = undefined;
-    }
-    if (shell === undefined) {
-      const instance = this.acquire(record.effect, cost);
-      if (instance === null) return; // ассет не доехал или невалиден — пропуск
-      shell = {
-        instance,
-        effect: record.effect,
-        socketName: record.socket,
-        scale: record.scale ?? 1,
-        socket: null,
-        socketRoot: null,
-        view,
-        decoration,
-      };
-      shells.set(key, shell);
-    }
-    shell.view = view;
-    shell.scale = record.scale ?? 1;
-    if (shell.socketName !== record.socket) {
-      shell.socketName = record.socket;
-      shell.socketRoot = null; // имя сокета правлено — ищем узел заново
-      shell.socket = null;
-    }
-    live.add(key);
+  /**
+   * Источник оболочки исчез (REND-24): эмиссия ПРЕКРАЩАЕТСЯ, а живые частицы
+   * доживают своё время (`particleDying.ts`). Экземпляр уходит не в пул, а в
+   * список догорающих, и возвращается в пул сам — концом эмиссии и смертью
+   * последней частицы.
+   */
+  private retire(instance: EffectInstance): void {
+    this.dying.retire(instance);
   }
 
   /**
@@ -570,17 +614,13 @@ export class ParticlesSubsystem implements RenderSubsystem {
     const heightStep = this.ctx?.config.heightStep ?? 1;
     const surface = this.options.surface?.current ?? null;
     // Оболочки обоих наборов — по одной позе на оболочку в кадре (REND-18);
-    // счёт снимается разом с размеров наборов. Систем частиц, которые шагаются
-    // следом, у каждой оболочки СВОЁ число — его складывает сам шаг
-    // (`stepShells`), там же, где эта работа и делается.
-    if (cost !== undefined) {
-      cost.particlesShellsPosed += this.shells.size + this.decorationShells.size;
-    }
-    // Сама поза — общей механикой оболочки (`poseEmitterShell`): `warnOnce`
-    // уходит готовой функцией, а не обёрткой — без замыкания на оболочку на кадр.
-    const sockets = this.options.sockets;
-    for (const shell of this.shells.values()) poseEmitterShell(shell, alpha, heightStep, surface, sockets, this.warnOnce, this.pose);
-    for (const shell of this.decorationShells.values()) poseEmitterShell(shell, alpha, heightStep, surface, sockets, this.warnOnce, this.pose);
+    // счёт отдаёт сам набор. Систем частиц, которые шагаются следом, у каждой
+    // оболочки СВОЁ число — его складывает шаг (`stepShells`), там же, где эта
+    // работа и делается.
+    const posed =
+      this.shells.poseAll(alpha, heightStep, surface) +
+      this.decorationShells.poseAll(alpha, heightStep, surface);
+    if (cost !== undefined) cost.particlesShellsPosed += posed;
   }
 
   /**
@@ -614,24 +654,35 @@ export class ParticlesSubsystem implements RenderSubsystem {
   private spawnShot(
     effect: string,
     scale: number,
-    data: Readonly<Record<string, number>>,
+    event: RenderEvent,
     view: TickView,
     cost: RenderCostCounters | undefined,
   ): void {
     const point = this.eventPoint;
-    if (!eventPointOf(data, view, point)) return;
+    if (!eventPointOf(event.type, event.data, view, point, this.warnOnce, 'REND-24')) return;
     const x = point.x;
     const y = point.y;
     const instance = this.acquire(effect, cost);
     if (instance === null) return;
     const surface = this.options.surface?.current ?? null;
+    // Кватернион сбрасывает `acquire` пула — он же чинит наклон конуса эмиссии
+    // у экземпляра, побывавшего сокетной оболочкой; выстрелу остаётся масштаб
+    // ЗАПИСИ (ASSET-14) и позиция.
     instance.object.position.set(x, y, surface === null ? 0 : surface.heightAt(x, y));
-    instance.object.quaternion.identity();
     instance.object.scale.setScalar(scale);
     // Зацикленный документ, поставленный на событие, одноразовым не станет сам:
     // зацикливание снимается с ЭКЗЕМПЛЯРА выстрела, документ не трогается.
     for (const entry of instance.systems) entry.system.looping = false;
     this.shots.push(instance);
+    // Возраст СОБЫТИЯ (SHELL-4): доставка вправе привезти события нескольких
+    // тиков, и выстрел обязан начаться уже прожившим своё расстояние. Мировая
+    // матрица эмиттера для догона нужна свежая — библиотека берёт позу оттуда,
+    // а кадровое обновление матриц будет только в `updateFrame`.
+    const age = eventAgeSeconds(view, event.tick, this.tickSeconds);
+    if (age > 0) {
+      instance.object.updateMatrixWorld(true);
+      ageInstance(instance, age, this.warnOnce);
+    }
   }
 
   /**
@@ -733,9 +784,16 @@ export class ParticlesSubsystem implements RenderSubsystem {
   private shieldBatches(): void {
     const batches = this.batchRenderer.batches;
     if (batches.length === this.shieldedBatches) return;
-    for (const batch of batches) {
+    // Обход идёт с НОВЫХ батчей, а не со всех: отключение луча идемпотентно, а
+    // регистрация материалов в учёте (PERF-8) — нет, и повторная считала бы
+    // один и тот же материал дважды.
+    for (let i = this.shieldedBatches; i < batches.length; i++) {
+      const batch = batches[i]!;
       // eslint-disable-next-line @typescript-eslint/no-empty-function -- пустой raycast и есть «луч меня не видит»
       batch.raycast = () => {};
+      // Два материала батча строит библиотека, и учёт получает их здесь — по
+      // факту появления батча, как ресурсы разобранного графа (REND-31, PERF-8).
+      ownBatchMaterials(batch);
     }
     this.shieldedBatches = batches.length;
   }

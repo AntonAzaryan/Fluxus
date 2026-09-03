@@ -7,7 +7,11 @@
 import { describe, expect, it } from 'vitest';
 import * as THREE from 'three';
 import { FIXED_ONE, createTerrainGrid } from '@fluxus/core';
-import { validateCurvatureMap, type TerrainCurvatureMap } from '@fluxus/assets';
+import {
+  validateCurvatureMap,
+  type NormalizedModel,
+  type TerrainCurvatureMap,
+} from '@fluxus/assets';
 import {
   VisualSurfaceSource,
   buildFloorGeometry,
@@ -16,6 +20,7 @@ import {
   createVisualSurface,
   type RenderContext,
   type SurfaceNormal,
+  type WalkablePlacement,
 } from '../src/index.js';
 import { makeAssets } from './fixtures.js';
 
@@ -25,6 +30,47 @@ function curvatureOf(width: number, height: number, rows: number[][]): TerrainCu
   const result = validateCurvatureMap({ width, height, rows });
   if (!result.ok) throw new Error(result.errors.join('; '));
   return result.map;
+}
+
+/**
+ * Модель настила: плоский квад на высоте 1 в канонических осях модели — тем же
+ * видом, каким её отдаёт загрузчик (ASSET-5). Нужен только walkable-вклад.
+ */
+function deckModel(): NormalizedModel {
+  const positions = new Float32Array([-0.5, -0.5, 1, 0.5, -0.5, 1, 0.5, 0.5, 1, -0.5, 0.5, 1]);
+  return {
+    bones: [],
+    meshes: [
+      {
+        partId: 0,
+        positions,
+        normals: null,
+        uvs: null,
+        indices: new Uint16Array([0, 1, 2, 0, 2, 3]),
+        skinIndices: new Uint16Array(4 * 4),
+        skinWeights: new Float32Array(Array.from({ length: 4 }, () => [1, 0, 0, 0]).flat()),
+        materialIndex: 0,
+      },
+    ],
+    sequences: [],
+    materials: [
+      {
+        baseColorFactor: [1, 1, 1, 1],
+        baseColorTexture: null,
+        metallicFactor: 0,
+        roughnessFactor: 1,
+        normalTexture: null,
+        emissiveFactor: [0, 0, 0],
+        emissiveTexture: null,
+        emissiveStrength: 1,
+        alphaMode: 'opaque',
+        alphaCutoff: 0.5,
+        doubleSided: false,
+      },
+    ],
+    textureSlots: [],
+    height: 1,
+  };
 }
 
 /** Карта из нулей с одним узлом (nx, ny) = value. */
@@ -546,8 +592,13 @@ describe('VisualSurfaceSource: документные входы (ED-10, ED-11, 
     expect(assets.requests.length).toBe(0); // документ, а не ассет
     expect(source.current!.hasCurvature).toBe(true);
     expect(source.current!.heightAt(2, 1)).toBeGreaterThan(0);
-    // Узел — общий угол четырёх клеток: их и получил подписчик, а не «всю поверхность».
-    expect(changes).toEqual([[1, 2, 5, 6]]);
+    // Узел — общий угол четырёх клеток (1, 2, 5, 6), и подписчик получил их
+    // ОКРЕСТНОСТЬ — тот же прямоугольник ±1, каким поверхность пересчитала
+    // углы: угол клетки зависит от уровней и флагов рампы соседей (REND-9), и
+    // подписчик, метящий ровно названные клетки (вода REND-35), иначе оставил
+    // бы соседнюю рампу от прежнего поля. «Вся поверхность» (null) это по-
+    // прежнему не: за пределами окрестности не помечено ничего.
+    expect(changes).toEqual([[0, 1, 2, 3, 4, 5, 6, 7]]);
 
     // Снятие карты возвращает плоские ступени REND-7.
     source.setCurvature(null);
@@ -593,7 +644,9 @@ describe('VisualSurfaceSource: документные входы (ED-10, ED-11, 
     expect(source.current!.cornerHeights(1, 0)).toEqual([STEP, STEP, STEP, STEP]);
     // Соседняя клетка осталась внизу: правка не «перетекла» через границу.
     expect(source.current!.heightAt(2.5, 0.5)).toBeCloseTo(0, 6);
-    expect(changes).toEqual([[1]]);
+    // Изменилась клетка 1, уведомлена её окрестность ±1 — ровно то, что
+    // пересчитала поверхность (REND-9); клетка 3 (x = 3) в неё не входит.
+    expect(changes).toEqual([[0, 1, 2, 4, 5, 6]]);
 
     // Сетка, отличающаяся только полом, поверхности не видна — подписчики молчат.
     source.setGrid(raisedGrid(1));
@@ -610,12 +663,93 @@ describe('VisualSurfaceSource: документные входы (ED-10, ED-11, 
 
     // Уровни прежние, изменился только флаг столбца x = 0 (кисть рампы ED-10).
     source.setGrid(rampFlagGrid(true));
-    expect(changes).toEqual([[0, 3]]);
+    // Флаг сменился у клеток 0 и 3 (столбец x = 0), уведомлена их окрестность
+    // ±1: угол рампы тянется к проходимому соседу, и его высота меняется от
+    // ЧУЖОГО флага (REND-9).
+    expect(changes).toEqual([[0, 1, 3, 4]]);
     // Помеченная клетка стала склоном: её восточное ребро тянется вверх.
     expect(source.current!.cornerHeights(0, 0)).toEqual([0, STEP, STEP, 0]);
     // А сосед остался плоским: на карте, прошедшей загрузку, нижний сосед
     // рампы сам помечен рампой (TERR-5), и за чужим флагом угол не едет.
     expect(source.current!.cornerHeights(1, 0)).toEqual([STEP, STEP, STEP, STEP]);
+  });
+
+  it('смена ОДНОГО tileSize переконфигурирует реестр walkable и зовёт подписчиков', () => {
+    // Другой шаг клетки — другой перевод мира в клетки: диапазоны клеток
+    // walkable-записей посчитаны прежним шагом (REND-9), и оставить реестр как
+    // есть значило бы держать вклад настила привязанным к прежней раскладке.
+    const { ctx } = makeCtx();
+    const source = new VisualSurfaceSource(flatGrid());
+    source.init(ctx);
+    const changes: (readonly number[] | null)[] = [];
+    source.onChange((cells) => changes.push(cells));
+
+    const deck: WalkablePlacement = {
+      x: 0.5,
+      y: 0.5,
+      yaw: 0,
+      tiltFactor: 0,
+      tiltMaxRad: null,
+      scale: 1,
+      model: deckModel(),
+    };
+    source.setWalkable(1, deck);
+    // Настил накрывает клетку (0, 0) при клетке в одну мировую единицу.
+    expect(source.current!.hasCellWalkable(0, 0)).toBe(true);
+    expect(source.current!.hasCellWalkable(2, 0)).toBe(false);
+    changes.length = 0;
+
+    // Та же арена в клетках, но клетка вдвое мельче: тот же настил накрывает
+    // вдвое больше клеток.
+    source.setGrid(
+      createTerrainGrid({
+        width: 4,
+        height: 2,
+        tileSize: FIXED_ONE / 2,
+        levels: ['0000', '0000'],
+        flags: ['....', '....'],
+      }),
+    );
+    expect(changes).toEqual([null]);
+    expect(source.current!.hasCellWalkable(2, 0)).toBe(true);
+  });
+
+  it('правка рядом с рампой уведомляет и её: инкрементальное обновление равно полному', () => {
+    // Клетка 1 — рампа: её углы тянутся к проходимому соседу (TERR-5), поэтому
+    // подъём КЛЕТКИ 2 двигает поле в клетке 1. Подписчик, метящий ровно
+    // названные клетки (вода REND-35), обязан услышать про обе.
+    const { ctx } = makeCtx();
+    const source = new VisualSurfaceSource(
+      createTerrainGrid({
+        width: 4,
+        height: 2,
+        tileSize: FIXED_ONE,
+        levels: ['0000', '0000'],
+        flags: ['....', '....'],
+      }),
+    );
+    source.init(ctx);
+    const changes: (readonly number[] | null)[] = [];
+    source.onChange((cells) => changes.push(cells));
+
+    // Кисть подняла столбец x = 2 и пометила столбец x = 1 рампой (ED-10):
+    // изменились клетки 1, 2, 5, 6, а поле поехало и в клетке 0 — угол рампы
+    // тянется к соседу.
+    source.setGrid(
+      createTerrainGrid({
+        width: 4,
+        height: 2,
+        tileSize: FIXED_ONE,
+        levels: ['0010', '0010'],
+        flags: ['.^..', '.^..'],
+      }),
+    );
+    expect(source.current!.cornerHeights(1, 0)).toEqual([0, STEP, STEP, 0]);
+    const notified = new Set(changes[0]);
+    for (const cell of [1, 2, 5, 6]) expect(notified.has(cell), `клетка ${cell}`).toBe(true);
+    // И соседи изменившихся — тоже: их углы пересчитаны тем же прямоугольником.
+    expect(notified.has(0)).toBe(true);
+    expect(notified.has(3)).toBe(true);
   });
 
   it('кривизна безразлична к уровням: подъём клетки сдвигает базу, узлы остаются', () => {

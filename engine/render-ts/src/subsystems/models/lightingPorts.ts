@@ -54,9 +54,16 @@ function poseOfCarrier(record: InstanceRecord, out: LightCarrierPose): boolean {
 }
 
 /**
- * Позиция контактного пятна инстанса (REND-30): ТА САМАЯ поза, которой инстанс
- * нарисован в этом кадре (REND-3), а не второй её расчёт. `false` — пятна в
- * кадре нет, и оснований для этого три:
+ * Опора контактного пятна инстанса (REND-30) — из ТОГО ЖЕ кадрового расчёта,
+ * которым инстанс нарисован (REND-3), а не из второго прохода по поверхности.
+ *
+ * Отдаётся именно ОПОРА, а не поза: в позу входят дуга прыжка, полётная дуга и
+ * снижение при провале (REND-12), и пятно, взятое с `pos.z`, взлетало бы вместе
+ * с моделью — ровно в том случае, ради которого пятно и читаемо. По той же
+ * причине рядом едет нормаль поверхности: горизонтальный круг на уклоне уходит
+ * в грунт (см. `BlobCasterPose`).
+ *
+ * `false` — пятна в кадре нет, и оснований для этого три:
  *
  * - позы кадра инстанс ещё не получил;
  * - он отсечён пирамидой видимости (REND-21) — в кадре его нет вовсе;
@@ -78,7 +85,11 @@ function poseOfBlob(record: InstanceRecord, out: BlobCasterPose): boolean {
   if (!record.posed || !record.visible || record.fade < 1) return false;
   out.x = record.pos.x;
   out.y = record.pos.y;
-  out.z = record.pos.z;
+  out.z = record.seatZ;
+  const normal = record.seatNormal;
+  out.nx = normal.x;
+  out.ny = normal.y;
+  out.nz = normal.z;
   return true;
 }
 

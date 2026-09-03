@@ -84,9 +84,18 @@ export class VisualSurfaceSource {
     return this.grid;
   }
 
-  /** Подписка на изменение поверхности (догрузка карты, правка документа). */
-  onChange(listener: SurfaceChangeListener): void {
+  /**
+   * Подписка на изменение поверхности (догрузка карты, правка документа).
+   * Возвращает отписку: снесённая подсистема (REND-31) обязана перестать
+   * получать правки — иначе она продолжала бы метить свои чанки и тела уже
+   * после того, как отдала GPU всё, что ими нарисовано.
+   */
+  onChange(listener: SurfaceChangeListener): () => void {
     this.listeners.push(listener);
+    return (): void => {
+      const at = this.listeners.indexOf(listener);
+      if (at >= 0) this.listeners.splice(at, 1);
+    };
   }
 
   /** Идемпотентна: зовут обе подсистемы из своих init, работа делается один раз. */
@@ -151,6 +160,21 @@ export class VisualSurfaceSource {
         this.surface = createVisualSurface(grid, this.heightStep, this.curvature, this.walkable);
         // Walkable-инстансы пересаживаются на террейн-форму новой арены; общий
         // notify(null) ниже покрывает и их клетки.
+        this.walkable.reseatAll(this.surface);
+      }
+      this.notify(null);
+      return;
+    }
+    if (grid.tileSize !== previous.tileSize) {
+      // Другой шаг клетки — другой перевод мира в клетки: диапазоны клеток
+      // walkable-записей посчитаны прежним шагом (REND-9), и без
+      // переконфигурации реестра вклад настила остался бы привязан к клеткам
+      // прежней раскладки. Углы клеток от шага не зависят, но выборка внутри
+      // клетки зависит — поверхность подменяет ссылку на сетку и пересаживает
+      // инстансы, а подписчики получают «изменилась вся поверхность».
+      this.walkable.configure(grid.width, grid.height, grid.tileSize / FIXED_ONE);
+      if (this.surface !== null) {
+        this.surface.update(grid, this.curvature, 0, 0, grid.width - 1, grid.height - 1);
         this.walkable.reseatAll(this.surface);
       }
       this.notify(null);
@@ -241,13 +265,42 @@ export class VisualSurfaceSource {
     // террейн-форме (REND-9), и его вклад пересчитывается вместе с ней. Углы
     // пересчитаны прямоугольником ±1 — пересадка идёт тем же расширением.
     const walkableCells = this.walkable.reseatRect(surface, x0 - 1, y0 - 1, x1 + 1, y1 + 1);
-    this.notify(cells);
+    // Уведомление идёт ТЕМ ЖЕ прямоугольником ±1, каким поверхность пересчитала
+    // углы, а не списком изменившихся клеток: узел общий у смежных клеток, а
+    // угол рампы тянется к проходимому соседу (REND-9), поэтому правка клетки
+    // двигает поле в её окрестности. Подписчик, метящий ровно названные клетки
+    // (вода, REND-35), иначе оставил бы тексели соседней рампы от прежнего
+    // поля — инкрементальное обновление разошлось бы с полным.
+    this.notify(expandedCells(x0, y0, x1, y1, width, this.grid.height));
     if (walkableCells.length > 0) this.notify(walkableCells, true);
   }
 
   private notify(cells: readonly number[] | null, walkableOnly = false): void {
     for (const listener of this.listeners) listener(cells, walkableOnly);
   }
+}
+
+/**
+ * Клетки прямоугольника, расширенного на одну по каждой стороне и зажатого по
+ * сетке, — ровно то, что пересчитала `MutableVisualSurface.update` (REND-9).
+ */
+function expandedCells(
+  x0: number,
+  y0: number,
+  x1: number,
+  y1: number,
+  width: number,
+  height: number,
+): number[] {
+  const fromX = Math.max(x0 - 1, 0);
+  const fromY = Math.max(y0 - 1, 0);
+  const toX = Math.min(x1 + 1, width - 1);
+  const toY = Math.min(y1 + 1, height - 1);
+  const cells: number[] = [];
+  for (let y = fromY; y <= toY; y++) {
+    for (let x = fromX; x <= toX; x++) cells.push(y * width + x);
+  }
+  return cells;
 }
 
 /** Клетки, у которых изменились уровень или флаг рампы — вход поверхности. */

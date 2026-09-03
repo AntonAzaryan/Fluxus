@@ -8,11 +8,22 @@
  * что статы и фаза полёта доезжают до `TickView`, из которого HUD и читает.
  */
 import { describe, expect, it } from 'vitest';
-import { tick as simTick, type SceneDef } from '@fluxus/core';
+import {
+  FIXED_ONE,
+  tick as simTick,
+  world as coreWorld,
+  type SceneDef,
+} from '@fluxus/core';
 import { resolveComposition, type MinimapTerrainSource } from '@fluxus/hud';
 import { AssetService, type VisualManifest } from '@fluxus/assets';
 import { RemoteHost, WorkerShell } from '@fluxus/client';
-import { createDemoHudRegistry, demoHudComposition } from '../app/hud.js';
+import {
+  createDemoHudRegistry,
+  createDemoMinimapSource,
+  demoDecorationFootprints,
+  demoHudComposition,
+  demoWaterMask,
+} from '../app/hud.js';
 import demoBindings from '../app/bindings.json';
 import { createDemoExtractor } from '../app/extractor.js';
 import {
@@ -58,6 +69,25 @@ describe('композиция HUD демо резолвится против р
     expect(resolved.entries.map((entry) => entry.kind.name)).toEqual(
       expect.arrayContaining(['runtime', 'deaths', 'cooldowns', 'hp-bar', 'minimap', 'portrait']),
     );
+  });
+
+  /**
+   * Полоса здоровья героя стоит НАД НИМ по мировому якорю (HUD-10): место ей
+   * даёт проекция, которую публикует рендер (`rendering` REND-41), а объявлено
+   * это ЗАПИСЬЮ композиции — кода виджета размещение не касается (HUD-4).
+   */
+  it('полоса здоровья размещена по мировому якорю героя (HUD-10)', () => {
+    const composition = demoHudComposition({ controls: true, matchPause: true, tickMs: 16 });
+    const hp = composition.entries.find((entry) => entry.widget === 'hp-bar')!;
+    expect(hp.anchor).toBeDefined();
+    // Сущность названа СЛОТОМ биндинга, а не идентификатором: композиция —
+    // значение со ссылками-именами (HUD-4).
+    expect(hp.anchor!.entity).toBe('entity');
+    expect(hp.bindings![hp.anchor!.entity]).toBe('hero.entity');
+    // И резолв это подтверждает: слот якоря обязан быть среди биндингов записи.
+    const resolved = resolveComposition(createDemoHudRegistry(stubOptions), composition);
+    const entry = resolved.entries.find((one) => one.kind.name === 'hp-bar')!;
+    expect(entry.anchor).toEqual(hp.anchor);
   });
 
   it('панель кулдаунов забиндена на имена статов сборки, а не на компоненты мира', () => {
@@ -163,6 +193,46 @@ describe('headless-прогон демо: статы и фаза полёта д
     expect(fireball!.flightPhase).toBeLessThan(1);
     // У героя фазы полёта нет — он не летит (REND-12).
     expect(Number.isNaN(hero.flightPhase)).toBe(true);
+  });
+
+  /**
+   * Радиус обзора доезжает ЭФФЕКТИВНЫМ (change `fog-observer-inputs`, FOW-3):
+   * стат указывает на опубликованное состояние `VisionState`, а не на авторский
+   * `Vision.radius`. Разница наблюдаема только под модификатором обзора, но
+   * пинить нужно ИСТОЧНИК: маска тумана строит по этой величине круг, и
+   * расхождение с симуляцией в большую сторону FOW-9 запрещает прямо.
+   */
+  it('радиус обзора доезжает из VisionState — величины симуляции, а не авторской', () => {
+    const { sim, state, playerId, grid } = createDemoSimulation(SCENE);
+    const [workerPort, mainPort] = syncPortPair();
+    const shell = new WorkerShell({
+      mode: 'local',
+      port: workerPort,
+      sim,
+      state,
+      tickSeconds: TICK_SECONDS,
+      extractor: createDemoExtractor(grid),
+      playerId: PLAYER_ID,
+      helloExtra: { hero: playerId },
+      clock: () => 0,
+    });
+    const remote = new RemoteHost(dummyContext(), { clock: () => 0, onReady: () => {} }).connect(
+      mainPort,
+    );
+    shell.start();
+    for (let i = 0; i < 4; i++) shell.stepTick();
+
+    const hero = remote.view!.entities.get(playerId)!;
+    const delivered = hero.stats!.get(STATS.visionRadius);
+    expect(delivered).toBeDefined();
+    // Ровно то, что опубликовал пересчёт видимости, приведённое к мировым
+    // единицам на границе потока тиков (REND-1).
+    const published =
+      coreWorld.getField(state.world, playerId, 'VisionState', 'radius') / FIXED_ONE;
+    expect(published).toBeGreaterThan(0);
+    expect(delivered).toBeCloseTo(published, 6);
+    // Команда рядом с ним — второй вход маски (design D4 тумана).
+    expect(hero.stats!.get(STATS.team)).toBeDefined();
   });
 
   /**
@@ -275,5 +345,80 @@ describe('панель способностей не обещает нажати
     // (`rewind.holdButton`): разошлись бы — удержание кнопки кастовало ульту, а
     // точку остановки не вело (NET-11, REW-13).
     expect(ACTION_BITS.rewind).toBe(DEMO_REWIND?.holdButton);
+  });
+});
+
+// --------------------------------------- слои подложки миникарты (HUD-6)
+
+import presentationJson from '../../../content/scenes/duel.presentation.json';
+import type { PresentationScene } from '@fluxus/assets';
+
+/** Парный документ сцены демо — контент, читаемый ею законно (CONT-4). */
+const PRESENTATION = presentationJson as unknown as PresentationScene;
+
+describe('слои подложки миникарты — данные сборки, а не чтение документа в HUD (HUD-6)', () => {
+  it('маска воды считается по секции документа и ложится на сетку сцены', () => {
+    const rows = PRESENTATION.water?.cells ?? [];
+    expect(rows.length).toBeGreaterThan(0);
+    const grid = { width: rows[0]!.length, height: rows.length, tileSize: 65536 };
+    const mask = demoWaterMask(PRESENTATION, grid)!;
+    expect(mask).not.toBeNull();
+    expect(mask.length).toBe(grid.width * grid.height);
+    // Вода на арене дуэли есть: пустая маска означала бы, что слой не считается.
+    expect(mask.some((cell) => cell !== 0)).toBe(true);
+    // И там, где документ ставит точку, воды нет.
+    const emptyAt = rows.findIndex((row) => row.includes('.'));
+    const column = rows[emptyAt]!.indexOf('.');
+    expect(mask[emptyAt * grid.width + column]).toBe(0);
+  });
+
+  it('карта, не ложащаяся на сетку, слоем не становится', () => {
+    expect(demoWaterMask(PRESENTATION, { width: 3, height: 3, tileSize: 65536 })).toBeNull();
+    expect(demoWaterMask(null, { width: 3, height: 3, tileSize: 65536 })).toBeNull();
+    expect(demoWaterMask(PRESENTATION, null)).toBeNull();
+  });
+
+  it('след декорации — позиция и радиус НАРИСОВАННОГО инстанса, а не запись документа', () => {
+    const built = demoDecorationFootprints(2, {
+      entityOf: (key) => (key === '#0' ? 11 : 12),
+      instanceFor: (entity) =>
+        entity === 11
+          ? {
+              pose: { x: 4, y: 6, scale: 2 },
+              bounds: { minX: -0.5, minY: -0.25, maxX: 0.5, maxY: 0.25 },
+            }
+          : // Модель второй ещё грузится (ASSET-4): границ нет, и следа тоже.
+            { pose: { x: 0, y: 0, scale: 1 }, bounds: null },
+    });
+    expect(built.ready).toBe(false);
+    expect(built.footprints).toEqual([{ x: 4, y: 6, radius: 1 }]);
+  });
+
+  it('источник отдаёт сетку и слои геттерами: и то и другое приезжает позже сборки HUD', () => {
+    const holder: { terrain: { width: number; height: number; tileSize: number } | null } = {
+      terrain: null,
+    };
+    const source = createDemoMinimapSource({
+      terrain: holder,
+      presentation: PRESENTATION,
+      decorations: null,
+    });
+    // До handshake сетки нет — и слоёв тоже.
+    expect(source.terrain).toBeNull();
+    expect(source.layers?.water ?? null).toBeNull();
+
+    const rows = PRESENTATION.water?.cells ?? [];
+    holder.terrain = { width: rows[0]!.length, height: rows.length, tileSize: 65536 };
+    expect(source.terrain).not.toBeNull();
+    expect(source.layers?.water ?? null).not.toBeNull();
+  });
+
+  it('запись миникарты называет палитру уровней и цвета слоёв — данными (HUD-6)', () => {
+    const composition = demoHudComposition({ controls: true, matchPause: true, tickMs: 16 });
+    const minimap = composition.entries.find((entry) => entry.widget === 'minimap')!;
+    const palette = minimap.params!.levelPalette as readonly string[];
+    expect(palette.length).toBeGreaterThan(1);
+    expect(typeof minimap.params!.waterColor).toBe('string');
+    expect(typeof minimap.params!.decorationColor).toBe('string');
   });
 });
