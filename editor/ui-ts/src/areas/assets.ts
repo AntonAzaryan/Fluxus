@@ -133,6 +133,13 @@ import {
   paramsForBinding,
   typesForTable,
 } from './assetCameraEffects.js';
+import {
+  vfxDraftState,
+  vfxEffectRows,
+  vfxParticleRows,
+  type VfxAreaState,
+} from './assetVfxRows.js';
+import { vfxManifestDraftRows } from './assetVfxDraft.js';
 import { effectParamKey } from '../i18n/cameraEffectBundles.js';
 import { createAssetModule, type AssetModule } from './assetModule.js';
 import {
@@ -217,7 +224,12 @@ export interface AssetAreaOptions {
   readonly assets?: AssetStates;
 }
 
-export interface AssetAreaState {
+/**
+ * Секции VFX манифеста (ED-14) панель правит своим вкладом (`assetVfxRows.ts`),
+ * а черновик её живёт здесь: запись состояния у области ОДНА и переживает
+ * переключение (ED-23), и второй её половины ради второй секции не заводится.
+ */
+export interface AssetAreaState extends VfxAreaState {
   /** Дерево контента и причина, по которой его нет (ED-12, ED-20). */
   tree: AssetTree;
   readonly expanded: Set<string>;
@@ -1238,6 +1250,13 @@ function inspectorGroups(context: AreaContext<AssetAreaState>): readonly FieldGr
       { label: resourceText(resources, 'ui.area.assets.effectEvents'), rows: effectRows(context, EVENTS_TABLE) },
       { label: resourceText(resources, 'ui.area.assets.effectStates'), rows: effectRows(context, STATES_TABLE) },
       { label: resourceText(resources, 'ui.area.assets.effectNew'), rows: effectDraftRows(context) },
+      // Секции VFX того же документа (ED-14, REND-23, REND-24): изображения
+      // эффектов и эмиттеры частиц выбранной таблицы источников. Строит их
+      // вклад (`assetVfxRows.ts`), а место в зоне инспектора — здесь, рядом с
+      // секцией эффектов камеры: документ у них один.
+      { label: resourceText(resources, 'ui.area.assets.vfxEffects'), rows: vfxEffectRows(context) },
+      { label: resourceText(resources, 'ui.area.assets.vfxParticles'), rows: vfxParticleRows(context) },
+      { label: resourceText(resources, 'ui.area.assets.vfxNew'), rows: vfxManifestDraftRows(context) },
     );
   }
   return groups;
@@ -1340,6 +1359,7 @@ export function createAssetArea(options: AssetAreaOptions = {}): WorkspaceArea<A
         effectName: '',
         effectType: '',
         animationEvent: '',
+        ...vfxDraftState(),
         effects: options.cameraEffects ?? CAMERA_EFFECTS_DESCRIPTION,
         sceneKind: options.sceneKind ?? DEFAULT_SCENE_KIND,
         stage,

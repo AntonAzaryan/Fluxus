@@ -142,42 +142,35 @@ function holderMaterial(scene: THREE.Scene, name: string): THREE.Material | null
 }
 
 /**
- * Инстанс ДЕТАЛЬНОГО яруса с названным узлом — вход резолва сокета (REND-24).
- * `rebuild()` строит инстанс заново — корень и узел новые, прежнее поддерево
- * отцеплено: ровно то, что делает с инстансом переподача манифеста и смена
- * яруса (REND-17, REND-20).
+ * Источник поз узлов (REND-24): подсистема моделей отвечает на этот вопрос на
+ * ОБОИХ ярусах (REND-20), поэтому фикстура — не дерево объектов, а семь чисел.
+ * `move()` двигает узел: поза спрашивается каждый кадр, и кэша между кадрами у
+ * привязки нет.
  */
-function makeSockets(nodeAt: THREE.Vector3 | null, rootAt = new THREE.Vector3()) {
-  let root = new THREE.Group();
-  let node: THREE.Object3D | null = null;
-  const build = (): void => {
-    root = new THREE.Group();
-    root.position.copy(rootAt);
-    node = null;
-    if (nodeAt === null) return;
-    const built = new THREE.Object3D();
-    built.name = SOCKET_NAME;
-    built.position.copy(nodeAt);
-    root.add(built);
-    node = built;
-  };
-  build();
+function makeSockets(nodeAt: THREE.Vector3 | null) {
+  const at = nodeAt === null ? null : nodeAt.clone();
   return {
-    source: { instanceFor: () => ({ tier: 'detailed', model: { root } }) } as SocketSource,
-    get root(): THREE.Group { return root; },
-    get node(): THREE.Object3D | null { return node; },
-    rebuild: build,
+    source: {
+      nodePose: (_entity, node, out) => {
+        if (at === null || node !== SOCKET_NAME) return false;
+        out.x = at.x;
+        out.y = at.y;
+        out.z = at.z;
+        out.qx = 0;
+        out.qy = 0;
+        out.qz = 0;
+        out.qw = 1;
+        return true;
+      },
+    } satisfies SocketSource,
+    move: (x: number, y: number, z: number): void => {
+      at?.set(x, y, z);
+    },
   };
 }
 
-/**
- * Инстанс БАТЧЕВОГО яруса (REND-20): нарисован, но дерева узлов у него нет и не
- * будет — `model` пуст навсегда. Отличается от «модель ещё едет» ровно ярусом.
- */
-const BATCHED_SOCKETS: SocketSource = { instanceFor: () => ({ tier: 'batched', model: null }) };
-
-/** Инстанса ещё нет вовсе: ассет едет либо подсистема моделей его не создала. */
-const PENDING_SOCKETS: SocketSource = { instanceFor: () => null };
+/** Источник без поз узлов вовсе — законная сборка без сокетов (REND-24). */
+const NO_SOCKETS: SocketSource = {};
 
 /** Сколько частиц живо у названной системы экземпляра — вход теста суб-эмиттеров. */
 function particlesOfNamed(object: THREE.Object3D, name: string): number {
@@ -325,10 +318,10 @@ describe('ParticlesSubsystem: выстрел по событию (REND-24, HUD-5
 });
 
 describe('ParticlesSubsystem: сокет (REND-24)', () => {
-  const tailAt = (): THREE.Vector3 => new THREE.Vector3(1, 0, 2);
+  const tailAt = (): THREE.Vector3 => new THREE.Vector3(11, 0, 2);
 
   it('эмиттер следует мировой позе названного узла инстанса', () => {
-    const sockets = makeSockets(tailAt(), new THREE.Vector3(10, 0, 0));
+    const sockets = makeSockets(tailAt());
     const { subsystem } = makeRig({ sockets: sockets.source });
 
     subsystem.syncTick(makeTickView([makeEntityView(1, { kind: 'Fireball', currX: 3, currY: 3 })]));
@@ -340,13 +333,17 @@ describe('ParticlesSubsystem: сокет (REND-24)', () => {
     expect(object.position.z).toBeCloseTo(2, 6);
 
     // Инстанс переехал — эмиттер за ним, поза снимается каждый кадр.
-    sockets.node!.position.set(1, 5, 2);
+    sockets.move(11, 5, 2);
     subsystem.updateFrame(0.016, 1);
     expect(object.position.y).toBeCloseTo(5, 6);
   });
 
   it('узла нет — предупреждение один раз и позиция сущности', () => {
+    // Инстанс ещё строится либо вид такого узла не несёт: источник отдаёт оба
+    // одним `false`, и ответ на них один — сказать один раз и играть у ног.
     const { subsystem, warnings } = makeRig({ sockets: makeSockets(null).source });
+    subsystem.syncTick(makeTickView([makeEntityView(1, { kind: 'Fireball', currX: 3, currY: 4 })]));
+    frames(subsystem, 3, 0.016);
     subsystem.syncTick(makeTickView([makeEntityView(1, { kind: 'Fireball', currX: 3, currY: 4 })]));
     frames(subsystem, 3, 0.016);
 
@@ -356,52 +353,40 @@ describe('ParticlesSubsystem: сокет (REND-24)', () => {
     expect(warnings.filter((m) => m.includes('Socket_Tail'))).toHaveLength(1);
   });
 
-  it('источника инстансов нет — эмиттер играет в позиции сущности и говорит об этом', () => {
-    const { subsystem, warnings } = makeRig();
-    subsystem.syncTick(makeTickView([makeEntityView(1, { kind: 'Fireball', currX: 2, currY: 2 })]));
-    frames(subsystem, 2, 0.016);
-    expect(subsystem.emitterFor(1)!.object.position.x).toBeCloseTo(2, 6);
-    expect(warnings.filter((m) => m.includes('Socket_Tail'))).toHaveLength(1);
+  it('источника поз узлов нет — эмиттер играет в позиции сущности и говорит об этом', () => {
+    for (const sockets of [undefined, NO_SOCKETS]) {
+      const { subsystem, warnings } = makeRig(sockets === undefined ? {} : { sockets });
+      subsystem.syncTick(makeTickView([makeEntityView(1, { kind: 'Fireball', currX: 2, currY: 2 })]));
+      frames(subsystem, 2, 0.016);
+      expect(subsystem.emitterFor(1)!.object.position.x).toBeCloseTo(2, 6);
+      expect(warnings.filter((m) => m.includes('Socket_Tail'))).toHaveLength(1);
+    }
   });
 
-  it('батчевый ярус: дерева узлов нет — предупреждение один раз и позиция сущности (REND-20)', () => {
-    // Батчевый ярус — умолчание записи (ASSET-13), и молчаливый fallback был бы
-    // неотличим от «модель ещё грузится»: эмиттер вечно у ног сущности без
-    // единого слова о причине.
-    const { subsystem, warnings } = makeRig({ sockets: BATCHED_SOCKETS });
-    subsystem.syncTick(makeTickView([makeEntityView(1, { kind: 'Fireball', currX: 6, currY: 7 })]));
-    frames(subsystem, 3, 0.016);
+  it('батчевый ярус сокету не мешает: поза узла считается на обоих (REND-20)', () => {
+    // Прежде сокет требовал ДЕТАЛЬНОГО яруса — обход дерева узлов на батчевом
+    // был невозможен, — и запись получала предупреждение вместо эмиттера на
+    // месте. Источник отвечает позой, а не деревом, и яруса больше не знает.
+    const sockets = makeSockets(tailAt());
+    const { subsystem, warnings } = makeRig({ sockets: sockets.source });
     subsystem.syncTick(makeTickView([makeEntityView(1, { kind: 'Fireball', currX: 6, currY: 7 })]));
     frames(subsystem, 3, 0.016);
 
-    const object = subsystem.emitterFor(1)!.object;
-    expect(object.position.x).toBeCloseTo(6, 6);
-    expect(object.position.y).toBeCloseTo(7, 6);
-    const tier = warnings.filter((m) => m.includes('Socket_Tail') && m.includes('детального яруса'));
-    expect(tier).toHaveLength(1);
-  });
-
-  it('инстанса ещё нет — молчание: это не отсутствие узла, а незаконченная загрузка', () => {
-    const { subsystem, warnings } = makeRig({ sockets: PENDING_SOCKETS });
-    subsystem.syncTick(makeTickView([makeEntityView(1, { kind: 'Fireball', currX: 6, currY: 7 })]));
-    frames(subsystem, 3, 0.016);
-    expect(subsystem.emitterFor(1)!.object.position.x).toBeCloseTo(6, 6);
+    expect(subsystem.emitterFor(1)!.object.position.x).toBeCloseTo(11, 6);
     expect(warnings).toEqual([]);
   });
 
-  it('инстанс пересобран — узел ищется заново, эмиттер не замирает в прежней позе', () => {
-    const sockets = makeSockets(tailAt(), new THREE.Vector3(10, 0, 0));
+  it('поза спрашивается каждый кадр: пересборка инстанса эмиттер не замораживает', () => {
+    // Кэша найденного узла у привязки нет вовсе (REND-17): держаться было бы
+    // не за что, и пересобранный инстанс уводит эмиттер за собой сам собой.
+    const sockets = makeSockets(tailAt());
     const { subsystem } = makeRig({ sockets: sockets.source });
     subsystem.syncTick(makeTickView([makeEntityView(1, { kind: 'Fireball' })]));
     subsystem.updateFrame(0.016, 1);
     const object = subsystem.emitterFor(1)!.object;
     expect(object.position.x).toBeCloseTo(11, 6);
 
-    // Пересборка инстанса (REND-17, REND-20): корень и узел новые, прежнее
-    // поддерево отцеплено от сцены и с инстансом больше не двигается — держась
-    // за узел из него, эмиттер замер бы на 11.
-    sockets.rebuild();
-    sockets.root.position.set(20, 0, 0);
+    sockets.move(21, 0, 2);
     subsystem.updateFrame(0.016, 1);
     expect(object.position.x).toBeCloseTo(21, 6);
   });
