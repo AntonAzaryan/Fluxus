@@ -23,9 +23,10 @@
  *   прямо в диффе эталона.
  * - На осях стороны симуляции (PERF-6) — `npc-stress.cost.json` (число агентов
  *   платформы поведения, NPC-9), `nav-path.cost.json` (число агентов поиска
- *   пути, NAV-5) и `ability-stress.cost.json` (число кастующих агентов
- *   платформы способностей, ABIL-5): те же два размера и та же форма документа,
- *   только стадия одна — `tick`.
+ *   пути, NAV-5), `ability-stress.cost.json` (число кастующих агентов платформы
+ *   способностей, ABIL-5) и `dsl-scale.cost.json` (число сущностей, которые
+ *   обрабатывают JSON-системы, SYS-1): те же два размера и та же форма
+ *   документа, только стадия одна — `tick`.
  * - На оси экстракции (PERF-6) — `extract.cost.json` (число сущностей
  *   доставки): та же форма, стадия `extract`. Записанные матчи стадию эту
  *   меряют, но осью не являются — их состав фиксирован, и линейность экстракции
@@ -64,9 +65,11 @@ import {
   ABILITY_STRESS,
   BENCH_PRESETS,
   BENCH_PRESET_NAMES,
+  DSL_SCALE,
   NAV_PATH,
   NPC_STRESS,
   abilityStressSizes,
+  dslScaleSizes,
   loadNavPath,
   loadNpcStress,
   GOLDEN_DIR,
@@ -915,6 +918,161 @@ describe('PERF-6: эталон стоимости платформы спосо�
     // Шаги снарядов, наоборот, линейны числу кастеров: один каст — один снаряд.
     // Строка рядом с квадратичными и нужна затем, чтобы отличать одно от другого.
     expect(large.projectileSteps).toBe(casters * small.projectileSteps!);
+  });
+});
+
+/**
+ * Стоимость data-driven слоя на двух размерах оси «число сущностей, которые
+ * обрабатывают JSON-системы» (`data-driven-systems` SYS-1, PERF-6): четыре
+ * системы сцены — движение, ветвление, запрос с фильтрами и эмиссия события —
+ * над сеткой сущностей одного prefab'а.
+ *
+ * Набор систем у размеров ФИКСИРОВАН, и двигается только число сущностей: ось
+ * проверяет ровно то, чего по одному размеру не видно, — линейна ли работа
+ * evaluator'а по обработанной сущности. На записанных матчах `expressions`
+ * набирает несколько сотен за прогон, а на осях NPC и навигации он ноль вовсе:
+ * их нагрузки собраны нативными системами.
+ */
+function measureDslScale(): unknown {
+  return axisDocument('dslEntities', 'tick', dslScaleSizes(), measureTickSize);
+}
+
+/** Счётчики, ради которых ось и заведена: пусты они быть не вправе. */
+const DSL_AXIS_COUNTERS = ['commandsApplied', 'eventsEmitted', 'expressions'] as const;
+
+describe('SYS-1, PERF-6: эталон стоимости data-driven слоя', () => {
+  it('счётчики стадии тика совпадают с эталоном', () => {
+    checkGolden(`${DSL_SCALE}.cost.json`, measureDslScale());
+  });
+
+  it('нагрузка не мёртвая: выражения, команды и события непусты на ОБОИХ размерах', () => {
+    const document = measureDslScale() as SimAxisDocument;
+    // Ноль на любом из размеров означал бы, что нагрузка перестала поднимать
+    // evaluator, а эталон при этом остался бы зелёным: ноль сходится с нулём.
+    for (const size of ['small', 'large'] as const) {
+      const cost = document.cost[size].tick;
+      expect(cost.ticks, size).toBe(dslScaleSizes().small.def.ticks);
+      for (const name of DSL_AXIS_COUNTERS) {
+        expect(cost[name], `${size}/${name}`).toBeGreaterThan(0);
+      }
+    }
+    expect(measureDslScale()).toEqual(document);
+  });
+
+  it('работа идёт на КАЖДОМ тике прогона, а не только на первом', () => {
+    // Сумма за прогон этого не показывает: нагрузка, отработавшая один тик и
+    // высохшая, дала бы непустой эталон и мерила бы дальше пустоту.
+    const rows: StageCost[] = [];
+    const sink: DiagnosticsSink = {
+      trace: 'systems',
+      record: (entry) => {
+        if (entry.code !== 'TICK_COST') return;
+        const row: StageCost = {};
+        for (const [name, value] of Object.entries(entry.data ?? {})) {
+          if (typeof value === 'number') row[name] = value;
+        }
+        rows.push(row);
+      },
+    };
+    const { small } = dslScaleSizes();
+    runScenario(small.def, sink);
+    expect(rows).toHaveLength(small.def.ticks);
+    for (const [index, row] of rows.entries()) {
+      expect(row.expressions, `тик ${index}: выражения`).toBeGreaterThan(0);
+      expect(row.commandsApplied, `тик ${index}: команды`).toBeGreaterThan(0);
+    }
+  });
+
+  it('PERF-6: ось двигает ровно одну величину — различается только число сущностей', () => {
+    const { small, large } = dslScaleSizes();
+    const spawns = (def: ScenarioDef): readonly ScenarioSpawn[] => def.scene.initial ?? [];
+
+    // Сцена без расстановки — компоненты, prefab, системы, ёмкость — совпадает
+    // целиком: набор JSON-систем оси фиксирован (PERF-6), и двигать его вместе
+    // с числом сущностей значило бы мерить две величины одним отношением.
+    expect({ ...small.def.scene, initial: [] }).toEqual({ ...large.def.scene, initial: [] });
+    expect(large.def.ticks).toBe(small.def.ticks);
+    expect(large.def.seed).toBe(small.def.seed);
+    // Ни физики, ни видимости, ни навигации у прогона нет: их счётчики растут
+    // плотностью расстановки и геометрией арены, а не числом обработанных
+    // сущностей, и на этой оси двигали бы вторую величину.
+    for (const def of [small.def, large.def]) {
+      expect(def.physics).toBeUndefined();
+      expect(def.visibility).toBeUndefined();
+      expect(def.navigation).toBeUndefined();
+      expect(def.locomotion).toBeUndefined();
+    }
+
+    // Малый размер — ПРЕФИКС расстановки большого, запись в запись. Префикс, а
+    // не прореживание сетки (как у оси NPC), законен здесь потому, что
+    // пространственного запроса у нагрузки нет вовсе: позиции она пишет и
+    // никогда не читает соседством, поэтому охват сетки ни одного счётчика не
+    // касается.
+    expect(spawns(small.def)).toHaveLength(small.magnitude);
+    expect(spawns(large.def)).toHaveLength(large.magnitude);
+    expect(spawns(large.def).slice(0, small.magnitude)).toEqual(spawns(small.def));
+
+    // Доля каждого варианта начальных значений у размеров одна и та же: иначе
+    // отношение L/S мерило бы заодно и состав ветвей, вычисленных односторонним
+    // действием `if` (ACT-1), — то есть вторую величину под видом первой.
+    const variants = (list: readonly ScenarioSpawn[]): Record<string, number> => {
+      const seen: Record<string, number> = {};
+      for (const spawn of list) {
+        const key = JSON.stringify([spawn.prefab, spawn.overrides?.Health, spawn.overrides?.Velocity]);
+        seen[key] = (seen[key] ?? 0) + 1;
+      }
+      return seen;
+    };
+    const ratio = large.magnitude / small.magnitude;
+    const thin = variants(spawns(small.def));
+    const full = variants(spawns(large.def));
+    expect(Object.keys(full).sort()).toEqual(Object.keys(thin).sort());
+    for (const [key, count] of Object.entries(thin)) expect(full[key], key).toBe(ratio * count);
+  });
+
+  it("PERF-6: работа evaluator'а линейна — счётчики оси растут РОВНО её отношением", () => {
+    const document = measureDslScale() as SimAxisDocument;
+    const small = document.cost.small.tick;
+    const large = document.cost.large.tick;
+    const ratio = document.large / document.small;
+
+    // Размеры отличаются ровно величиной оси: тиков поровну, растёт только
+    // число обрабатываемых сущностей.
+    expect(large.ticks).toBe(small.ticks);
+    expect(ratio).toBeGreaterThan(1);
+    // Ради ЭТИХ строк ось и заведена (PERF-6, сценарий «Evaluator вычисляет
+    // выражение на каждую пару сущностей»): работа evaluator'а на сущность от
+    // числа сущностей не зависит, поэтому счётчики ОСИ обязаны вырасти ровно её
+    // отношением. Обход запроса заново на каждую обработанную сущность или
+    // повторное вычисление выражения на шаг сломали бы равенство первым же
+    // прогоном — по одному числу этого не видно вовсе. Сильная форма (точное
+    // равенство, а не порог) взята с оси экстракции: линейность там тоже
+    // свойство построения нагрузки, а не пожелание к ней.
+    //
+    // Проверка адресована ИМЕННО счётчикам оси, а не всей записи: счётчик,
+    // чей вклад в эту нагрузку постоянен на тик или на систему, растёт с осью
+    // сублинейно — по PERF-6 это законно («отдельный счётчик ВНУТРИ стадии, у
+    // которой ось есть, вправе ни одной осью не двигаться»), и общий цикл
+    // краснел бы на нём диффом, которого не снимает никакая регенерация.
+    for (const name of DSL_AXIS_COUNTERS) {
+      expect(large[name], name).toBe(ratio * small[name]!);
+    }
+  });
+
+  it('нагрузка поднимает ТОЛЬКО evaluator: счётчики прочих платформ ядра пусты', () => {
+    // Утверждение о форме нагрузки, а не о линейности: ни физики, ни видимости,
+    // ни навигации, ни платформ способностей у прогона нет (их работа росла бы
+    // плотностью и геометрией, то есть второй величиной), и потому их строки в
+    // эталоне — нули. Появление ненулевой строки означает, что в нагрузку
+    // приехала чужая платформа, и ось перестала быть осью одной величины.
+    const document = measureDslScale() as SimAxisDocument;
+    const axis = new Set<string>([...DSL_AXIS_COUNTERS, 'ticks']);
+    for (const size of ['small', 'large'] as const) {
+      for (const [name, value] of Object.entries(document.cost[size].tick)) {
+        if (axis.has(name)) continue;
+        expect(value, `${size}/${name}`).toBe(0);
+      }
+    }
   });
 });
 

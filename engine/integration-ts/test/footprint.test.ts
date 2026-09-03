@@ -11,9 +11,9 @@
  *   владельцу и виду и величинами состояния. Секции `tick` и `history` — по
  *   одной: симуляция пресета не знает (QUAL-2), и равенство между прогонами
  *   двух пресетов здесь проверяется, а не предполагается.
- * - На осях PERF-6 — те же пять документов, что у стоимости: `scaling`
+ * - На осях PERF-6 — те же шесть документов, что у стоимости: `scaling`
  *   (величины рендера на двух размерах каждой оси), `npc-stress`, `nav-path`,
- *   `ability-stress` и `extract` (величины ядра на двух размерах).
+ *   `ability-stress`, `dsl-scale` и `extract` (величины ядра на двух размерах).
  *
  * ## Почему отдельный документ, а не секция в `*.cost.json`
  *
@@ -43,12 +43,14 @@ import {
   ABILITY_STRESS,
   BENCH_PRESETS,
   BENCH_PRESET_NAMES,
+  DSL_SCALE,
   GOLDEN_DIR,
   NAV_PATH,
   NPC_STRESS,
   RECORDED_MATCHES,
   abilityStressSizes,
   benchGrid,
+  dslScaleSizes,
   extractSizes,
   loadRecording,
   matchBench,
@@ -341,6 +343,15 @@ function measureAbilityStress(): unknown {
   return axisDocument('abilityCasters', abilityStressSizes(), measureTickSize);
 }
 
+/**
+ * Величины памяти на оси data-driven слоя (`data-driven-systems` SYS-1, PERF-6,
+ * PERF-8): та же нагрузка, что у стоимости, и по той же причине — вторая копия
+ * сцены рядом расходилась бы с первой молча.
+ */
+function measureDslScale(): unknown {
+  return axisDocument('dslEntities', dslScaleSizes(), measureTickSize);
+}
+
 // --------------------------------------------------------------- сверка эталона
 
 /** Канонический вид эталона — тот же, что у golden-пар ядра (SER-6, CLI-5). */
@@ -438,6 +449,10 @@ describe('PERF-6: оси масштабирования — величины п�
     checkGolden(`${ABILITY_STRESS}.footprint.json`, measureAbilityStress());
   });
 
+  it(`${DSL_SCALE}.footprint.json: величины ядра совпадают с эталоном`, () => {
+    checkGolden(`${DSL_SCALE}.footprint.json`, measureDslScale());
+  });
+
   it('extract.footprint.json: величины ядра совпадают с эталоном', () => {
     checkGolden('extract.footprint.json', measureExtract());
   });
@@ -482,6 +497,20 @@ describe('PERF-6: оси масштабирования — величины п�
       nav.footprint.small.tick.navHeapCapacity * 4,
     );
     expect(nav.footprint.large.tick.navBytes).toBe(nav.footprint.small.tick.navBytes);
+  });
+
+  it('ось JSON-систем: населённость растёт осью, ёмкость мира — нет (SYS-1)', () => {
+    const dsl = measureDslScale() as AxisDocument;
+    // Сущности оси не спавнятся и не гибнут: расстановка прогона и есть его
+    // населённость, и величина оси читается в эталоне памяти прямо числом.
+    expect(dsl.footprint.small.tick.entitiesAlive).toBe(dsl.small);
+    expect(dsl.footprint.large.tick.entitiesAlive).toBe(dsl.large);
+    // Ёмкость хранилища задана сценой и у размеров ОДНА (PERF-8): подобранная
+    // под размер, она двигалась бы вместе с осью и мерила бы вторую величину.
+    expect(dsl.footprint.large.tick.worldBytes).toBe(dsl.footprint.small.tick.worldBytes);
+    // Записи тегов, наоборот, принадлежат сущностям и растут ровно осью.
+    const ratio = dsl.large / dsl.small;
+    expect(dsl.footprint.large.tick.tagEntries).toBe(ratio * dsl.footprint.small.tick.tagEntries);
   });
 
   it('ось экстракции: живых сущностей ровно столько, сколько в нагрузке', () => {
