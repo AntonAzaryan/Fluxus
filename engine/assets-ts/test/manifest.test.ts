@@ -26,7 +26,9 @@ import {
   resolveVisualTier,
   validateManifest,
   visualKeys,
+  EFFECT_FIELDS,
   type CameraEffectsDescription,
+  type ManifestFieldSpec,
   type VisualEffect,
 } from '../src/index.js';
 import { MemoryAssetSource, bytesOf, expectValidationErrors, settled } from './helpers.js';
@@ -1546,5 +1548,119 @@ describe('validateManifest: секция путей камеры (ASSET-17)', ()
 
   it('незнакомый ключ записи пути — ошибка закрытого состава', () => {
     expectErrors({ entities, cameraPaths: { p: { keys: [{ x: 0, y: 0 }], speed: 2 } } }, /speed/);
+  });
+});
+
+
+/**
+ * Машинное описание состава записи эффекта (REND-23) и то, чем валидация
+ * закрывает её состав, — ОДНО И ТО ЖЕ, а не два перечня, случайно совпавших.
+ * Проверка идёт по наблюдаемому: находка о неизвестном ключе печатает перечень
+ * допустимых соседей, и он обязан быть описанием — включая порядок, потому что
+ * порядок описания смысловой и его же видит автор в подсказке редактора
+ * (`editor` ED-14).
+ *
+ * Значения проб выводятся ИЗ описания, а не пишутся таблицей рядом: таблица
+ * была бы третьим перечнем и отстала бы первой.
+ */
+describe('EFFECT_FIELDS: описание состава записи — источник, а не копия (ASSET-6, REND-23)', () => {
+  /** Годное значение поля по его описанию: строке — непустая, числу — внутри границ. */
+  function sample(spec: ManifestFieldSpec): unknown {
+    if (spec.kind === 'string') return 'проба';
+    if (spec.kind === 'composite') {
+      return Object.fromEntries(
+        (spec.fields ?? [])
+          .filter((sub) => sub.required === true)
+          .map((sub) => [sub.name, sample(sub)]),
+      );
+    }
+    return spec.min ?? spec.max ?? 1;
+  }
+
+  function field(name: string): ManifestFieldSpec {
+    const spec = EFFECT_FIELDS.find((candidate) => candidate.name === name);
+    if (spec === undefined) throw new Error(`описание не называет поле "${name}"`);
+    return spec;
+  }
+
+  /**
+   * Валидная запись, к которой пробы и дописываются. Окно стата в ней есть
+   * всегда: порог цвета без окна формат отвергает отдельным правилом, и проба
+   * порога без окна проверяла бы это правило, а не состав.
+   */
+  function base(): Record<string, unknown> {
+    return {
+      primitive: 'sphere',
+      color: '#ff8a3c',
+      radius: 1,
+      radiusFromStat: sample(field('radiusFromStat')),
+    };
+  }
+
+  function doc(record: Record<string, unknown>): Record<string, unknown> {
+    return { entities: {}, effects: { byKind: { X: record } } };
+  }
+
+  /** Находка, адресованная именно этому полю записи. */
+  function at(name: string): RegExp {
+    return new RegExp(`effects\\.byKind\\.X\\.${name}: `);
+  }
+
+  it('каждое поле описания законно в записи', () => {
+    for (const spec of EFFECT_FIELDS) {
+      const result = validateManifest(doc({ ...base(), [spec.name]: sample(spec) }));
+      expect(result.ok, `${spec.name}: ${result.ok ? '' : result.errors.join('; ')}`).toBe(true);
+    }
+  });
+
+  it('«допустимы:» находки о неизвестном ключе — само описание, а не второй список', () => {
+    const errors = expectErrors(
+      doc({ ...base(), такогоНет: 1 }),
+      /effects\.byKind\.X\.такогоНет: неизвестное поле/,
+    );
+    expect(errors.join('\n')).toContain(
+      `допустимы: ${EFFECT_FIELDS.map((spec) => spec.name).join(', ')}`,
+    );
+  });
+
+  it('состав составного поля закрыт тем же описанием', () => {
+    const composites = EFFECT_FIELDS.filter((spec) => spec.kind === 'composite');
+    expect(composites.map((spec) => spec.name)).toEqual([
+      'verticalOffset',
+      'radiusFromStat',
+      'colorAt',
+      'blink',
+    ]);
+    for (const spec of composites) {
+      const value = { ...(sample(spec) as Record<string, unknown>), такогоНет: 1 };
+      const errors = expectErrors(
+        doc({ ...base(), [spec.name]: value }),
+        new RegExp(`effects\\.byKind\\.X\\.${spec.name}\\.такогоНет: неизвестное поле`),
+      );
+      expect(errors.join('\n'), spec.name).toContain(
+        `допустимы: ${(spec.fields ?? []).map((sub) => sub.name).join(', ')}`,
+      );
+    }
+  });
+
+  it('границы числа в описании — те самые, что применяет валидация', () => {
+    for (const spec of EFFECT_FIELDS) {
+      if (spec.kind !== 'number') continue;
+      if (spec.min !== undefined) expectErrors(doc({ ...base(), [spec.name]: spec.min - 1 }), at(spec.name));
+      if (spec.max !== undefined) expectErrors(doc({ ...base(), [spec.name]: spec.max + 1 }), at(spec.name));
+      if (spec.integer === true) {
+        expectErrors(doc({ ...base(), [spec.name]: (spec.min ?? 0) + 0.5 }), at(spec.name));
+      }
+    }
+  });
+
+  it('поле, объявленное обязательным, отсутствовать не вправе', () => {
+    const required = EFFECT_FIELDS.filter((spec) => spec.required === true);
+    expect(required.map((spec) => spec.name)).toEqual(['primitive', 'color']);
+    for (const spec of required) {
+      const record = base();
+      delete record[spec.name];
+      expectErrors(doc(record), new RegExp(`${spec.name}: обязательное поле`));
+    }
   });
 });

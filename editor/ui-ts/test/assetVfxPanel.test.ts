@@ -12,6 +12,7 @@
  */
 import { describe, expect, it } from 'vitest';
 import { collectTexts, findAll, type UiNode } from '../src/dom/node.js';
+import { EFFECT_FIELDS } from '@fluxus/assets';
 import { buildAssetFrame, ASSET_IDS } from './support/assets.js';
 import { buttonByKey, press } from './support/frame.js';
 
@@ -202,5 +203,220 @@ describe('ED-14: эмиттеры частиц (ASSET-14)', () => {
     expect(manifest(fixture).particles?.byKind?.Fireball).toEqual({
       effect: 'visuals/vfx/torch.effect.json',
     });
+  });
+});
+
+
+/**
+ * Составные поля записи (REND-23): окно доставленного стата, порог цвета,
+ * мигание. До этой правки они были видны, но не правились — автор открывал
+ * `manifest.json` руками, чего ED-14 не допускает. Проверяется наблюдаемое:
+ * подполя стоят строками, правка идёт операцией (ED-29), заводимое поле уходит
+ * в документ одной записью, а находка владельца видна у своей строки (ED-8).
+ */
+describe('ED-14: составные поля записи правятся подполями', () => {
+  /** Запись выбранного источника таблицы `byKind`. */
+  function record(fixture: Fixture, name: string): Record<string, unknown> {
+    return manifest(fixture).effects?.byKind?.[name] as Record<string, unknown>;
+  }
+
+  /** Подписи пунктов выпадающего списка — то, из чего выбирает автор. */
+  function options(fixture: Fixture, label: string): readonly string[] {
+    const node = labelled(fixture, 'select', label);
+    return (node?.children ?? []).map((child) => child.text?.value ?? '');
+  }
+
+  /** Выбрать источник (он же выбор его единственного изображения). */
+  function selectSource(fixture: Fixture, name: string): void {
+    commit(labelled(fixture, 'select', name), '0');
+  }
+
+  it('список «дописать поле» — само описание формата (ASSET-6), а не список панели', async () => {
+    const fixture = await buildAssetFrame();
+    seed(fixture, ['effects', 'byKind', 'Fireball'], BALL);
+    fixture.frame.view();
+    selectSource(fixture, 'Fireball');
+
+    // Первый пункт списка — «нет»; дальше поля описания в его смысловом порядке.
+    const shown = options(fixture, 'ui.area.assets.vfxField');
+    expect(shown.slice(1)).toEqual(
+      EFFECT_FIELDS.filter((spec) => !(spec.name in BALL)).map((spec) => spec.name),
+    );
+    // Составные поля и вертикальное смещение — в списке: прежний ручной список
+    // панели о них не знал, и дописать их из редактора было нечем.
+    for (const field of ['verticalOffset', 'radiusFromStat', 'colorAt', 'blink']) {
+      expect(shown, field).toContain(field);
+    }
+  });
+
+  it('окно стата правится подполем, а запись уходит операцией целиком', async () => {
+    const fixture = await buildAssetFrame();
+    seed(fixture, ['effects', 'byKind', 'Charge'], {
+      ...BALL,
+      radiusFromStat: { stat: 'charge', max: 60, to: 2 },
+    });
+    fixture.frame.view();
+    selectSource(fixture, 'Charge');
+
+    commit(labelled(fixture, 'input', 'radiusFromStat.max'), '80');
+
+    const window = record(fixture, 'Charge').radiusFromStat as Record<string, unknown>;
+    expect(window).toEqual({ stat: 'charge', max: 80, to: 2 });
+    // Порядок ключей правка одного числа не перекладывает (ED-21).
+    expect(Object.keys(window)).toEqual(['stat', 'max', 'to']);
+  });
+
+  it('пустое подполе снимается, а необязательное дописывается', async () => {
+    const fixture = await buildAssetFrame();
+    seed(fixture, ['effects', 'byKind', 'Charge'], {
+      ...BALL,
+      radiusFromStat: { stat: 'charge', min: 1, max: 60, to: 2 },
+    });
+    fixture.frame.view();
+    selectSource(fixture, 'Charge');
+
+    commit(labelled(fixture, 'input', 'radiusFromStat.min'), '');
+    expect(record(fixture, 'Charge').radiusFromStat).toEqual({ stat: 'charge', max: 60, to: 2 });
+
+    commit(labelled(fixture, 'input', 'radiusFromStat.from'), '1.5');
+    expect(record(fixture, 'Charge').radiusFromStat).toEqual({
+      stat: 'charge',
+      max: 60,
+      to: 2,
+      from: 1.5,
+    });
+  });
+
+  it('мигание заводится черновиком подполей и уходит в документ одной записью', async () => {
+    const fixture = await buildAssetFrame();
+    seed(fixture, ['effects', 'byKind', 'Link'], {
+      primitive: 'beam',
+      color: '#6fd3ff',
+      width: 0.4,
+    });
+    fixture.frame.view();
+    selectSource(fixture, 'Link');
+
+    commit(labelled(fixture, 'select', 'ui.area.assets.vfxField'), 'blink');
+    // До нажатия набранное живёт в черновике: документ не трогается подполем.
+    commit(labelled(fixture, 'input', 'blink.periodMs'), '180');
+    expect(record(fixture, 'Link').blink).toBeUndefined();
+    commit(labelled(fixture, 'input', 'blink.alpha'), '0.4');
+
+    pressByKey(fixture, 'ui.area.assets.vfxSetField');
+
+    expect(record(fixture, 'Link').blink).toEqual({ periodMs: 180, alpha: 0.4 });
+    // Поле в документе — черновик закрыт, и у строки теперь снятие поля.
+    expect(buttonByKey(fixture.frame.view(), 'ui.area.assets.vfxSetField')).toBeUndefined();
+    expect(buttonByKey(fixture.frame.view(), 'ui.area.assets.vfxRemoveField')).toBeDefined();
+  });
+
+  it('пустой черновик записывать нечего: действие показано недоступным (ED-26)', async () => {
+    const fixture = await buildAssetFrame();
+    seed(fixture, ['effects', 'byKind', 'Link'], {
+      primitive: 'beam',
+      color: '#6fd3ff',
+      width: 0.4,
+    });
+    fixture.frame.view();
+    selectSource(fixture, 'Link');
+    commit(labelled(fixture, 'select', 'ui.area.assets.vfxField'), 'blink');
+
+    const write = (): UiNode | undefined =>
+      buttonByKey(fixture.frame.view(), 'ui.area.assets.vfxSetField');
+    expect(write()?.attrs?.['aria-disabled']).toBe('true');
+
+    commit(labelled(fixture, 'input', 'blink.periodMs'), '180');
+
+    expect(write()?.attrs?.['aria-disabled']).toBe('false');
+  });
+
+  it('порог цвета заводится тем же черновиком: строка и число в одном поле', async () => {
+    const fixture = await buildAssetFrame();
+    seed(fixture, ['effects', 'byKind', 'Charge'], {
+      ...BALL,
+      radiusFromStat: { stat: 'charge', max: 60, to: 2 },
+    });
+    fixture.frame.view();
+    selectSource(fixture, 'Charge');
+
+    commit(labelled(fixture, 'select', 'ui.area.assets.vfxField'), 'colorAt');
+    commit(labelled(fixture, 'input', 'colorAt.phase'), '0.5');
+    commit(labelled(fixture, 'input', 'colorAt.color'), '#ff7020');
+    pressByKey(fixture, 'ui.area.assets.vfxSetField');
+
+    expect(record(fixture, 'Charge').colorAt).toEqual({ phase: 0.5, color: '#ff7020' });
+  });
+
+  it('составное поле снимается кнопкой своей строки', async () => {
+    const fixture = await buildAssetFrame();
+    seed(fixture, ['effects', 'byKind', 'Charge'], {
+      ...BALL,
+      radiusFromStat: { stat: 'charge', max: 60, to: 2 },
+    });
+    fixture.frame.view();
+    selectSource(fixture, 'Charge');
+
+    pressByKey(fixture, 'ui.area.assets.vfxRemoveField');
+
+    expect(record(fixture, 'Charge')).toEqual(BALL);
+  });
+
+  it('находка владельца видна у строки подполя, а не одной кучей (ED-8)', async () => {
+    const fixture = await buildAssetFrame();
+    // Конец окна не дальше его начала — пустое окно, и владелец адресует находку
+    // подполю `max` (ASSET-6).
+    seed(fixture, ['effects', 'byKind', 'Charge'], {
+      ...BALL,
+      radiusFromStat: { stat: 'charge', min: 5, max: 5, to: 2 },
+      alpha: 2,
+    });
+    fixture.frame.view();
+    selectSource(fixture, 'Charge');
+
+    // Знак находки живёт в оболочке контрола — рядом с полем, а не внизу области.
+    const reason = (label: string): string => {
+      const shell = findAll(fixture.frame.view(), (node) =>
+        (node.children ?? []).some((child) => child.labels?.ariaLabel?.value === label),
+      )[0];
+      return shell === undefined
+        ? ''
+        : collectTexts(shell)
+            .map((text) => text.value)
+            .join(' ');
+    };
+    expect(reason('radiusFromStat.max')).toMatch(/конец окна/);
+    // Скалярное поле показывает свою находку тем же способом.
+    expect(reason('alpha')).toMatch(/\[0\.\.1\]/);
+  });
+
+  it('порог цвета без окна помечен у своей строки, а не молча принят', async () => {
+    const fixture = await buildAssetFrame();
+    seed(fixture, ['effects', 'byKind', 'Zone'], {
+      ...BALL,
+      colorAt: { phase: 0.5, color: '#ff7020' },
+    });
+    fixture.frame.view();
+    selectSource(fixture, 'Zone');
+
+    const shown = collectTexts(fixture.frame.view()).map((text) => text.value);
+    expect(shown.some((text) => text.includes('поле ведётся фазой окна'))).toBe(true);
+  });
+
+  it('негодное подполе отвергает владелец, и полуправки не остаётся (ED-29, ED-30)', async () => {
+    const fixture = await buildAssetFrame();
+    seed(fixture, ['effects', 'byKind', 'Link'], {
+      primitive: 'beam',
+      color: '#6fd3ff',
+      width: 0.4,
+      blink: { periodMs: 180, alpha: 0.4 },
+    });
+    fixture.frame.view();
+    selectSource(fixture, 'Link');
+
+    commit(labelled(fixture, 'input', 'blink.alpha'), '5');
+
+    expect(fixture.state.failure).toMatch(/blink\.alpha/);
+    expect(record(fixture, 'Link').blink).toEqual({ periodMs: 180, alpha: 0.4 });
   });
 });

@@ -443,6 +443,24 @@ export function effectImages(
   return isJsonObject(source) ? [source] : [];
 }
 
+/**
+ * Адрес изображения источника в находках документа (ED-30): у источника-СПИСКА
+ * с номером записи, у одиночной записи без него — так их адресует валидация
+ * манифеста, и панель, показывающая находку у своей строки (ED-8), обязана
+ * спрашивать тем же адресом. Знание о форме источника живёт здесь, рядом с
+ * операциями, а не вторым его чтением в интерфейсе.
+ */
+export function effectImageAddress(
+  value: JsonValue | undefined,
+  table: string,
+  name: string,
+  index: number,
+): string {
+  const source = sourceValue(value, EFFECTS_SECTION, table, name);
+  const path = `${EFFECTS_SECTION}.${table}.${name}`;
+  return isJsonArray(source) ? `${path}[${index}]` : path;
+}
+
 /** Запись эмиттера источника; `null` — привязки нет или она не объект. */
 export function emitterOf(
   value: JsonValue | undefined,
