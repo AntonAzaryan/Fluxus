@@ -843,9 +843,12 @@ describe('terrain.curvatureTessellation — потолок разбиения (R
 
     const clamped = rig.subsystem.floorVertexCount;
     expect(clamped).toBeLessThan(authored);
-    // Подклеток стало квадратом отношения меньше: 4×4 → 2×2 на клетку.
-    const curved = (authored - SIZE * SIZE * 4) / (DEFAULT_CURVATURE_TESSELLATION ** 2 * 4 - 4);
-    expect(clamped).toBe(curved * 2 * 2 * 4 + (SIZE * SIZE - curved) * 4);
+    // Подклеток стало квадратом отношения меньше: 4×4 → 2×2 на клетку, а
+    // вершин у разбитой клетки `(N+1)²` — подклетки сварены внутри неё (T-6).
+    const vertices = (n: number): number => (n + 1) * (n + 1);
+    const curved =
+      (authored - SIZE * SIZE * 4) / (vertices(DEFAULT_CURVATURE_TESSELLATION) - 4);
+    expect(clamped).toBe(curved * vertices(2) + (SIZE * SIZE - curved) * 4);
   });
 
   it('потолок выше конфига разбиение не поднимает — семантика min', () => {
@@ -882,6 +885,7 @@ describe('константная стоимость объявляется яв�
       'models.lodThresholdScale',
       'particles.density',
       'terrain.curvatureTessellation',
+      'terrain.textureSlots',
     ]);
     // Каждая ручка называет свою стоимостную ось и семантику (QUAL-1).
     for (const knob of knobs) {

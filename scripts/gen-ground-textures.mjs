@@ -1,13 +1,15 @@
 #!/usr/bin/env node
 /**
- * Генератор покрытий террейна (`rendering` REND-7, покрытие пола и стенок):
- * `content/visuals/textures/ground-grass.png` — тайлящаяся трава для площадок
- * пола и `content/visuals/textures/ground-cliff.png` — тайлящаяся земля со
- * слоями и камнем для стенок обрывов и юбки. Запуск: `npm run textures:ground`.
+ * Генератор покрытий террейна (`rendering` REND-39, ASSET-15): слоты tileset'а
+ * арены дуэли — `ground-grass.png` (трава), `ground-dirt.png` (утоптанная
+ * земля) и `ground-rock.png` (камень) для площадок пола, плюс
+ * `ground-cliff.png` — земля со слоями и камнем для стенок обрывов и юбки.
+ * Запуск: `npm run textures:ground`.
  *
- * Это ВРЕМЕННЫЕ покрытия: одно на весь пол и одно на все стенки, пока
- * текстурирование террейна не приехало раскраской клеток из Blender (стаб
- * `terrain-texturing`). Рисуются под изометрическую камеру и
+ * Это ЗАГЛУШКИ АРТА демо, а не механизм рендера: слоты называет tileset в
+ * разделе `terrain` манифеста визуалов, раскраску клеток — карта, приезжающая
+ * импортом из Blender (BLND-14), и заменить любую из этих картинок настоящей
+ * — правка контента, а не кода. Рисуются под изометрическую камеру и
  * стилизованный арт демо: крупные пятна тона, мазки-травинки и слои породы, а
  * не фотограмметрия, которая на таком масштабе сворачивается в шум.
  *
@@ -145,10 +147,20 @@ const CLIFF = {
    */
   stones: { cells: 7, seam: 0.1, relief: 0.3, warp: 0.07, mask: [0.45, 0.6] },
   specks: { count: 900 },
+  seed: 0x0c1f_0c1f,
 };
 
-function cliffMap() {
-  const random = xorshift32(SEED ^ 0x0c1f_0c1f);
+/** Стенка обрыва — та же порода, что у площадок, со слоистостью среза. */
+const cliffMap = () => surfaceMap(CLIFF);
+
+/**
+ * Одно ядро на все породные поверхности: пятна тона, необязательные
+ * горизонтальные прослойки и вкрапления камней. Разница между стенкой обрыва и
+ * каменистой площадкой — ПАЛИТРА и число полос, а не второй рисунок.
+ */
+function surfaceMap(palette) {
+  const CLIFF = palette;
+  const random = xorshift32(SEED ^ palette.seed);
   const tone = periodicOctaves(CLIFF.tone, random);
   const warp = periodicValueNoise(4, random);
   const stoneWarpU = periodicValueNoise(5, random);
@@ -177,7 +189,8 @@ function cliffMap() {
       const { strata } = CLIFF;
       const phase = (v + (warp(u, v) - 0.5) * strata.warp * 2) * strata.bands * Math.PI * 2;
       const wave = 0.7 * Math.sin(phase) + 0.3 * Math.sin(phase * 2.3 + 1.0);
-      const band = Math.pow(clamp01((wave + 1) / 2), strata.sharpness);
+      // Ноль полос — площадка без слоистости: волны нет вовсе, а не «почти нет».
+      const band = strata.bands === 0 ? 0 : Math.pow(clamp01((wave + 1) / 2), strata.sharpness);
       r = lerp(r, CLIFF.stone[0], band * 0.6);
       g = lerp(g, CLIFF.stone[1], band * 0.6);
       b = lerp(b, CLIFF.stone[2], band * 0.6);
@@ -203,11 +216,57 @@ function cliffMap() {
   return canvas.toRgb8();
 }
 
-const grass = encodePng(SIZE, SIZE, 3, grassMap());
-writeFileSync(`${OUT_DIR}ground-grass.png`, grass);
-const cliff = encodePng(SIZE, SIZE, 3, cliffMap());
-writeFileSync(`${OUT_DIR}ground-cliff.png`, cliff);
-process.stdout.write(
-  `ground-grass.png: ${SIZE}×${SIZE} RGB, ${grass.length} байт\n` +
-    `ground-cliff.png: ${SIZE}×${SIZE} RGB, ${cliff.length} байт\n`,
-);
+// ------------------------------------------------------- земля и камень пола
+
+/**
+ * Два оставшихся слота пола выводятся ТЕМ ЖЕ рисунком, что стенка обрыва, с
+ * другой палитрой и без слоистости: у обрыва читается срез породы, у площадки —
+ * её поверхность. Второй генератор ради двух палитр писать незачем — разошлись
+ * бы они молча, а картинка у них родственная по замыслу.
+ */
+const FLOOR_ROCK = {
+  soil: rgbOf('#8d8a84'),
+  dark: rgbOf('#5c5954'),
+  stone: rgbOf('#b3aea4'),
+  tone: [
+    { cells: 3, amp: 0.5 },
+    { cells: 9, amp: 0.3 },
+    { cells: 21, amp: 0.2 },
+  ],
+  // Слоистости у площадки нет: ноль полос выключает волну целиком.
+  strata: { bands: 0, warp: 0, sharpness: 1 },
+  stones: { cells: 6, seam: 0.09, relief: 0.34, warp: 0.08, mask: [0.3, 0.42] },
+  specks: { count: 700 },
+  seed: 0x50c1_50c1,
+};
+
+const FLOOR_DIRT = {
+  soil: rgbOf('#8a6b47'),
+  dark: rgbOf('#5f472c'),
+  stone: rgbOf('#a2855c'),
+  tone: [
+    { cells: 4, amp: 0.55 },
+    { cells: 11, amp: 0.3 },
+    { cells: 23, amp: 0.15 },
+  ],
+  strata: { bands: 0, warp: 0, sharpness: 1 },
+  // Камней в утоптанной земле мало: маска пропускает их пятнами.
+  stones: { cells: 9, seam: 0.12, relief: 0.22, warp: 0.1, mask: [0.58, 0.72] },
+  specks: { count: 1100 },
+  seed: 0xd127_d127,
+};
+
+const OUTPUTS = [
+  ['ground-grass.png', grassMap()],
+  ['ground-dirt.png', surfaceMap(FLOOR_DIRT)],
+  ['ground-rock.png', surfaceMap(FLOOR_ROCK)],
+  ['ground-cliff.png', cliffMap()],
+];
+
+let report = '';
+for (const [name, pixels] of OUTPUTS) {
+  const png = encodePng(SIZE, SIZE, 3, pixels);
+  writeFileSync(`${OUT_DIR}${name}`, png);
+  report += `${name}: ${SIZE}×${SIZE} RGB, ${png.length} байт\n`;
+}
+process.stdout.write(report);

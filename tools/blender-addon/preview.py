@@ -28,7 +28,7 @@ API-замечание: интерфейс групп (`group.interface.new_sock
 
 import bpy
 
-from .grids import NOFLOOR_ATTRIBUTE, RAMP_ATTRIBUTE
+from .grids import NOFLOOR_ATTRIBUTE, PAINT_ATTRIBUTE, RAMP_ATTRIBUTE
 
 TERRAIN_GROUP = "FluxusTerrainPreview"
 CURVATURE_GROUP = "FluxusCurvaturePreview"
@@ -384,6 +384,99 @@ class FLUXUS_OT_setup_preview(bpy.types.Operator):
         return {"FINISHED"}
 
 
+#: Имя материала предпросмотра раскраски. Одно на сцену: материал показывает
+#: АТРИБУТ, а не покрытие конкретной арены.
+PAINT_MATERIAL = "FluxusTerrainPaint"
+
+#: Плоские цвета слотов предпросмотра. Совпадения с кадром движка аддон не
+#: обещает (BLND-8, BLND-14): гарантия конвейера — импорт, а цвета здесь нужны,
+#: чтобы автор ВИДЕЛ границы раскраски и попадал кистью.
+PAINT_PREVIEW_COLORS = (
+    (0.35, 0.55, 0.22, 1.0),
+    (0.55, 0.42, 0.26, 1.0),
+    (0.52, 0.52, 0.55, 1.0),
+    (0.72, 0.66, 0.42, 1.0),
+)
+
+
+def build_paint_material(material):
+    """Материал предпросмотра раскраски: атрибут `_PAINT` → плоские цвета слотов.
+
+    Читается ТОТ ЖЕ атрибут, который уезжает в экспорт и который читает импорт
+    (BLND-14): второй источник правды о раскраске в сцене Blender не заводится,
+    и «покрашено для вида» от «покрашено данными» не расходится.
+    """
+    material.use_nodes = True
+    tree = material.node_tree
+    tree.nodes.clear()
+    attribute = tree.nodes.new("ShaderNodeAttribute")
+    attribute.attribute_name = PAINT_ATTRIBUTE
+    attribute.location = (-600, 0)
+    # Индекс слота — целое; делением на число цветов оно ложится на [0, 1]
+    # ступенями, а `CONSTANT`-интерполяция рампы держит их плоскими.
+    divide = tree.nodes.new("ShaderNodeMath")
+    divide.operation = "DIVIDE"
+    divide.location = (-400, 0)
+    divide.inputs[1].default_value = float(len(PAINT_PREVIEW_COLORS))
+    tree.links.new(attribute.outputs["Fac"], divide.inputs[0])
+    ramp = tree.nodes.new("ShaderNodeValToRGB")
+    ramp.location = (-220, 0)
+    ramp.color_ramp.interpolation = "CONSTANT"
+    while len(ramp.color_ramp.elements) > 1:
+        ramp.color_ramp.elements.remove(ramp.color_ramp.elements[-1])
+    for index, color in enumerate(PAINT_PREVIEW_COLORS):
+        position = index / float(len(PAINT_PREVIEW_COLORS))
+        element = ramp.color_ramp.elements[0] if index == 0 else ramp.color_ramp.elements.new(position)
+        element.position = position
+        element.color = color
+    tree.links.new(divide.outputs["Value"], ramp.inputs["Fac"])
+    shader = tree.nodes.new("ShaderNodeBsdfDiffuse")
+    shader.location = (0, 0)
+    tree.links.new(ramp.outputs["Color"], shader.inputs["Color"])
+    output = tree.nodes.new("ShaderNodeOutputMaterial")
+    output.location = (200, 0)
+    tree.links.new(shader.outputs["BSDF"], output.inputs["Surface"])
+    return material
+
+
+def ensure_paint_material(rebuild=False):
+    """Материал предпросмотра; `rebuild` пересобирает граф, теряя ручные правки."""
+    material = bpy.data.materials.get(PAINT_MATERIAL)
+    if material is None:
+        material = bpy.data.materials.new(PAINT_MATERIAL)
+        return build_paint_material(material)
+    if rebuild:
+        build_paint_material(material)
+    return material
+
+
+class FLUXUS_OT_paint_preview(bpy.types.Operator):
+    """Материал предпросмотра раскраски на объект террейна (BLND-14)"""
+
+    bl_idname = "fluxus.paint_preview"
+    bl_label = "Превью раскраски"
+    bl_options = {"REGISTER", "UNDO"}
+
+    rebuild: bpy.props.BoolProperty(
+        name="Пересобрать материал",
+        description="Собрать граф материала заново, потеряв ручные правки",
+        default=False,
+    )
+
+    def execute(self, context):
+        from .grids import TERRAIN_KEY, resolve_grid
+
+        obj = resolve_grid(context, TERRAIN_KEY)
+        if obj is None:
+            self.report({"ERROR"}, "в сцене нет объекта со свойством %r (BLND-3)" % TERRAIN_KEY)
+            return {"CANCELLED"}
+        material = ensure_paint_material(self.rebuild)
+        if material.name not in obj.data.materials:
+            obj.data.materials.append(material)
+        self.report({"INFO"}, "превью раскраски на объекте %s" % obj.name)
+        return {"FINISHED"}
+
+
 class FLUXUS_OT_sync_preview(bpy.types.Operator):
     """Подать настройки превью в существующие модификаторы"""
 
@@ -417,6 +510,7 @@ class FLUXUS_OT_sync_preview(bpy.types.Operator):
 
 CLASSES = (
     FLUXUS_OT_setup_preview,
+    FLUXUS_OT_paint_preview,
     FLUXUS_OT_sync_preview,
 )
 

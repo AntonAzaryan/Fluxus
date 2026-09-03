@@ -23,6 +23,7 @@ import {
   createManifestLoader,
   cubeLutLoader,
   curvatureLoader,
+  terrainPaintLoader,
   gltfLoader,
   mdxLoader,
   particleEffectLoader,
@@ -221,6 +222,7 @@ assets.registerLoader(
   }),
 );
 assets.registerLoader(curvatureLoader);
+assets.registerLoader(terrainPaintLoader);
 // Таблица цветокоррекции кадра (`rendering` REND-34): без загрузчика ссылка
 // подсекции `postprocess.lut` разрешалась бы в `failed` «нет загрузчика под пару
 // вид+формат» (ASSET-3), и кадр рисовался бы без LUT с предупреждением.
@@ -1477,15 +1479,16 @@ async function main(): Promise<void> {
       });
       remote!.register(lighting);
       // Порядок подсистем нормативен (REND-8): сначала террейн, затем модели.
-      // Покрытия террейна — политика игры, не движка: ID текстур дерева контента
-      // (ASSET-2) называет демо. Временные, одно на пол и одно на стенки, до
-      // раскраски клеток из Blender (стаб `terrain-texturing`).
+      // Текстурирование — ДАННЫЕ игры, не параметры движка (REND-39): tileset
+      // покрытий и ссылку на карту раскраски называет раздел `terrain`
+      // манифеста визуалов (ASSET-6, ASSET-15), а сам манифест — контент.
+      // Нет раздела — арена одноцветна, и кадр тот же, каким был до него.
       remote!.register(
         new TerrainSubsystem(grid, {
           surface,
           shadows: lighting,
-          floorCover: { texture: 'visuals/textures/ground-grass.png', period: 6 },
-          wallCover: { texture: 'visuals/textures/ground-cliff.png', period: 2 },
+          ...(manifest.terrain?.tileset === undefined ? {} : { tileset: manifest.terrain.tileset }),
+          ...(manifest.terrain?.paintMap === undefined ? {} : { paintMap: manifest.terrain.paintMap }),
         }),
       );
       // Вода (REND-35) — сразу за террейном и до моделей: глубину она берёт из

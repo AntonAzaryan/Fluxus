@@ -387,7 +387,16 @@
     "factor": 1
   },
   "terrain": {
-    "curvatureMap": "visuals/arena-curvature.json"
+    "curvatureMap": "visuals/arena-curvature.json",
+    "paintMap": "visuals/duel.paint.json",
+    "tileset": {
+      "slots": [
+        { "texture": "visuals/textures/ground-grass.png", "period": 6 },
+        { "texture": "visuals/textures/ground-dirt.png", "period": 4 },
+        { "texture": "visuals/textures/ground-rock.png", "period": 5 }
+      ],
+      "wall": { "texture": "visuals/textures/ground-cliff.png", "period": 2 }
+    }
   },
   "cameraConfig": {
     "pitch": 0.8726646259971648,

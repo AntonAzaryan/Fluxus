@@ -45,6 +45,14 @@ import { worldPoint, type SourceObject, type WorldPoint } from './normalize.js';
  */
 export const RAMP_CHANNEL = '_RAMP';
 export const NOFLOOR_CHANNEL = '_NOFLOOR';
+/**
+ * Слот покрытия клетки (BLND-14): скалярный канал рядом с двумя предыдущими, а
+ * НЕ вершинный цвет. Цвет — векторный канал с семантикой цвета, который
+ * экспортёр вправе квантовать и переносить между пространствами, а читатель
+ * каналов берёт из строки атрибута первый компонент — три четверти `COLOR_0`
+ * были бы отброшены молча.
+ */
+export const PAINT_CHANNEL = '_PAINT';
 
 /** Сетка, с которой обязан совпасть grid-объект (TERR-2). */
 export interface CellGridSpec {
@@ -62,6 +70,13 @@ export interface CellGrid {
   readonly heights: readonly number[];
   /** Значения запрошенных каналов; канала в экспорте нет — все нули. */
   readonly channels: Readonly<Record<string, readonly number[]>>;
+  /**
+   * Какие из запрошенных каналов экспорт ДЕЙСТВИТЕЛЬНО нёс. Нули канала,
+   * которого в источнике нет, неотличимы от нулей нарисованных, а для
+   * производного слоя это разные вещи: «источник его не даёт» означает, что
+   * документ не переписывается вовсе (BLND-2).
+   */
+  readonly present: ReadonlySet<string>;
 }
 
 /** Результат чтения: сетка либо перечень ошибок с адресами клеток (BLND-6). */
@@ -400,6 +415,7 @@ function gridOfCells(
   cells: readonly (CellSlot | null)[],
   spec: CellGridSpec,
   channels: readonly string[],
+  geometry: MeshGeometry,
 ): CellGrid {
   const total = spec.width * spec.height;
   const heights = new Array<number>(total);
@@ -416,7 +432,13 @@ function gridOfCells(
     heights[at] = cell.height;
     for (const [index, column] of columns.entries()) column[at] = cell.channels[index]!;
   }
-  return { width: spec.width, height: spec.height, heights, channels: read };
+  return {
+    width: spec.width,
+    height: spec.height,
+    heights,
+    channels: read,
+    present: new Set(channels.filter((name) => geometry.attributes[name] != null)),
+  };
 }
 
 /**
@@ -462,5 +484,5 @@ export function readCellGrid(
     );
   }
   if (errors.length > 0) return { grid: null, errors };
-  return { grid: gridOfCells(cells, spec, channels), errors: [] };
+  return { grid: gridOfCells(cells, spec, channels, geometry), errors: [] };
 }

@@ -20,6 +20,8 @@ Grid-меши террейна и кривизны: построение, чте
   равен единице: 1 уровень = 1 единица Blender = 1 мировая единица (CONVENTIONS,
   «1 юнит = 1 мировая единица»). Визуальное преувеличение высоты живёт в
   превью-модификаторе и клеточных данных не трогает.
+- **Слот покрытия**: целочисленный атрибут `_PAINT` на том же домене — индекс
+  слота tileset'а для клетки (BLND-14, ASSET-15).
 - **Рампа и снятый пол**: целочисленные атрибуты `_RAMP` и `_NOFLOOR` на домене
   точек (`POINT`), одинаковые у всех четырёх вершин клетки. Домен точек выбран
   ради экспорта: атрибуты граней glTF не выражает. Ноль — обычная клетка
@@ -62,6 +64,11 @@ LEVEL_UNIT = 1.0
 #: только атрибуты с ним (см. шапку), и в glTF они уезжают теми же именами.
 RAMP_ATTRIBUTE = "_RAMP"
 NOFLOOR_ATTRIBUTE = "_NOFLOOR"
+#: Слот покрытия клетки (BLND-14, ASSET-15): целое — индекс слота tileset'а.
+#: Скалярный атрибут, а НЕ вершинный цвет: цвет экспортёр вправе квантовать и
+#: переносить между пространствами, а импорт читает первый компонент строки —
+#: три четверти `COLOR_0` были бы отброшены молча.
+PAINT_ATTRIBUTE = "_PAINT"
 
 TERRAIN_KEY = "terrain"
 CURVATURE_KEY = "curvature"
@@ -299,7 +306,13 @@ class FLUXUS_OT_create_terrain_grid(bpy.types.Operator):
         obj[TERRAIN_KEY] = 1
         context.collection.objects.link(obj)
 
-        for name, values in ((RAMP_ATTRIBUTE, ramp), (NOFLOOR_ATTRIBUTE, noflo)):
+        for name, values in (
+            (RAMP_ATTRIBUTE, ramp),
+            (NOFLOOR_ATTRIBUTE, noflo),
+            # Раскраска заводится вместе с сеткой и нулями: слот 0 — первый
+            # слот tileset'а, то есть «клетка покрыта первым покрытием».
+            (PAINT_ATTRIBUTE, None),
+        ):
             attribute = ensure_int_attribute(mesh, name)
             if attribute is None:
                 self.report({"WARNING"}, "атрибут %s занят другим доменом" % name)

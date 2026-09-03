@@ -77,6 +77,7 @@ import {
   AssetService,
   cubeLutLoader,
   curvatureLoader,
+  terrainPaintLoader,
   gltfLoader,
   manifestLoader,
   mdxLoader,
@@ -126,6 +127,7 @@ function build(source: ContentAssetSource): AssetService {
   assets.registerLoader(pngTextureLoader);
   assets.registerLoader(manifestLoader);
   assets.registerLoader(curvatureLoader);
+  assets.registerLoader(terrainPaintLoader);
   // Эмиттерный ассет (ASSET-14): им рисует вьюпорт свои decoration-эмиттеры
   // (`rendering` REND-24), поэтому загрузчик — часть комплектации редактора, а
   // не только игрового клиента.

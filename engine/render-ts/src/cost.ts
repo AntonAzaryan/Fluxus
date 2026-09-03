@@ -555,6 +555,18 @@ export interface RenderCostCounters {
    * у стенок; глубина юбки на число квадов не влияет.
    */
   terrainSkirtQuads: number;
+  /**
+   * Веса слотов текстурирования, записанные пересборкой чанков (REND-39):
+   * четвёрка на вершину пола. Величина растёт площадью арены и КВАДРАТОМ
+   * потолка разбиения — она считается на тех же вершинах, что и позиции, — и
+   * обнуляется на сцене без tileset'а: кадр без текстурирования за него не
+   * платит (PERF-2).
+   *
+   * Фрагментной стоимости смешивания счётчиком здесь нет и быть не может: она
+   * не работа CPU, а её рычаг — потолок `terrain.textureSlots`, чьё действие
+   * видно `#define` материала (QUAL-1).
+   */
+  terrainPaintVertices: number;
 
   // ------------------------------------------------- вода: работа кадра (REND-35)
 
@@ -659,6 +671,7 @@ export const COST_COUNTER_STAGES: Readonly<Record<keyof RenderCostCounters, Cost
     terrainFloorQuads: 'frame',
     terrainWallQuads: 'frame',
     terrainSkirtQuads: 'frame',
+    terrainPaintVertices: 'frame',
     waterBodiesDrawn: 'frame',
     waterQuads: 'frame',
     waterRippleSources: 'frame',
@@ -724,6 +737,7 @@ export function createCostCounters(): RenderCostCounters {
     terrainFloorQuads: 0,
     terrainWallQuads: 0,
     terrainSkirtQuads: 0,
+    terrainPaintVertices: 0,
     waterBodiesDrawn: 0,
     waterQuads: 0,
     waterRippleSources: 0,

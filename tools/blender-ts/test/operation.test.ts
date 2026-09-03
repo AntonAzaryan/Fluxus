@@ -330,6 +330,7 @@ describe('ED-18, ED-29: операция обратима и видна в ка�
       'decorationsPath',
       'initialPath',
       'layer',
+      'paint',
       'presentation',
       'scene',
       'terrainPath',

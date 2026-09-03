@@ -157,6 +157,13 @@ export { validateParticleEffect } from './particleEffect.js';
 // карта кривизны террейна (ASSET-7)
 export type { TerrainCurvatureMap } from './curvature.js';
 export { validateCurvatureMap, CURVATURE_SCALE } from './curvature.js';
+export type { TerrainPaintMap } from './terrainPaint.js';
+export { validateTerrainPaint, TERRAIN_PAINT_MAX_SLOT } from './terrainPaint.js';
+export type {
+  TerrainTileset,
+  TerrainTilesetSlot,
+  TerrainVisualSection,
+} from './visualSections.js';
 
 // таблица цветокоррекции кадра (`rendering` REND-34) — вид ассета `lut`
 export type { ColorLut } from './colorLut.js';
@@ -227,6 +234,7 @@ export { pngTextureLoader, decodePng } from './loaders/png.js';
 export { manifestLoader, createManifestLoader } from './loaders/manifest.js';
 export type { ManifestLoaderOptions } from './loaders/manifest.js';
 export { curvatureLoader } from './loaders/curvature.js';
+export { terrainPaintLoader } from './loaders/terrainPaint.js';
 export { LUT_ASSET_KIND, cubeLutLoader } from './loaders/cube.js';
 export { particleEffectLoader } from './loaders/particleEffect.js';
 export { presentationLoader } from './loaders/presentation.js';

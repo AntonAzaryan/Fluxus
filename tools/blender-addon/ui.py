@@ -12,7 +12,7 @@ N-панель авторинга (BLND-8): типизированный вид 
 import bpy
 
 from . import exporter, livecheck, props, sources
-from .grids import CURVATURE_KEY, NOFLOOR_ATTRIBUTE, RAMP_ATTRIBUTE, TERRAIN_KEY
+from .grids import CURVATURE_KEY, NOFLOOR_ATTRIBUTE, PAINT_ATTRIBUTE, RAMP_ATTRIBUTE, TERRAIN_KEY
 
 #: Семантика скалпт-поверхности (BLND-13) — сырое свойство, как у grid-объектов.
 SCULPT_KEY = "sculpt"
@@ -193,15 +193,22 @@ class FLUXUS_PT_terrain(FluxusPanel, bpy.types.Panel):
         box.prop(settings, "brush_level_step")
         box.prop(settings, "brush_level_target")
         box.prop(settings, "brush_flag", expand=True)
+        box.prop(settings, "brush_paint_slot")
         box.prop(settings, "brush_curvature_step")
         box.prop(settings, "brush_curvature_falloff")
-        box.label(text="атрибуты клеток: %s, %s" % (RAMP_ATTRIBUTE, NOFLOOR_ATTRIBUTE), icon="INFO")
+        box.label(
+            text="атрибуты клеток: %s, %s, %s" % (RAMP_ATTRIBUTE, NOFLOOR_ATTRIBUTE, PAINT_ATTRIBUTE),
+            icon="INFO",
+        )
 
         box = layout.box()
         box.label(text="Превью (приближение, правда — кадр движка)", icon="SHADING_RENDERED")
         row = box.row(align=True)
         row.operator("fluxus.setup_preview", text="Террейн").target = "TERRAIN"
         row.operator("fluxus.setup_preview", text="Кривизна").target = "CURVATURE"
+        # Раскраска показывается МАТЕРИАЛОМ, а не геометрией: она про цвет
+        # поверхности, и нодами модификатора её не увидеть (BLND-14).
+        box.operator("fluxus.paint_preview", text="Раскраска")
         box.prop(settings, "preview_height_step")
         box.prop(settings, "preview_skirt")
         box.prop(settings, "preview_smooth")

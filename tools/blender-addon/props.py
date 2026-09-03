@@ -284,6 +284,16 @@ class FluxusSceneProps(bpy.types.PropertyGroup):
         ),
         default="RAMP",
     )
+    brush_paint_slot: IntProperty(
+        name="Слот покрытия",
+        description=(
+            "Индекс слота tileset'а, которым красит кисть раскраски (BLND-14). "
+            "Сам tileset — авторский перечень в манифесте визуалов, и импорт его не трогает"
+        ),
+        default=0,
+        min=0,
+        max=9,
+    )
     brush_curvature_step: FloatProperty(
         name="Шаг кривизны",
         description=(

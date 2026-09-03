@@ -28,6 +28,8 @@ import { hasErrors, type Finding, type SpatialLayer } from './layer.js';
 export const LEVEL_MAP = 'levels';
 export const FLAG_MAP = 'flags';
 export const OFFSET_MAP = 'rows';
+/** Ряды карты раскраски — то же имя поля формата (ASSET-15), что у кривизны. */
+export const PAINT_MAP = 'rows';
 
 /** Ключи слоя, которые операция умеет писать. Перечень закрыт: ключ вне его — отказ. */
 const KNOWN_SLOTS: readonly string[] = Object.freeze([
@@ -35,6 +37,7 @@ const KNOWN_SLOTS: readonly string[] = Object.freeze([
   'decorations',
   'terrain',
   'curvature',
+  'paint',
   'findings',
 ]);
 
@@ -47,6 +50,7 @@ const KNOWN_SLOTS: readonly string[] = Object.freeze([
 export function spatialLayerParam(layer: SpatialLayer): JsonValue {
   const terrain = layer.terrain;
   const curvature = layer.curvature;
+  const paint = layer.paint;
   return {
     initial: layer.initial.map((record) => record as JsonValue),
     decorations: layer.decorations.map((record) => record as JsonValue),
@@ -56,6 +60,9 @@ export function spatialLayerParam(layer: SpatialLayer): JsonValue {
     ...(curvature === undefined
       ? {}
       : { curvature: { width: curvature.width, height: curvature.height, rows: [...curvature.rows] } }),
+    ...(paint === undefined
+      ? {}
+      : { paint: { width: paint.width, height: paint.height, rows: [...paint.rows] } }),
     findings: layer.findings.map(
       (finding): JsonValue => ({
         severity: finding.severity,
@@ -72,6 +79,8 @@ export function importParams(input: {
   readonly presentation?: DocumentId;
   /** Документ карты кривизны (ASSET-7); его адрес называет манифест. */
   readonly curvature?: DocumentId | null;
+  /** Документ карты раскраски (ASSET-15); его адрес называет тот же манифест. */
+  readonly paint?: DocumentId | null;
   readonly layer: SpatialLayer;
   readonly initialPath?: JsonPath;
   readonly decorationsPath?: JsonPath;
@@ -81,6 +90,7 @@ export function importParams(input: {
     scene: input.scene,
     ...(input.presentation === undefined ? {} : { presentation: input.presentation }),
     ...(input.curvature === undefined || input.curvature === null ? {} : { curvature: input.curvature }),
+    ...(input.paint === undefined || input.paint === null ? {} : { paint: input.paint }),
     layer: spatialLayerParam(input.layer),
     ...(input.initialPath === undefined ? {} : { initialPath: [...input.initialPath] }),
     ...(input.decorationsPath === undefined ? {} : { decorationsPath: [...input.decorationsPath] }),
@@ -235,6 +245,24 @@ export function readTerrainSlot(id: string, layer: JsonObject): TerrainSlot | nu
   return {
     levels: readMap(id, slot, 'terrain', LEVEL_MAP),
     flags: readMap(id, slot, 'terrain', FLAG_MAP),
+  };
+}
+
+/** Карта раскраски из слоя: у неё производен весь документ (BLND-2, ASSET-15). */
+export interface PaintSlot {
+  readonly width: number;
+  readonly height: number;
+  readonly rows: readonly string[];
+}
+
+/** Слот раскраски из параметра; `null` — источник его не дал (BLND-2). */
+export function readPaintSlot(id: string, layer: JsonObject): PaintSlot | null {
+  const slot = readSlotObject(id, layer, 'paint');
+  if (slot === null) return null;
+  return {
+    width: readNumber(id, slot, 'paint', 'width'),
+    height: readNumber(id, slot, 'paint', 'height'),
+    rows: readMap(id, slot, 'paint', PAINT_MAP),
   };
 }
 

@@ -409,19 +409,73 @@ function checkKeySpaceCollision(
   }
 }
 
-/** Presentation-данные террейна арены: ссылка на карту кривизны (ASSET-7). */
+/**
+ * Presentation-данные террейна арены: ссылка на карту кривизны (ASSET-7),
+ * tileset покрытий и ссылка на карту раскраски (ASSET-15). Tileset здесь, а не
+ * в производном документе, потому что он авторский — импорт из Blender его не
+ * переписывает (BLND-2, BLND-14).
+ */
 function validateTerrainSection(terrain: unknown, errors: string[]): void {
   if (!isRecord(terrain)) {
     errors.push(`terrain: ожидался объект, получено ${typeName(terrain)}`);
     return;
   }
-  closedKeys(terrain, 'terrain', ['curvatureMap'], errors);
-  if (
-    'curvatureMap' in terrain &&
-    (typeof terrain.curvatureMap !== 'string' || terrain.curvatureMap.length === 0)
-  ) {
+  closedKeys(terrain, 'terrain', ['curvatureMap', 'tileset', 'paintMap'], errors);
+  assetId(terrain, 'curvatureMap', 'карты кривизны', errors);
+  assetId(terrain, 'paintMap', 'карты раскраски', errors);
+  if ('tileset' in terrain) validateTileset(terrain.tileset, errors);
+}
+
+/** Необязательная ссылка на ассет раздела `terrain`: непустая строка или ничего. */
+function assetId(
+  section: Record<string, unknown>,
+  key: string,
+  what: string,
+  errors: string[],
+): void {
+  if (!(key in section)) return;
+  const value = section[key];
+  if (typeof value !== 'string' || value.length === 0) {
+    errors.push(`terrain.${key}: ожидался asset id ${what} (непустая строка), получено ${typeName(value)}`);
+  }
+}
+
+/**
+ * Tileset (ASSET-15): непустой список слотов пола и необязательная запись
+ * покрытия стенок. Предела числа слотов здесь НЕТ: сколько их смешивает
+ * сегодняшний рендер, решает REND-39, и валидация манифеста о рендере не знает
+ * — тем же приёмом, каким формат кривизны не ограничивает амплитуду (ASSET-7).
+ */
+function validateTileset(tileset: unknown, errors: string[]): void {
+  if (!isRecord(tileset)) {
+    errors.push(`terrain.tileset: ожидался объект, получено ${typeName(tileset)}`);
+    return;
+  }
+  closedKeys(tileset, 'terrain.tileset', ['slots', 'wall'], errors);
+  const slots = tileset.slots;
+  if (!Array.isArray(slots) || slots.length === 0) {
     errors.push(
-      `terrain.curvatureMap: ожидался asset id карты кривизны (непустая строка), получено ${typeName(terrain.curvatureMap)}`,
+      `terrain.tileset.slots: ожидался непустой массив слотов покрытия, получено ${typeName(slots)}`,
     );
+  } else {
+    slots.forEach((slot, index) => {
+      validateTilesetSlot(slot, `terrain.tileset.slots[${index}]`, errors);
+    });
+  }
+  if ('wall' in tileset) validateTilesetSlot(tileset.wall, 'terrain.tileset.wall', errors);
+}
+
+/** Слот покрытия: ID текстуры дерева контента (ASSET-2) и положительный период. */
+function validateTilesetSlot(slot: unknown, at: string, errors: string[]): void {
+  if (!isRecord(slot)) {
+    errors.push(`${at}: ожидался объект слота покрытия, получено ${typeName(slot)}`);
+    return;
+  }
+  closedKeys(slot, at, ['texture', 'period'], errors);
+  if (typeof slot.texture !== 'string' || slot.texture.length === 0) {
+    errors.push(`${at}.texture: ожидался asset id текстуры (непустая строка), получено ${typeName(slot.texture)}`);
+  }
+  if (!isFiniteNumber(slot.period) || slot.period <= 0) {
+    errors.push(`${at}.period: ожидался мировой период тайла > 0, получено ${typeName(slot.period)}`);
   }
 }

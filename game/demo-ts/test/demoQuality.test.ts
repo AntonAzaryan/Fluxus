@@ -212,6 +212,10 @@ describe('документы пресетов применимы к сцене �
       'postprocess.bloomResolution',
       'postprocess.lut',
       'terrain.curvatureTessellation',
+      // Потолок числа смешиваемых слотов текстурирования (REND-39): документы
+      // пресетов его не называют, и действует кодовое умолчание «потолка нет»
+      // — арена носит tileset манифеста как объявлен (QUAL-1).
+      'terrain.textureSlots',
       'water.depthTexelsPerCell',
       'water.detailLayers',
       'water.rippleSources',

@@ -277,3 +277,39 @@ function validateEmitter(v: unknown, path: string, errors: string[]): void {
 export function validateParticles(section: unknown, errors: string[]): void {
   validateSourceTables(section, 'particles', 'эмиттер', validateEmitter, errors);
 }
+
+/**
+ * Слот tileset'а террейна (ASSET-15): тайлящаяся текстура покрытия и её мировой
+ * период. Период в МИРОВЫХ единицах, а не в клетках: у геометрии террейна нет
+ * своего UV — координата слота выводится проекцией мировой позиции (REND-39), и
+ * период клетками зависел бы от `tileSize` арены.
+ */
+export interface TerrainTilesetSlot {
+  /** ID текстуры дерева контента (ASSET-2). */
+  readonly texture: string;
+  /** Мировых единиц на период тайла; строго положительный. */
+  readonly period: number;
+}
+
+/**
+ * Tileset террейна (ASSET-15) — АВТОРСКИЙ перечень покрытий: список слотов пола
+ * (порядок есть нумерация: индекс `0` — первый элемент) и необязательная запись
+ * покрытия стенок обрывов и юбки. Живёт в манифесте, а не в производном
+ * документе, потому что его подбирает художник, и импорт из Blender его не
+ * переписывает (BLND-2, BLND-14).
+ */
+export interface TerrainTileset {
+  readonly slots: readonly TerrainTilesetSlot[];
+  /** Покрытие стенок обрывов и юбки; нет — они рисуются цветом (REND-7). */
+  readonly wall?: TerrainTilesetSlot;
+}
+
+/** Presentation-данные террейна арены: рельеф (ASSET-7) и текстурирование (ASSET-15). */
+export interface TerrainVisualSection {
+  /** ID карты кривизны (ASSET-7); нет — плоские ступени REND-7. */
+  readonly curvatureMap?: string;
+  /** Перечень покрытий поверхности; нет — террейн без текстурирования. */
+  readonly tileset?: TerrainTileset;
+  /** ID карты раскраски клеток (ASSET-15); нет — террейн без текстурирования. */
+  readonly paintMap?: string;
+}

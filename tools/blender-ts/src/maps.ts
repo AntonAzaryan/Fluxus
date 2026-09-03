@@ -47,6 +47,7 @@ import { CURVATURE_SCALE, validateCurvatureMap } from '@fluxus/assets';
 import {
   HEIGHT_EPSILON,
   NOFLOOR_CHANNEL,
+  PAINT_CHANNEL,
   formatHeight,
   RAMP_CHANNEL,
   readCellGrid,
@@ -57,6 +58,7 @@ import {
 } from './cells.js';
 import type { GltfDocument } from './gltf.js';
 import { byObjectName } from './layer.js';
+import { error, gridPaintMap, type Sink } from './paint.js';
 import {
   buildSculptSampler,
   cliffJumpOf,
@@ -70,6 +72,7 @@ import type {
   CellLayerContext,
   CurvatureMap,
   Finding,
+  PaintMap,
   SpatialLayer,
   TargetTerrain,
   TerrainMaps,
@@ -88,15 +91,8 @@ export const LEVEL_UNIT = 1;
 export interface CellLayer {
   readonly terrain?: TerrainMaps;
   readonly curvature?: CurvatureMap;
+  readonly paint?: PaintMap;
   readonly findings: readonly Finding[];
-}
-
-interface Sink {
-  readonly findings: Finding[];
-}
-
-function error(sink: Sink, object: string, message: string): void {
-  sink.findings.push({ severity: 'error', object, message });
 }
 
 /**
@@ -368,6 +364,9 @@ function sculptTerrainMaps(
     height: spec.height,
     heights: cells.heights,
     channels: { [RAMP_CHANNEL]: cells.ramps, [NOFLOOR_CHANNEL]: cells.noFloor },
+    // Скалпт даёт уровни, рампы и пол, но не раскраску: её канал живёт на
+    // grid-объекте террейна (BLND-14).
+    present: new Set([RAMP_CHANNEL, NOFLOOR_CHANNEL]),
   };
   return terrainMapsOf(sink, anchor, grid);
 }
@@ -452,13 +451,16 @@ function gridTerrainMaps(
   object: SourceObject,
   spec: CellGridSpec,
   target: TargetTerrain,
-): TerrainMaps | undefined {
-  const read = readCellGrid(document, object, spec, [RAMP_CHANNEL, NOFLOOR_CHANNEL]);
+  context: CellLayerContext,
+): { terrain?: TerrainMaps; paint?: PaintMap } {
+  const read = readCellGrid(document, object, spec, [RAMP_CHANNEL, NOFLOOR_CHANNEL, PAINT_CHANNEL]);
   for (const message of read.errors) error(sink, object.name, message);
-  if (read.grid === null) return undefined;
+  if (read.grid === null) return {};
   const maps = terrainMapsOf(sink, object, read.grid);
-  if (maps === null) return undefined;
-  return checkedTerrainGrid(sink, object, target, maps) === null ? undefined : maps;
+  if (maps === null) return {};
+  if (checkedTerrainGrid(sink, object, target, maps) === null) return {};
+  const paint = gridPaintMap(sink, object, read.grid, spec, context);
+  return { terrain: maps, ...(paint === undefined ? {} : { paint }) };
 }
 
 /** Карта кривизны из grid-объекта (BLND-10): узловая сетка, квантование, проверка. */
@@ -510,14 +512,15 @@ export function generateCellLayer(
   }
 
   const spec = specOf(target);
-  const terrain =
-    terrainObject === null ? undefined : gridTerrainMaps(sink, document, terrainObject, spec, target);
+  const fromGrid =
+    terrainObject === null ? {} : gridTerrainMaps(sink, document, terrainObject, spec, target, context);
   const curvature =
     curvatureObject === null ? undefined : gridCurvatureMap(sink, document, curvatureObject, spec, context);
 
   return {
-    ...(terrain === undefined ? {} : { terrain }),
+    ...(fromGrid.terrain === undefined ? {} : { terrain: fromGrid.terrain }),
     ...(curvature === undefined ? {} : { curvature }),
+    ...(fromGrid.paint === undefined ? {} : { paint: fromGrid.paint }),
     findings: sink.findings,
   };
 }
@@ -533,6 +536,7 @@ export function withCellLayer(layer: SpatialLayer, cells: CellLayer): SpatialLay
     ...layer,
     ...(cells.terrain === undefined ? {} : { terrain: cells.terrain }),
     ...(cells.curvature === undefined ? {} : { curvature: cells.curvature }),
+    ...(cells.paint === undefined ? {} : { paint: cells.paint }),
     findings: [...layer.findings, ...cells.findings],
   };
 }

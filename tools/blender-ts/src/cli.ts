@@ -171,7 +171,7 @@ export function cliValidationRules(): ContributionReader<ValidationRule> {
  * при этом значимо и здесь: ключа нет ровно тогда, когда ассет не переписывается.
  */
 function resultJson(result: ImportResult): string {
-  const { terrain, curvature } = result.layer;
+  const { terrain, curvature, paint } = result.layer;
   return JSON.stringify(
     {
       ok: result.ok,
@@ -185,6 +185,7 @@ function resultJson(result: ImportResult): string {
         decorations: result.layer.decorations,
         ...(terrain === undefined ? {} : { terrain }),
         ...(curvature === undefined ? {} : { curvature }),
+        ...(paint === undefined ? {} : { paint }),
       },
       changes: result.changes,
       written: result.written,
