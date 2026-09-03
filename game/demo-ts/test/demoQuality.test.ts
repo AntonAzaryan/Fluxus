@@ -207,6 +207,7 @@ describe('документы пресетов применимы к сцене �
       'models.defaultTier',
       'models.lodThresholdScale',
       'particles.density',
+      'postprocess.antialias',
       'postprocess.bloom',
       'postprocess.bloomResolution',
       'postprocess.lut',
@@ -340,6 +341,12 @@ describe('performance — первые реальные ограничения (
     // потолок написан на будущее, в отличие от соседних.
     expect(cheap['postprocess.lut']).toBe(false);
     expect(baseline['postprocess.lut']).toBe(true);
+    // Сглаживание снято вовсе (REND-34): цель сцены цепочки без сэмплов — ни
+    // растеризация, ни память цели, ни сведение многосэмплового буфера слабому
+    // устройству не достаются. Умолчание ручки — четыре сэмпла, то есть столько
+    // же, сколько даёт `antialias: true` кадру без цепочки.
+    expect(cheap['postprocess.antialias']).toBe(0);
+    expect(baseline['postprocess.antialias']).toBe(4);
   });
 
   it('потолок свечения гасит авторски включённый bloom, документ сцены не трогается', () => {

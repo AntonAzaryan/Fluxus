@@ -892,6 +892,19 @@ interface InstanceRecord {
    * снимается он вместе с инстансом или со сменой яруса кастера.
    */
   blobCaster: BlobCaster | null;
+  /**
+   * Опора кадра под инстансом — высота поверхности и её нормаль в точке
+   * (REND-30, вход `poseOfBlob`). Считается там же, где поза кадра, и только
+   * при живом носителе пятна: инстанс без него за выборку поверхности не платит.
+   *
+   * Отдельно от `pos`, потому что это РАЗНЫЕ величины: в позу входят дуга
+   * манёвра, полёт и снижение при провале (REND-12), а опора — то, над чем
+   * инстанс в этот момент находится. Нормаль — свойство той же точки, и берётся
+   * она тем же правилом, каким сажается сам инстанс: walkable-инстанс — по
+   * террейн-форме, все прочие — по полю целиком (REND-9).
+   */
+  seatZ: number;
+  readonly seatNormal: SurfaceNormal;
   /** Публичный вид инстанса; строится лениво и живёт с инстансом (REND-17). */
   publicView: ModelInstanceView | null;
 }
@@ -1744,6 +1757,10 @@ export class ModelsSubsystem implements RenderSubsystem, InstanceProxySource {
       y,
       base + arcPrev + (arcCurr - arcPrev) * t + flightArc + record.fallOffset,
     );
+    // Опора под инстансом — вход контактного пятна (REND-30): её надо снять
+    // ЗДЕСЬ, где известны и точка кадра, и правило посадки, а не пересчитывать
+    // вторым проходом в `blobCastersPosed`.
+    captureSeat(record, x, y, base, surface, walkableSeat);
 
     // Курс: цель из данных тика, доворот сглажен по кадрам; при snap —
     // мгновенно. Поправка на перёд модели — своя у каждой записи (REND-13).
@@ -2832,6 +2849,10 @@ export class ModelsSubsystem implements RenderSubsystem, InstanceProxySource {
       deathLock: false,
       lightCarrier: null,
       blobCaster: null,
+      // Опора до первого кадра — мировой ноль с вертикальной нормалью; позы
+      // инстанс ещё не получил, и пятна ему всё равно не полагается (`posed`).
+      seatZ: 0,
+      seatNormal: { x: 0, y: 0, z: 1 },
       publicView: null,
     };
     this.applyEntryParams(record);
@@ -3688,9 +3709,16 @@ function poseOfCarrier(record: InstanceRecord, out: LightCarrierPose): boolean {
 }
 
 /**
- * Позиция контактного пятна инстанса (REND-30): ТА САМАЯ поза, которой инстанс
- * нарисован в этом кадре (REND-3), а не второй её расчёт. `false` — пятна в
- * кадре нет, и оснований для этого три:
+ * Опора контактного пятна инстанса (REND-30) — из ТОГО ЖЕ кадрового расчёта,
+ * которым инстанс нарисован (REND-3), а не из второго прохода по поверхности.
+ *
+ * Отдаётся именно ОПОРА, а не поза: в позу входят дуга прыжка, полётная дуга и
+ * снижение при провале (REND-12), и пятно, взятое с `pos.z`, взлетало бы вместе
+ * с моделью — ровно в том случае, ради которого пятно и читаемо. По той же
+ * причине рядом едет нормаль поверхности: горизонтальный круг на уклоне уходит
+ * в грунт (см. `BlobCasterPose`).
+ *
+ * `false` — пятна в кадре нет, и оснований для этого три:
  *
  * - позы кадра инстанс ещё не получил;
  * - он отсечён пирамидой видимости (REND-21) — в кадре его нет вовсе;
@@ -3712,8 +3740,56 @@ function poseOfBlob(record: InstanceRecord, out: BlobCasterPose): boolean {
   if (!record.posed || !record.visible || record.fade < 1) return false;
   out.x = record.pos.x;
   out.y = record.pos.y;
-  out.z = record.pos.z;
+  out.z = record.seatZ;
+  const normal = record.seatNormal;
+  out.nx = normal.x;
+  out.ny = normal.y;
+  out.nz = normal.z;
   return true;
+}
+
+/**
+ * Опора кадра под инстансом — высота поверхности и её нормаль (REND-30, вход
+ * `poseOfBlob`). Считается только при живом носителе пятна: выборка поверхности
+ * стоит работы, а инстансу без носителя она не нужна ни для чего.
+ *
+ * Наземный инстанс уже стоит на опоре — её посчитал `baseHeightOf`, и второй
+ * выборки высоты здесь не делается. У летящего (REND-12) поза и опора расходятся:
+ * `baseHeightOf` ведёт его по прямой между высотами отрыва и приземления, а
+ * пятно обязано лежать на поверхности ПОД ним — там его и берём.
+ *
+ * Правило посадки — то же, каким сажается сам инстанс (REND-9):
+ * walkable-инстанс читает террейн-форму без walkable-вкладов, все прочие — поле
+ * целиком. Нет поверхности либо override уровня (TERR-4) — опорой служит
+ * посчитанная позой высота, а нормалью вертикаль: наклонять пятно не по чему.
+ */
+function captureSeat(
+  record: InstanceRecord,
+  x: number,
+  y: number,
+  base: number,
+  surface: VisualSurface | null,
+  walkableSeat: boolean,
+): void {
+  if (record.blobCaster === null) return;
+  const normal = record.seatNormal;
+  // Порядок ветвей — тот же, что у `baseHeightOf`: манёвр решается ПЕРЕД
+  // override уровня, иначе опора летящего разошлась бы с его же позой.
+  const airborne = surface !== null && isAirborne(record.view);
+  if (surface === null || (!airborne && record.view.levelOverride)) {
+    record.seatZ = base;
+    normal.x = 0;
+    normal.y = 0;
+    normal.z = 1;
+    return;
+  }
+  if (walkableSeat) {
+    record.seatZ = airborne ? surface.terrainFormHeightAt(x, y) : base;
+    surface.terrainFormNormalAt(x, y, normal);
+    return;
+  }
+  record.seatZ = airborne ? surface.heightAt(x, y) : base;
+  surface.normalAt(x, y, normal);
 }
 
 /**

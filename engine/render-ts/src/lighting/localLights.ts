@@ -36,6 +36,17 @@
  * кадром за то, чего не видно; появившийся носитель по той же причине
  * загорается следующим кадром — «не позже следующего кадра» (`editor` ED-15).
  *
+ * ## Граница отбора и рампа у неё
+ *
+ * Отбор считается заново каждым кадром и памяти о прошлом не имеет (REND-33:
+ * «повтор того же кадра отбирает те же источники»). Без рампы это значило бы
+ * скачок на границе рейтинга: панорама камеры на пол-юнита гасит один факел и
+ * зажигает другой в полную силу. Поэтому интенсивность отобранного носителя
+ * умножается на его ЗАПАС до границы отбора (`fadeOf`) — величину того же
+ * кадра, а не состояние: у самой границы носитель горит слабо, и обмен местами
+ * происходит на нуле. Гистерезисом это не является и «того же кадра» не
+ * нарушает.
+ *
  * ## Теней локальный источник не отбрасывает
  *
  * `castShadow` не поднимается ни на одном слоте (REND-33): карты теней
@@ -62,6 +73,25 @@ export const LIGHTING_MAX_LOCAL_LIGHTS = 'lighting.maxLocalLights';
  * не заставляя форвард-рендер считать свет, которого игрок не видит.
  */
 export const DEFAULT_MAX_LOCAL_LIGHTS = 4;
+
+/**
+ * Ширина рампы затухания у ГРАНИЦЫ ОТБОРА, мировые единицы оценки (design D3).
+ *
+ * Отбор переранжируется каждым кадром, и без рампы источник на границе рейтинга
+ * переключался бы скачком: панорама камеры на пол-юнита гасила бы один факел и
+ * зажигала другой в полную силу. Рампа делает интенсивность НЕПРЕРЫВНОЙ функцией
+ * оценок кадра: чем меньше запас отобранного носителя до границы, тем тусклее он
+ * горит, и в точке, где два носителя меняются местами, обмен идёт на нуле —
+ * видимого переключения не происходит вовсе.
+ *
+ * Памяти о прошлом кадре у рампы нет (это не гистерезис): значение остаётся
+ * функцией данных ЭТОГО кадра, и «повтор того же кадра отбирает те же
+ * источники» (REND-33) выполняется наравне с отбором.
+ *
+ * Единица — клетка типовой арены: запас в клетку носитель проходит за доли
+ * секунды панорамирования, и рампа читается плавным, а не медленным.
+ */
+const SELECTION_FADE_WORLD_UNITS = 1;
 
 /**
  * Верхняя граница, которую вправе написать автор пресета. Не «столько бывает
@@ -130,6 +160,14 @@ export class LocalLightPool {
   private readonly keys: string[] = [];
   /** Сколько источников горело в последнем кадре — пробник для тестов и отладки. */
   private lit = 0;
+  /**
+   * Граница отбора кадра — середина между оценкой последнего ОТОБРАННОГО и
+   * лучшей оценкой ОТВЕРГНУТОГО носителя; по запасу до неё считается рампа
+   * затухания (см. `SELECTION_FADE_WORLD_UNITS`). `-Infinity` — отвергнутых нет
+   * вовсе (носителей не больше потолка), и рампе не от чего отсчитывать: все
+   * отобранные горят авторской силой.
+   */
+  private cut = Number.NEGATIVE_INFINITY;
 
   // Переиспользуемое хозяйство кадра: аллокаций пропорционально носителям нет.
   private readonly pose: LightCarrierPose = emptyPose();
@@ -270,26 +308,73 @@ export class LocalLightPool {
   private select(): number {
     const ceiling = this.ceiling;
     let count = 0;
+    // Лучшая оценка среди ОТВЕРГНУТЫХ — вторая половина границы отбора. Она же
+    // и есть «кто зажёгся бы следующим», а расстояние до неё — запас, по
+    // которому считается рампа затухания (REND-33, design D3).
+    let rejected = Number.POSITIVE_INFINITY;
     for (const carrier of this.carriers) {
       if (!carrier.pose(this.pose)) continue;
       this.anchor(carrier);
       const score = this.at.distanceTo(this.focus) - carrier.light.distance;
-      let i = count < ceiling ? count : ceiling - 1;
-      if (count === ceiling && !closer(score, carrier.key, this.scores[i]!, this.keys[i]!)) {
+      const full = count === ceiling;
+      const tail = full ? ceiling - 1 : count;
+      if (full && !closer(score, carrier.key, this.scores[tail]!, this.keys[tail]!)) {
+        rejected = Math.min(rejected, score);
         continue;
       }
-      while (i > 0 && closer(score, carrier.key, this.scores[i - 1]!, this.keys[i - 1]!)) {
-        this.scores[i] = this.scores[i - 1]!;
-        this.keys[i] = this.keys[i - 1]!;
-        this.chosen[i] = this.chosen[i - 1]!;
-        i--;
-      }
-      this.scores[i] = score;
-      this.keys[i] = carrier.key;
-      this.chosen[i] = carrier;
-      if (count < ceiling) count++;
+      // Отобранный вытесняет последнего — вытесненный отвергнут наравне с теми,
+      // кто в префикс не попал, и на границу претендует так же.
+      if (full) rejected = Math.min(rejected, this.scores[tail]!);
+      this.insert(carrier, score, tail);
+      count = full ? count : count + 1;
     }
+    this.cut = this.cutOf(count, rejected);
     return count;
+  }
+
+  /**
+   * Граница отбора кадра — СЕРЕДИНА между оценкой последнего отобранного и
+   * лучшей оценкой отвергнутого: ровно в ней два носителя меняются местами, и
+   * рампа затухания обеих сторон обращается там в ноль. Отвергнутых не было —
+   * границы не существует, и рампе не от чего отсчитывать.
+   */
+  private cutOf(count: number, rejected: number): number {
+    if (count === 0 || !Number.isFinite(rejected)) return Number.NEGATIVE_INFINITY;
+    return (this.scores[count - 1]! + rejected) / 2;
+  }
+
+  /**
+   * Отобранный носитель — в префикс на своё место: менее важные сдвигаются
+   * вправо, вытесненный (если префикс был полон) уходит из него совсем.
+   * Вставкой, а не сортировкой всего реестра: потолок мал (единицы), и это и
+   * дешевле, и не аллоцирует (design D3).
+   */
+  private insert(carrier: LightCarrier, score: number, at: number): void {
+    let i = at;
+    while (i > 0 && closer(score, carrier.key, this.scores[i - 1]!, this.keys[i - 1]!)) {
+      this.scores[i] = this.scores[i - 1]!;
+      this.keys[i] = this.keys[i - 1]!;
+      this.chosen[i] = this.chosen[i - 1]!;
+      i--;
+    }
+    this.scores[i] = score;
+    this.keys[i] = carrier.key;
+    this.chosen[i] = carrier;
+  }
+
+  /**
+   * Доля авторской интенсивности отобранного носителя (REND-33): запас его
+   * оценки до границы отбора, нормированный шириной рампы. Единица — носитель
+   * уверенно в отборе, ноль — он ровно на границе и в этот момент меняется
+   * местами со следующим кандидатом.
+   *
+   * Отвергнутых кадром нет — рампе не от чего отсчитывать: носителей не больше
+   * потолка, гаснуть некому, и все горят авторской силой.
+   */
+  private fadeOf(index: number): number {
+    if (!Number.isFinite(this.cut)) return 1;
+    const margin = (this.cut - this.scores[index]!) / SELECTION_FADE_WORLD_UNITS;
+    return margin <= 0 ? 0 : margin >= 1 ? 1 : margin;
   }
 
   /** Опора источника: позиция инстанса плюс смещение блока в его опоре (ASSET-16). */
@@ -315,10 +400,13 @@ export class LocalLightPool {
       const carrier = this.chosen[i];
       if (carrier?.pose(this.pose) !== true) continue;
       this.anchor(carrier);
+      // Доля рампы у границы отбора (design D3): без неё источник на границе
+      // рейтинга переключался бы скачком от панорамы камеры.
+      const fade = this.fadeOf(i);
       if (carrier.light.type === 'spot') {
-        this.lightSpot(spots++, carrier);
+        this.lightSpot(spots++, carrier, fade);
       } else {
-        this.lightPoint(points++, carrier);
+        this.lightPoint(points++, carrier, fade);
       }
     }
     dim(this.point, points);
@@ -326,27 +414,27 @@ export class LocalLightPool {
   }
 
   /** Точечный источник слота: позиция, тон и числа блока (ASSET-16). */
-  private lightPoint(index: number, carrier: LightCarrier): void {
+  private lightPoint(index: number, carrier: LightCarrier, fade: number): void {
     if (this.point.length === 0) this.growPoint();
     const slot = this.point[index];
     if (slot === undefined) return;
     const light = carrier.light;
     slot.light.position.copy(this.at);
     paint(slot, light.color);
-    slot.light.intensity = light.intensity;
+    slot.light.intensity = light.intensity * fade;
     slot.light.distance = light.distance;
     slot.light.decay = light.decay;
   }
 
   /** Конус слота: то же плюс направление, угол и полутень (ASSET-16). */
-  private lightSpot(index: number, carrier: LightCarrier): void {
+  private lightSpot(index: number, carrier: LightCarrier, fade: number): void {
     if (this.spot.length === 0) this.growSpot();
     const slot = this.spot[index];
     if (slot === undefined) return;
     const light = carrier.light;
     slot.light.position.copy(this.at);
     paint(slot, light.color);
-    slot.light.intensity = light.intensity;
+    slot.light.intensity = light.intensity * fade;
     slot.light.distance = light.distance;
     slot.light.decay = light.decay;
     slot.light.angle = light.angleRad;

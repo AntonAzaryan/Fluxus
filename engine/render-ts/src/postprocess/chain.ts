@@ -22,10 +22,14 @@
  *
  * ## Half-float и деградация (design D6)
  *
- * Заяркостный диапазон живёт в half-float цели; расширение WebGL2 проверяется
- * один раз, на первом кадре, — раньше рендерера у подсистемы нет. Нет
- * расширения — цепочка идёт в LDR с предупреждением: кадр остаётся корректным,
- * bloom теряет запас яркости, а не падает.
+ * Заяркостный диапазон живёт в half-float цели; расширения WebGL2 проверяются
+ * один раз, на первом кадре, — раньше рендерера у подсистемы нет. Нет ни
+ * одного — цепочка идёт в LDR с предупреждением: кадр остаётся корректным, а
+ * bloom теряет запас яркости, но не работу. Последнее не даром: в байтовой цели
+ * ничего ярче единицы не бывает, поэтому вместе с диапазоном прижимается и порог
+ * (`LDR_BLOOM_THRESHOLD_MAX`) — иначе авторское «светится то, что ярче белого»
+ * не пропускало бы в свечение ни одного текселя, и bloom молча не работал бы
+ * вовсе.
  */
 import * as THREE from 'three';
 import type { ColorLut } from '@fluxus/assets';
@@ -49,12 +53,41 @@ import {
 import { own } from '../footprint.js';
 
 /**
- * Расширение WebGL2, без которого цель half-float не является рисуемой
- * (design D6). Спрашивается у рендерера один раз: реестра расширений у
- * тестового двойника нет вовсе, и тогда спрашивать нечего — цепочка идёт полным
- * путём, а настоящий `WebGLRenderer` этот реестр несёт всегда.
+ * Расширения WebGL2, любое из которых делает цель half-float рисуемой (design
+ * D6). Спрашиваются у рендерера один раз: реестра расширений у тестового
+ * двойника нет вовсе, и тогда спрашивать нечего — цепочка идёт полным путём, а
+ * настоящий `WebGLRenderer` этот реестр несёт всегда.
+ *
+ * Их два, и второго ДОСТАТОЧНО: цель цепочки — RGBA16F, и рисуемой её делает
+ * `EXT_color_buffer_half_float`; `EXT_color_buffer_float` шире (он добавляет ещё
+ * и 32-битные цели), и требовать именно его значило бы уводить в LDR
+ * устройства, на которых половинная точность есть, — то есть ровно слабые, где
+ * запас яркости и нужен.
  */
-const FLOAT_TARGET_EXTENSION = 'EXT_color_buffer_float';
+const FLOAT_TARGET_EXTENSIONS = ['EXT_color_buffer_float', 'EXT_color_buffer_half_float'] as const;
+
+/**
+ * Потолок порога bloom в LDR-фолбэке (design D6). Байтовая цель не хранит
+ * ничего ярче единицы, поэтому авторский порог 1 — умолчание секции, «светится
+ * то, что ярче белого», — не пропускает в свечение ни одного текселя: bloom там
+ * не «теряет запас яркости», а не работает вовсе, притом молча. Порог поэтому
+ * прижимается: в LDR светятся самые светлые тексели кадра, и это честная
+ * деградация, названная вслух предупреждением.
+ *
+ * Значение 0.8, а не «чуть ниже единицы»: разница порога и белой точки и есть
+ * запас, из которого считается вклад (`over / luma`), и на 0.99 свечение было бы
+ * неотличимо от его отсутствия.
+ */
+const LDR_BLOOM_THRESHOLD_MAX = 0.8;
+
+/**
+ * Сэмплов мультисэмплинга у цели сцены по умолчанию — значение ручки
+ * `postprocess.antialias` (QUAL-1, QUAL-3). Четыре: столько же даёт `antialias:
+ * true` ДЕФОЛТНОМУ фреймбуферу рендерера, а включённая цепочка рисует сцену в
+ * свою цель, и без этого числа кадр с пост-обработкой терял бы сглаживание
+ * рёбер, которое тот же кадр без неё имеет.
+ */
+export const DEFAULT_ANTIALIAS_SAMPLES = 4;
 
 /** Ярус пирамиды: цель и материал даунсемпла В НЕЁ; у вершины его нет — её пишет порог. */
 interface BloomLevel {
@@ -74,6 +107,11 @@ export class PostprocessChain {
    * бесконечность — потолка нет, действует производное от кадра разрешение.
    */
   private ceiling = Number.POSITIVE_INFINITY;
+  /**
+   * Сэмплов мультисэмплинга у цели сцены — значение ручки `postprocess.antialias`
+   * (QUAL-1). Ноль — цель обычная, сглаживания у кадра цепочки нет.
+   */
+  private samples = DEFAULT_ANTIALIAS_SAMPLES;
 
   private sceneTarget: THREE.WebGLRenderTarget | null = null;
   /** Выход сведения для маскирующего прохода (design D2); null — цепочка пишет на экран. */
@@ -201,6 +239,21 @@ export class PostprocessChain {
   }
 
   /**
+   * Число сэмплов цели сцены (ручка `postprocess.antialias`, QUAL-1). Смена —
+   * СОБЫТИЕ (смена пресета): мультисэмплинг — свойство самой цели, и другое их
+   * число означает другую цель, поэтому прежняя отдаётся, а новая заводится
+   * ближайшим кадром — как при смене размера окна.
+   */
+  applyAntialias(samples: number): void {
+    const next = Math.max(0, Math.round(samples));
+    if (next === this.samples) return;
+    this.samples = next;
+    this.sceneTarget?.depthTexture?.dispose();
+    this.sceneTarget?.dispose();
+    this.sceneTarget = null;
+  }
+
+  /**
    * Кадр цепочки (design D2). `capture` — писать выход сведения в цель и вернуть
    * её вместе с глубиной сцены: так его читает маскирующий проход тумана
    * (FOW-7). Иначе последний проход пишет на канвас, и возвращается `null`.
@@ -317,12 +370,27 @@ export class PostprocessChain {
     if (this.checked) return;
     this.checked = true;
     const extensions = renderer.extensions;
-    if (extensions === undefined || extensions.has(FLOAT_TARGET_EXTENSION)) return;
+    if (extensions === undefined) return;
+    if (FLOAT_TARGET_EXTENSIONS.some((name) => extensions.has(name))) return;
     this.hdr = false;
     this.warnOnce(
-      FLOAT_TARGET_EXTENSION,
-      `пост-обработка: расширения ${FLOAT_TARGET_EXTENSION} нет — цепочка идёт в LDR (REND-34): кадр корректен, но bloom теряет заяркостный диапазон`,
+      FLOAT_TARGET_EXTENSIONS[0],
+      `пост-обработка: ни одного из расширений ${FLOAT_TARGET_EXTENSIONS.join(', ')} нет — ` +
+        `цепочка идёт в LDR (REND-34): кадр корректен, запаса ярче белого у него нет, ` +
+        `а порог bloom прижат к ${LDR_BLOOM_THRESHOLD_MAX} — выше него байтовая цель не хранит ничего, ` +
+        `и авторский порог не пропускал бы в свечение ни одного текселя`,
     );
+  }
+
+  /**
+   * Действующий порог bloom: авторский, а в LDR — прижатый к потолку фолбэка
+   * (см. `LDR_BLOOM_THRESHOLD_MAX`). Правится он в двух местах — при создании
+   * материала порога и при правке секции, — и оба берут число ЗДЕСЬ: разойдись
+   * они, кадр после правки соседнего поля молча менял бы свечение.
+   */
+  private get thresholdValue(): number {
+    const authored = this.config.bloomThreshold;
+    return this.hdr ? authored : Math.min(authored, LDR_BLOOM_THRESHOLD_MAX);
   }
 
   /** Тип текселя целей цепочки: half-float, а без расширения — байт (design D6). */
@@ -330,7 +398,17 @@ export class PostprocessChain {
     return this.hdr ? THREE.HalfFloatType : THREE.UnsignedByteType;
   }
 
-  /** HDR-цель сцены с текстурой глубины: глубину читает маскирующий проход (FOW-7). */
+  /**
+   * HDR-цель сцены с текстурой глубины: глубину читает маскирующий проход
+   * (FOW-7), а мультисэмплинг делает рёбра кадра с цепочкой такими же гладкими,
+   * какими их держит `antialias: true` у кадра без неё.
+   *
+   * Мультисэмплинг и текстура глубины уживаются (three r185): цель заводит
+   * многосэмпловые рендербуферы, а на смене цели сводит их блитом — цвет в
+   * текстуру цели, глубину в текстуру глубины (`resolveDepthBuffer` по
+   * умолчанию включён). Маскирующий проход тумана поэтому читает сведённую
+   * глубину, а не многосэмпловую, и знать о сглаживании ему не нужно.
+   */
   private ensureSceneTarget(width: number, height: number): THREE.WebGLRenderTarget {
     const existing = this.sceneTarget;
     if (existing !== null && existing.width === width && existing.height === height) return existing;
@@ -346,13 +424,30 @@ export class PostprocessChain {
         depthTexture,
         depthBuffer: true,
         type: this.texelType,
+        samples: this.samples,
       }),
     );
     this.sceneTarget = target;
     return target;
   }
 
-  /** LDR-цель выхода сведения: её читает маскирующий проход тумана (design D2). */
+  /**
+   * Цель выхода сведения: её читает маскирующий проход тумана (design D2).
+   *
+   * В ней лежит СВЕДЁННЫЙ кадр — тонемапленный и отгрейженный, то есть значения
+   * отображаемого диапазона, — и точность её байтов не безразлична: маска
+   * умножает их на свою величину и кодирует sRGB уже на канвасе (FOW-7).
+   * Байтовая цель БЕЗ объявленного цветового пространства хранила бы их
+   * ЛИНЕЙНО, а линейный байт — это 13 нижних уровней дисплея, схлопнутых в
+   * один: затемнённое туманом большинство арены и градиент края FOW-7 строились
+   * бы из квантованного источника. Поэтому:
+   *
+   * - есть half-float (обычный путь) — цель half-float, потерь нет вовсе;
+   * - нет (LDR-фолбэк) — байтовая цель с `SRGBColorSpace`: three выделяет ей
+   *   SRGB8_ALPHA8, и кодирование с декодированием делает сам GL — запись
+   *   прохода и выборка маски остаются линейными, а хранится кадр по кривой
+   *   sRGB, то есть с той же точностью, что видит глаз.
+   */
   private ensureOutputTarget(width: number, height: number): THREE.WebGLRenderTarget {
     const existing = this.outputTarget;
     if (existing !== null && existing.width === width && existing.height === height) return existing;
@@ -360,8 +455,12 @@ export class PostprocessChain {
     const target = own(
       'renderTarget',
       'postprocess',
-      new THREE.WebGLRenderTarget(width, height, { depthBuffer: false }),
+      new THREE.WebGLRenderTarget(width, height, { depthBuffer: false, type: this.texelType }),
     );
+    // Цветовое пространство объявляется только байтовой цели: у half-float
+    // диапазон и так линейный и полный, а объявленный sRGB заставил бы GL
+    // кодировать её значения без всякой на то нужды.
+    if (!this.hdr) target.texture.colorSpace = THREE.SRGBColorSpace;
     this.outputTarget = target;
     return target;
   }
@@ -405,7 +504,7 @@ export class PostprocessChain {
   private ensureThreshold(): THREE.ShaderMaterial {
     const existing = this.thresholdMaterial;
     if (existing !== null) return existing;
-    const material = createThresholdMaterial(this.config.bloomThreshold);
+    const material = createThresholdMaterial(this.thresholdValue);
     this.thresholdMaterial = material;
     return material;
   }
@@ -440,7 +539,7 @@ export class PostprocessChain {
     const config = this.config;
     const threshold = this.thresholdMaterial;
     if (threshold !== null) {
-      uniformOf(threshold, 'uThreshold').value = config.bloomThreshold;
+      uniformOf(threshold, 'uThreshold').value = this.thresholdValue;
     }
     const resolve = this.resolveMaterial;
     if (resolve === null) return;

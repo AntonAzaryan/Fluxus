@@ -87,10 +87,14 @@ import {
   minShadowMode,
   resolveLightingConfig,
   resolveLightingCycle,
+  sameLightingConfig,
+  sameLightingCycle,
+  type LightingCycleConfig,
   type LightingRenderConfig,
   type ShadowMode,
 } from '../lighting/config.js';
 import { LightingCycle, type LightingCycleSample } from '../lighting/cycle.js';
+import { fillLightingDebugState } from '../lighting/debugState.js';
 import { aimDirectional, arenaExtent, type ArenaExtent } from '../lighting/arena.js';
 import { BlobShadowField } from '../lighting/blobShadows.js';
 import { OptionalLights } from '../lighting/optionalLights.js';
@@ -194,11 +198,26 @@ export class LightingSubsystem
   /** Перерисовки кэша статики — пробник для тестов; картинка от него не зависит. */
   private rebuilds = 0;
   /**
+   * Перерисовка кэша статики ЗАКАЗАНА и ещё не подтверждена: следующий кадр
+   * читает `sun.shadow.needsUpdate` обратно и по нему решает, состоялась ли она
+   * (см. `confirmStaticRebuild`).
+   */
+  private staticPending = false;
+  /**
    * Цикл времени суток (REND-32): один экземпляр на всю жизнь подсистемы, фазы
    * в нём переставляет применение секции. Пустой цикл — сцена без подсекции:
    * кадр тогда байт-в-байт тот же, что до появления REND-32.
    */
   private readonly cycle = new LightingCycle();
+  /**
+   * Фазы, которые сейчас крутит цикл, — вход сравнения на применении (REND-32).
+   * Правка секции, не тронувшая круг, часы не перезапускает: в редакторе
+   * `applyConfig` зовётся после КАЖДОГО `submit()` любого документа (ED-15), и
+   * перезапуск круга там означал бы возврат к «утру» на каждое нажатие клавиши.
+   */
+  private cycleConfig: LightingCycleConfig | undefined;
+  /** Круг хоть раз применялся: до первого применения сравнивать не с чем. */
+  private cycleApplied = false;
   /**
    * Локальные источники инстансов (REND-33): реестр носителей, пул источников
    * и отбор активных живут в `lighting/localLights.ts` — здесь только их
@@ -270,7 +289,10 @@ export class LightingSubsystem
     // Цель направленного источника — объект сцены: без неё матрица цели не
     // обновляется, и направление считалось бы от мирового нуля.
     ctx.scene.add(this.sun.target);
-    this.applyResolved(this.current);
+    // Первое применение — БЕЗУСЛОВНОЕ: значения конфигурации на источники ещё
+    // не ставились, и сравнивать их с ней самой было бы сравнением с тем, чего
+    // в сцене нет (`applyResolved` иначе решил бы, что делать нечего).
+    this.applyResolved(this.current, true);
   }
 
   /**
@@ -319,6 +341,9 @@ export class LightingSubsystem
    */
   updateFrame(_dt: number, _alpha: number, realDt: number): void {
     if (this.ctx === null) return;
+    // Первым делом — подтверждение заказанной перерисовки кэша: решение о ней
+    // приняли прошлым кадром, а состоялась она или нет, видно только сейчас.
+    this.confirmStaticRebuild();
     const sample = this.cycle.step(realDt);
     // Сдвинул ли цикл источник ЭТИМ кадром. От этого — и устаревание кэша, и то,
     // платит ли кадр за ярус, чью карту он не рисовал: перестановка флагов от
@@ -409,7 +434,11 @@ export class LightingSubsystem
     const reflagged = this.applyPhase('static');
     this.sun.shadow.needsUpdate = true;
     this.sunDynamic.shadow.needsUpdate = false;
+    // Устаревание снимается ЗАКАЗОМ, а подтверждается следующим кадром: пока
+    // потребитель кадр не нарисовал, карта осталась прежней (см.
+    // `confirmStaticRebuild`).
     this.staticStale = false;
+    this.staticPending = true;
     this.rebuilds++;
     if (cost === undefined) return;
     cost.lightingStaticCasters += this.staticRoots.size;
@@ -418,6 +447,30 @@ export class LightingSubsystem
     // карту не рисовал: работа по числу его корней реальная, и эталон её
     // видит (PERF-3, см. `quality`).
     if (reflagged && cycleMoved) cost.lightingDynamicCasters += this.dynamicRoots.size;
+  }
+
+  /**
+   * Состоялась ли заказанная прошлым кадром перерисовка кэша статики (REND-30).
+   *
+   * Заказ — это `needsUpdate = true` у источника, а СНИМАЕТ флаг теневой проход
+   * three, отрисовав карту. Значит, флаг, оставшийся поднятым к следующему
+   * кадру, говорит ровно одно: кадра не было — потребитель его пропустил
+   * (потеря контекста, свёрнутое окно, `drawFailure` вьюпорта редактора). Тогда
+   * кэш по-прежнему устаревший, и решение принимается заново; иначе следующая
+   * фаза сняла бы флаг сама (`updateHybridShadows`), и статика осталась бы
+   * устаревшей молча — до следующего события инвалидации, которого может не быть
+   * вовсе.
+   *
+   * Пустая карта (`shadow.map === null`) — не «кадр пропущен», а «теневого
+   * прохода не было ни разу»: так выглядит прогон без рендерера вовсе
+   * (headless-тесты, стенд эталона стоимости), и спрашивать там нечего — иначе
+   * подсистема заказывала бы перерисовку каждый второй кадр до конца прогона.
+   */
+  private confirmStaticRebuild(): void {
+    if (!this.staticPending) return;
+    this.staticPending = false;
+    if (this.sun.shadow.map === null || !this.sun.shadow.needsUpdate) return;
+    this.staticStale = true;
   }
 
   // ------------------------------------------------------- реестр кастеров
@@ -530,7 +583,11 @@ export class LightingSubsystem
    */
   applyGrid(grid: TerrainGrid): void {
     this.extent = arenaExtent(grid);
-    this.applyResolved(this.current);
+    // Применение БЕЗУСЛОВНОЕ: изменилась не конфигурация, а границы арены —
+    // сравнение конфигураций про них ничего не знает, а наводка источников и
+    // фрустумы теневых камер обтянуты именно по ним (design D6). Круга суток
+    // это не касается: фазы те же, и часы идут дальше.
+    this.applyResolved(this.current, true);
   }
 
   /**
@@ -615,67 +672,33 @@ export class LightingSubsystem
   }
 
   /**
-   * Состояние освещения в переиспользуемую запись отладки (RDBG-2). Позиции и
-   * интенсивности берутся с ЖИВЫХ источников сцены — тех самых, которыми
-   * нарисован кадр, а не вторым расчётом по конфигурации; тон берётся из
-   * действующей конфигурации: `getHexString()` аллоцировал бы строку каждым
-   * кадром (REND-26).
-   *
-   * На сцене без цикла (REND-32) это одно и то же — тоном конфигурации источники
-   * и покрашены. С циклом покраска идёт фазами, и тон кадра расходится с тоном
-   * конфигурации; дамп поэтому не выдаёт второй за первый, а называет рядом
-   * авторские тона идущей фазы и долю перехода (`LightingCycle.fillDebug`).
+   * Состояние освещения в переиспользуемую запись отладки (RDBG-2). Что именно
+   * туда кладётся, знает `lighting/debugState.ts` — здесь только то, ЧЕМ
+   * нарисован кадр: живые источники, действующая конфигурация, авторская секция
+   * и решения этой подсистемы.
    */
   private fillDebugState(out: DebugLightingState): void {
-    // Без `init` источники в сцену не отданы, и кадр они не освещают: показывать
-    // тогда нечего, и источник скажет это вслух (RDBG-6).
-    out.inScene = this.ctx !== null;
-    out.authoredSection = this.section !== undefined;
-    if (this.ctx === null) return;
-    const authored = resolveLightingConfig(this.section);
-    const paired = this.sunDynamic.parent !== null;
-    // Необязательные источники (REND-29) считаются по ПРИСУТСТВИЮ В СЦЕНЕ, а не
-    // по конфигурации: дамп называет то, чем нарисован кадр.
-    const rimLit = this.optional.rimLit;
-    out.ambientLights = 1;
-    out.hemisphereLights = this.optional.hemisphereLit ? 1 : 0;
-    out.directionalLights = (paired ? 2 : 1) + (rimLit ? 1 : 0);
-    out.rimIntensity = rimLit ? this.optional.rim.intensity : 0;
-    out.ambientColor = this.current.ambientColor;
-    out.ambientIntensity = this.ambient.intensity;
-    out.directionalColor = this.current.directionalColor;
-    // Фаза цикла (REND-32, design D5) — своими полями и своим тоном поверх
-    // статического: числа круга знает он, а не подсистема.
-    this.cycle.fillDebug(out);
-    out.sunIntensity = this.sun.intensity;
-    out.sunDynamicIntensity = paired ? this.sunDynamic.intensity : 0;
-    out.lightWorldX = this.sun.position.x;
-    out.lightWorldY = this.sun.position.y;
-    out.lightWorldZ = this.sun.position.z;
-    out.targetWorldX = this.sun.target.position.x;
-    out.targetWorldY = this.sun.target.position.y;
-    out.targetWorldZ = this.sun.target.position.z;
-    out.arenaRadiusWorldUnits = this.extent.radius;
-    out.shadowFrustumHalfWorldUnits = this.sun.shadow.camera.right;
-    out.shadowMode = this.current.shadowMode;
-    out.authoredShadowMode = authored.shadowMode;
-    out.ceilingShadowMode = this.modeCeiling;
-    // Действующая сторона карты — та, что стоит у камеры источника: конфиг
-    // округляется при применении, и показывать надо применённое.
-    out.shadowMapTexels = this.sun.shadow.mapSize.x;
-    out.authoredShadowMapTexels = authored.shadowMapSize;
-    out.ceilingShadowMapTexels = this.sizeCeiling;
-    out.staticShare = this.current.staticShare;
-    out.shadowPhase = this.phase;
-    out.staticCasterRoots = this.staticRoots.size;
-    out.dynamicCasterRoots = this.dynamicRoots.size;
-    out.staticRebuilds = this.rebuilds;
-    out.staticStale = this.staticStale;
-    // Карту строит теневой проход three: ноль — прохода ещё не было (headless-
-    // прогон, режим `none`), и это ответ на «тени настроены, а их нет».
-    out.builtShadowMaps =
-      (this.sun.shadow.map === null ? 0 : 1) +
-      (paired && this.sunDynamic.shadow.map !== null ? 1 : 0);
+    fillLightingDebugState(
+      {
+        inScene: this.ctx !== null,
+        section: this.section,
+        config: this.current,
+        ambient: this.ambient,
+        sun: this.sun,
+        sunDynamic: this.sunDynamic,
+        optional: this.optional,
+        cycle: this.cycle,
+        extent: this.extent,
+        modeCeiling: this.modeCeiling,
+        sizeCeiling: this.sizeCeiling,
+        phase: this.phase,
+        staticRoots: this.staticRoots.size,
+        dynamicRoots: this.dynamicRoots.size,
+        staticRebuilds: this.rebuilds,
+        staticStale: this.staticStale,
+      },
+      out,
+    );
   }
 
   /**
@@ -692,8 +715,33 @@ export class LightingSubsystem
     };
   }
 
-  /** Общий шов применения: и правка секции автором, и потолки пресета — сюда. */
-  private applyResolved(next: LightingRenderConfig): void {
+  /**
+   * Общий шов применения: и правка секции автором, и потолки пресета — сюда.
+   *
+   * ПРИМЕНЕНИЕ ИДЕМПОТЕНТНО (REND-32, путь редактора ED-15): вход, ничего не
+   * изменивший, не делает ничего. Это не оптимизация, а условие корректности:
+   * применение метит кэш статики устаревшим, сбрасывает фазу теневого прохода и
+   * перезапускает круг суток, а зовётся оно в редакторе после КАЖДОГО `submit()`
+   * ЛЮБОГО документа — на сцене с четырёхфазным циклом каждое нажатие клавиши
+   * возвращало бы «утро» и в `hybrid` форсировало бы перезапекание статики. Тем
+   * же путём идёт смена пресета качества в матче: она не обязана трогать сутки.
+   *
+   * Сравниваются РАЗОБРАННЫЕ конфигурации, а не авторские секции: порядок
+   * ключей документа и «поле не написано против поля с умолчанием» на кадр не
+   * влияют, и различать их значило бы считать правкой то, что правкой не
+   * является.
+   *
+   * `force` — применить, не сравнивая: первое применение (значений на
+   * источниках ещё нет) и смена сетки арены (изменилась не конфигурация, а
+   * границы, которых сравнение не видит).
+   */
+  private applyResolved(next: LightingRenderConfig, force = false): void {
+    const cycle = resolveLightingCycle(this.section);
+    // Круг суток сравнивается ОТДЕЛЬНО от остальной конфигурации: часы —
+    // состояние, а не значение, и правка соседнего поля секции (или смена
+    // сетки) не вправе их перезапускать.
+    const sameCycle = this.cycleApplied && sameLightingCycle(cycle, this.cycleConfig);
+    if (!force && sameCycle && sameLightingConfig(next, this.current)) return;
     this.current = next;
     this.ambient.color.set(next.ambientColor);
     this.ambient.intensity = next.ambientIntensity;
@@ -733,6 +781,7 @@ export class LightingSubsystem
     // пересчитывается заново: прежняя могла принадлежать другому режиму.
     this.phase = 'none';
     this.staticStale = true;
+    this.staticPending = false;
     this.flagsStale = true;
     this.dynamicIdle = false;
 
@@ -740,8 +789,16 @@ export class LightingSubsystem
     // начинается с начала первой фазы, и её значения встают на источники сразу,
     // а не первым кадром — иначе сцена с циклом показала бы один кадр
     // статической частью секции.
-    const first = this.cycle.reset(resolveLightingCycle(this.section));
-    if (first !== null) this.applyCycleSample(first);
+    //
+    // Но начинается он заново ТОЛЬКО когда изменились сами фазы. Круг с теми же
+    // фазами продолжается с того места, где шёл, — а значения его текущего
+    // положения переставляются на источники здесь же: выше на них легла
+    // статическая часть секции, а установившаяся фаза кадром значений не отдаёт
+    // (`step` вернёт `null`), и сцена осталась бы покрашенной мимо круга.
+    this.cycleConfig = cycle;
+    this.cycleApplied = true;
+    const sample = sameCycle ? this.cycle.resample() : this.cycle.reset(cycle);
+    if (sample !== null) this.applyCycleSample(sample);
   }
 
   /**
