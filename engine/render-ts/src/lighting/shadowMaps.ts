@@ -7,16 +7,26 @@
  *
  * Своего состояния у модуля нет: это чистые операции над переданными объектами.
  */
-import type * as THREE from 'three';
+import * as THREE from 'three';
 import { PRESENTATION_SHADOW_MODES, type PresentationShadowMode } from '@fluxus/assets';
+import type { QualityKnob } from '../types.js';
 import type { LightingRenderConfig, ShadowMode } from './config.js';
 import { aimDirectional, type ArenaExtent } from './arena.js';
 
 /**
- * Запас фрустума теневой камеры над ареной, доля её радиуса: модели стоят выше
- * пола, и обтянутый ровно по сетке фрустум срезал бы тень высокой декорации.
+ * Запас фрустума теневой камеры по бокам коробки арены, мировые единицы. Нужен
+ * не «на всякий случай»: кастер стоит НА краю арены, а его тень уходит за край,
+ * и обтянутый ровно по коробке фрустум срезал бы её у самой кромки. Полметра —
+ * половина клетки типовой арены.
  */
-const FRUSTUM_MARGIN = 0.25;
+const FRUSTUM_MARGIN_WORLD_UNITS = 0.5;
+
+/** Переиспользуемое хозяйство подгонки фрустума: событие, но аллокаций не стоит. */
+const SCRATCH_VIEW = new THREE.Matrix4();
+const SCRATCH_CORNER = new THREE.Vector3();
+const SCRATCH_EYE = new THREE.Vector3();
+const SCRATCH_TARGET = new THREE.Vector3();
+const SCRATCH_UP = new THREE.Vector3();
 
 /**
  * Смещения выборки карты теней — в ТЕКСЕЛЯХ этой карты, а не в мировых
@@ -58,23 +68,102 @@ export function aimShadowLight(
   light.color.set(config.directionalColor);
   light.intensity = intensity;
   aimDirectional(light, extent, config.directionX, config.directionY, config.directionZ);
-
-  const distance = extent.radius * 2;
-  const radius = extent.radius * (1 + FRUSTUM_MARGIN);
-  const camera = light.shadow.camera;
-  camera.left = -radius;
-  camera.right = radius;
-  camera.top = radius;
-  camera.bottom = -radius;
-  camera.near = 0.5;
-  camera.far = distance + radius * 2;
-  camera.updateProjectionMatrix();
+  fitShadowFrustum(light, extent);
   resizeShadowMap(light, config.shadowMapSize);
+  applyShadowBias(light, config.shadowMapSize);
+}
 
-  // Смещения выборки — производная фрустума и стороны карты (см. константы):
-  // тексель камеры ортографический, то есть один и тот же по всей арене.
-  const side = Math.max(1, Math.round(config.shadowMapSize));
-  const texel = (radius * 2) / side;
+/**
+ * Обтягивает ортографический фрустум теневой камеры по КОРОБКЕ АРЕНЫ в
+ * пространстве света (design D6, находка L-9 аудита 2026-09-03).
+ *
+ * Прежняя наводка брала квадрат по диагонали сетки — «радиус» описывал арену
+ * окружностью, и фрустум не зависел от направления света вовсе. Стоило это
+ * вчетверо больше площади, чем нужно: для арены 48×48 сторона выходила 84.9
+ * мировой единицы там, где проекция восьми углов коробки на направление демо
+ * укладывается в ≈33×26. Тексели тратились на пустоту за углами арены, а
+ * плотность карты — то самое, чем меряется качество кромки тени.
+ *
+ * Подгонка идёт по ВОСЬМИ УГЛАМ коробки, а не по её плану: свет косой, и
+ * верхние углы проецируются в другое место, чем нижние. Границы получаются
+ * АСИММЕТРИЧНЫМИ (`left ≠ −right`) — это нормально для ортографии и это ровно
+ * та экономия, ради которой подгонка и делается.
+ *
+ * Свойство «без мерцания» (design D6) сохраняется: фрустум — функция НАПРАВЛЕНИЯ
+ * СВЕТА и коробки арены, и ничего больше. Камера кадра в него не входит, поэтому
+ * панорама и зум текселей не двигают; пересчитывается он только там, где поехало
+ * направление, — на применении секции и на кадре перехода цикла (REND-32).
+ */
+export function fitShadowFrustum(light: THREE.DirectionalLight, extent: ArenaExtent): void {
+  const camera = light.shadow.camera;
+  // Матрица вида света: смотрим из позиции источника в его цель. Собирается она
+  // здесь, а не берётся у камеры, потому что позу камеры three ставит своим
+  // `updateMatrices` уже во время теневого прохода — то есть позже нас.
+  SCRATCH_EYE.copy(light.position);
+  SCRATCH_TARGET.copy(light.target.position);
+  SCRATCH_UP.copy(camera.up);
+  SCRATCH_VIEW.lookAt(SCRATCH_EYE, SCRATCH_TARGET, SCRATCH_UP);
+  SCRATCH_VIEW.setPosition(SCRATCH_EYE);
+  SCRATCH_VIEW.invert();
+
+  const halfX = extent.sizeX / 2;
+  const halfY = extent.sizeY / 2;
+  let minX = Number.POSITIVE_INFINITY;
+  let maxX = Number.NEGATIVE_INFINITY;
+  let minY = Number.POSITIVE_INFINITY;
+  let maxY = Number.NEGATIVE_INFINITY;
+  let minZ = Number.POSITIVE_INFINITY;
+  let maxZ = Number.NEGATIVE_INFINITY;
+  const height = extent.maxZ - extent.minZ;
+  for (let corner = 0; corner < 8; corner++) {
+    // Биты номера — это и есть выбор угла: младший даёт знак по X, следующий —
+    // по Y, старший поднимает угол на верх коробки. Арифметикой, а не ветвями:
+    // читается так же, а анализатору сложности здесь видеть нечего.
+    const signX = (corner & 1) * 2 - 1;
+    const signY = ((corner >> 1) & 1) * 2 - 1;
+    const high = (corner >> 2) & 1;
+    SCRATCH_CORNER.set(
+      extent.centerX + signX * halfX,
+      extent.centerY + signY * halfY,
+      extent.minZ + high * height,
+    );
+    SCRATCH_CORNER.applyMatrix4(SCRATCH_VIEW);
+    minX = Math.min(minX, SCRATCH_CORNER.x);
+    maxX = Math.max(maxX, SCRATCH_CORNER.x);
+    minY = Math.min(minY, SCRATCH_CORNER.y);
+    maxY = Math.max(maxY, SCRATCH_CORNER.y);
+    minZ = Math.min(minZ, SCRATCH_CORNER.z);
+    maxZ = Math.max(maxZ, SCRATCH_CORNER.z);
+  }
+  const margin = FRUSTUM_MARGIN_WORLD_UNITS;
+  camera.left = minX - margin;
+  camera.right = maxX + margin;
+  camera.bottom = minY - margin;
+  camera.top = maxY + margin;
+  // Камера смотрит вдоль −Z своего пространства: точка на глубине `z` удалена от
+  // неё на `−z`. Ближняя плоскость — самый близкий угол, дальняя — самый далёкий.
+  // Ноль ближней плоскости ортографию не ломает, но оставляет её на самом углу
+  // коробки: запас тот же, что по бокам.
+  camera.near = Math.max(0.1, -maxZ - margin);
+  camera.far = -minZ + margin;
+  camera.updateProjectionMatrix();
+}
+
+/**
+ * Смещения выборки — производная фрустума и стороны карты (см. константы
+ * `NORMAL_BIAS_TEXELS`/`DEPTH_BIAS_TEXELS`). Тексель ортографической камеры один
+ * и тот же по всей арене, но после подгонки фрустума (L-9) он РАЗНЫЙ ПО ОСЯМ:
+ * коробка арены проецируется в прямоугольник, а не в квадрат. Берётся больший из
+ * двух — смещение обязано покрывать худшую ось, иначе на ней вернётся ребристая
+ * сетка самозатенения.
+ */
+export function applyShadowBias(light: THREE.DirectionalLight, mapSize: number): void {
+  const camera = light.shadow.camera;
+  const side = Math.max(1, Math.round(mapSize));
+  const texel = Math.max(
+    (camera.right - camera.left) / side,
+    (camera.top - camera.bottom) / side,
+  );
   light.shadow.normalBias = texel * NORMAL_BIAS_TEXELS;
   // `bias` три складывает с нормированной глубиной приёмника, а глубина
   // ортографической камеры линейна по `far − near`: мировая поправка
@@ -125,4 +214,40 @@ export function releaseShadowMap(light: THREE.DirectionalLight): void {
   map.depthTexture?.dispose();
   map.dispose();
   light.shadow.map = null;
+}
+
+/**
+ * Ручки качества подсистемы освещения (QUAL-1, QUAL-3). Обе — ПОТОЛКИ над
+ * авторскими значениями секции: пресет вправе удешевить тени, но не поднять их
+ * выше авторских и не тронуть документ сцены (та же семантика, что у потолка
+ * разрешения маски тумана, FOW-10).
+ *
+ * Объявления живут здесь, рядом с механикой карт, по тому же основанию, что и
+ * ручка пула локальных источников рядом с пулом (`localLightsKnob`): подсистема
+ * решает, ЧТО рисовать, а чем это меряется — свойство самой механики.
+ */
+export const LIGHTING_SHADOW_MODE = 'lighting.shadowMode';
+export const LIGHTING_SHADOW_MAP_SIZE = 'lighting.shadowMapSize';
+
+export function shadowModeKnob(): QualityKnob {
+  return {
+    name: LIGHTING_SHADOW_MODE,
+    cost: 'теневые проходы кадра: `none` — их нет, `blob` — карт нет, под динамикой контактные пятна одним инстанс-мешем, `hybrid` — покадрово рисуется только динамический ярус, `full` — все кастеры каждым кадром',
+    semantics: 'ceiling',
+    // Потолка нет — действует авторский режим секции: самый дорогой из
+    // объявленных и есть «не ограничивать».
+    default: 'full',
+    values: PRESENTATION_SHADOW_MODES,
+  };
+}
+
+export function shadowMapSizeKnob(): QualityKnob {
+  return {
+    name: LIGHTING_SHADOW_MAP_SIZE,
+    cost: 'тексели карт теней: стоимость теневого прохода растёт квадратом стороны карты',
+    semantics: 'ceiling',
+    default: Number.POSITIVE_INFINITY,
+    min: 256,
+    max: 8192,
+  };
 }

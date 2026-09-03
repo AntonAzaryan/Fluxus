@@ -41,7 +41,6 @@ export interface LightingDebugInput {
   readonly config: LightingRenderConfig;
   readonly ambient: THREE.AmbientLight;
   readonly sun: THREE.DirectionalLight;
-  readonly sunDynamic: THREE.DirectionalLight;
   readonly optional: OptionalLights;
   readonly cycle: LightingCycle;
   readonly extent: ArenaExtent;
@@ -52,6 +51,8 @@ export interface LightingDebugInput {
   readonly dynamicRoots: number;
   readonly staticRebuilds: number;
   readonly staticStale: boolean;
+  /** Целей сведения ярусов (REND-30); 0 — сведения в этом режиме нет. */
+  readonly compositeTargets: number;
 }
 
 /** Состояние освещения — в переиспользуемую запись отладки (RDBG-2). */
@@ -64,15 +65,16 @@ export function fillLightingDebugState(
   out.inScene = input.inScene;
   out.authoredSection = input.section !== undefined;
   if (!input.inScene) return;
-  const { sun, sunDynamic, optional, config } = input;
+  const { sun, optional, config } = input;
   const authored = resolveLightingConfig(input.section);
-  const paired = sunDynamic.parent !== null;
   // Необязательные источники (REND-29) считаются по ПРИСУТСТВИЮ В СЦЕНЕ, а не
   // по конфигурации: дамп называет то, чем нарисован кадр.
   const rimLit = optional.rimLit;
   out.ambientLights = 1;
   out.hemisphereLights = optional.hemisphereLit ? 1 : 0;
-  out.directionalLights = (paired ? 2 : 1) + (rimLit ? 1 : 0);
+  // Направленный источник ОДИН во всех режимах (REND-30); второй в списке —
+  // только контровой, и то если секция его завела.
+  out.directionalLights = 1 + (rimLit ? 1 : 0);
   out.rimIntensity = rimLit ? optional.rim.intensity : 0;
   out.ambientColor = config.ambientColor;
   out.ambientIntensity = input.ambient.intensity;
@@ -81,7 +83,6 @@ export function fillLightingDebugState(
   // статического: числа круга знает он, а не подсистема.
   input.cycle.fillDebug(out);
   out.sunIntensity = sun.intensity;
-  out.sunDynamicIntensity = paired ? sunDynamic.intensity : 0;
   out.lightWorldX = sun.position.x;
   out.lightWorldY = sun.position.y;
   out.lightWorldZ = sun.position.z;
@@ -89,7 +90,10 @@ export function fillLightingDebugState(
   out.targetWorldY = sun.target.position.y;
   out.targetWorldZ = sun.target.position.z;
   out.arenaRadiusWorldUnits = input.extent.radius;
-  out.shadowFrustumHalfWorldUnits = sun.shadow.camera.right;
+  // Стороны фрустума, а не полусторона: он обтянут по коробке арены в
+  // пространстве света и потому несимметричен (REND-30, design D6).
+  out.shadowFrustumWidthWorldUnits = sun.shadow.camera.right - sun.shadow.camera.left;
+  out.shadowFrustumHeightWorldUnits = sun.shadow.camera.top - sun.shadow.camera.bottom;
   out.shadowMode = config.shadowMode;
   out.authoredShadowMode = authored.shadowMode;
   out.ceilingShadowMode = input.modeCeiling;
@@ -98,14 +102,15 @@ export function fillLightingDebugState(
   out.shadowMapTexels = sun.shadow.mapSize.x;
   out.authoredShadowMapTexels = authored.shadowMapSize;
   out.ceilingShadowMapTexels = input.sizeCeiling;
-  out.staticShare = config.staticShare;
   out.shadowPhase = input.phase;
   out.staticCasterRoots = input.staticRoots;
   out.dynamicCasterRoots = input.dynamicRoots;
   out.staticRebuilds = input.staticRebuilds;
   out.staticStale = input.staticStale;
-  // Карту строит теневой проход three: ноль — прохода ещё не было (headless-
-  // прогон, режим `none`), и это ответ на «тени настроены, а их нет».
+  // Карты строит теневой проход three: ноль — прохода ещё не было (headless-
+  // прогон, режим `none`), и это ответ на «тени настроены, а их нет». В `hybrid`
+  // со сведением их три — две цели ярусов и карта сведения (REND-30), и карта
+  // источника ОДНА ИЗ НИХ: считать её отдельно значило бы назвать четвёртую.
   out.builtShadowMaps =
-    (sun.shadow.map === null ? 0 : 1) + (paired && sunDynamic.shadow.map !== null ? 1 : 0);
+    input.compositeTargets > 0 ? input.compositeTargets : sun.shadow.map === null ? 0 : 1;
 }

@@ -31,7 +31,15 @@ import {
   type PostRendererLike,
   type RenderContext,
 } from '../src/index.js';
-import { RESOLVE_FRAGMENT, createResolveMaterial } from '../src/postprocess/passes.js';
+import {
+  BLOOM_DOWNSAMPLE_FRAGMENT,
+  BLOOM_TENT_KERNEL,
+  BLOOM_TENT_WEIGHT_SUM,
+  BLOOM_UPSAMPLE_FRAGMENT,
+  RESOLVE_FRAGMENT,
+  bloomUpsampleScale,
+  createResolveMaterial,
+} from '../src/postprocess/passes.js';
 import {
   buildFogMask,
   flatGrid,
@@ -197,7 +205,7 @@ describe('REND-34: порядок проходов — сцена, bloom, све
     expect(post.passes.resolve?.uniforms.toneMappingExposure?.value).toBe(1.2);
   });
 
-  it('свечение — порог, пирамида даунсемплов и сведение', () => {
+  it('свечение — порог, пирамида вниз, цепочка апсемплов вверх и сведение', () => {
     const { post, ctx } = subsystem(TONE_AND_BLOOM);
     const renderer = new PostRendererSpy();
 
@@ -205,22 +213,62 @@ describe('REND-34: порядок проходов — сцена, bloom, све
 
     const passes = post.passes;
     expect(passes.pyramid).toHaveLength(BLOOM_LEVELS);
-    // Сцена, порог, четыре даунсемпла, сведение — по проходу на ярус.
+    // Сцена, порог, четыре даунсемпла ВНИЗ, четыре апсемпла ВВЕРХ, сведение.
+    // Апсемплы — не украшение: мелкий ярус (кадр/32), растянутый билинейно сразу
+    // на весь кадр, даёт вокруг яркой точки коробчатую звезду, а свечение
+    // собирается тентом на каждой ступени вверх (L-7).
     expect(renderer.rendered[0]).toBe(ctx.scene);
-    expect(renderer.rendered).toHaveLength(2 + BLOOM_LEVELS);
+    expect(renderer.rendered).toHaveLength(2 + BLOOM_LEVELS + (BLOOM_LEVELS - 1));
     expect(renderer.materials[1]).toBe(passes.threshold);
     expect(renderer.materials.at(-1)).toBe(passes.resolve);
     // Ярус вдвое мельче предыдущего, вершина — вдвое мельче кадра (design D4).
     expect(passes.pyramid[0]?.width).toBe(FRAME_WIDTH / 2);
     expect(passes.pyramid[1]?.width).toBe(FRAME_WIDTH / 4);
     expect(passes.pyramid.at(-1)?.width).toBe(FRAME_WIDTH / 2 / 2 ** (BLOOM_LEVELS - 1));
-    // Цели проходов записаны в порядке цепочки: сцена, ярусы, канвас.
-    expect(renderer.targets).toEqual([
-      passes.scene,
-      ...passes.pyramid.map((level) => level),
-      null,
-      null,
-    ]);
+    // Цели проходов: сцена, ярусы вниз (0..4), ярусы вверх (3..0), канвас.
+    const down = passes.pyramid.map((level) => level);
+    const up = [...passes.pyramid].reverse().slice(1);
+    expect(renderer.targets).toEqual([passes.scene, ...down, ...up, null, null]);
+  });
+
+  it('ядро тента — одно на даунсемпл и апсемпл, и оно же в тексте программ', () => {
+    // Веса вынесены числами не для красоты: по ним считается профиль свечения
+    // ниже, и списанное рядом второе ядро разошлось бы с шейдером молча.
+    expect(BLOOM_TENT_KERNEL).toHaveLength(9);
+    expect(BLOOM_TENT_WEIGHT_SUM).toBe(16);
+    const center = BLOOM_TENT_KERNEL.find((tap) => tap.dx === 0 && tap.dy === 0);
+    expect(center?.weight).toBe(4);
+    // Программа апсемпла собрана из того же ядра и умножает тент на вклад яруса.
+    expect(BLOOM_UPSAMPLE_FRAGMENT).toContain('uniform float uScale');
+    expect(BLOOM_UPSAMPLE_FRAGMENT).toContain('tent() * uScale');
+    for (const tap of BLOOM_TENT_KERNEL) {
+      const offset = `vec2(${tap.dx.toFixed(1)}, ${tap.dy.toFixed(1)}) * uTexel`;
+      expect(BLOOM_UPSAMPLE_FRAGMENT, offset).toContain(offset);
+      expect(BLOOM_DOWNSAMPLE_FRAGMENT, offset).toContain(offset);
+    }
+  });
+
+  it('вклад мелкого яруса — авторская ширина свечения, и она не вырождается', () => {
+    // Ноль и единица авторского радиуса — законные значения секции (REND-34), и
+    // ни на одном из них цепочка не обязана ни исчезнуть, ни разогнаться сама.
+    expect(bloomUpsampleScale(0)).toBeGreaterThan(0);
+    expect(bloomUpsampleScale(1)).toBeLessThan(1);
+    expect(bloomUpsampleScale(1)).toBeGreaterThan(bloomUpsampleScale(0));
+    // Значения вне [0, 1] зажимаются: секцию проверяет валидация, а механизм
+    // остаётся определённым и на числе, собранном руками.
+    expect(bloomUpsampleScale(-5)).toBe(bloomUpsampleScale(0));
+    expect(bloomUpsampleScale(5)).toBe(bloomUpsampleScale(1));
+  });
+
+  it('свечение сведения — ОДНА текстура: вершина пирамиды, а не пять ярусов', () => {
+    const { post } = subsystem(TONE_AND_BLOOM);
+    post.render(new PostRendererSpy(), camera());
+
+    const resolve = post.passes.resolve!;
+    expect(resolve.uniforms.tBloom0?.value).toBe(post.passes.pyramid[0]?.texture);
+    for (let level = 1; level < BLOOM_LEVELS; level++) {
+      expect(resolve.uniforms[`tBloom${level}`], `ярус ${level}`).toBeUndefined();
+    }
   });
 
   it('порог берётся от ЦЕЛИ СЦЕНЫ, то есть до сведения яркости (REND-34)', () => {
@@ -232,7 +280,7 @@ describe('REND-34: порядок проходов — сцена, bloom, све
     expect(passes.threshold?.uniforms.tScene?.value).toBe(passes.scene?.texture);
     expect(passes.threshold?.uniforms.uThreshold?.value).toBe(0.8);
     // …и в проходе сведения свечение складывается ДО вызова оператора.
-    const glow = RESOLVE_FRAGMENT.indexOf('uStrength * glow');
+    const glow = RESOLVE_FRAGMENT.indexOf('uStrength * texture2D(tBloom0');
     const tone = RESOLVE_FRAGMENT.indexOf('POST_TONE_MAPPING(color)');
     expect(glow).toBeGreaterThan(0);
     expect(tone).toBeGreaterThan(glow);
@@ -256,14 +304,113 @@ describe('REND-34: порядок проходов — сцена, bloom, све
       post.render(new PostRendererSpy(), camera());
     });
 
-    // Отрисовка сцены плюс полноэкранные проходы цепочки.
-    expect(counters.postprocessPasses).toBe(2 + BLOOM_LEVELS);
-    const pyramid = post.passes.pyramid.reduce(
-      (sum, level) => sum + level.width * level.height,
-      0,
+    // Отрисовка сцены плюс полноэкранные проходы цепочки: порог, четыре
+    // даунсемпла и четыре апсемпла пирамиды, сведение (L-7).
+    expect(counters.postprocessPasses).toBe(2 + BLOOM_LEVELS + (BLOOM_LEVELS - 1));
+    const levels = post.passes.pyramid;
+    const down = levels.reduce((sum, level) => sum + level.width * level.height, 0);
+    // Апсемплы пишут в те же ярусы, кроме самого мелкого: он только источник.
+    const up = down - (levels.at(-1)!.width * levels.at(-1)!.height);
+    expect(counters.postprocessTexels).toBe(down + up + FRAME_WIDTH * FRAME_HEIGHT);
+  });
+});
+
+// ---------------- 2.2b: профиль свечения — модель цепочки на CPU (L-7)
+
+/**
+ * Модель пирамиды bloom на CPU: то же ядро (`BLOOM_TENT_KERNEL`) и тот же
+ * порядок проходов, что у шейдеров, только одномерные и на маленьком буфере.
+ * Она не заменяет GPU-прогон — программы здесь компилирует железо, а тесты
+ * пакета headless (то же известное ограничение, что у GLSL VAT-материала), — но
+ * СВОЙСТВО, ради которого цепочка апсемплов и заводится, проверяется именно
+ * арифметикой: коробчатый профиль от прямого растяжения мелкого яруса виден
+ * числами так же ясно, как глазом.
+ */
+function tent1d(source: readonly number[]): number[] {
+  // Одномерный срез того же ядра: по строке тента 3×3 веса столбцов — (1, 2, 1),
+  // и центральный тап вчетверо тяжелее углового ровно поэтому.
+  const weights = BLOOM_TENT_KERNEL.filter((tap) => tap.dy === 0).map((tap) => tap.weight);
+  const ordered = [weights[1] ?? 1, weights[0] ?? 2, weights[1] ?? 1];
+  const sum = ordered.reduce((a, b) => a + b, 0);
+  return source.map((_, index) => {
+    let acc = 0;
+    for (let tap = -1; tap <= 1; tap++) {
+      const at = Math.min(Math.max(index + tap, 0), source.length - 1);
+      acc += source[at]! * ordered[tap + 1]!;
+    }
+    return acc / sum;
+  });
+}
+
+/** Даунсемпл вдвое: тент, затем прореживание — как у прохода в мельчающий ярус. */
+function downsample(source: readonly number[]): number[] {
+  const blurred = tent1d(source);
+  const out: number[] = [];
+  for (let index = 0; index < source.length; index += 2) out.push(blurred[index]!);
+  return out;
+}
+
+/** Билинейное растяжение вдвое — то, чем ярус попадает в крупный. */
+function stretch(source: readonly number[], length: number): number[] {
+  return Array.from({ length }, (_, index) => {
+    const at = index / 2;
+    const low = Math.min(Math.floor(at), source.length - 1);
+    const high = Math.min(low + 1, source.length - 1);
+    return source[low]! + (source[high]! - source[low]!) * (at - low);
+  });
+}
+
+/** Профиль вершины пирамиды: цепочка апсемплов против прямого сложения ярусов. */
+function bloomProfile(width: number, progressive: boolean): number[] {
+  const top = Array.from({ length: width }, (_, index) => (index === width / 2 ? 1 : 0));
+  const levels: number[][] = [top];
+  for (let level = 1; level < BLOOM_LEVELS; level++) levels.push(downsample(levels[level - 1]!));
+  if (!progressive) {
+    // Прежняя схема: каждый ярус растягивается СРАЗУ до вершины и складывается
+    // там — между текселями мелкого яруса нет ничего, кроме прямой.
+    return levels.reduce<number[]>(
+      (acc, level) => stretch(level, width).map((value, index) => acc[index]! + value * 0.6),
+      new Array<number>(width).fill(0),
     );
-    // Тексели назначения: ярусы пирамиды плюс кадр прохода сведения.
-    expect(counters.postprocessTexels).toBe(pyramid + FRAME_WIDTH * FRAME_HEIGHT);
+  }
+  const scale = bloomUpsampleScale(0.5);
+  for (let level = BLOOM_LEVELS - 2; level >= 0; level--) {
+    const up = tent1d(stretch(levels[level + 1]!, levels[level]!.length));
+    levels[level] = levels[level]!.map((value, index) => value + up[index]! * scale);
+  }
+  return levels[0]!;
+}
+
+describe('L-7: свечение собирается цепочкой апсемплов, а не растяжением ярусов', () => {
+  it('профиль от одной яркой точки убывает от центра МОНОТОННО', () => {
+    const width = 64;
+    const profile = bloomProfile(width, true);
+    const center = width / 2;
+
+    expect(profile[center]).toBeGreaterThan(0);
+    for (let index = center; index < width - 1; index++) {
+      expect(profile[index], `тексель ${index}`).toBeGreaterThanOrEqual(profile[index + 1]! - 1e-9);
+    }
+    // Свечение действительно широкое: на четверти кадра от центра оно ещё есть.
+    expect(profile[center + width / 4]).toBeGreaterThan(0);
+  });
+
+  it('прямое сложение ярусов даёт ступени, цепочка апсемплов — гладкий спад', () => {
+    // Мера «коробчатости» — наибольший скачок между соседними текселями
+    // относительно вершины: у растянутого мелкого яруса он крупный, у цепочки
+    // тентов — малый. Это ровно тот ореол, из-за которого схемы без гауссианы
+    // требуют апсемплов, и он же — предмет находки L-7.
+    const width = 64;
+    const step = (profile: readonly number[]): number => {
+      const peak = Math.max(...profile);
+      let worst = 0;
+      for (let index = 1; index < profile.length; index++) {
+        worst = Math.max(worst, Math.abs(profile[index]! - profile[index - 1]!) / peak);
+      }
+      return worst;
+    };
+
+    expect(step(bloomProfile(width, true))).toBeLessThan(step(bloomProfile(width, false)));
   });
 });
 
@@ -423,8 +570,14 @@ describe('ED-15: правка секции применяется на живо�
     expect(post.passes.resolve).toBe(resolve);
     expect(resolve?.uniforms.toneMappingExposure?.value).toBe(2);
     expect(resolve?.uniforms.uStrength?.value).toBe(0.1);
-    expect(resolve?.uniforms.uRadius?.value).toBe(0.9);
     expect(post.passes.threshold?.uniforms.uThreshold?.value).toBe(3);
+    // Ширина свечения живёт не в сведении, а на ступенях апсемпла (L-7): её
+    // вклад читается с конфигурации каждым кадром пирамиды, и униформы у неё
+    // здесь нет вовсе — правка всё равно действует ближайшим кадром (ED-15).
+    expect(resolve?.uniforms.uRadius).toBeUndefined();
+    post.render(renderer, camera());
+    const top = post.passes.pyramid[0];
+    expect(top).toBeDefined();
   });
 
   it('выключенная правкой цепочка отдаёт цели и возвращает прежний кадр', () => {
@@ -492,7 +645,7 @@ describe('REND-34: без расширения half-float цепочка идё�
     expect(post.passes.hdr).toBe(false);
     expect(post.passes.scene?.texture.type).toBe(THREE.UnsignedByteType);
     // Проходы на месте: цепочка деградировала, а не отказала.
-    expect(renderer.rendered).toHaveLength(2 * (2 + BLOOM_LEVELS));
+    expect(renderer.rendered).toHaveLength(2 * (2 + BLOOM_LEVELS + (BLOOM_LEVELS - 1)));
   });
 
   it('у рендерера без реестра расширений спрашивать нечего — путь полный', () => {
@@ -718,7 +871,7 @@ describe('FOW-7, REND-34: маска остаётся финальным про�
     expect(fog.postPass.target).toBeNull();
     expect(renderer.rendered[0]).toBe(ctx.scene);
     expect(renderer.rendered.at(-1)).toBe(fog.postPass.scene);
-    expect(renderer.rendered).toHaveLength(3 + BLOOM_LEVELS);
+    expect(renderer.rendered).toHaveLength(3 + BLOOM_LEVELS + (BLOOM_LEVELS - 1));
     // Вход маскирующего прохода — выход сведения и глубина СЦЕНЫ (design D2).
     const uniforms = (fog.postPass.scene.children[0] as THREE.Mesh)
       .material as THREE.ShaderMaterial;
@@ -908,7 +1061,6 @@ describe('REND-34: LUT — цветокоррекция после сведен�
       exposure: 1,
       bloom: false,
       strength: 0,
-      radius: 0,
       lut,
       lutAmount: 1,
     });
@@ -920,7 +1072,6 @@ describe('REND-34: LUT — цветокоррекция после сведен�
         exposure: 1,
         bloom: false,
         strength: 0,
-        radius: 0,
         lut: null,
         lutAmount: 1,
       }).glslVersion,

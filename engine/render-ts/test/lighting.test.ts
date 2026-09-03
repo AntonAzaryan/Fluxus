@@ -12,7 +12,7 @@
  */
 import { describe, expect, it, vi } from 'vitest';
 import * as THREE from 'three';
-import type { EntityId } from '@fluxus/core';
+import { FIXED_ONE, createTerrainGrid, type EntityId, type TerrainGrid } from '@fluxus/core';
 import type {
   PresentationLighting,
   PresentationLightingPhase,
@@ -42,6 +42,7 @@ import {
   type PresentationProducer,
   type QualityPreset,
   type RenderContext,
+  type ShadowRendererLike,
 } from '../src/index.js';
 import { OptionalLights } from '../src/lighting/optionalLights.js';
 import { flatGrid, makeAssets, makeEntityView, makeModel, makeTickView } from './fixtures.js';
@@ -69,6 +70,8 @@ interface Rig {
   readonly models: ModelsSubsystem;
   readonly terrain: TerrainSubsystem;
   readonly scene: THREE.Scene;
+  /** Порт теневых проходов стенда; `null` — сборка его не дала (REND-30). */
+  readonly renderer: ShadowRendererLike | null;
 }
 
 /**
@@ -76,17 +79,67 @@ interface Rig {
  * Модель разрешается сразу — батчевый ярус (REND-20) собирается той же
  * доставкой, и тестировать заглушку вместо него незачем.
  */
+/**
+ * Рендерер глазами теневых проходов (REND-30): записывает, чью глубину заказала
+ * подсистема и куда написан композит, и повторяет ЕДИНСТВЕННОЕ наблюдаемое
+ * следствие настоящего прохода three — снятый флаг `needsUpdate` у источника,
+ * чью карту он нарисовал. Живого WebGL для этого не нужно: под тестом решения
+ * подсистемы, а не содержимое карт (то же ограничение, что у GLSL-материалов).
+ */
+class ShadowRendererSpy implements ShadowRendererLike {
+  /** Цели теневых проходов в порядке заказа: по ним видно чередование ярусов. */
+  readonly depthPasses: (THREE.RenderTarget | null)[] = [];
+  /** Сцены полноэкранных проходов — сведения (REND-30). */
+  readonly rendered: THREE.Object3D[] = [];
+  readonly targets: (THREE.WebGLRenderTarget | null)[] = [];
+  /**
+   * Рисует ли проход на самом деле. `false` — та самая ситуация, ради которой
+   * подсистема подтверждает перерисовку фактом, а не решением: тени у
+   * потребителя выключены либо контекст потерян, и `needsUpdate` остаётся
+   * поднятым (REND-30).
+   */
+  drawing = true;
+  readonly shadowMap = {
+    enabled: true,
+    render: (lights: readonly THREE.Light[]): void => {
+      for (const light of lights) {
+        const shadow = (light as THREE.DirectionalLight).shadow;
+        this.depthPasses.push(shadow.map);
+        // Проход three снимает флаг, отрисовав карту, — и ровно по нему
+        // подсистема подтверждает состоявшуюся перерисовку (REND-30).
+        if (this.drawing) shadow.needsUpdate = false;
+      }
+    },
+  };
+
+  render(scene: THREE.Object3D): void {
+    this.rendered.push(scene);
+  }
+
+  setRenderTarget(target: THREE.WebGLRenderTarget | null): void {
+    this.targets.push(target);
+  }
+}
+
 function makeRig(
   config?: PresentationLighting,
   preset?: QualityPreset,
-  options: { readonly fadeSeconds?: number } = {},
+  options: { readonly fadeSeconds?: number; readonly renderer?: ShadowRendererLike | null } = {},
 ): Rig {
   const assets = makeAssets();
   const scene = new THREE.Scene();
   const ctx: RenderContext = { scene, assets: assets.service, config: { heightStep: 0.5 } };
   const stage = new PresentationStage(ctx);
   const grid = flatGrid();
-  const lighting = new LightingSubsystem({ grid, ...(config === undefined ? {} : { config }) });
+  // Порт рендерера у стенда есть по умолчанию: без него режим `hybrid`
+  // исполняется как `full` (сведение вести нечем), и тесты чередования ярусов
+  // проверяли бы не тот режим. Сборка без порта — свой тест, `null` здесь.
+  const renderer = options.renderer === undefined ? new ShadowRendererSpy() : options.renderer;
+  const lighting = new LightingSubsystem({
+    grid,
+    ...(config === undefined ? {} : { config }),
+    ...(renderer === null ? {} : { renderer }),
+  });
   stage.register(lighting);
   const terrain = new TerrainSubsystem(grid, { shadows: lighting });
   stage.register(terrain);
@@ -98,7 +151,7 @@ function makeRig(
   stage.register(models);
   if (preset !== undefined) new QualityController(stage, preset);
   assets.resolve('model', MODEL_ID, makeModel());
-  return { stage, lighting, models, terrain, scene };
+  return { stage, lighting, models, terrain, scene, renderer };
 }
 
 /** Набор decoration-инстансов в форме входа REND-18. */
@@ -118,11 +171,10 @@ function floorMesh(scene: THREE.Scene): THREE.Mesh {
  * ровно то, что двигает цикл времени суток, и то, чего он двигать не должен.
  */
 function lightSnapshot(rig: Rig): unknown {
-  const { ambient, sun, sunDynamic } = rig.lighting.lights;
+  const { ambient, sun } = rig.lighting.lights;
   return {
     ambient: [ambient.color.getHexString(), ambient.intensity],
     sun: [sun.color.getHexString(), sun.intensity, ...sun.position.toArray()],
-    sunDynamic: [sunDynamic.color.getHexString(), sunDynamic.intensity],
   };
 }
 
@@ -165,7 +217,7 @@ describe('конфигурация освещения — данные секц�
     const config = resolveLightingConfig({
       ambient: { color: '#101010', intensity: 0.1 },
       directional: { color: '#fff0d0', intensity: 2.5, direction: { x: 1, y: 2, z: 3 } },
-      shadows: { mode: 'full', mapSize: 512, staticShare: 0.25 },
+      shadows: { mode: 'full', mapSize: 512 },
     });
     expect(config).toEqual({
       ambientColor: '#101010',
@@ -179,7 +231,6 @@ describe('конфигурация освещения — данные секц�
       rim: undefined,
       shadowMode: 'full',
       shadowMapSize: 512,
-      staticShare: 0.25,
     });
   });
 
@@ -343,24 +394,36 @@ describe('подсистема освещения — источники сце�
     expect(directionalLights(rig.scene)[0]!.intensity).toBe(3);
   });
 
-  it('режим `hybrid` заводит второй источник и делит интенсивность между ними', () => {
-    const rig = makeRig({
-      directional: { intensity: 2 },
-      shadows: { mode: 'hybrid', staticShare: 0.25 },
-    });
+  it('режим `hybrid` НЕ заводит второго источника и не делит интенсивность', () => {
+    // Прежняя пара источников гасила по половине вклада каждая, и тень от
+    // одного лишь здания выходила вдвое светлее, чем в `full`. Ярусы теперь
+    // живут в целях глубины, а не в источниках (REND-30): источник один, и
+    // интенсивность у него авторская целиком.
+    const rig = makeRig({ directional: { intensity: 2 }, shadows: { mode: 'hybrid' } });
+
     const lights = directionalLights(rig.scene);
-    expect(lights.length).toBe(2);
-    // Доля — данные конфига: тень каждой карты гасит вклад только своего
-    // источника, и делится он ровно тем числом, что написал автор.
-    expect(lights[0]!.intensity).toBeCloseTo(0.5, 6);
-    expect(lights[1]!.intensity).toBeCloseTo(1.5, 6);
+    expect(lights.length).toBe(1);
+    expect(lights[0]!.intensity).toBeCloseTo(2, 6);
     expect(lights[0]!.castShadow).toBe(true);
-    expect(lights[1]!.castShadow).toBe(true);
   });
 
-  it('смена режима на `none` снимает второй источник из сцены', () => {
+  it('затенение `hybrid` равно `full`: тот же источник и та же его сила', () => {
+    // Тень темна ровно настолько, насколько гасится вклад источника, а гасит её
+    // одна карта на оба яруса — значит, тень от статики так же темна, как от
+    // динамики, и обе — как в `full` (REND-30).
+    const hybrid = makeRig({ directional: { intensity: 1.7 }, shadows: { mode: 'hybrid' } });
+    const full = makeRig({ directional: { intensity: 1.7 }, shadows: { mode: 'full' } });
+
+    const hybridLights = directionalLights(hybrid.scene);
+    const fullLights = directionalLights(full.scene);
+    expect(hybridLights.length).toBe(fullLights.length);
+    expect(hybridLights[0]!.intensity).toBe(fullLights[0]!.intensity);
+    expect(hybrid.lighting.lights.sun.castShadow).toBe(full.lighting.lights.sun.castShadow);
+  });
+
+  it('смена режима на `none` снимает тени с единственного источника', () => {
     const rig = makeRig({ shadows: { mode: 'hybrid' } });
-    expect(directionalLights(rig.scene).length).toBe(2);
+    expect(directionalLights(rig.scene).length).toBe(1);
 
     rig.lighting.applyConfig({ shadows: { mode: 'none' } });
 
@@ -370,20 +433,17 @@ describe('подсистема освещения — источники сце�
 
   it('источник, переставший нести тени, отдаёт построенную карту', () => {
     const rig = makeRig({ shadows: { mode: 'hybrid' } });
-    const { sun, sunDynamic } = rig.lighting.lights;
+    const { sun } = rig.lighting.lights;
     // Карту строит теневой проход three, которого в headless-прогоне нет:
     // подставляется готовая — предмет теста не её содержимое, а владение ею.
-    for (const light of [sun, sunDynamic]) {
-      const map = new THREE.WebGLRenderTarget(4, 4);
-      map.depthTexture = new THREE.DepthTexture(4, 4);
-      light.shadow.map = map;
-    }
+    const map = new THREE.WebGLRenderTarget(4, 4);
+    map.depthTexture = new THREE.DepthTexture(4, 4);
+    sun.shadow.map = map;
 
     rig.lighting.applyConfig({ shadows: { mode: 'none' } });
 
     // `none` — теневого прохода нет вовсе, и держать текстуру глубины незачем.
     expect(sun.shadow.map).toBeNull();
-    expect(sunDynamic.shadow.map).toBeNull();
   });
 });
 
@@ -494,7 +554,7 @@ describe('полусферная подсветка и контровой ист
     // иначе на него легли бы нули незаполненной записи.
     const optional = new OptionalLights();
     const scene = new THREE.Scene();
-    const extent = { centerX: 0, centerY: 0, radius: 10 };
+    const extent = { centerX: 0, centerY: 0, radius: 10, sizeX: 14, sizeY: 14, minZ: 0, maxZ: 4 };
     optional.apply(scene, extent, { skyColor: '#ffffff', groundColor: '#ffffff', intensity: 1 }, {
       color: '#ffffff',
       intensity: 1,
@@ -628,10 +688,8 @@ describe('режим теней `blob` — контактные пятна вм�
     rig.stage.publishDecorations(decorations([makeEntityView(2, { kind: 'Rock' })]));
     rig.stage.frame(0.016, 0);
 
-    // Ни один источник карты не несёт: теневого прохода в режиме нет вовсе.
+    // Источник карты не несёт: теневого прохода в режиме нет вовсе.
     expect(rig.lighting.lights.sun.castShadow).toBe(false);
-    expect(rig.lighting.lights.sunDynamic.castShadow).toBe(false);
-    // Пара ярусов — свойство `hybrid`: здесь источник один.
     expect(directionalLights(rig.scene).length).toBe(1);
     // Статические кастеры теней не отбрасывают и не принимают.
     expect(floorMesh(rig.scene).castShadow).toBe(false);
@@ -820,6 +878,40 @@ describe('режим теней `blob` — контактные пятна вм�
     expect(rig.lighting.blobCasterCount).toBe(0);
     expect(mesh.parent).toBeNull();
   });
+
+  it('снос отдаёт цели сведения и снимает карту с источника (REND-31)', () => {
+    const rig = makeRig({ shadows: { mode: 'hybrid' } });
+    rig.stage.publish(PRODUCER, makeTickView([makeEntityView(1, { kind: 'Rock' })]));
+    rig.stage.frame(0.016, 0);
+    const composite = rig.lighting.shadowComposite;
+    const map = composite.map!;
+    const tier = composite.tiers.static!;
+    const disposed: string[] = [];
+    map.addEventListener('dispose', () => disposed.push('map'));
+    tier.addEventListener('dispose', () => disposed.push('tier'));
+
+    rig.lighting.dispose();
+
+    expect(disposed).toEqual(expect.arrayContaining(['map', 'tier']));
+    expect(composite.map).toBeNull();
+    // Ссылку на снесённую карту источник держать не вправе: материалы сцены
+    // читают её текстуру глубины, а той больше нет.
+    expect(rig.lighting.lights.sun.shadow.map).toBeNull();
+  });
+
+  it('смена режима на `full` отдаёт цели сведения: три карты глубины ни к чему', () => {
+    const rig = makeRig({ shadows: { mode: 'hybrid' } });
+    rig.stage.frame(0.016, 0);
+    expect(rig.lighting.shadowComposite.map).not.toBeNull();
+
+    rig.lighting.applyConfig({ shadows: { mode: 'full' } });
+
+    expect(rig.lighting.shadowComposite.map).toBeNull();
+    expect(rig.lighting.lights.sun.shadow.map).toBeNull();
+    // В `full` карту заводит теневой проход three: она одна, и наша ей не нужна.
+    rig.stage.frame(0.016, 0);
+    expect(rig.lighting.lights.sun.shadow.needsUpdate).toBe(true);
+  });
 });
 
 describe('счётчик контактных пятен (PERF-2, PERF-3)', () => {
@@ -900,22 +992,76 @@ describe('режимы теней и кэш статики (design D2)', () => {
     rig.stage.publishDecorations(decorations([makeEntityView(2, { kind: 'Rock' })]));
 
     rig.stage.frame(0.016, 0);
-    const [sun, sunDynamic] = directionalLights(rig.scene);
-    // Кадр запекания: перерисовывается карта статики, динамическая его пропускает.
+    const composite = rig.lighting.shadowComposite;
+    // Кадр запекания: рисуется глубина статики. Динамику этот кадр тоже рисует
+    // ровно один раз — в цели ярусов до первого прохода лежит мусор драйвера, и
+    // свести её было бы нечем; дальше динамика идёт своим чередом.
     expect(rig.lighting.staticRebuilds).toBe(1);
-    expect(sun!.shadow.needsUpdate).toBe(true);
-    expect(sunDynamic!.shadow.needsUpdate).toBe(false);
+    expect(composite.draws.static).toBe(1);
     expect(floorMesh(rig.scene).castShadow).toBe(true);
+    const primed = { ...composite.draws };
 
     rig.stage.frame(0.016, 0);
     rig.stage.frame(0.016, 0);
-    // Установившийся кадр: кэш не трогается, в карту идёт только динамика.
+    // Установившийся кадр: кэш не трогается, рисуется только глубина динамики.
     expect(rig.lighting.staticRebuilds).toBe(1);
-    expect(sun!.shadow.needsUpdate).toBe(false);
-    expect(sunDynamic!.shadow.needsUpdate).toBe(true);
+    expect(composite.draws.static).toBe(primed.static);
+    expect(composite.draws.dynamic).toBe(primed.dynamic + 2);
     expect(floorMesh(rig.scene).castShadow).toBe(false);
     // Приёмником террейн остаётся в обеих фазах: он ловит тени, а не отбрасывает.
     expect(floorMesh(rig.scene).receiveShadow).toBe(true);
+    // Карту материалам отдаёт СВЕДЕНИЕ, и оно идёт каждым кадром: в ней всегда
+    // оба яруса, а не тот, чья глубина рисовалась последней (REND-30).
+    expect(rig.lighting.lights.sun.shadow.map).toBe(composite.map);
+    expect(composite.compositeCount).toBe(3);
+  });
+
+  it('карта сведения несёт ОБА яруса: тень статики не гаснет в кадры динамики', () => {
+    // Прежняя пара источников держала ярусы в РАЗНЫХ картах, и каждая гасила
+    // только свою долю интенсивности. Теперь ярус — цель глубины, а карта
+    // источника собирается из обеих поэлементным минимумом: тень от одного лишь
+    // здания так же темна, как в `full` (REND-30).
+    const rig = makeRig({ shadows: { mode: 'hybrid' } });
+    rig.stage.publish(PRODUCER, makeTickView([makeEntityView(1, { kind: 'Rock' })]));
+    rig.stage.publishDecorations(decorations([makeEntityView(2, { kind: 'Rock' })]));
+    rig.stage.frame(0.016, 0);
+    rig.stage.frame(0.016, 0);
+
+    const composite = rig.lighting.shadowComposite;
+    const spy = rig.renderer as ShadowRendererSpy;
+    // Цели ярусов — разные, карта — третья, и рисуют в неё сведением.
+    expect(composite.tiers.static).not.toBe(composite.tiers.dynamic);
+    expect(composite.map).not.toBe(composite.tiers.static);
+    expect(spy.targets.at(-2)).toBe(composite.map);
+    // Проход читает ОБЕ глубины и пишет минимум — вход материалов сцены.
+    const pass = composite.pass!;
+    expect(pass.uniforms.tStatic?.value).toBe(composite.tiers.static?.depthTexture);
+    expect(pass.uniforms.tDynamic?.value).toBe(composite.tiers.dynamic?.depthTexture);
+    expect(pass.fragmentShader).toContain('gl_FragDepth = min(staticDepth, dynamicDepth)');
+    // Карта, которую читают материалы, — с аппаратным сравнением; цели ярусов
+    // читает наш проход обычной выборкой, и сравнения у них нет.
+    expect(composite.map?.depthTexture?.compareFunction).toBe(THREE.LessEqualCompare);
+    expect(composite.tiers.static?.depthTexture?.compareFunction).toBeNull();
+  });
+
+  it('без порта рендерера `hybrid` исполняется как `full`: картинка та же, кэша нет', () => {
+    // Сведение ведёт подсистема, и вести его нечем, если сборка не дала
+    // рендерера. Тогда карта одна и в неё идут ОБА яруса каждым кадром — то
+    // есть ровно `full`: тень не темнее и не светлее, просто дороже.
+    const rig = makeRig({ shadows: { mode: 'hybrid' } }, undefined, { renderer: null });
+    rig.stage.publish(PRODUCER, makeTickView([makeEntityView(1, { kind: 'Rock' })]));
+    rig.stage.publishDecorations(decorations([makeEntityView(2, { kind: 'Rock' })]));
+
+    rig.stage.frame(0.016, 0);
+    rig.stage.frame(0.016, 0);
+
+    expect(rig.lighting.shadowComposite.map).toBeNull();
+    expect(rig.lighting.lights.sun.shadow.needsUpdate).toBe(true);
+    // Оба яруса подняты одновременно, как в `full`.
+    expect(floorMesh(rig.scene).castShadow).toBe(true);
+    for (const mesh of rig.models.batchMeshes()) expect(mesh.castShadow).toBe(true);
+    // Кэша статики нет вовсе: перерисовывать нечего, счётчик стоит.
+    expect(rig.lighting.staticRebuilds).toBe(0);
   });
 
   it('автор двигает декорацию: кэш перерисован событием, а не кадром', () => {
@@ -950,15 +1096,18 @@ describe('режимы теней и кэш статики (design D2)', () => {
   it('непрерывная инвалидация кэша: фазы чередуются, динамика не голодает (REND-30)', () => {
     const rig = makeRig({ shadows: { mode: 'hybrid' } });
     rig.stage.publish(PRODUCER, makeTickView([makeEntityView(1, { kind: 'Rock' })]));
-    const [sun, sunDynamic] = directionalLights(rig.scene);
 
     // Поток событий инвалидации без затишья — та же нагрузка, что мутация пола
     // каждый тик (TERR-6) или перетаскивание декорации в редакторе (ED-15).
+    const composite = rig.lighting.shadowComposite;
     const phases: ('static' | 'dynamic')[] = [];
+    let seen = { ...composite.draws };
     for (let frame = 0; frame < 8; frame++) {
       rig.lighting.invalidateStatic();
       rig.stage.frame(0.016, 0);
-      phases.push(sun!.shadow.needsUpdate ? 'static' : 'dynamic');
+      const now = { ...composite.draws };
+      phases.push(now.static > seen.static ? 'static' : 'dynamic');
+      seen = now;
     }
 
     // Ни одной пары статических кадров подряд: перерисовка кэша MUST NOT
@@ -973,9 +1122,9 @@ describe('режимы теней и кэш статики (design D2)', () => {
       'static',
       'dynamic',
     ]);
-    // Динамическая карта в её кадры действительно рисуется — тени юнитов
+    // Глубина динамики в её кадры действительно рисуется — тени юнитов
     // следуют за ними, а не застывают на всё время мутаций.
-    expect(sunDynamic!.shadow.needsUpdate).toBe(true);
+    expect(composite.draws.dynamic).toBeGreaterThanOrEqual(4);
     expect(rig.lighting.staticRebuilds).toBe(4);
   });
 
@@ -1063,11 +1212,10 @@ describe('перерисовка кэша статики подтверждае�
    * у неё нет.
    */
   function drawShadows(rig: Rig): void {
-    for (const light of [rig.lighting.lights.sun, rig.lighting.lights.sunDynamic]) {
-      if (!light.castShadow) continue;
-      light.shadow.map ??= new THREE.WebGLRenderTarget(1, 1);
-      light.shadow.needsUpdate = false;
-    }
+    const light = rig.lighting.lights.sun;
+    if (!light.castShadow) return;
+    light.shadow.map ??= new THREE.WebGLRenderTarget(1, 1);
+    light.shadow.needsUpdate = false;
   }
 
   /** Сцена `hybrid` с обоими ярусами: чередование карт тут наблюдаемо. */
@@ -1094,48 +1242,46 @@ describe('перерисовка кэша статики подтверждае�
     expect(rig.lighting.staticRebuilds).toBe(baked);
   });
 
-  it('ПРОПУЩЕННЫЙ потребителем кадр перерисовку не подтверждает (drawFailure)', () => {
-    // Вьюпорт редактора пропускает кадр при отказе отрисовки (`drawFailure`), а
-    // теневой проход three снимает `needsUpdate` только нарисовав карту. Считай
-    // подсистема заказ исполненным, следующая фаза сняла бы флаг сама — и кэш
-    // статики остался бы устаревшим до следующего события инвалидации, которого
-    // может не быть вовсе.
+  it('НЕСОСТОЯВШИЙСЯ теневой проход перерисовку не подтверждает (drawFailure)', () => {
+    // Теневая машинерия потребителя бывает выключена (`shadowMap.enabled`), а
+    // контекст — потерян: заказанный проход тогда не рисует ничего и флага
+    // `needsUpdate` не снимает. Считай подсистема заказ исполненным, кэш
+    // статики остался бы устаревшим молча — до следующего события инвалидации,
+    // которого может не быть вовсе.
     const rig = hybridRig();
-    rig.stage.frame(0.016, 0); // перерисовка кэша
-    drawShadows(rig);
-    rig.stage.frame(0.016, 0); // ворота REND-30 отдают следующий кадр динамике
-    drawShadows(rig);
+    rig.stage.frame(0.016, 0);
     const baked = rig.lighting.staticRebuilds;
+    expect(baked).toBe(1);
 
-    // Событие инвалидации: заказ на перерисовку выдан следующим кадром…
+    // Проход перестал состояться: рендерер флага не снимает.
+    const spy = rig.renderer as ShadowRendererSpy;
+    spy.drawing = false;
     rig.lighting.invalidateStatic();
+    for (let frame = 0; frame < 4; frame++) rig.stage.frame(0.016, 0);
+
+    // Ни одной подтверждённой перерисовки — и кэш по-прежнему объявлен старым.
+    expect(rig.lighting.staticRebuilds).toBe(baked);
+
+    // Проход снова состоится — заказ исполняется ближайшим своим кадром.
+    spy.drawing = true;
+    rig.stage.frame(0.016, 0);
     rig.stage.frame(0.016, 0);
     expect(rig.lighting.staticRebuilds).toBe(baked + 1);
-
-    // …а кадр потребитель ПРОПУСТИЛ: флаг источника никто не снял. Ближайший
-    // кадр ворота отдают динамике, а следующий за ним обязан заказать
-    // перерисовку заново — кэш-то остался прежним.
-    rig.stage.frame(0.016, 0);
-    rig.stage.frame(0.016, 0);
-    expect(rig.lighting.staticRebuilds).toBe(baked + 2);
-
-    // Теперь кадр нарисован — и заказ больше не повторяется.
-    drawShadows(rig);
-    rig.stage.frame(0.016, 0);
-    rig.stage.frame(0.016, 0);
-    expect(rig.lighting.staticRebuilds).toBe(baked + 2);
   });
 
-  it('прогон без рендерера вовсе перерисовку не переспрашивает (headless)', () => {
-    // Карты нет ни у кого: теневого прохода в прогоне не бывает, и «флаг не
-    // снят» здесь значит «рисовать некому», а не «кадр пропущен». Иначе
-    // подсистема заказывала бы перерисовку каждый второй кадр до конца прогона
-    // — и эталон стоимости (PERF-3) считал бы работу, которой нет.
+  it('заказ на кадр отдаётся только один раз: карту рисует наш проход, не кадр сцены', () => {
+    // После нашего прохода флаг обязан быть снят при любом исходе: кадр
+    // отрисовки сцены потребителем (`renderer.render`) иначе перерисовал бы
+    // карту сведения одним ярусом — тем, чьи флаги стоят на кастерах.
     const rig = hybridRig();
-    for (let frame = 0; frame < 8; frame++) rig.stage.frame(0.016, 0);
+    rig.stage.frame(0.016, 0);
+    expect(rig.lighting.lights.sun.shadow.needsUpdate).toBe(false);
 
-    expect(rig.lighting.lights.sun.shadow.map).toBeNull();
-    expect(rig.lighting.staticRebuilds).toBe(1);
+    const spy = rig.renderer as ShadowRendererSpy;
+    spy.drawing = false;
+    rig.lighting.invalidateStatic();
+    rig.stage.frame(0.016, 0);
+    expect(rig.lighting.lights.sun.shadow.needsUpdate).toBe(false);
   });
 });
 
@@ -1487,15 +1633,13 @@ describe('цикл времени суток — исполнение подси
     expect(rig.lighting.lights.ambient.intensity).toBe(0.4);
   });
 
-  it('пара ярусов `hybrid` светит как один источник на любом кадре перехода', () => {
-    const rig = makeRig(
-      cycleSection({ shadows: { mode: 'hybrid', staticShare: 0.25 } }),
-    );
+  it('интенсивность перехода — целиком на единственном источнике (REND-30)', () => {
+    const rig = makeRig(cycleSection({ shadows: { mode: 'hybrid' } }));
     advance(rig, 9);
-    const { sun, sunDynamic } = rig.lighting.lights;
-    // Доля применяется к УЖЕ слерпленной сумме: половина пути от 2 к 0 — это 1.
-    expect(sun.intensity + sunDynamic.intensity).toBeCloseTo(1, 6);
-    expect(sun.intensity).toBeCloseTo(0.25, 6);
+    // Половина пути от 2 к 0 — это 1, и всю единицу несёт один источник: делить
+    // её между ярусами больше нечем, карта одна.
+    expect(directionalLights(rig.scene).length).toBe(1);
+    expect(rig.lighting.lights.sun.intensity).toBeCloseTo(1, 6);
   });
 
   it('потолок пресета фаз не касается — ограничивать ему в них нечего (QUAL-1)', () => {
@@ -1564,28 +1708,26 @@ describe('тени на переходе фаз (design D3, REND-32)', () => {
     expect(rig.lighting.staticRebuilds).toBe(4);
   });
 
-  it('покадровая карта динамики на переходе не застывает', () => {
+  it('покадровая глубина динамики на переходе не застывает', () => {
     const rig = makeRig(movingSun());
     rig.stage.publish(PRODUCER, makeTickView([makeEntityView(1, { kind: 'Rock' })]));
     rig.stage.publishDecorations(decorations([makeEntityView(2, { kind: 'Rock' })]));
     advance(rig, 0);
-    const { sun, sunDynamic } = rig.lighting.lights;
 
-    // Переход из тридцати кадров: цикл устаревает кэш КАЖДЫМ кадром, карта у
-    // источника одна на кадр, и делят они кадры воротами чередования REND-30 —
-    // теми же, что под потоком инвалидаций пола. Без чередования тени бойцов
-    // застыли бы на всю длину перехода (REND-32).
-    let staticFrames = 0;
-    let dynamicFrames = 0;
+    // Переход из тридцати кадров: цикл устаревает кэш КАЖДЫМ кадром, глубина за
+    // кадр рисуется одна, и делят кадры ворота чередования REND-30 — те же, что
+    // под потоком инвалидаций пола. Без чередования тени бойцов застыли бы на
+    // всю длину перехода (REND-32).
     advance(rig, 8);
-    for (let frame = 0; frame < 30; frame++) {
-      advance(rig, 2 / 30);
-      if (sun.shadow.needsUpdate) staticFrames++;
-      if (sunDynamic.shadow.needsUpdate) dynamicFrames++;
-    }
+    const before = { ...rig.lighting.shadowComposite.draws };
+    for (let frame = 0; frame < 30; frame++) advance(rig, 2 / 30);
+
+    const draws = rig.lighting.shadowComposite.draws;
+    const staticFrames = draws.static - before.static;
+    const dynamicFrames = draws.dynamic - before.dynamic;
     expect(staticFrames).toBeGreaterThan(10);
     expect(dynamicFrames).toBeGreaterThan(10);
-    // И ровно один источник за кадр — правило кадра не сломано.
+    // И ровно один ярус за кадр — правило кадра не сломано.
     expect(staticFrames + dynamicFrames).toBe(30);
   });
 
@@ -1651,27 +1793,226 @@ describe('тени на переходе фаз (design D3, REND-32)', () => {
     expect(cost.lightingDynamicCasters).toBe(10);
   });
 
-  it('переход не трогает фрустум теневой камеры, сторону карты и смещения выборки', () => {
+  it('переход переобтягивает фрустум по новому направлению, а сторону карты не трогает', () => {
+    // Фрустум обтянут по коробке арены В ПРОСТРАНСТВЕ СВЕТА (design D6, L-9):
+    // от направления он зависит, и поехавшее направление обязано его
+    // переобтянуть — иначе кастеры у края арены ушли бы за его границу. Сторона
+    // карты при этом не поле фазы (REND-32), и цикл её не трогает.
     const rig = makeRig(movingSun());
     advance(rig, 0);
     const { sun } = rig.lighting.lights;
     const before = {
-      right: sun.shadow.camera.right,
-      far: sun.shadow.camera.far,
+      width: sun.shadow.camera.right - sun.shadow.camera.left,
       map: sun.shadow.mapSize.x,
       normalBias: sun.shadow.normalBias,
-      bias: sun.shadow.bias,
     };
 
     for (let frame = 0; frame < 10; frame++) advance(rig, 1);
 
-    // Фрустум обтянут по арене и от направления света не зависит (design D6):
-    // пересчитывать его кадром значило бы платить событием за картинку.
-    expect(sun.shadow.camera.right).toBe(before.right);
-    expect(sun.shadow.camera.far).toBe(before.far);
+    expect(sun.shadow.camera.right - sun.shadow.camera.left).not.toBe(before.width);
     expect(sun.shadow.mapSize.x).toBe(before.map);
-    expect(sun.shadow.normalBias).toBe(before.normalBias);
-    expect(sun.shadow.bias).toBe(before.bias);
+    // Смещение выборки — производная ТЕКСЕЛЯ переобтянутого фрустума (два
+    // текселя худшей оси), и считается оно из него же, а не из прежнего.
+    const texel = Math.max(
+      (sun.shadow.camera.right - sun.shadow.camera.left) / sun.shadow.mapSize.x,
+      (sun.shadow.camera.top - sun.shadow.camera.bottom) / sun.shadow.mapSize.y,
+    );
+    expect(sun.shadow.normalBias).toBeCloseTo(texel * 2, 9);
+  });
+
+  it('установившаяся фаза фрустум не трогает: он функция направления, а не кадра', () => {
+    const rig = makeRig(movingSun());
+    // Круг доигран до установившейся второй фазы: направление стоит.
+    for (let frame = 0; frame < 12; frame++) advance(rig, 1);
+    const { sun } = rig.lighting.lights;
+    const settled = {
+      left: sun.shadow.camera.left,
+      right: sun.shadow.camera.right,
+      top: sun.shadow.camera.top,
+      bottom: sun.shadow.camera.bottom,
+    };
+
+    for (let frame = 0; frame < 5; frame++) advance(rig, 0.1);
+
+    expect(sun.shadow.camera.left).toBe(settled.left);
+    expect(sun.shadow.camera.right).toBe(settled.right);
+    expect(sun.shadow.camera.top).toBe(settled.top);
+    expect(sun.shadow.camera.bottom).toBe(settled.bottom);
+  });
+});
+
+// ------------------------- фрустум теневой камеры (design D6, L-9)
+
+describe('фрустум теневой камеры обтянут по коробке арены в пространстве света', () => {
+  /** Арена размером с дуэльную: 48×48 клеток по мировой единице. */
+  function duelGrid(): TerrainGrid {
+    return createTerrainGrid({
+      width: 48,
+      height: 48,
+      tileSize: FIXED_ONE,
+      levels: Array.from({ length: 48 }, () => '0'.repeat(48)),
+      flags: Array.from({ length: 48 }, () => '.'.repeat(48)),
+    });
+  }
+
+  /** Подсистема на своей сетке — без стенда: под тестом одна наводка. */
+  function aimed(grid: TerrainGrid, config: PresentationLighting): LightingSubsystem {
+    const lighting = new LightingSubsystem({ grid, config });
+    lighting.init({
+      scene: new THREE.Scene(),
+      assets: makeAssets().service,
+      config: { heightStep: 0.6 },
+    });
+    return lighting;
+  }
+
+  /** Восемь углов коробки арены в мировых координатах. */
+  function boxCorners(grid: TerrainGrid, heightStep: number, top: number): THREE.Vector3[] {
+    const size = grid.width * (grid.tileSize / FIXED_ONE);
+    const corners: THREE.Vector3[] = [];
+    for (let index = 0; index < 8; index++) {
+      corners.push(
+        new THREE.Vector3(
+          (index & 1) === 0 ? 0 : size,
+          (index & 2) === 0 ? 0 : size,
+          (index & 4) === 0 ? 0 : top * heightStep,
+        ),
+      );
+    }
+    return corners;
+  }
+
+  /** Точка внутри ортографического объёма камеры (с допуском на арифметику). */
+  function insideFrustum(camera: THREE.OrthographicCamera, point: THREE.Vector3): boolean {
+    const view = point.clone().applyMatrix4(camera.matrixWorldInverse);
+    const eps = 1e-6;
+    return (
+      view.x >= camera.left - eps &&
+      view.x <= camera.right + eps &&
+      view.y >= camera.bottom - eps &&
+      view.y <= camera.top + eps &&
+      -view.z >= camera.near - eps &&
+      -view.z <= camera.far + eps
+    );
+  }
+
+  it('все восемь углов арены — внутри фрустума при косом и низком солнце', () => {
+    // Косое солнце — тот случай, ради которого подгонка и делается: квадрат по
+    // диагонали сетки покрывал арену при любом направлении, но ценой вчетверо
+    // большей площади, а обтянутый по коробке фрустум обязан покрывать её ТОЧНО
+    // — иначе тень у края арены обрежется.
+    const grid = duelGrid();
+    for (const direction of [
+      { x: 8, y: -12, z: 18 },
+      { x: 30, y: 4, z: 6 },
+      { x: -25, y: -25, z: 5 },
+      { x: 0, y: 0, z: 10 },
+    ]) {
+      const lighting = aimed(grid, { shadows: { mode: 'full' }, directional: { direction } });
+      const sun = lighting.lights.sun;
+      sun.updateMatrixWorld();
+      sun.shadow.updateMatrices(sun);
+      const camera = sun.shadow.camera;
+      for (const corner of boxCorners(grid, 0.6, 0)) {
+        expect(
+          insideFrustum(camera, corner),
+          `направление ${JSON.stringify(direction)}, угол ${corner.toArray().join(',')}`,
+        ).toBe(true);
+      }
+      lighting.dispose();
+    }
+  });
+
+  it('верхний ярус кастеров тоже внутри: коробка знает высоту, а не только план', () => {
+    // Уровни террейна и то, что на них стоит, — часть коробки (REND-7): без
+    // запаса по высоте статуя на верхнем ярусе рисовала бы тень мимо карты.
+    const grid = createTerrainGrid({
+      width: 16,
+      height: 16,
+      tileSize: FIXED_ONE,
+      // Дальний угол поднят на третий уровень — коробка обязана его вместить.
+      levels: Array.from({ length: 16 }, (_, y) =>
+        Array.from({ length: 16 }, (_, x) => (x > 12 && y > 12 ? '3' : '0')).join(''),
+      ),
+      flags: Array.from({ length: 16 }, () => '.'.repeat(16)),
+    });
+    const lighting = aimed(grid, {
+      shadows: { mode: 'full' },
+      directional: { direction: { x: 20, y: 6, z: 8 } },
+    });
+    const sun = lighting.lights.sun;
+    sun.updateMatrixWorld();
+    sun.shadow.updateMatrices(sun);
+
+    for (const corner of boxCorners(grid, 0.6, 3)) {
+      expect(insideFrustum(sun.shadow.camera, corner), corner.toArray().join(',')).toBe(true);
+    }
+    lighting.dispose();
+  });
+
+  it('плотность текселей на дуэльной арене выросла не меньше чем в 1.4 раза', () => {
+    // Прежний фрустум — квадрат со стороной 1.25 · hypot(w, h): для 48×48 это
+    // 84.9 мировой единицы на сторону карты. Подгонка по коробке даёт для
+    // направления демо прямоугольник заметно меньше, и линейная плотность
+    // текселей растёт ровно во столько же раз — бесплатно.
+    const grid = duelGrid();
+    const lighting = aimed(grid, {
+      shadows: { mode: 'full', mapSize: 2048 },
+      directional: { direction: { x: 8, y: -12, z: 18 } },
+    });
+    const camera = lighting.lights.sun.shadow.camera;
+
+    const previousSide = 1.25 * Math.hypot(48, 48);
+    const width = camera.right - camera.left;
+    const height = camera.top - camera.bottom;
+    expect(previousSide / Math.max(width, height)).toBeGreaterThanOrEqual(1.4);
+    // И фрустум ПРЯМОУГОЛЬНЫЙ: квадратом коробка проецируется только при свете
+    // строго сверху, а любое косое направление даёт разные стороны.
+    expect(Math.abs(width - height)).toBeGreaterThan(0.5);
+    lighting.dispose();
+  });
+
+  it('пирамида теневой камеры отдаётся владельцу инстансов портом (REND-21)', () => {
+    // Отсечённый по камере кадра инстанс перестаёт рисоваться и в теневой
+    // проход: его тень исчезает из видимой области, хотя сам он всего лишь за
+    // краем экрана. Чтобы владелец инстансов мог этого не делать, ему нужна
+    // пирамида теневой камеры — и знает её только подсистема освещения.
+    const rig = makeRig({ shadows: { mode: 'full' } });
+    const frustum = rig.lighting.shadowFrustum();
+
+    expect(frustum).not.toBeNull();
+    // Центр арены освещён и, значит, лежит внутри пирамиды.
+    expect(frustum!.containsPoint(new THREE.Vector3(4, 4, 0))).toBe(true);
+    // Точка далеко за границей коробки — снаружи.
+    expect(frustum!.containsPoint(new THREE.Vector3(400, 400, 0))).toBe(false);
+  });
+
+  it('в режимах без карт теней пирамиды нет вовсе (`none`, `blob`)', () => {
+    // Отсекать по ней нечего: карты нет, и владелец инстансов остаётся с одной
+    // камерой кадра, как и до появления порта.
+    expect(makeRig({ shadows: { mode: 'none' } }).lighting.shadowFrustum()).toBeNull();
+    expect(makeRig({ shadows: { mode: 'blob' } }).lighting.shadowFrustum()).toBeNull();
+    expect(makeRig({ shadows: { mode: 'hybrid' } }).lighting.shadowFrustum()).not.toBeNull();
+  });
+
+  it('пирамида следует направлению света и переиспользуется (REND-26)', () => {
+    const rig = makeRig({
+      shadows: { mode: 'full' },
+      directional: { direction: { x: 0, y: 0, z: 10 } },
+    });
+    const first = rig.lighting.shadowFrustum()!;
+    const plane = first.planes[0]!.normal.clone();
+
+    rig.lighting.applyConfig({
+      shadows: { mode: 'full' },
+      directional: { direction: { x: 20, y: 5, z: 4 } },
+    });
+    const second = rig.lighting.shadowFrustum()!;
+
+    // Тот же объект — своих аллокаций порт на вызов не делает…
+    expect(second).toBe(first);
+    // …а числа в нём — уже нового направления.
+    expect(second.planes[0]!.normal.equals(plane)).toBe(false);
   });
 });
 
@@ -1855,7 +2196,6 @@ interface LightingSection {
   readonly directionalColor: string;
   readonly directionalIntensity: number;
   readonly sunIntensity: number;
-  readonly sunDynamicIntensity: number;
   readonly lightWorldX: number;
   readonly lightWorldY: number;
   readonly lightWorldZ: number;
@@ -1863,14 +2203,14 @@ interface LightingSection {
   readonly targetWorldY: number;
   readonly targetWorldZ: number;
   readonly arenaRadiusWorldUnits: number;
-  readonly shadowFrustumHalfWorldUnits: number;
+  readonly shadowFrustumWidthWorldUnits: number;
+  readonly shadowFrustumHeightWorldUnits: number;
   readonly shadowMode: string;
   readonly authoredShadowMode: string;
   readonly ceilingShadowMode: string;
   readonly shadowMapTexels: number;
   readonly authoredShadowMapTexels: number;
   readonly ceilingShadowMapTexels: number | null;
-  readonly staticShare: number;
   readonly shadowPhase: string;
   readonly staticCasterRoots: number;
   readonly dynamicCasterRoots: number;
@@ -1954,7 +2294,7 @@ describe('Отладочный источник освещения (render-debug
   it('включённый источник называет свет кадра, режим теней и ярусы кастеров', () => {
     const rig = makeRig({
       directional: { intensity: 2 },
-      shadows: { mode: 'hybrid', mapSize: 512, staticShare: 0.25 },
+      shadows: { mode: 'hybrid', mapSize: 512 },
     });
     const layer = new RenderDebugLayer(rig.stage);
     layer.setEnabled(LIGHTING_SOURCE, true);
@@ -1967,17 +2307,15 @@ describe('Отладочный источник освещения (render-debug
     // Секция документа была: «умолчания» и «автор написал ровно умолчания» —
     // разные ответы на вопрос, где эти числа искать (PRES-2).
     expect(dumped.authoredSection).toBe(true);
-    // Пара направленных источников режима `hybrid` плюс рассеянный (REND-30).
+    // Направленный источник ОДИН во всех режимах (REND-30) плюс рассеянный.
     expect(dumped.ambientLights).toBe(1);
-    expect(dumped.directionalLights).toBe(2);
-    expect(dumped.lightCount).toBe(3);
+    expect(dumped.directionalLights).toBe(1);
+    expect(dumped.lightCount).toBe(2);
     expect(dumped.ambientIntensity).toBe(DEFAULT_LIGHTING_CONFIG.ambientIntensity);
     expect(dumped.ambientColor).toBe('#ffffff');
-    // Сумма — та, что написал автор; доля делит её между картами ярусов.
+    // Интенсивность — авторская целиком: делить её между ярусами нечем.
     expect(dumped.directionalIntensity).toBeCloseTo(2, 6);
-    expect(dumped.sunIntensity).toBeCloseTo(0.5, 6);
-    expect(dumped.sunDynamicIntensity).toBeCloseTo(1.5, 6);
-    expect(dumped.staticShare).toBe(0.25);
+    expect(dumped.sunIntensity).toBeCloseTo(2, 6);
     expect(dumped.shadowMode).toBe('hybrid');
     expect(dumped.shadowMapTexels).toBe(512);
     // Ярусы: статика — чанк террейна и батч декорации, динамика — батч сущности.
@@ -1996,9 +2334,19 @@ describe('Отладочный источник освещения (render-debug
     expect(dumped.targetWorldX).toBeCloseTo(4, 6);
     expect(dumped.targetWorldY).toBeCloseTo(4, 6);
     expect(dumped.arenaRadiusWorldUnits).toBeCloseTo(Math.hypot(8, 8) / 2, 6);
-    expect(dumped.shadowFrustumHalfWorldUnits).toBeCloseTo(sun.shadow.camera.right, 6);
-    // Теневого прохода в headless-прогоне не было: карту строит three, а не мы.
-    expect(dumped.builtShadowMaps).toBe(0);
+    // Стороны фрустума, а не полусторона: он обтянут по коробке арены в
+    // пространстве света и несимметричен (REND-30, design D6).
+    expect(dumped.shadowFrustumWidthWorldUnits).toBeCloseTo(
+      sun.shadow.camera.right - sun.shadow.camera.left,
+      6,
+    );
+    expect(dumped.shadowFrustumHeightWorldUnits).toBeCloseTo(
+      sun.shadow.camera.top - sun.shadow.camera.bottom,
+      6,
+    );
+    // Карт три: две цели ярусов и карта сведения (REND-30). Настоящего теневого
+    // прохода в headless-прогоне нет — цели заводит подсистема, а не three.
+    expect(dumped.builtShadowMaps).toBe(3);
     // Единицы величин названы прозой — читатель дампа исходника не открывает.
     expect(dumped.units).toMatch(/мировые единицы/);
     expect(dumped.units).toMatch(/текселях/);
@@ -2013,7 +2361,6 @@ describe('Отладочный источник освещения (render-debug
     const dumped = section(layer);
     expect(dumped.authoredSection).toBe(false);
     expect(dumped.directionalLights).toBe(1);
-    expect(dumped.sunDynamicIntensity).toBe(0);
     expect(dumped.directionalIntensity).toBeCloseTo(
       DEFAULT_LIGHTING_CONFIG.directionalIntensity,
       6,
@@ -2083,16 +2430,9 @@ describe('Отладочный источник освещения (render-debug
     rig.lighting.applyConfig({ directional: { intensity: 3 }, shadows: { mode: 'hybrid' } });
     expect(section(layer).staticStale).toBe(true);
 
-    // Карту строит теневой проход three, которого в headless-прогоне нет:
-    // подставляется готовая — предмет проверки не её содержимое, а то, что
-    // «тени настроены, но прохода ещё не было» отличимо от «карты построены».
-    const { sun, sunDynamic } = rig.lighting.lights;
-    for (const light of [sun, sunDynamic]) {
-      const map = new THREE.WebGLRenderTarget(4, 4);
-      map.depthTexture = new THREE.DepthTexture(4, 4);
-      light.shadow.map = map;
-    }
-    expect(section(layer).builtShadowMaps).toBe(2);
+    // Цели сведения подсистема заводит сама (REND-30), и дамп называет их все:
+    // две цели ярусов плюс карта, которую читают материалы сцены.
+    expect(section(layer).builtShadowMaps).toBe(3);
   });
 
   it('отметка стоит в позиции направленного источника, луч указывает на центр арены', () => {
@@ -2102,7 +2442,7 @@ describe('Отладочный источник освещения (render-debug
     source.draw?.(source.probe(IDLE_FRAME), drawn.out);
 
     const sun = directionalLights(rig.scene)[0]!;
-    // Отметка ОДНА и в `hybrid`: пара источников стоит в одной точке.
+    // Отметка одна: направленный источник сцены один во всех режимах (REND-30).
     expect(drawn.points).toHaveLength(1);
     expect(drawn.points[0]![0]).toBeCloseTo(sun.position.x, 6);
     expect(drawn.points[0]![1]).toBeCloseTo(sun.position.y, 6);

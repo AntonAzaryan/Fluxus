@@ -83,28 +83,83 @@ void main() {
 `;
 
 /**
- * Даунсемпл яруса пирамиды (design D4): разделяемый тент 3×3 по текселям
- * ИСТОЧНИКА. Ярус вдвое мельче предыдущего, поэтому размытие идёт не шириной
- * ядра, а самой пирамидой: широкий ореол собирается из мелких ярусов проходом
- * сведения, а не двадцатью тапами на каждом.
+ * Разделяемый тент 3×3 — ядро И даунсемпла, и апсемпла пирамиды bloom (design
+ * D4). Веса вынесены ЧИСЛАМИ, а не зашиты в текст программы, по одной причине:
+ * по ним считается профиль свечения в тестах, и списанное рядом второе ядро
+ * разошлось бы с шейдером молча.
+ *
+ * Смещения — в текселях ИСТОЧНИКА (`uTexel`), веса нормированы суммой 16.
  */
-const BLOOM_DOWNSAMPLE_FRAGMENT = `
+export const BLOOM_TENT_KERNEL: readonly { readonly dx: number; readonly dy: number; readonly weight: number }[] =
+  Object.freeze([
+    { dx: 0, dy: 0, weight: 4 },
+    { dx: 1, dy: 0, weight: 2 },
+    { dx: -1, dy: 0, weight: 2 },
+    { dx: 0, dy: 1, weight: 2 },
+    { dx: 0, dy: -1, weight: 2 },
+    { dx: 1, dy: 1, weight: 1 },
+    { dx: -1, dy: -1, weight: 1 },
+    { dx: 1, dy: -1, weight: 1 },
+    { dx: -1, dy: 1, weight: 1 },
+  ]);
+
+/** Сумма весов ядра — нормировка тента; считается из него же, а не пишется рядом. */
+export const BLOOM_TENT_WEIGHT_SUM = BLOOM_TENT_KERNEL.reduce((sum, tap) => sum + tap.weight, 0);
+
+/** Текст выборки тента: одно и то же ядро в двух проходах пирамиды. */
+function tentSampler(sampler: string): string {
+  const taps = BLOOM_TENT_KERNEL.map(
+    (tap) =>
+      `  sum += texture2D(${sampler}, vUv + vec2(${tap.dx.toFixed(1)}, ${tap.dy.toFixed(1)}) * uTexel).rgb * ${tap.weight.toFixed(1)};`,
+  ).join('\n');
+  return `vec3 tent() {\n  vec3 sum = vec3(0.0);\n${taps}\n  return sum / ${BLOOM_TENT_WEIGHT_SUM.toFixed(1)};\n}`;
+}
+
+/**
+ * Даунсемпл яруса пирамиды (design D4): тент 3×3 по текселям ИСТОЧНИКА. Ярус
+ * вдвое мельче предыдущего, поэтому размытие идёт не шириной ядра, а самой
+ * пирамидой — но собирается оно ПРОГРЕССИВНЫМ АПСЕМПЛОМ (см. ниже), а не
+ * сложением всех ярусов в сведении.
+ */
+export const BLOOM_DOWNSAMPLE_FRAGMENT = `
 precision highp float;
 varying vec2 vUv;
 uniform sampler2D tSource;
 uniform vec2 uTexel;
 
+${tentSampler('tSource')}
+
 void main() {
-  vec3 sum = texture2D(tSource, vUv).rgb * 4.0;
-  sum += texture2D(tSource, vUv + vec2(uTexel.x, 0.0)).rgb * 2.0;
-  sum += texture2D(tSource, vUv - vec2(uTexel.x, 0.0)).rgb * 2.0;
-  sum += texture2D(tSource, vUv + vec2(0.0, uTexel.y)).rgb * 2.0;
-  sum += texture2D(tSource, vUv - vec2(0.0, uTexel.y)).rgb * 2.0;
-  sum += texture2D(tSource, vUv + uTexel).rgb;
-  sum += texture2D(tSource, vUv - uTexel).rgb;
-  sum += texture2D(tSource, vUv + vec2(uTexel.x, -uTexel.y)).rgb;
-  sum += texture2D(tSource, vUv + vec2(-uTexel.x, uTexel.y)).rgb;
-  gl_FragColor = vec4(sum / 16.0, 1.0);
+  gl_FragColor = vec4(tent(), 1.0);
+}
+`;
+
+/**
+ * Апсемпл яруса пирамиды (design D4, находка L-7 аудита 2026-09-03): тент 3×3 по
+ * текселям МЕЛКОГО яруса, добавляемый к крупному аддитивным блендингом.
+ *
+ * Пирамида без апсемпла — коробчатые ореолы. Мелкий ярус (кадр/32 — это 60×34
+ * текселя на 1080p) билинейно растянутый сразу на весь кадр даёт вокруг яркой
+ * точки звезду и ступени, а не свечение: между его текселями нет ничего, кроме
+ * прямой интерполяции. Схемы без гауссианы на каждом ярусе (CoD, Dual-Kawase)
+ * ТРЕБУЮТ цепочки апсемплов 4→3→2→1→0 — размытие в них и собирается тентом на
+ * каждой ступени вверх, а не одним растяжением.
+ *
+ * Вклад мелкого яруса — `uScale`: им управляет авторская ширина свечения
+ * (`bloom.radius`, REND-34). Сложение идёт блендингом, а не чтением цели: читать
+ * и писать одну цель в проходе нельзя.
+ */
+export const BLOOM_UPSAMPLE_FRAGMENT = `
+precision highp float;
+varying vec2 vUv;
+uniform sampler2D tSource;
+uniform vec2 uTexel;
+uniform float uScale;
+
+${tentSampler('tSource')}
+
+void main() {
+  gl_FragColor = vec4(tent() * uScale, 1.0);
 }
 `;
 
@@ -131,21 +186,11 @@ varying vec2 vUv;
 uniform sampler2D tScene;
 
 #ifdef POST_BLOOM
+// Свечение приходит ОДНОЙ текстурой — вершиной пирамиды, в которую уже собраны
+// все её ярусы цепочкой апсемплов (design D4, L-7). Ширина ореола живёт там же:
+// её задаёт вклад мелких ярусов на каждой ступени вверх, а не веса здесь.
 uniform sampler2D tBloom0;
-uniform sampler2D tBloom1;
-uniform sampler2D tBloom2;
-uniform sampler2D tBloom3;
-uniform sampler2D tBloom4;
 uniform float uStrength;
-uniform float uRadius;
-
-/**
- * Вес яруса: узкий ореол — вклад крупных ярусов, широкий — мелких. Униформа
- * uRadius переводит одно в другое зеркалом веса, как композит UnrealBloomPass.
- */
-float bloomWeight(float factor) {
-  return mix(factor, 1.2 - factor, uRadius);
-}
 #endif
 
 #ifdef POST_TONE_MAPPING
@@ -201,12 +246,7 @@ void main() {
   vec3 color = texture2D(tScene, vUv).rgb;
 
   #ifdef POST_BLOOM
-  vec3 glow = bloomWeight(1.0) * texture2D(tBloom0, vUv).rgb;
-  glow += bloomWeight(0.8) * texture2D(tBloom1, vUv).rgb;
-  glow += bloomWeight(0.6) * texture2D(tBloom2, vUv).rgb;
-  glow += bloomWeight(0.4) * texture2D(tBloom3, vUv).rgb;
-  glow += bloomWeight(0.2) * texture2D(tBloom4, vUv).rgb;
-  color += uStrength * glow;
+  color += uStrength * texture2D(tBloom0, vUv).rgb;
   #endif
 
   #ifdef POST_TONE_MAPPING
@@ -310,6 +350,39 @@ export function createDownsampleMaterial(): THREE.ShaderMaterial {
 }
 
 /**
+ * Вклад мелкого яруса в крупный на одной ступени апсемпла — из авторской ширины
+ * свечения (`bloom.radius`, REND-34). Узкий ореол (`radius = 0`) оставляет
+ * мелким ярусам малую долю: свечение собирается почти целиком из крупных, то
+ * есть жмётся к источнику. Широкий (`radius = 1`) отдаёт им почти всё, и ореол
+ * расходится на весь кадр.
+ *
+ * Границы 0.35 и 0.95, а не 0 и 1: на нуле цепочка апсемплов выродилась бы в
+ * вершину пирамиды без ярусов вовсе (то есть в отсутствие свечения), а на
+ * единице каждая ступень удваивала бы вклад мелкого яруса — свечение росло бы
+ * само по себе, без правки силы.
+ */
+export function bloomUpsampleScale(radius: number): number {
+  const clamped = radius < 0 ? 0 : radius > 1 ? 1 : radius;
+  return 0.35 + 0.6 * clamped;
+}
+
+/**
+ * Материал одной ступени апсемпла (design D4, L-7): тент мелкого яруса,
+ * ДОБАВЛЯЕМЫЙ к крупному. Блендинг аддитивный — крупный ярус в проходе читать
+ * нельзя, он же и цель.
+ */
+export function createUpsampleMaterial(): THREE.ShaderMaterial {
+  const material = fullscreenMaterial(BLOOM_UPSAMPLE_FRAGMENT, {
+    tSource: { value: null },
+    uTexel: { value: new THREE.Vector2() },
+    uScale: { value: 1 },
+  });
+  material.blending = THREE.AdditiveBlending;
+  material.transparent = true;
+  return material;
+}
+
+/**
  * Материал прохода сведения. Оператор и наличие свечения — DEFINE'Ы (design D3):
  * их смена пересобирает ОДИН этот материал — событие правки (ED-15), а не
  * кадровый путь; материалы сцены при этом не перекомпилируются вовсе.
@@ -325,7 +398,6 @@ export function createResolveMaterial(config: {
   readonly exposure: number;
   readonly bloom: boolean;
   readonly strength: number;
-  readonly radius: number;
   /** Загруженная таблица цвета либо `null` — её наличие включает define POST_LUT. */
   readonly lut: THREE.Data3DTexture | null;
   readonly lutAmount: number;
@@ -345,9 +417,10 @@ export function createResolveMaterial(config: {
   }
   if (config.bloom) {
     defines.POST_BLOOM = '';
-    for (let level = 0; level < BLOOM_LEVELS; level++) uniforms[`tBloom${level}`] = { value: null };
+    // Одна текстура вместо пяти: ярусы уже сложены цепочкой апсемплов в вершину
+    // пирамиды (design D4, L-7), и сведение читает ровно её.
+    uniforms.tBloom0 = { value: null };
     uniforms.uStrength = { value: config.strength };
-    uniforms.uRadius = { value: config.radius };
   }
   const lut = config.lut;
   if (lut !== null) {

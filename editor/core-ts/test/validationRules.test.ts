@@ -737,11 +737,11 @@ describe('PRES-2: парный presentation-документ и секция lig
     const report = presentation({
       lighting: {
         ambient: { intensity: -1 },
-        shadows: { mapSize: 0, staticShare: 2 },
+        shadows: { mapSize: 0 },
       },
     });
     const found = report.forDocument(PRESENTATION).filter((issue) => issue.ruleId === PRESENTATION_RULE);
-    expect(found).toHaveLength(3);
+    expect(found).toHaveLength(2);
   });
 
   it('подсекция цикла приходит правилу тем же вызовом — своего кода у редактора нет', () => {

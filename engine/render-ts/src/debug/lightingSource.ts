@@ -85,13 +85,11 @@ export interface DebugLightingState {
   ambientColor: string;
   /** Интенсивность рассеянного источника — с ЖИВОГО источника, то есть кадра. */
   ambientIntensity: number;
-  /** Тон направленного источника из действующей конфигурации — общий у пары. */
+  /** Тон направленного источника из действующей конфигурации. */
   directionalColor: string;
-  /** Интенсивность источника кэшированной карты статики (в `hybrid` — доля). */
+  /** Интенсивность направленного источника — с ЖИВОГО источника, то есть кадра. */
   sunIntensity: number;
-  /** Интенсивность источника покадровой карты; 0 — пары в сцене нет. */
-  sunDynamicIntensity: number;
-  /** Позиция направленного источника, мировые единицы; пара стоит в одной точке. */
+  /** Позиция направленного источника, мировые единицы. */
   lightWorldX: number;
   lightWorldY: number;
   lightWorldZ: number;
@@ -99,10 +97,16 @@ export interface DebugLightingState {
   targetWorldX: number;
   targetWorldY: number;
   targetWorldZ: number;
-  /** Радиус арены, мировые единицы; по нему считаны позиция и фрустум. */
+  /** Радиус арены, мировые единицы; по нему считана позиция источника. */
   arenaRadiusWorldUnits: number;
-  /** Полусторона ортографического фрустума теневой камеры, мировые единицы. */
-  shadowFrustumHalfWorldUnits: number;
+  /**
+   * Стороны ортографического фрустума теневой камеры, мировые единицы. ДВЕ, а не
+   * полусторона: фрустум обтянут по коробке арены в пространстве света (REND-30,
+   * design D6) и потому прямоугольный и несимметричный — «полусторона» описывала
+   * бы его неверно, а плотность текселей меряется как раз этими сторонами.
+   */
+  shadowFrustumWidthWorldUnits: number;
+  shadowFrustumHeightWorldUnits: number;
   /** Действующий режим теней, авторский режим секции и потолок пресета (QUAL-1). */
   shadowMode: ShadowMode;
   authoredShadowMode: ShadowMode;
@@ -113,8 +117,6 @@ export interface DebugLightingState {
   authoredShadowMapTexels: number;
   /** Потолок стороны карты; бесконечность — потолка нет. */
   ceilingShadowMapTexels: number;
-  /** Доля интенсивности, отданная кэшированной карте статики в `hybrid`. */
-  staticShare: number;
   /** Чья карта рисуется этим кадром и, значит, чьи кастеры подняты флагом. */
   shadowPhase: ShadowPhase;
   /** Корней-кастеров в реестре ярусов (REND-30) — корней, а не мешей. */
@@ -124,7 +126,10 @@ export interface DebugLightingState {
   staticRebuilds: number;
   /** Кэш статики устарел: ближайший кадр перерисует его. */
   staticStale: boolean;
-  /** Карт теней, ПОСТРОЕННЫХ теневым проходом; 0 — прохода ещё не было. */
+  /**
+   * Карт теней, ПОСТРОЕННЫХ теневым проходом; 0 — прохода ещё не было. В
+   * `hybrid` со сведением (REND-30) их три: две цели ярусов и карта сведения.
+   */
   builtShadowMaps: number;
   /** Фаз в цикле времени суток (REND-32); 0 — подсекции цикла в секции нет. */
   cyclePhases: number;
@@ -169,7 +174,6 @@ export interface DebugLightingProbe extends DebugProbe {
   /** Интенсивность контрового источника; 0 — его в кадре нет (REND-29). */
   readonly rimIntensity: number;
   readonly sunIntensity: number;
-  readonly sunDynamicIntensity: number;
   readonly lightWorldX: number;
   readonly lightWorldY: number;
   readonly lightWorldZ: number;
@@ -177,7 +181,8 @@ export interface DebugLightingProbe extends DebugProbe {
   readonly targetWorldY: number;
   readonly targetWorldZ: number;
   readonly arenaRadiusWorldUnits: number;
-  readonly shadowFrustumHalfWorldUnits: number;
+  readonly shadowFrustumWidthWorldUnits: number;
+  readonly shadowFrustumHeightWorldUnits: number;
   readonly shadowMode: ShadowMode;
   readonly authoredShadowMode: ShadowMode;
   /** Потолок режима; `full` — потолка нет (QUAL-1). */
@@ -186,7 +191,6 @@ export interface DebugLightingProbe extends DebugProbe {
   readonly authoredShadowMapTexels: number;
   /** Потолок стороны карты, тексели; null — потолка нет. */
   readonly ceilingShadowMapTexels: number | null;
-  readonly staticShare: number;
   /** Фаза теневого прохода: `none`, `static`, `dynamic`, `full`. */
   readonly shadowPhase: ShadowPhase;
   readonly staticCasterRoots: number;
@@ -230,7 +234,6 @@ export function lightingSceneDebugSource(
     ambientIntensity: 0,
     directionalColor: '',
     sunIntensity: 0,
-    sunDynamicIntensity: 0,
     lightWorldX: 0,
     lightWorldY: 0,
     lightWorldZ: 0,
@@ -238,14 +241,14 @@ export function lightingSceneDebugSource(
     targetWorldY: 0,
     targetWorldZ: 0,
     arenaRadiusWorldUnits: 0,
-    shadowFrustumHalfWorldUnits: 0,
+    shadowFrustumWidthWorldUnits: 0,
+    shadowFrustumHeightWorldUnits: 0,
     shadowMode: 'none',
     authoredShadowMode: 'none',
     ceilingShadowMode: 'full',
     shadowMapTexels: 0,
     authoredShadowMapTexels: 0,
     ceilingShadowMapTexels: Number.POSITIVE_INFINITY,
-    staticShare: 0,
     shadowPhase: 'none',
     staticCasterRoots: 0,
     dynamicCasterRoots: 0,
@@ -274,9 +277,9 @@ export function lightingSceneDebugSource(
   // Переиспользуемая проба (RDBG-2): поля переписываются, объект живёт.
   const probe = {
     units:
-      'lightWorld*, targetWorld*, arenaRadiusWorldUnits и shadowFrustumHalfWorldUnits — ' +
+      'lightWorld*, targetWorld*, arenaRadiusWorldUnits и shadowFrustum*WorldUnits — ' +
       'мировые единицы; shadowMapTexels — сторона карты теней в текселях; ' +
-      'интенсивности безразмерны; staticShare — доля [0..1]; casterRoots — КОРНИ ' +
+      'интенсивности безразмерны; casterRoots — КОРНИ ' +
       'поддеревьев реестра, а не меши; staticRebuilds — перерисовки кэша, не тики; ' +
       'cyclePhaseSeconds и cycleTransitionSeconds — секунды кадровых часов, ' +
       'cyclePhaseProgress и cycleTransitionProgress — доли [0..1) в секции clock; ' +
@@ -294,7 +297,6 @@ export function lightingSceneDebugSource(
     directionalColor: '',
     directionalIntensity: 0,
     sunIntensity: 0,
-    sunDynamicIntensity: 0,
     lightWorldX: 0,
     lightWorldY: 0,
     lightWorldZ: 0,
@@ -302,14 +304,14 @@ export function lightingSceneDebugSource(
     targetWorldY: 0,
     targetWorldZ: 0,
     arenaRadiusWorldUnits: 0,
-    shadowFrustumHalfWorldUnits: 0,
+    shadowFrustumWidthWorldUnits: 0,
+    shadowFrustumHeightWorldUnits: 0,
     shadowMode: 'none' as ShadowMode,
     authoredShadowMode: 'none' as ShadowMode,
     ceilingShadowMode: 'full' as ShadowMode,
     shadowMapTexels: 0,
     authoredShadowMapTexels: 0,
     ceilingShadowMapTexels: null as number | null,
-    staticShare: 0,
     shadowPhase: 'none' as ShadowPhase,
     staticCasterRoots: 0,
     dynamicCasterRoots: 0,
@@ -351,10 +353,9 @@ export function lightingSceneDebugSource(
       probe.ambientIntensity = state.ambientIntensity;
       probe.directionalColor = state.directionalColor;
       probe.sunIntensity = state.sunIntensity;
-      probe.sunDynamicIntensity = state.sunDynamicIntensity;
-      // Сумму складывает отладка у себя: заказывать ради пробы работу подсистемы
-      // ей нельзя (RDBG-8), а два слагаемых она уже назвала.
-      probe.directionalIntensity = state.sunIntensity + state.sunDynamicIntensity;
+      // Источник направленного света один (REND-30), и его интенсивность и есть
+      // интенсивность направленного света кадра.
+      probe.directionalIntensity = state.sunIntensity;
       probe.lightWorldX = state.lightWorldX;
       probe.lightWorldY = state.lightWorldY;
       probe.lightWorldZ = state.lightWorldZ;
@@ -362,7 +363,8 @@ export function lightingSceneDebugSource(
       probe.targetWorldY = state.targetWorldY;
       probe.targetWorldZ = state.targetWorldZ;
       probe.arenaRadiusWorldUnits = state.arenaRadiusWorldUnits;
-      probe.shadowFrustumHalfWorldUnits = state.shadowFrustumHalfWorldUnits;
+      probe.shadowFrustumWidthWorldUnits = state.shadowFrustumWidthWorldUnits;
+      probe.shadowFrustumHeightWorldUnits = state.shadowFrustumHeightWorldUnits;
       probe.shadowMode = state.shadowMode;
       probe.authoredShadowMode = state.authoredShadowMode;
       probe.ceilingShadowMode = state.ceilingShadowMode;
@@ -373,7 +375,6 @@ export function lightingSceneDebugSource(
       probe.ceilingShadowMapTexels = Number.isFinite(state.ceilingShadowMapTexels)
         ? state.ceilingShadowMapTexels
         : null;
-      probe.staticShare = state.staticShare;
       probe.shadowPhase = state.shadowPhase;
       probe.staticCasterRoots = state.staticCasterRoots;
       probe.dynamicCasterRoots = state.dynamicCasterRoots;

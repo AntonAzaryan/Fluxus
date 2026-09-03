@@ -272,7 +272,7 @@ describe('ED-21, PRES-3: парный документ переживает «о
       lighting: {
         ambient: { color: '#ffffff', intensity: 0.65 },
         directional: { intensity: 1.7, direction: { x: 8, y: -12, z: 18 } },
-        shadows: { mode: 'hybrid', mapSize: 1024, staticShare: 0.5 },
+        shadows: { mode: 'hybrid', mapSize: 1024 },
       },
     });
     const host = createMemoryHost({ files: { [PRESENTATION_PATH]: handwritten } });
@@ -304,7 +304,7 @@ describe('ED-21, PRES-3: парный документ переживает «о
     expect(saved.lighting).toEqual({
       ambient: { color: '#ffffff', intensity: 0.65 },
       directional: { intensity: 1.7, direction: { x: 8, y: -12, z: 18 } },
-      shadows: { mode: 'hybrid', mapSize: 1024, staticShare: 0.5 },
+      shadows: { mode: 'hybrid', mapSize: 1024 },
     });
     // Порядок ключей секции — авторский: сортировка дала бы дифф на весь файл.
     expect(after.indexOf('"ambient"')).toBeLessThan(after.indexOf('"directional"'));
