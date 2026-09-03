@@ -622,3 +622,165 @@ describe('RenderHost: входная граница нагрузки событ�
     expect(event.data.amount).toBe(7);
   });
 });
+
+// -- change `fog-observer-inputs`: каденс доставок по часам и часы кадра
+
+describe('RenderHost: темп и альфа считаются по каденсу ЧАСОВ (REND-2, REND-25)', () => {
+  /**
+   * Скраб шагает по `step` тиков РАЗ В `every` рассылок (`workerShell`,
+   * `DEMO_SCRUB_EVERY`): тиков за доставку у него в `step` раз больше, а самих
+   * доставок во столько же меньше. Темп обязан считаться тиками В СЕКУНДУ —
+   * иначе клипы отматываются в `every` раз быстрее ног.
+   */
+  it('скраб раз в две доставки: темп — отношение тиков в секунду, а не спанов', () => {
+    const { scene, sim } = makeScene();
+    spawnRunner(scene, 0.5, 0.5, 0.1, 0);
+    const state = initialState(scene.world, 7);
+    const { host, setNow } = makeHost(scene);
+    for (let i = 0; i < 20; i++) tick(sim, state);
+
+    const dts: number[] = [];
+    host.register({
+      name: 'probe',
+      init: () => {},
+      syncTick: () => {},
+      updateFrame: (dt) => dts.push(dt),
+    });
+
+    // Живой мир: тик за доставку, доставка раз в 16 мс — 62.5 тика в секунду.
+    let at = 30;
+    for (let ms = 0; ms <= 64; ms += 16) {
+      setNow(ms);
+      dispatch(deliveredResult(state, at++, 'Running'), [host]);
+    }
+    setNow(80);
+    host.frame();
+    setNow(96);
+    host.frame();
+
+    // Скраб: четыре тика назад РАЗ В ДВЕ рассылки — те же 32 мс на доставку,
+    // то есть 125 тиков в секунду, вдвое быстрее живого мира.
+    let back = at - 1;
+    for (let ms = 128; ms <= 256; ms += 32) {
+      setNow(ms);
+      back -= 4;
+      dispatch(deliveredResult(state, back, 'Rewinding'), [host]);
+    }
+    setNow(272);
+    host.frame();
+    setNow(288);
+    host.frame();
+
+    const forward = dts[1]!;
+    const backward = dts[dts.length - 1]!;
+    expect(forward).toBeCloseTo(0.016, 6);
+    // ВДВОЕ и назад. Считая спанами (4 тика против 1), темп вышел бы вчетверо —
+    // клипы отматывались бы вдвое быстрее собственных ног.
+    expect(backward).toBeCloseTo(-0.032, 4);
+  });
+
+  it('доставка раз в два тика: альфа доходит до единицы к следующей доставке', () => {
+    const { scene, sim } = makeScene();
+    spawnRunner(scene, 0.5, 0.5, 0.1, 0);
+    const state = initialState(scene.world, 7);
+    // tickSeconds 0.05, а доставки — раз в 100 мс (conflation SHELL-4 либо
+    // рассылка реже тиков). Знаменатель альфы обязан быть каденсом доставки:
+    // по `tickSeconds` интерполяция кончалась бы на половине интервала, и
+    // вторую половину сущность стояла бы — 50 % duty-цикл, «череда телепортов».
+    const { host, setNow } = makeHost(scene);
+    for (let i = 0; i < 20; i++) tick(sim, state);
+
+    const alphas: number[] = [];
+    host.register({
+      name: 'probe',
+      init: () => {},
+      syncTick: () => {},
+      updateFrame: (_dt, alpha) => alphas.push(alpha),
+    });
+
+    let at = 10;
+    for (let ms = 0; ms <= 400; ms += 100) {
+      setNow(ms);
+      dispatch(deliveredResult(state, (at += 2), 'Running'), [host]);
+    }
+    // Середина интервала доставок — ровно половина пути.
+    setNow(450);
+    host.frame();
+    // Его конец — единица, а не «единица с 250 мс назад».
+    setNow(500);
+    host.frame();
+    expect(alphas[0]).toBeCloseTo(0.5, 2);
+    expect(alphas[1]).toBeCloseTo(1, 2);
+  });
+
+  it('доставки чаще тика альфу не ломают: знаменатель не меньше длительности тика', () => {
+    const { scene, sim } = makeScene();
+    spawnRunner(scene, 0.5, 0.5, 0.1, 0);
+    const state = initialState(scene.world, 7);
+    const { host, setNow } = makeHost(scene);
+    for (let i = 0; i < 20; i++) tick(sim, state);
+
+    const alphas: number[] = [];
+    host.register({
+      name: 'probe',
+      init: () => {},
+      syncTick: () => {},
+      updateFrame: (_dt, alpha) => alphas.push(alpha),
+    });
+
+    let at = 10;
+    for (let ms = 0; ms <= 100; ms += 10) {
+      setNow(ms);
+      dispatch(deliveredResult(state, at++, 'Running'), [host]);
+    }
+    setNow(125); // половина ТИКА, а не половина интервала доставок
+    host.frame();
+    expect(alphas[0]).toBeCloseTo(0.5, 2);
+  });
+});
+
+describe('RenderHost: часы кадра неактивного продюсера (REND-11)', () => {
+  it('первый кадр после возвращения не доигрывает накопленный простой', () => {
+    const { scene, sim } = makeScene();
+    spawnRunner(scene, 0.5, 0.5, 0.1, 0);
+    const state = initialState(scene.world, 7);
+    const { host, setNow } = makeHost(scene);
+
+    const dts: number[] = [];
+    host.register({
+      name: 'probe',
+      init: () => {},
+      syncTick: () => {},
+      updateFrame: (dt) => dts.push(dt),
+    });
+
+    setNow(0);
+    dispatch(tick(sim, state), [host]);
+    setNow(50);
+    dispatch(tick(sim, state), [host]);
+    // Первый кадр сессии: интервала ещё нет, dt — ноль.
+    host.frame();
+    setNow(66);
+    host.frame();
+    expect(dts[1]).toBeCloseTo(0.016, 5);
+
+    // Сцену забрал другой продюсер (режим правки, REND-11): кадры потока тиков
+    // не рисуются вовсе.
+    const other = { name: 'document' };
+    host.stage.publish(other, host.view);
+    setNow(5000);
+    host.frame();
+    expect(dts).toHaveLength(2);
+
+    // Поток тиков вернулся. Первый его кадр обязан быть НУЛЕВЫМ по dt: иначе
+    // подсистемы доигрывают накопленный простой до потолка в 0.25 с разом.
+    dispatch(deliveredResult(state, state.tick, 'Running'), [host]);
+    setNow(5016);
+    host.frame();
+    expect(dts).toHaveLength(3);
+    expect(dts[2]).toBe(0);
+    setNow(5032);
+    host.frame();
+    expect(dts[3]).toBeCloseTo(0.016, 5);
+  });
+});

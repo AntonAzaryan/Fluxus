@@ -8,7 +8,12 @@
  * что статы и фаза полёта доезжают до `TickView`, из которого HUD и читает.
  */
 import { describe, expect, it } from 'vitest';
-import { tick as simTick, type SceneDef } from '@fluxus/core';
+import {
+  FIXED_ONE,
+  tick as simTick,
+  world as coreWorld,
+  type SceneDef,
+} from '@fluxus/core';
 import { resolveComposition, type MinimapTerrainSource } from '@fluxus/hud';
 import { AssetService, type VisualManifest } from '@fluxus/assets';
 import { RemoteHost, WorkerShell } from '@fluxus/client';
@@ -182,6 +187,46 @@ describe('headless-прогон демо: статы и фаза полёта д
     expect(fireball!.flightPhase).toBeLessThan(1);
     // У героя фазы полёта нет — он не летит (REND-12).
     expect(Number.isNaN(hero.flightPhase)).toBe(true);
+  });
+
+  /**
+   * Радиус обзора доезжает ЭФФЕКТИВНЫМ (change `fog-observer-inputs`, FOW-3):
+   * стат указывает на опубликованное состояние `VisionState`, а не на авторский
+   * `Vision.radius`. Разница наблюдаема только под модификатором обзора, но
+   * пинить нужно ИСТОЧНИК: маска тумана строит по этой величине круг, и
+   * расхождение с симуляцией в большую сторону FOW-9 запрещает прямо.
+   */
+  it('радиус обзора доезжает из VisionState — величины симуляции, а не авторской', () => {
+    const { sim, state, playerId, grid } = createDemoSimulation(SCENE);
+    const [workerPort, mainPort] = syncPortPair();
+    const shell = new WorkerShell({
+      mode: 'local',
+      port: workerPort,
+      sim,
+      state,
+      tickSeconds: TICK_SECONDS,
+      extractor: createDemoExtractor(grid),
+      playerId: PLAYER_ID,
+      helloExtra: { hero: playerId },
+      clock: () => 0,
+    });
+    const remote = new RemoteHost(dummyContext(), { clock: () => 0, onReady: () => {} }).connect(
+      mainPort,
+    );
+    shell.start();
+    for (let i = 0; i < 4; i++) shell.stepTick();
+
+    const hero = remote.view!.entities.get(playerId)!;
+    const delivered = hero.stats!.get(STATS.visionRadius);
+    expect(delivered).toBeDefined();
+    // Ровно то, что опубликовал пересчёт видимости, приведённое к мировым
+    // единицам на границе потока тиков (REND-1).
+    const published =
+      coreWorld.getField(state.world, playerId, 'VisionState', 'radius') / FIXED_ONE;
+    expect(published).toBeGreaterThan(0);
+    expect(delivered).toBeCloseTo(published, 6);
+    // Команда рядом с ним — второй вход маски (design D4 тумана).
+    expect(hero.stats!.get(STATS.team)).toBeDefined();
   });
 
   /**

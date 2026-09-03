@@ -254,6 +254,18 @@ describe('выборка в буферы вызывающего (QUERY-2, QUERY-
     expect([...grown]).toEqual([...query(state, { all: ['Health'] })]);
   });
 
+  it('без буфера индексов отбор тот же: второй массив не обязателен', () => {
+    // Вызывающему, который читает поля по id (воркер рендера, REND-26), буфер
+    // слотов не нужен вовсе, и требовать его значило бы навязывать аллокацию
+    // размером в мир ради выброшенных чисел.
+    const { state, alive } = populated();
+    const ids = new Float64Array(8);
+    const count = queryInto(state, { all: ['Health'] }, ids);
+
+    expect(count).toBe(alive.length);
+    expect([...ids.subarray(0, count)]).toEqual(alive);
+  });
+
   it('ctx.getByIndex отвечает то же, что ctx.getByHandle (SYS-10)', () => {
     const { state } = populated();
     spawn(state, 'note');

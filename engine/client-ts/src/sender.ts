@@ -67,6 +67,14 @@ export class ShellSender {
   private readonly floor = new Map<number, number>();
   private snapAllPending = false;
   /**
+   * Сменилась ли ВЕТВЬ истории в окне доставки (SHELL-7) — своё ИЛИ, отдельно
+   * от `snapAll`: конфляция (SHELL-4) вправе съесть тик смены ветви, и признак
+   * обязан пережить её так же, как разрыв картинки. Оба признака нужны
+   * приёмнику по-разному: по первому он снапит интерполяцию (REND-2), по
+   * второму — забывает всё, что помнил по идентификаторам сущностей (NTR-16).
+   */
+  private branchChangedPending = false;
+  /**
    * Был ли в окне честный проход (OBS-5). Аккумулятор несёт только события
    * честных тиков, поэтому флаг конверта означает «события этого конверта
    * свежие, их можно проигрывать» — реплеевых дубликатов в нём нет.
@@ -122,6 +130,7 @@ export class ShellSender {
     // eslint-disable-next-line @typescript-eslint/no-non-null-assertion -- инвариант описан строкой выше
     for (let i = 0; i + 1 < delta.length; i += 2) this.floor.set(delta[i]!, delta[i + 1]!);
     this.snapAllPending ||= ext.snapAll;
+    this.branchChangedPending ||= ext.branchChanged;
     this.freshPending ||= ext.freshEvents;
     this.tryFlush();
   }
@@ -197,6 +206,7 @@ export class ShellSender {
     }
     writeTick(buffer, ext, {
       snapAll: this.snapAllPending,
+      branchChanged: this.branchChangedPending,
       // «Нельзя» побеждает: непроигрываемый факт в накопителе гасит флаг всей
       // пачки (SHELL-4, HUD-5) — см. `unplayablePending`.
       freshEvents: this.freshPending && !this.unplayablePending,
@@ -218,6 +228,7 @@ export class ShellSender {
     this.expiredEvents = 0;
     this.floor.clear();
     this.snapAllPending = false;
+    this.branchChangedPending = false;
     this.freshPending = false;
     this.unplayablePending = false;
     this.dirty = false;

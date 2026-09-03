@@ -6,7 +6,7 @@
     "small": {
       "extract": {
         "extractCalls": 8,
-        "extractChannelValues": 4352,
+        "extractChannelValues": 4608,
         "extractEntitiesCopied": 256,
         "extractEntitiesScanned": 256,
         "extractEvents": 0,
@@ -17,7 +17,7 @@
     "large": {
       "extract": {
         "extractCalls": 8,
-        "extractChannelValues": 34816,
+        "extractChannelValues": 36864,
         "extractEntitiesCopied": 2048,
         "extractEntitiesScanned": 2048,
         "extractEvents": 0,

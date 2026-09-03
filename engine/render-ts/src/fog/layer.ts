@@ -67,6 +67,14 @@ export class FogMinimapSurface {
   private image: ReturnType<FogLayerContext['createImageData']> | null = null;
   /** Тон, вбитый в R/G/B буфера; NaN — буфера ещё нет либо тон сменился. */
   private imageHex = Number.NaN;
+  /**
+   * Прямоугольник, который канвас накрывает, — ПОКРЫТЫЙ маской, а не
+   * прямоугольник террейна (`VisibilityMask.covered`). Виджет растягивает канвас
+   * по нему (HUD-6), и при нецелом `rect × разрешение` разница доходит до юнита
+   * у дальнего края. Объект мутируется на месте: смена разрешения меняет
+   * покрытие, а ссылку на слой виджет вправе держать.
+   */
+  private readonly worldRect: { x: number; y: number; width: number; height: number };
 
   /**
    * Объект, который отдают виджету: канвас и сила читаются геттерами — правка
@@ -80,16 +88,29 @@ export class FogMinimapSurface {
     create?: (width: number, height: number) => FogLayerCanvas,
   ) {
     this.create = create ?? null;
+    this.worldRect = { x: world.x, y: world.y, width: world.width, height: world.height };
     const canvasOf = (): unknown => this.canvas;
+    const rect = this.worldRect;
     this.layer = {
       get canvas(): unknown {
         return canvasOf();
       },
-      world,
+      world: rect,
       get strength(): number {
         return strengthOf();
       },
     };
+  }
+
+  /**
+   * Покрытый маской прямоугольник сменился (смена разрешения, FOW-10). Правка
+   * идёт на месте: слой — стабильный объект, и виджет держит его ссылку.
+   */
+  setWorld(world: FogWorldRect): void {
+    this.worldRect.x = world.x;
+    this.worldRect.y = world.y;
+    this.worldRect.width = world.width;
+    this.worldRect.height = world.height;
   }
 
   /** Есть ли что показывать виджету: канвас заведён первым же блитом. */

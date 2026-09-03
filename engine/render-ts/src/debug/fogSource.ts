@@ -15,6 +15,12 @@
  * прямоугольник, число наблюдателей и доля вскрытого — агрегаты, а не десятки
  * тысяч чисел.
  *
+ * Тело секции ВОСПРОИЗВОДИМО по доставленному состоянию: доля вскрытого
+ * считается по опубликованному целевому растру, а величины, которые ведут
+ * КАДРЫ, — счётчик перестроек и признак идущего рассеивания — уезжают в секцию
+ * `clock` (RDBG-7). Иначе два дампа одного и того же доставленного состояния
+ * различались бы, и дифф разбора превращался бы в шум.
+ *
  * Раскрывать невидимое источник не может по построению (RDBG-6): маска строится
  * из наблюдателей ДОСТАВЛЕННОГО состояния, то есть из того, что клиенту уже
  * прислано, и своей логики видимости у источника нет.
@@ -49,12 +55,24 @@ export interface DebugFogProbe extends DebugProbe {
   readonly worldHeight: number;
   /** Наблюдателей своей команды в последней перестройке (FOW-7). */
   readonly observerCount: number;
-  /** Доля вскрытых текселей ПОКАЗАННОЙ маски [0..1]. */
+  /**
+   * Доля вскрытых текселей ОПУБЛИКОВАННОГО ЦЕЛЕВОГО растра [0..1] — того, к
+   * которому маска сходится, а не того, что сейчас на экране.
+   *
+   * Целевого потому, что проба обязана быть воспроизводимой (RDBG-7): показанный
+   * растр ползёт кадрами рассеивания (FOW-7), и два дампа ОДНОГО доставленного
+   * состояния разошлись бы числом, которое ни от доставки, ни от состояния мира
+   * не зависит. Показанный растр наблюдаем наложением — он и есть картинка.
+   */
   readonly revealedFraction: number;
-  /** Перестроек маски с создания подсистемы (design D4 тумана). */
-  readonly rebuildCount: number;
-  /** Показанная маска ещё догоняет целевую — идёт рассеивание (FOW-7). */
-  readonly dissolving: boolean;
+  /**
+   * Часовые величины (RDBG-7): перестроек маски с создания подсистемы
+   * (`rebuildCount`) и идёт ли рассеивание (`dissolving`, 1/0). Обе — про КАДРЫ,
+   * а не про доставленное состояние: перестройка идёт порциями кадров под
+   * бюджетом, рассеивание — тоже. В теле секции они делали бы всякий дифф
+   * дампов шумом.
+   */
+  readonly clock: Readonly<Record<string, number>>;
 }
 
 /** Что источнику нужно от подсистемы тумана — и ничего сверх этого. */
@@ -110,6 +128,9 @@ export function fogMaskDebugSource(access: FogDebugAccess): DebugSource<DebugFog
     worldZ: 0,
     texels,
   };
+  // Часовая секция — стабильный объект, как и сама проба (RDBG-2): свежий
+  // словарь на кадр был бы мусором включённого источника.
+  const clock = { rebuildCount: 0, dissolving: 0 };
   const probe = {
     resolutionTexelsPerUnit: 0,
     authoredResolutionTexelsPerUnit: 0,
@@ -122,8 +143,7 @@ export function fogMaskDebugSource(access: FogDebugAccess): DebugSource<DebugFog
     worldHeight: 0,
     observerCount: 0,
     revealedFraction: 0,
-    rebuildCount: 0,
-    dissolving: false,
+    clock,
     mask: raster,
     noData: undefined as string | undefined,
   };
@@ -144,8 +164,11 @@ export function fogMaskDebugSource(access: FogDebugAccess): DebugSource<DebugFog
         raster.texels = texels;
       }
       texels.set(shown);
+      // Доля вскрытого считается по ЦЕЛЕВОМУ растру (см. `revealedFraction`);
+      // в наложение при этом едет показанный — оно и есть картинка кадра.
+      const target = mask.data;
       let lit = 0;
-      for (const value of shown) {
+      for (const value of target) {
         if (value > 0) lit += 1;
       }
       probe.resolutionTexelsPerUnit = mask.texelsPerUnit;
@@ -159,9 +182,9 @@ export function fogMaskDebugSource(access: FogDebugAccess): DebugSource<DebugFog
       probe.worldWidth = mask.rect.width;
       probe.worldHeight = mask.rect.height;
       probe.observerCount = access.observers();
-      probe.revealedFraction = shown.length === 0 ? 0 : lit / shown.length;
-      probe.rebuildCount = access.rebuilds();
-      probe.dissolving = access.dissolving();
+      probe.revealedFraction = target.length === 0 ? 0 : lit / target.length;
+      clock.rebuildCount = access.rebuilds();
+      clock.dissolving = access.dissolving() ? 1 : 0;
       raster.widthTexels = mask.width;
       raster.heightTexels = mask.height;
       raster.worldX = mask.rect.x;

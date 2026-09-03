@@ -33,6 +33,7 @@ import type { TerrainGrid, Vec2 } from '@fluxus/core';
 import {
   PresentationStage,
   ViewBuffer,
+  tickStreamFrame,
   type PresentationProducer,
   type RenderContext,
   type RenderSubsystem,
@@ -143,15 +144,15 @@ export class RemoteHost implements PresentationProducer {
   }
 
   /**
-   * Кадр: дословный контракт `RenderHost.frame` (REND-2, REND-8). Пока
-   * presentation-состояние наполняет другой продюсер (режим правки, REND-11),
-   * кадр не рисуется: подсистемы уже ведёт он.
+   * Кадр: дословный контракт `RenderHost.frame` (REND-2, REND-8) — и буквально
+   * его тело: продюсер потока тиков у них один (`tickStreamFrame`), разница
+   * только в том, откуда приехал тик. Пока presentation-состояние наполняет
+   * другой продюсер (режим правки, REND-11), кадр не рисуется — подсистемы уже
+   * ведёт он, — а часы кадра сбрасываются: превью, простоявшее в стороне,
+   * иначе доиграло бы накопленное до потолка в 0.25 с одним кадром.
    */
   frame(now?: number): void {
-    if (this.buffer === null || !this.presentation.isActive(this)) return;
-    const timing = now === undefined ? this.buffer.frame() : this.buffer.frame(now);
-    if (timing === null) return;
-    this.presentation.frame(timing.dt, timing.alpha, timing.realDt);
+    tickStreamFrame(this.presentation, this, this.buffer, now);
   }
 
   /**

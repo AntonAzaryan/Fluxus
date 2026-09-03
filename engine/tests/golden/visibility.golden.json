@@ -1,7 +1,7 @@
 {
   "scenario": "visibility",
   "seed": 20260813,
-  "worldInitHash": "fd07fc34",
+  "worldInitHash": "e28c5f18",
   "ticks": [
     {
       "tick": 0,
@@ -25,7 +25,7 @@
         "maskWords": [
           8,
           113,
-          611,
+          1123,
           5
         ],
         "components": {
@@ -310,6 +310,14 @@
               0,
               0
             ]
+          },
+          "VisionState": {
+            "radius": [
+              0,
+              0,
+              0,
+              0
+            ]
           }
         },
         "tags": [
@@ -352,8 +360,8 @@
         "freeList": [],
         "maskWords": [
           8,
-          113,
-          611,
+          625,
+          1123,
           5
         ],
         "components": {
@@ -638,6 +646,14 @@
               0,
               0
             ]
+          },
+          "VisionState": {
+            "radius": [
+              0,
+              393216,
+              0,
+              0
+            ]
           }
         },
         "tags": [
@@ -680,8 +696,8 @@
         "freeList": [],
         "maskWords": [
           8,
-          113,
-          611,
+          625,
+          1123,
           5
         ],
         "components": {
@@ -966,6 +982,14 @@
               0,
               0
             ]
+          },
+          "VisionState": {
+            "radius": [
+              0,
+              393216,
+              0,
+              0
+            ]
           }
         },
         "tags": [
@@ -1008,8 +1032,8 @@
         "freeList": [],
         "maskWords": [
           8,
-          113,
-          611,
+          625,
+          1123,
           5
         ],
         "components": {
@@ -1294,6 +1318,14 @@
               0,
               0
             ]
+          },
+          "VisionState": {
+            "radius": [
+              0,
+              393216,
+              0,
+              0
+            ]
           }
         },
         "tags": [
@@ -1336,8 +1368,8 @@
         "freeList": [],
         "maskWords": [
           8,
-          113,
-          611,
+          625,
+          1123,
           5
         ],
         "components": {
@@ -1619,6 +1651,14 @@
             "value3": [
               0,
               0,
+              0,
+              0
+            ]
+          },
+          "VisionState": {
+            "radius": [
+              0,
+              393216,
               0,
               0
             ]

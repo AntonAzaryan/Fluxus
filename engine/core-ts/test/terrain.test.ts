@@ -7,6 +7,7 @@ import { loadScene } from '../src/sim/scene.js';
 import { initialState, restoreSnapshot, takeSnapshot, tick, type Simulation } from '../src/sim/tick.js';
 import {
   cellAt,
+  cellAtXY,
   createTerrainGrid,
   terrainFlagChar,
   terrainLevelChar,
@@ -403,6 +404,21 @@ describe('запросы террейна (TERR-4)', () => {
     // И то же самое через публичный запрос уровня — клетка нулевая.
     const { terrain } = scene(def);
     expect(terrain!.levelAt({ x: -1, y: -1 })).toBe(0);
+  });
+
+  it('cellAtXY — тот же вход по раздёрнутым координатам (REND-26)', () => {
+    // Горячий обход воркера рендера спрашивает клетку под каждой сущностью
+    // каждый тик, и `Vec2` на сущность был бы объектом на сущность на тик.
+    // Правило клетки при этом обязано остаться ОДНИМ.
+    const grid = createTerrainGrid(def);
+    const points = [-1, -TILE, 0, TILE, TILE + 1, 5 * TILE, 100 * TILE].flatMap((v) => [
+      { x: v, y: 0 },
+      { x: 0, y: v },
+      { x: v, y: v },
+    ]);
+    for (const point of points) {
+      expect(cellAtXY(grid, point.x, point.y)).toBe(cellAt(grid, point));
+    }
   });
 
   it('уровень сущности меняется от перемещения без мутации компонентов', () => {

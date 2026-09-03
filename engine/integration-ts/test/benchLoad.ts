@@ -950,8 +950,13 @@ export class PresentationBench {
   }
 
   private frame(): void {
-    // Полтика между доставкой и кадром: альфа интерполяции 0.5 — кадр посреди
-    // тика, а не вырожденный на его границе.
+    // Полтика между доставкой и кадром: кадр посреди интервала доставки, а не
+    // вырожденный на его границе. Сама альфа при этом — доля НАБЛЮДАЕМОГО
+    // каденса доставок (REND-2, change `fog-observer-inputs`): цикл стенда
+    // занимает полтора тика по часам (тик до доставки плюс полтика до кадра),
+    // и кадр приходится на его треть. Величина стенду безразлична — важно,
+    // что она постоянна от прогона к прогону: счётчики остаются
+    // воспроизводимыми (PERF-3).
     this.clock.ms += 500 / TICK_RATE;
     const timing = this.buffer.frame(this.clock.ms);
     if (timing !== null) this.stage.frame(timing.dt, timing.alpha, timing.realDt);
@@ -1093,6 +1098,7 @@ export function syntheticTick(load: SyntheticLoad): ExtractedTick {
     mode: 'Running',
     isReplay: false,
     snapAll: false,
+    branchChanged: false,
     freshEvents: true,
     count,
     id: new Float64Array(count),
@@ -1100,6 +1106,7 @@ export function syntheticTick(load: SyntheticLoad): ExtractedTick {
     x: new Float32Array(count),
     y: new Float32Array(count),
     level: new Uint8Array(count),
+    simLevel: new Uint8Array(count),
     flags: new Uint8Array(count),
     facingYaw: new Float32Array(count),
     aimYaw: new Float32Array(count),

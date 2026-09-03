@@ -61,6 +61,7 @@ export const VISIBILITY_COMPONENT = 'Visibility';
 export const TEAM_COMPONENT = 'Team';
 export const STEALTH_STATE_COMPONENT = 'StealthState';
 export const DETECTION_STATE_COMPONENT = 'DetectionState';
+export const VISION_STATE_COMPONENT = 'VisionState';
 
 /** FOW-1: радиус обзора наблюдателя. */
 export const VISION_SCHEMA: ComponentSchema = {
@@ -100,6 +101,21 @@ export const DETECTION_STATE_SCHEMA: ComponentSchema = {
 };
 
 /**
+ * FOW-3: эффективный радиус обзора носителя `Vision` — `Vision.radius`,
+ * домноженный на свёртку `VisionModifier`. Производный компонент того же класса,
+ * что `StealthState`/`DetectionState`, и по тому же основанию: величина, которую
+ * считает пересчёт, обязана быть ОДНА — потребитель вне ядра (доставка
+ * presentation-состояния, вход маски тумана FOW-9) читает её, а не повторяет
+ * свёртку своим кодом. Повторённая, она разошлась бы с симуляцией на первом же
+ * изменении политики стакинга, и для маски видимости расхождение в большую
+ * сторону запрещено прямо (FOW-9).
+ */
+export const VISION_STATE_SCHEMA: ComponentSchema = {
+  name: VISION_STATE_COMPONENT,
+  fields: { radius: 'fixed' },
+};
+
+/**
  * FOW-3: слотовые списки источников стелса и детекции — та же раскладка
  * TIME-7, что у `VisionModifier`, но значение слота — маска каналов `i32`
  * с нейтралью `0` и свёрткой OR (`systems/modifiers.ts`, values: 'mask').
@@ -128,9 +144,10 @@ export interface FowLists {
 /**
  * Все схемы FoW разом — сцене подключать их одним спредом. Порядок задаёт
  * битовые id и нормирован FOW-3: `Vision`, `Visibility`, `Team`,
- * `StealthState`, `DetectionState`, `StealthSources`, `DetectionSources`,
- * `VisionModifier`. Функция, а не константа: схемы списков — функция от числа
- * слотов сцены.
+ * `StealthState`, `DetectionState`, `VisionState`, `StealthSources`,
+ * `DetectionSources`, `VisionModifier` — блок производных состояний и блок
+ * списков источников идут в одном порядке (стелс, детекция, обзор). Функция, а
+ * не константа: схемы списков — функция от числа слотов сцены.
  */
 export function fowComponents(lists: FowLists): readonly ComponentSchema[] {
   return [
@@ -139,6 +156,7 @@ export function fowComponents(lists: FowLists): readonly ComponentSchema[] {
     TEAM_SCHEMA,
     STEALTH_STATE_SCHEMA,
     DETECTION_STATE_SCHEMA,
+    VISION_STATE_SCHEMA,
     lists.stealth.schema,
     lists.detection.schema,
     lists.vision.schema,
@@ -201,6 +219,12 @@ const STEALTH_SOURCES_SPEC: QuerySpec = { all: [STEALTH_SOURCES_COMPONENT] };
 const DETECTION_SOURCES_SPEC: QuerySpec = { all: [DETECTION_SOURCES_COMPONENT] };
 const STEALTH_STATE_SPEC: QuerySpec = { all: [STEALTH_STATE_COMPONENT] };
 const DETECTION_STATE_SPEC: QuerySpec = { all: [DETECTION_STATE_COMPONENT] };
+/**
+ * Носители обзора (FOW-3): у них публикуется эффективный радиус. Выборка своя,
+ * а не `OBSERVER_SPEC`: радиус — свойство носителя `Vision`, а «наблюдатель» —
+ * роль в пересчёте, которую сущность без `Team` или `Position` не играет.
+ */
+const VISION_SPEC: QuerySpec = { all: [VISION_COMPONENT] };
 
 /**
  * Handle полей FoW (`data-driven-systems` SYS-10): пересчёт видимости читает
@@ -221,6 +245,9 @@ interface VisibilityHandles {
   readonly detectionState:
     | { readonly component: ComponentHandle; readonly mask: FieldHandle }
     | undefined;
+  readonly visionState:
+    | { readonly component: ComponentHandle; readonly radius: FieldHandle }
+    | undefined;
   readonly posX: FieldHandle;
   readonly posY: FieldHandle;
   readonly visibleTo: FieldHandle;
@@ -231,6 +258,7 @@ function resolveHandles(ctx: SystemContext): VisibilityHandles {
   const team = optionalComponentHandle(ctx, TEAM_COMPONENT);
   const stealthState = optionalComponentHandle(ctx, STEALTH_STATE_COMPONENT);
   const detectionState = optionalComponentHandle(ctx, DETECTION_STATE_COMPONENT);
+  const visionState = optionalComponentHandle(ctx, VISION_STATE_COMPONENT);
   return {
     team: team === undefined ? undefined : { component: team, id: ctx.resolveField(TEAM_COMPONENT, 'id') },
     stealthState:
@@ -241,6 +269,10 @@ function resolveHandles(ctx: SystemContext): VisibilityHandles {
       detectionState === undefined
         ? undefined
         : { component: detectionState, mask: ctx.resolveField(DETECTION_STATE_COMPONENT, 'mask') },
+    visionState:
+      visionState === undefined
+        ? undefined
+        : { component: visionState, radius: ctx.resolveField(VISION_STATE_COMPONENT, 'radius') },
     posX: ctx.resolveField(POSITION_COMPONENT, 'x'),
     posY: ctx.resolveField(POSITION_COMPONENT, 'y'),
     visibleTo: ctx.resolveField(VISIBILITY_COMPONENT, 'visibleTo'),
@@ -300,6 +332,8 @@ export class VisibilitySystem implements System {
   private readonly targets = new QueryBuffer();
   private readonly observers = new QueryBuffer();
   private readonly candidates = new QueryBuffer();
+  /** Носители обзора: по ним публикуется эффективный радиус (FOW-3). */
+  private readonly visionCarriers = new QueryBuffer();
   private readonly stealthSources = new QueryBuffer();
   private readonly detectionSources = new QueryBuffer();
   private readonly stealthOrphans = new QueryBuffer();
@@ -310,6 +344,12 @@ export class VisibilitySystem implements System {
   private readonly next = new Map<EntityId, number>();
   /** Свёртка стелса по целям (FOW-5) — один раз на цель, а не на пару; живёт как `next`. */
   private readonly stealthOf = new Map<EntityId, number>();
+  /**
+   * Эффективный радиус по носителям `Vision` (FOW-3) — один расчёт на носителя
+   * за прогон: он же публикуется состоянием, он же служит радиусом отбора
+   * кандидатов. Живёт между прогонами и очищается на входе, как `next`.
+   */
+  private readonly radiusOf = new Map<EntityId, Fixed>();
 
   /** Списки источников и таблица каналов приходят извне (DI-1, FOW-12). */
   constructor(deps: VisibilityDeps) {
@@ -320,11 +360,30 @@ export class VisibilitySystem implements System {
     const targets = this.targets.run(ctx, TARGET_SPEC);
     const stealth = this.stealthSources.run(ctx, STEALTH_SOURCES_SPEC);
     const detection = this.detectionSources.run(ctx, DETECTION_SOURCES_SPEC);
+    const carriers = this.visionCarriers.run(ctx, VISION_SPEC);
     // Ранний выход только когда системе не о ком говорить ВООБЩЕ: публикация
     // свёрток (FOW-3) обязана идти и на тике без единой пары Visibility+Position
     // — иначе носитель источников без позиции хранил бы чёрствую маску (FOW-5).
-    if (targets === 0 && stealth === 0 && detection === 0) return;
+    if (targets === 0 && stealth === 0 && detection === 0 && carriers === 0) return;
     const h = (this.handles ??= resolveHandles(ctx));
+
+    // FOW-3: эффективный радиус — ОДИН расчёт на носителя за прогон; он же
+    // уезжает радиусом отбора кандидатов ниже. Публикация идёт до фильтра по
+    // высоте намеренно: обзор — свойство носителя, а террейн нужен фильтру, и
+    // связывать одно с другим значило бы делать публикацию условной там, где
+    // FOW-3 её условной не делает.
+    const radiusOf = this.radiusOf;
+    radiusOf.clear();
+    for (let slot = 0; slot < carriers; slot++) {
+      const carrier = this.visionCarriers.ids[slot]!;
+      radiusOf.set(carrier, effectiveRadius(ctx, h, carrier, this.deps.lists.vision));
+    }
+    publishVisionState(ctx, h.visionState, this.visionCarriers, carriers, radiusOf);
+
+    // Считать видимость нечего: ни целей, ни свёрток стелса — и уровень
+    // спрашивать не у кого и незачем. Точка отказа ниже остаётся той же, какой
+    // была до публикации радиусов: она про пересчёт, а не про обзор.
+    if (targets === 0 && stealth === 0 && detection === 0) return;
     // FOW-5: фолбэка «уровней нет» у фильтра по высоте не существует, поэтому
     // считать без террейна система не вправе. Сюда доходит только сборка,
     // собранная мимо `buildSimulation`: та отвергает такой прогон до первого
@@ -352,7 +411,17 @@ export class VisibilitySystem implements System {
 
     const observers = targets === 0 ? 0 : this.observers.run(ctx, OBSERVER_SPEC);
     for (let slot = 0; slot < observers; slot++) {
-      markSeenBy(ctx, h, terrain, this.observers.ids[slot]!, this.deps, stealthOf, next, this.candidates);
+      markSeenBy(
+        ctx,
+        h,
+        terrain,
+        this.observers.ids[slot]!,
+        this.deps,
+        stealthOf,
+        radiusOf,
+        next,
+        this.candidates,
+      );
     }
 
     // FOW-6: команда эмитится только при фактическом изменении битов — иначе
@@ -438,6 +507,41 @@ function publishState(
 }
 
 /**
+ * FOW-3: эффективный радиус обзора публикуется производным компонентом
+ * `VisionState` — тем же правилом, что свёртки стелса и детекции: командой,
+ * только при фактическом изменении (FOW-6), с дописыванием компонента носителю,
+ * который его не объявил.
+ *
+ * Осиротевшего состояния здесь не бывает по построению: носитель `VisionState`
+ * без `Vision` — это сущность, у которой обзора нет вовсе, а её состояние
+ * гасить нечем — «радиус ноль» и «обзора нет» различаются, и выдумывать за
+ * контент второе значение система не вправе. Тем и отличается от стелса, где
+ * нейтраль свёртки (`0`) есть законное значение самой маски.
+ */
+function publishVisionState(
+  ctx: SystemContext,
+  handle: { readonly component: ComponentHandle; readonly radius: FieldHandle } | undefined,
+  carriers: QueryBuffer,
+  count: number,
+  radiusOf: ReadonlyMap<EntityId, Fixed>,
+): void {
+  // Компонента состояния нет в схемах сцены — публиковать некуда; в группе
+  // тумана (FOW-3) он есть всегда, случай этот — рукотворные миры тестов.
+  if (handle === undefined) return;
+  for (let slot = 0; slot < count; slot++) {
+    const entity = carriers.ids[slot]!;
+    const radius = radiusOf.get(entity) ?? 0;
+    if (ctx.hasByHandle(entity, handle.component)) {
+      if (radius !== ctx.getByHandle(entity, handle.radius)) {
+        ctx.commands.setFieldByHandle(entity, handle.radius, radius);
+      }
+    } else {
+      ctx.commands.addComponent(entity, VISION_STATE_COMPONENT, { radius });
+    }
+  }
+}
+
+/**
  * Взводит бит стороны наблюдателя у всех, кого он видит (FOW-3, FOW-5).
  * Маска-накопитель приходит аргументом: она одна на прогон системы, и кандидат
  * может быть виден нескольким наблюдателям одной стороны.
@@ -449,6 +553,7 @@ function markSeenBy(
   observer: EntityId,
   deps: VisibilityDeps,
   stealthOf: ReadonlyMap<EntityId, number>,
+  radiusOf: ReadonlyMap<EntityId, Fixed>,
   next: Map<EntityId, number>,
   candidates: QueryBuffer,
 ): void {
@@ -461,9 +566,11 @@ function markSeenBy(
   // FOW-3: детекция — свойство наблюдателя, свёртка одна на его проход.
   const detection = deps.lists.detection.union(ctx, observer);
 
+  // Радиус — уже посчитанный и ОПУБЛИКОВАННЫЙ эффективный (FOW-3, FOW-5):
+  // наблюдатель отобран по `Vision`, значит его свёртка в карте есть.
   const found = candidates.run(ctx, {
     all: [VISIBILITY_COMPONENT, POSITION_COMPONENT],
-    withinRadius: { center: from, radius: effectiveRadius(ctx, h, observer, deps.lists.vision) },
+    withinRadius: { center: from, radius: radiusOf.get(observer) ?? 0 },
   });
   for (let slot = 0; slot < found; slot++) {
     const candidate = candidates.ids[slot]!;
