@@ -55,6 +55,48 @@ const EMITTER_NODE_TYPE = 'ParticleEmitter';
 const OBJECT_GRAPH_METADATA_TYPE = 'Object';
 
 /**
+ * Поля АТЛАСА КАДРОВ эмиттера (флипбук): сетка тайлов текстуры, по клеткам
+ * которой ходит кадр частицы. Единственные поля начинки, чью ФОРМУ модуль
+ * проверяет, и вот почему они — исключение из правила заголовка.
+ *
+ * Правило гласит: набор генераторов и поведений принадлежит библиотеке, и
+ * документ богаче кода обязан оставаться легальным. Дробное или нулевое число
+ * тайлов ни к какой будущей версии редактора не относится — это сломанное
+ * число, а не незнакомая нам возможность: атлас 0×0 не «богаче», он невозможен.
+ * Стоит же он молчаливой поломки — библиотека делит текстуру на такую сетку
+ * прямо в шейдере, и частица получает пустой либо перевёрнутый кадр, о чём
+ * узнают глазами и не сразу.
+ *
+ * Согласованность атласа с ведущим кадр поведением (`FrameOverLife`) здесь не
+ * проверяется: это уже семантика библиотеки, и о ней предупреждает рендер
+ * (REND-24), у которого документ уже развёрнут в объекты.
+ */
+const TILE_COUNT_FIELDS = ['uTileCount', 'vTileCount'] as const;
+
+/** Описание системы частиц внутри узла-эмиттера — там и живёт атлас. */
+const SYSTEM_FIELD = 'ps';
+
+/**
+ * Числа атласа кадров узла, если узел их называет. Отсутствие поля — законный
+ * документ: у эффекта без флипбука атласа нет вовсе.
+ */
+function validateTileCounts(node: Record<string, unknown>, path: string, errors: string[]): void {
+  const system: unknown = node[SYSTEM_FIELD];
+  if (!isRecord(system)) return;
+  for (const field of TILE_COUNT_FIELDS) {
+    if (!(field in system)) continue;
+    const value: unknown = system[field];
+    if (typeof value !== 'number' || !Number.isInteger(value) || value < 1) {
+      errors.push(
+        `${path}.${SYSTEM_FIELD}.${field}: ожидалось целое число тайлов атласа >= 1, получено ${
+          typeof value === 'number' ? String(value) : typeName(value)
+        }`,
+      );
+    }
+  }
+}
+
+/**
  * Узел графа и его потомки. Проверяется ровно форма узла — запись с непустым
  * строковым типом и, если он есть, списком потомков; поля самого узла (матрица,
  * материалы, описание системы частиц) валидации не подлежат по причине из
@@ -68,7 +110,10 @@ function validateNode(node: unknown, path: string, errors: string[]): boolean {
   if (typeof node.type !== 'string' || node.type.length === 0) {
     errors.push(`${path}.type: обязательное поле — тип узла (непустая строка), получено ${typeName(node.type)}`);
   }
-  let hasEmitter = node.type === EMITTER_NODE_TYPE;
+  const isEmitter = node.type === EMITTER_NODE_TYPE;
+  // Атлас кадров проверяется у ЭМИТТЕРА: у прочих узлов графа его не бывает.
+  if (isEmitter) validateTileCounts(node, path, errors);
+  let hasEmitter = isEmitter;
   if ('children' in node) {
     if (!Array.isArray(node.children)) {
       errors.push(`${path}.children: ожидался список узлов графа, получено ${typeName(node.children)}`);

@@ -10,7 +10,7 @@
  * `game/demo-ts/app/prewarm.ts` — 95–147 мс ожидания линковки). Ступень здесь
  * одна, в отличие от моделей: ассетов у эффектов нет и ждать нечего.
  */
-import type { VisualEffect, VisualManifest } from '@fluxus/assets';
+import { isEffectList, type VisualEffect, type VisualManifest } from '@fluxus/assets';
 import type * as THREE from 'three';
 
 /**
@@ -35,10 +35,14 @@ export function effectPrimitives(manifest: VisualManifest): readonly VisualEffec
   const records: VisualEffect[] = [];
   for (const table of [effects?.byKind, effects?.byState, effects?.byEvent]) {
     if (table === undefined) continue;
-    for (const record of Object.values(table)) {
-      if (seen.has(record.primitive)) continue;
-      seen.add(record.primitive);
-      records.push(record);
+    for (const entry of Object.values(table)) {
+      // Значение таблицы — одна запись либо список (REND-23): греются ВСЕ его
+      // изображения, иначе второе из них компилирует свою программу в кадре.
+      for (const record of isEffectList(entry) ? entry : [entry]) {
+        if (seen.has(record.primitive)) continue;
+        seen.add(record.primitive);
+        records.push(record);
+      }
     }
   }
   return records;

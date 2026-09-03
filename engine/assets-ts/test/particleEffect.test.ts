@@ -110,6 +110,38 @@ describe('ASSET-14: форма документа эффекта', () => {
     expectErrors({ metadata: 7, object: minimalDoc.object }, /metadata: ожидался объект метаданных/);
   });
 
+  it('атлас кадров: числа тайлов проверяются формой, отсутствие атласа законно', () => {
+    // Единственная начинка, чью форму модуль проверяет: дробное или нулевое
+    // число тайлов ни к какой будущей версии редактора не относится — это
+    // сломанное число, а стоит оно молчаливой поломки картинки (шейдер делит
+    // текстуру на такую сетку). Отсутствие полей — эффект без флипбука.
+    expect(validateParticleEffect(minimalDoc).ok).toBe(true);
+    expect(
+      validateParticleEffect({
+        object: { uuid: 'e', type: 'ParticleEmitter', ps: { uTileCount: 4, vTileCount: 2 } },
+      }).ok,
+    ).toBe(true);
+
+    expectErrors(
+      { object: { uuid: 'e', type: 'ParticleEmitter', ps: { uTileCount: 0 } } },
+      /object\.ps\.uTileCount: ожидалось целое число тайлов атласа >= 1, получено 0/,
+    );
+    expectErrors(
+      { object: { uuid: 'e', type: 'ParticleEmitter', ps: { vTileCount: 2.5 } } },
+      /object\.ps\.vTileCount: ожидалось целое число тайлов атласа >= 1, получено 2\.5/,
+    );
+    expectErrors(
+      {
+        object: {
+          uuid: 'r',
+          type: 'Group',
+          children: [{ uuid: 'e', type: 'ParticleEmitter', ps: { uTileCount: '4' } }],
+        },
+      },
+      /object\.children\[0\]\.ps\.uTileCount: ожидалось целое число тайлов атласа >= 1, получено string/,
+    );
+  });
+
   it('битый узел адресуется путём внутри графа, ошибки собираются все разом', () => {
     const errors = expectErrors(
       {

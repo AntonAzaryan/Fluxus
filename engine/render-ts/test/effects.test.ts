@@ -653,3 +653,85 @@ describe('stateTableNames: пустой словарь сборки — коро
     expect(stateTableNames(table, ['Shielded'])).toEqual(['Shielded', 'Burning']);
   });
 });
+
+// -------------------------------- список изображений одного источника (REND-23)
+
+describe('Источник несёт НЕСКОЛЬКО изображений (REND-23)', () => {
+  /** Шар снаряда и его след — две записи одного визуального типа. */
+  const LIST: VisualManifest = {
+    entities: {},
+    effects: {
+      byKind: {
+        Fireball: [
+          { primitive: 'sphere', color: '#ff8a3c', radius: 0.25 },
+          { primitive: 'ribbon', color: '#ffb066', width: 0.2, trailSamples: 8 },
+        ],
+      },
+      byState: {
+        Shielded: [
+          { primitive: 'sphere', color: '#4aa3ff', radius: 0.9, alpha: 0.3 },
+          { primitive: 'ring', color: '#4aa3ff', radius: 1.1, alpha: 0.4 },
+        ],
+      },
+      byEvent: {
+        FireballExploded: [
+          { primitive: 'sphere', color: '#ff4020', radius: 0.2, radiusTo: 1.6, durationMs: 400 },
+          { primitive: 'ring', color: '#ffd0a0', radius: 0.3, radiusTo: 2.4, durationMs: 400 },
+        ],
+      },
+    },
+  };
+
+  it('каждая запись списка получает СВОЮ оболочку, и обе живут с сущностью', () => {
+    const { subsystem } = makeRig(LIST);
+    subsystem.syncTick(makeTickView([makeEntityView(1, { kind: 'Fireball' })]));
+
+    expect(subsystem.activeCount).toBe(2);
+    // Ключ оболочки несёт номер записи: иначе второе изображение вытеснило бы
+    // первое, и след съел бы шар.
+    expect(subsystem.effectFor(1, 'kind:Fireball#0')!.record.primitive).toBe('sphere');
+    expect(subsystem.effectFor(1, 'kind:Fireball#1')!.record.primitive).toBe('ribbon');
+
+    subsystem.syncTick(makeTickView([]));
+    expect(subsystem.activeCount).toBe(0);
+  });
+
+  it('список состояния живёт, пока доставляется состояние', () => {
+    const { subsystem } = makeRig(LIST);
+    subsystem.syncTick(makeTickView([makeEntityView(1, { states: SHIELDED })]));
+    expect(subsystem.activeCount).toBe(2);
+    expect(subsystem.effectFor(1, 'state:Shielded#1')!.record.primitive).toBe('ring');
+
+    subsystem.syncTick(makeTickView([makeEntityView(1, { states: 0 })]));
+    expect(subsystem.activeCount).toBe(0);
+  });
+
+  it('событие запускает вспышку на КАЖДУЮ запись списка', () => {
+    const { subsystem } = makeRig(LIST);
+    subsystem.syncTick(
+      makeTickView([], {
+        freshEvents: true,
+        events: [{ type: 'FireballExploded', tick: 1, data: { x: 1, y: 1 } }],
+      }),
+    );
+
+    expect(subsystem.activeCount).toBe(2);
+  });
+
+  it('укоротившийся список убирает лишнюю оболочку переподачей (REND-17)', () => {
+    const { subsystem } = makeRig(LIST);
+    subsystem.syncTick(makeTickView([makeEntityView(1, { kind: 'Fireball' })]));
+    expect(subsystem.activeCount).toBe(2);
+
+    subsystem.applyManifest({
+      entities: {},
+      effects: { byKind: { Fireball: { primitive: 'sphere', color: '#ff8a3c', radius: 0.25 } } },
+    });
+
+    // Одна запись — одна оболочка, и ключ её снова без номера: форма записи
+    // остаётся законной, а не «списком из одного».
+    expect(subsystem.activeCount).toBe(1);
+    expect(subsystem.effectFor(1, 'kind:Fireball')!.record.primitive).toBe('sphere');
+    expect(subsystem.effectFor(1, 'kind:Fireball#0')).toBeNull();
+  });
+});

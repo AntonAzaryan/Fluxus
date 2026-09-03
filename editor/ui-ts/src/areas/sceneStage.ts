@@ -555,7 +555,14 @@ export function registerViewportSubsystems(
   // Extractor превью их не зеркалирует вовсе (`scenePreview.ts`). Оболочки
   // `effects.byState` поэтому в кадре правки не оживают, и подсистема говорит
   // об этом один раз, а не молчит.
-  const effects = new EffectsSubsystem(visuals, surface === null ? {} : { surface });
+  //
+  // Камера — та же, что у отсечения инстансов выше (REND-43): наземный телеграф
+  // за кромкой кадра вершин не переписывает. Кадру автора это ничего не
+  // отнимает — отсечённое невидимо при любом пресете (QUAL-2).
+  const effects = new EffectsSubsystem(visuals, {
+    camera,
+    ...(surface === null ? {} : { surface }),
+  });
   presentation.register(effects);
   // Частицы (REND-24) — после моделей, как и в игровой сборке: эмиттер с
   // сокетом снимает позу узла инстанса, посаженного в этом же кадре. Автору
@@ -564,6 +571,9 @@ export function registerViewportSubsystems(
   // правки значило бы ставить его вслепую (ED-15).
   const particles = new ParticlesSubsystem(visuals, {
     sockets: models,
+    // Камера — вход отсечения эмиттеров (REND-24): факел за кромкой кадра своей
+    // системой частиц не шагает. Та же камера и та же причина, что у моделей.
+    camera,
     ...(surface === null ? {} : { surface }),
   });
   presentation.register(particles);
@@ -672,6 +682,20 @@ export function createSceneStage(options: SceneStageOptions): SceneStage {
    * стартовый кадр обязан быть кадрированным, а не пропущенным (ED-15).
    */
   let framing: { readonly rect: CameraBounds; readonly immediate: boolean } | null = null;
+
+  /**
+   * Отписка от пересоздания модуля ассетов (ED-15). Дерево контента правится
+   * из-под редактора — самим автором либо конвейером импорта (BLND-12), — и
+   * модуль выбрасывает кэш ассетов целиком, когда прочитанное им изменилось
+   * (`assetModule.ts`). Документ ЭФФЕКТА частиц при этом остаётся разобранным
+   * внутри подсистемы, и без этой подписки автор видел бы факел, которого на
+   * диске уже нет: манифест переподаётся сам (REND-17), а эмиттерный ассет —
+   * нет, он приходит вторым запросом (ASSET-14). Модели такого входа не имеют:
+   * подсистема моделей спрашивает сервис у контекста на каждом обращении.
+   */
+  const stopAssetWatch = options.assets.onInvalidate(() => {
+    parts?.particles.refreshAssets();
+  });
 
   let draft: StageDraft | null = null;
   let dirty = false;
@@ -1176,6 +1200,7 @@ export function createSceneStage(options: SceneStageOptions): SceneStage {
       doc.removeEventListener('mouseup', onPointerUp);
       window_?.removeEventListener('blur', onWindowBlur);
       canvas.remove();
+      stopAssetWatch();
       // Подсистемы отдают то, что положили в GPU (REND-31), — до контекста
       // рендерера: снятый контекст освободить их объекты уже не даст, а вьюпорт
       // здесь живёт короче процесса (ED-15) — открытие другой сцены заводит

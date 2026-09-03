@@ -1575,6 +1575,10 @@ async function main(): Promise<void> {
       const effects = new EffectsSubsystem(manifest, {
         surface,
         stateComponents: STATE_COMPONENTS,
+        // Камера кадра — вход отсечения наземных фигур по пирамиде (REND-43):
+        // телеграф за кромкой кадра вершин не переписывает. Та же камера, что у
+        // подсистемы моделей, и тем же путём — опцией.
+        camera,
         // Шаг СИМУЛЯЦИОННОГО тика (REND-23, SHELL-4): им подсистема считает
         // возраст события, приехавшего в пачке нескольких тиков. Именно
         // симуляционный, а не `hello.tickSeconds`: последний — знаменатель
@@ -1594,6 +1598,9 @@ async function main(): Promise<void> {
         surface,
         stateComponents: STATE_COMPONENTS,
         sockets: models,
+        // Камера кадра — вход отсечения эмиттеров (REND-24, QUAL-3): факел за
+        // кромкой кадра не шагает своей системой частиц вовсе.
+        camera,
         // Тот же шаг мира, что у эффектов, и по той же причине (REND-24).
         tickSeconds: TICK_SECONDS,
       });

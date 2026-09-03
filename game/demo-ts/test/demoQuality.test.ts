@@ -200,12 +200,19 @@ describe('документы пресетов применимы к сцене �
   it('реестр сцены демо — ровно те ручки, о которых написаны документы', () => {
     const controller = new QualityController(demoRig().stage);
     expect(controller.knobs.map((knob) => knob.name).sort()).toEqual([
+      // Потолок дробления наземных фигур (REND-43): документы пресетов его не
+      // называют, и действует кодовое умолчание «потолка нет» — телеграф
+      // облегает рельеф так, как его написал автор записи (QUAL-1).
+      'effects.shapeDetail',
       'fog.maskResolution',
       'lighting.maxLocalLights',
       'lighting.shadowMapSize',
       'lighting.shadowMode',
       'models.defaultTier',
       'models.lodThresholdScale',
+      // Предел расстояния отсечения эмиттеров (REND-24): умолчание — «предела
+      // нет», и документы пресетов его пока не называют.
+      'particles.cullDistance',
       'particles.density',
       'postprocess.antialias',
       'postprocess.bloom',

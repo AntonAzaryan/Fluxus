@@ -38,7 +38,7 @@ const EFFECTS_OWNER = 'effects';
  * «клетки × тесселяция» шагов по каждой оси. Потолок на ПРОИЗВОДНОЙ величине,
  * как у общего правила клетки (`surfaceCells.ts`).
  */
-const MAX_GROUND_STEPS = 24;
+export const MAX_GROUND_STEPS = 24;
 
 /** Угловых сегментов на полный оборот: круглость на глаз не зависит от размера. */
 const FULL_TURN_SEGMENTS = 48;
@@ -121,10 +121,14 @@ export function groundSteps(
   tile: number,
   extent: number,
   tessellation: number,
+  ceiling: number,
 ): number {
   const cells = tile > 0 ? Math.ceil(extent / tile) : Math.ceil(extent);
   const perCell = surface?.hasCurvature === true ? Math.max(1, Math.floor(tessellation)) : 1;
-  return Math.min(MAX_GROUND_STEPS, Math.max(1, cells * perCell));
+  // Потолок ручки (QUAL-1) действует НАРЯДУ с потолком кода: пресет вправе
+  // сделать фигуру грубее, но не тоньше того, что код и так считает разумным.
+  const limit = Math.min(MAX_GROUND_STEPS, Math.max(1, Math.floor(ceiling)));
+  return Math.min(limit, Math.max(1, cells * perCell));
 }
 
 /** Угловых сегментов на дугу раствора `span` радиан. */

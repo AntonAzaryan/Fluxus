@@ -13,6 +13,7 @@ import {
   resolveEffectByEvent,
   resolveEffectByKind,
   resolveEffectByState,
+  resolveEffectsByKind,
   resolveLodThresholds,
   resolveParticlesByEvent,
   resolveParticlesByKind,
@@ -26,6 +27,7 @@ import {
   validateManifest,
   visualKeys,
   type CameraEffectsDescription,
+  type VisualEffect,
 } from '../src/index.js';
 import { MemoryAssetSource, bytesOf, expectValidationErrors, settled } from './helpers.js';
 
@@ -679,6 +681,43 @@ describe('validateManifest: секция транзиентных эффекто
       /effects\.byKind\.X\.radus: неизвестное поле/,
     );
     expectErrors({ entities: {}, effects: [] }, /effects: ожидался объект/);
+  });
+
+  it('источник несёт СПИСОК записей, и одна запись остаётся законной формой (REND-23)', () => {
+    // Изображений у одного источника бывает несколько — шар снаряда и его след,
+    // — и список описывает ровно это. Обе формы валидны: оборачивать одну
+    // запись в массив документ не обязан.
+    const result = validateManifest({
+      entities: {},
+      effects: {
+        byKind: {
+          Fireball: [
+            { primitive: 'sphere', color: '#ff8a3c', radius: 0.25 },
+            { primitive: 'ribbon', color: '#ffb066', width: 0.2, trailSamples: 8 },
+          ],
+        },
+      },
+    });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    const list = resolveEffectsByKind(result.manifest, 'Fireball');
+    expect(Array.isArray(list)).toBe(true);
+    expect((list as readonly VisualEffect[]).map((record) => record.primitive)).toEqual([
+      'sphere',
+      'ribbon',
+    ]);
+    // Односоставный резолвер отдаёт ПЕРВУЮ запись списка: читателю, которому
+    // нужно одно изображение (заглушка модели, REND-37), список ничего не ломает.
+    expect(resolveEffectByKind(result.manifest, 'Fireball')!.primitive).toBe('sphere');
+  });
+
+  it('пустой список — ошибка: источнику нечего рисовать', () => {
+    expectErrors({ entities: {}, effects: { byKind: { X: [] } } }, /список изображений пуст/);
+    // Ошибка внутри списка адресуется НОМЕРОМ записи, а не именем источника.
+    expectErrors(
+      { entities: {}, effects: { byKind: { X: [{ primitive: 'sphere', color: '#fff' }] } } },
+      /effects\.byKind\.X\[0\]\.radius: обязательное поле/,
+    );
   });
 
   it('числа формы непроцедурных примитивов — закрытый состав (REND-43)', () => {

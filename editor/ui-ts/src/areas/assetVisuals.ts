@@ -47,6 +47,7 @@ import {
 } from '@fluxus/editor-core';
 import { validateManifest, type EntityVisual, type VisualManifest } from '@fluxus/assets';
 import { reasonOf } from '../reason.js';
+import { VFX_AUTHORING_OPERATIONS } from './assetVfx.js';
 import { ASSET_ID, DOCUMENT, asDocument, asNumber, asString } from './operationParams.js';
 
 /** Идентификаторы операций над записями манифеста. */
@@ -386,6 +387,11 @@ export const VISUALS_AUTHORING_OPERATIONS: readonly AuthoringOperation[] = Objec
   setEntryAnimationOperation,
   setEntrySurfaceAlignOperation,
   setCurvatureMapOperation,
+  // Секции VFX того же документа (`assetVfx.ts`, REND-23, REND-24) — здесь, а
+  // не своей точкой регистрации: своя понадобилась эффектам камеры ради
+  // ПАРАМЕТРА (машинного описания типов CAM-9), которого у этих операций нет, а
+  // второе место регистрации есть второе место, где о наборе можно забыть.
+  ...VFX_AUTHORING_OPERATIONS,
 ]);
 
 /**

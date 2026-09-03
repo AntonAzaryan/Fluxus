@@ -174,26 +174,52 @@
   },
   "effects": {
     "byKind": {
-      "Fireball": {
-        "primitive": "sphere",
-        "color": "#ff8a3c",
-        "radius": 0.15,
-        "alpha": 0.8,
-        "height": 0.3,
-        "verticalOffset": {
-          "flightArc": 0.12
+      "Fireball": [
+        {
+          "primitive": "sphere",
+          "color": "#ff8a3c",
+          "radius": 0.15,
+          "alpha": 0.8,
+          "height": 0.3,
+          "verticalOffset": {
+            "flightArc": 0.12
+          }
+        },
+        {
+          "primitive": "ribbon",
+          "color": "#ff8a3c",
+          "width": 0.22,
+          "trailSamples": 12,
+          "alpha": 0.55,
+          "height": 0.3,
+          "verticalOffset": {
+            "flightArc": 0.12
+          }
         }
-      },
-      "HeavyFireball": {
-        "primitive": "sphere",
-        "color": "#ff7020",
-        "radius": 0.3,
-        "alpha": 0.8,
-        "height": 0.35,
-        "verticalOffset": {
-          "flightArc": 0.12
+      ],
+      "HeavyFireball": [
+        {
+          "primitive": "sphere",
+          "color": "#ff7020",
+          "radius": 0.3,
+          "alpha": 0.8,
+          "height": 0.35,
+          "verticalOffset": {
+            "flightArc": 0.12
+          }
+        },
+        {
+          "primitive": "ribbon",
+          "color": "#ff7020",
+          "width": 0.4,
+          "trailSamples": 14,
+          "alpha": 0.6,
+          "height": 0.35,
+          "verticalOffset": {
+            "flightArc": 0.12
+          }
         }
-      },
+      ],
       "SlowDome": {
         "primitive": "ring",
         "color": "#6fd3ff",

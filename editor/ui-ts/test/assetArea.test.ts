@@ -41,6 +41,7 @@ import {
 import { createAssetModule } from '../src/areas/assetModule.js';
 import { assetKindOf, loadAssetTree } from '../src/areas/assetTree.js';
 import { VISUALS_AUTHORING_OPERATIONS, VISUALS_OPERATIONS } from '../src/areas/assetVisuals.js';
+import { VFX_OPERATIONS } from '../src/areas/assetVfx.js';
 import { buildFrame, buttonByKey, press } from './support/frame.js';
 import {
   ASSET_IDS,
@@ -560,7 +561,7 @@ describe('ED-29: каждая операция записи манифеста �
     }
   });
 
-  it('в наборе шесть операций — три назначения ED-20 и три правки ED-14', () => {
+  it('в наборе девять операций — три назначения ED-20, три правки ED-14 и три секций VFX', () => {
     expect(VISUALS_AUTHORING_OPERATIONS.map((operation) => operation.id)).toEqual([
       VISUALS_OPERATIONS.setModel,
       VISUALS_OPERATIONS.setDefaultSkin,
@@ -568,6 +569,11 @@ describe('ED-29: каждая операция записи манифеста �
       VISUALS_OPERATIONS.setAnimation,
       VISUALS_OPERATIONS.setSurfaceAlign,
       VISUALS_OPERATIONS.setCurvatureMap,
+      // Секции VFX того же документа (`assetVfx.ts`, REND-23, REND-24)
+      // регистрируются тем же набором: второй точки регистрации у них нет.
+      VFX_OPERATIONS.addImage,
+      VFX_OPERATIONS.setField,
+      VFX_OPERATIONS.setEmitter,
     ]);
   });
 });

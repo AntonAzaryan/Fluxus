@@ -58,15 +58,18 @@
 import * as THREE from 'three';
 import { NO_ENTITY, FIXED_ONE, type EntityId } from '@fluxus/core';
 import {
-  resolveEffectByEvent,
-  resolveEffectByKind,
-  resolveEffectByState,
+  isEffectList,
+  resolveEffectsByEvent,
+  resolveEffectsByKind,
+  resolveEffectsByState,
   type VisualEffect,
+  type VisualEffectEntry,
   type VisualManifest,
 } from '@fluxus/assets';
 import type {
   EntityView,
   QualityDeclaration,
+  QualityValues,
   RenderContext,
   RenderSubsystem,
   TickView,
@@ -84,22 +87,25 @@ import {
   shellKey,
   stateTableNames,
   syncShellSources,
-  type Shell,
   type ShellPose,
   type StateReader,
 } from './shellSupport.js';
 import { effectPrimitives, warmEffectNodes, type EffectsPrewarm } from './effectsPrewarm.js';
 import { EffectNodePool, type EffectNode, type ShapeContext } from './effectNodes.js';
+import { CameraCull } from './cameraCull.js';
+import { MAX_GROUND_STEPS } from './effectShapes.js';
 import {
   PRIMITIVE_BEAM,
   applyShapeEdge,
   drawBeam,
   drawGround,
   drawTrail,
+  groundExtentOf,
   isGroundPrimitive,
   radiusOf,
 } from './effectDraw.js';
 import { FlashSet } from './effectFlashes.js';
+import { applyShellLook, type EffectShell } from './effectLook.js';
 
 /** Кривые фазы жизни; неизвестное имя — предупреждение и линейная кривая. */
 const CURVE_LINEAR = 'linear';
@@ -110,6 +116,20 @@ const CURVE_EASE_OUT = 'easeOut';
  * SHELL-4). Величина сборки, а не рендера: подсистеме её называет опция.
  */
 const DEFAULT_TICK_SECONDS = 1 / 60;
+
+/**
+ * Ручка потолка дробления наземных фигур (QUAL-1, семантика потолка): пресет
+ * вправе сделать фигуру грубее, а её ФОРМА от этого не меняется — меняется
+ * лишь то, насколько плотно она облегает рельеф. Информации у игрока потолок не
+ * отнимает (QUAL-2): зона накрывает те же клетки.
+ */
+const EFFECTS_SHAPE_DETAIL = 'effects.shapeDetail';
+
+/**
+ * Запас вокруг якоря наземной фигуры при отсечении, мировые единицы: мягкая
+ * кромка и подъём над полем выводят её чуть за расчётный поперечник.
+ */
+const SHAPE_CULL_MARGIN = 0.5;
 
 export interface EffectsOptions {
   /**
@@ -132,34 +152,15 @@ export interface EffectsOptions {
    * продлевает вспышку, но не гасит её.
    */
   readonly tickSeconds?: number;
+  /**
+   * Камера сборки — вход отсечения наземных фигур по пирамиде кадра (REND-43,
+   * QUAL-3). Приходит опцией, а не контекстом (REND-8), тем же путём, каким её
+   * получает подсистема моделей. Не задана — отсечения нет вовсе, и подсистема
+   * делает ту же работу, что делала до него: это стоимость, а не поведение.
+   */
+  readonly camera?: THREE.Camera;
   /** Куда писать предупреждения; по умолчанию console.warn. */
   readonly warn?: (message: string) => void;
-}
-
-/**
- * Оболочка эффекта: узел пула плюс запись, которой он нарисован. Своего сверх
- * общей оболочки (`shellSupport.ts`) у неё одно поле — взят ли второй цвет
- * порога: `Color.set` разбирает строку, и звать его каждый кадр на каждую
- * оболочку значило бы аллоцировать пропорционально числу эффектов (REND-26).
- */
-interface EffectShell extends Shell<VisualEffect, EffectNode> {
-  colorAtTaken: boolean;
-}
-
-/**
- * Фаза окна стата записи (REND-23): доля пройденного окна `radiusFromStat`,
- * зажатая в [0..1]. `NaN` — вести нечем: стата в доставленном состоянии нет.
- */
-function statPhase(record: VisualEffect, view: EntityView): number {
-  const range = record.radiusFromStat;
-  if (range === undefined) return Number.NaN;
-  const value = view.stats?.get(range.stat);
-  if (value === undefined) return Number.NaN;
-  const min = range.min ?? 0;
-  const span = range.max - min;
-  if (!(span > 0)) return Number.NaN;
-  const t = (value - min) / span;
-  return t < 0 ? 0 : t > 1 ? 1 : t;
 }
 
 export class EffectsSubsystem implements RenderSubsystem {
@@ -191,6 +192,12 @@ export class EffectsSubsystem implements RenderSubsystem {
   private readonly trailScratch = new Float32Array(3);
   /** Вершины непроцедурных фигур, переписанные в этом кадре (PERF-3). */
   private shapeVertices = 0;
+  /** Фигуры, пропущенные отсечением камеры в этом кадре (REND-43). */
+  private shapesCulled = 0;
+  /** Отсечение кадра по камере (`cameraCull.ts`); без камеры — неактивно. */
+  private readonly cull = new CameraCull();
+  /** Потолок дробления от пресета (QUAL-1); бесконечность — потолка нет. */
+  private shapeDetail = Number.POSITIVE_INFINITY;
 
   /** Последнее доставленное состояние: по нему считается поза кадра (REND-2). */
   private view: TickView | null = null;
@@ -204,10 +211,10 @@ export class EffectsSubsystem implements RenderSubsystem {
   private clockMs = 0;
 
   /** Резолверы записей таблиц: строятся один раз, а не на каждую доставку. */
-  private readonly byKind = (kind: string): VisualEffect | undefined =>
-    resolveEffectByKind(this.manifest, kind);
-  private readonly byState = (name: string): VisualEffect | undefined =>
-    resolveEffectByState(this.manifest, name);
+  private readonly byKind = (kind: string): VisualEffectEntry | undefined =>
+    resolveEffectsByKind(this.manifest, kind);
+  private readonly byState = (name: string): VisualEffectEntry | undefined =>
+    resolveEffectsByState(this.manifest, name);
 
   constructor(manifest: VisualManifest, options: EffectsOptions = {}) {
     this.manifest = manifest;
@@ -227,6 +234,7 @@ export class EffectsSubsystem implements RenderSubsystem {
       release: (node) => { this.release(node); },
       surface: () => this.options.surface?.current ?? null,
       countVertices: (vertices) => { this.shapeVertices += vertices; },
+      shapeVisible: (record, x, y, z, scale) => this.shapeVisible(record, x, y, z, scale),
       warnOnce: this.warnOnce,
       tickSeconds: this.tickSeconds,
     });
@@ -282,33 +290,70 @@ export class EffectsSubsystem implements RenderSubsystem {
     this.syncShells(view);
     if (!view.freshEvents) return;
     for (const event of view.events) {
-      const record = resolveEffectByEvent(this.manifest, event.type);
-      if (record === undefined) continue;
-      this.flashes.spawn(record, event.type, event.data, event.tick, view);
+      const entry = resolveEffectsByEvent(this.manifest, event.type);
+      if (entry === undefined) continue;
+      // Изображений у события бывает несколько (REND-23): вспышка и кольцо
+      // ударной волны — две записи одного взрыва, и играют они обе.
+      if (isEffectList(entry)) {
+        for (const record of entry) this.flashes.spawn(record, event.type, event.data, event.tick, view);
+      } else {
+        this.flashes.spawn(entry, event.type, event.data, event.tick, view);
+      }
     }
   }
 
   /**
-   * Стоимость подсистемы объявлена КОНСТАНТНОЙ (`render-quality` QUAL-3, второй
-   * сценарий: «дешёвая фича объявляет константность»), и ручек у неё нет.
+   * Ручка подсистемы одна — ПОТОЛОК дробления наземных фигур (QUAL-1, QUAL-3).
    *
-   * Стоимость одного эффекта фиксирована и не зависит ни от содержимого записи,
-   * ни от объёма контента: геометрия примитива одна на все эффекты (REND-3),
-   * меши берутся из пула и в него возвращаются, пер-инстансен только материал.
-   * Растёт же ЧИСЛО одновременных эффектов — но задают его доставленное
-   * состояние и манифест (REND-23), и снижать его пресетом нельзя: шарик
-   * снаряда и сфера щита — то, что игрок видит вместо сущности, а состав
-   * доступной ему информации от качества картинки не зависит (QUAL-2).
+   * Стоимость эффекта-СФЕРЫ константна и была таковой всегда: геометрия одна на
+   * все эффекты (REND-3), меши берутся из пула и в него возвращаются,
+   * пер-инстансен только материал. Наземная фигура (REND-43) эту константность
+   * сняла: она облегает рельеф, её вершины переписываются каждый кадр, а число
+   * их растёт с поперечником зоны и дробностью поля под ней — покадровая
+   * работа, растущая с содержимым, а такая по QUAL-3 обязана иметь рычаг.
+   *
+   * Рычаг — потолок, а не значение: пресет вправе сделать зону ГРУБЕЕ, но не
+   * мельче и не иначе. Форма фигуры от потолка не меняется — телеграф накрывает
+   * те же клетки поля, — и потому информации у игрока он не отнимает (QUAL-2).
+   *
+   * Ручки ЧИСЛА эффектов нет и быть не может: сколько их одновременно, задают
+   * доставленное состояние и манифест (REND-23), а шарик снаряда и сфера щита —
+   * то, что игрок видит вместо сущности. Нет ручки и у отсечения по пирамиде
+   * кадра: фигура за кромкой не видна ни при каком пресете, и её пропуск есть
+   * отсутствие работы, а не качество картинки.
    */
   quality(): QualityDeclaration {
     return {
       subsystem: this.name,
-      knobs: [],
-      constantCost:
-        'разделяемая геометрия примитива и пул мешей: стоимость эффекта фиксирована, ' +
-        'а число одновременных эффектов задают доставленное состояние и манифест (REND-23), ' +
-        'и пресет его MUST NOT менять — это информация игрока (QUAL-2)',
+      knobs: [
+        {
+          name: EFFECTS_SHAPE_DETAIL,
+          cost:
+            'вершины наземных фигур: дробление, которым фигура облегает рельеф, ' +
+            'переписывается каждый кадр и растёт с поперечником зоны (REND-43)',
+          semantics: 'ceiling',
+          default: Number.POSITIVE_INFINITY,
+          min: 1,
+          max: MAX_GROUND_STEPS,
+        },
+      ],
     };
+  }
+
+  /**
+   * Значения пресета (QUAL-1). Топология узла фиксируется его ВЗЯТИЕМ (REND-26,
+   * design D2), поэтому смена потолка снимает живые оболочки и заводит их
+   * заново обычным сведением — тем же проходом, каким живёт переподача
+   * манифеста (REND-17). Проигрываемые вспышки доигрывают своей топологией: они
+   * короче доли секунды, и обрывать их сменой пресета значило бы терять момент
+   * мира ради кадра, которого игрок не заметит.
+   */
+  applyQuality(values: QualityValues): void {
+    const detail = values.get(EFFECTS_SHAPE_DETAIL);
+    if (typeof detail !== 'number' || detail === this.shapeDetail) return;
+    this.shapeDetail = detail;
+    this.shells.clear();
+    if (this.view !== null) this.syncShells(this.view);
   }
 
   updateFrame(dt: number, alpha: number): void {
@@ -318,6 +363,10 @@ export class EffectsSubsystem implements RenderSubsystem {
     // величины нет, а в стоящем мире часы стоят (REND-25).
     this.clockMs += Math.abs(dt) * 1000;
     this.shapeVertices = 0;
+    this.shapesCulled = 0;
+    // Пирамида кадра снимается ОДИН раз на кадр (REND-43): спрашивают её
+    // каждая наземная фигура и каждая вспышка, а считают — здесь.
+    this.cull.update(this.options.camera);
     this.poseShells(alpha);
     // Вспышка необратима: отматывать её назад нечем, а играть вперёд в
     // стоящем мире REND-25 запрещает — вне `Running` она замирает. Терять при
@@ -326,7 +375,12 @@ export class EffectsSubsystem implements RenderSubsystem {
     this.flashes.advance(dt > 0 ? dt : 0);
     // Вершины непроцедурных фигур, переписанные этим кадром (REND-43, PERF-3):
     // покадровая работа подсистемы, растущая с числом наземных телеграфов.
-    if (cost !== undefined) cost.effectsShapeVertices += this.shapeVertices;
+    if (cost !== undefined) {
+      cost.effectsShapeVertices += this.shapeVertices;
+      // Фигуры, за которые кадр не заплатил вовсе (REND-43): экономия отсечения
+      // видна числом, а не на глаз.
+      cost.effectsShapesCulled += this.shapesCulled;
+    }
   }
 
   /**
@@ -429,7 +483,7 @@ export class EffectsSubsystem implements RenderSubsystem {
       x += Math.cos(yaw) * offset;
       y += Math.sin(yaw) * offset;
     }
-    const scale = this.applyShellLook(shell);
+    const scale = applyShellLook(shell, this.clockMs);
     const node = shell.instance;
     if (node.shape !== null) {
       // Фигура несёт МИРОВЫЕ вершины: меш стоит в начале координат группы, а
@@ -460,13 +514,19 @@ export class EffectsSubsystem implements RenderSubsystem {
     const record = shell.record;
     const node = shell.instance;
     const shape = node.shape!;
-    node.mesh.visible = true;
-    this.shapeVertices += shape.vertices;
     if (isGroundPrimitive(record.primitive)) {
+      if (!this.shapeVisible(record, x, y, base, scale)) {
+        node.mesh.visible = false;
+        return;
+      }
+      node.mesh.visible = true;
+      this.shapeVertices += shape.vertices;
       const yaw = shell.view.aimYaw ?? shell.view.facingYaw;
       drawGround(shape, record, surface, x, y, yaw, scale, base);
       return;
     }
+    node.mesh.visible = true;
+    this.shapeVertices += shape.vertices;
     const lift = record.height ?? 0;
     if (record.primitive === PRIMITIVE_BEAM) {
       const target = this.beamTarget(record, shell.view);
@@ -502,75 +562,24 @@ export class EffectsSubsystem implements RenderSubsystem {
   }
 
   /**
-   * Размер, цвет и альфа оболочки в кадре (REND-23). Масштаб размещения
-   * (REND-11, REND-18) учитывается наравне с эмиттером частиц: у размера
-   * изображения сущности один ответ, а не два разных у двух подсистем.
-   *
-   * Ведение статом (`radiusFromStat`) правит те же три числа фазой окна: радиус
-   * — множителем, цвет — порогом `colorAt`, альфа — миганием за концом окна.
-   * Стата в доставленном состоянии нет — оболочка рисуется числами записи без
-   * ведения: выдумывать значение рендер не вправе.
+   * Видна ли наземная фигура записи в этом кадре (REND-43). Радиус якоря —
+   * наибольший поперечник записи под масштабом кадра плюс запас: мягкая кромка
+   * и подъём над полем выводят фигуру чуть за расчётный круг, а ошибиться здесь
+   * дороже, чем переписать лишние вершины. Отсечённая фигура вершин не
+   * переписывает и в счёт кадра не идёт — в этом и состоит экономия.
    */
-  private applyShellLook(shell: EffectShell): number {
-    const record = shell.record;
-    const node = shell.instance;
-    const placement = shell.view.scale ?? 1;
-    const alpha = record.alpha ?? 1;
-    const phase = statPhase(record, shell.view);
-    if (Number.isNaN(phase)) {
-      if (node.shape === null) node.mesh.scale.setScalar(radiusOf(record) * placement);
-      node.material.opacity = this.pulsed(record, alpha);
-      this.applyColorAt(shell, false);
-      return placement;
-    }
-    const range = record.radiusFromStat!;
-    const from = range.from ?? 1;
-    const scale = (from + (range.to - from) * phase) * placement;
-    // Сфере множитель идёт в масштаб меша, фигуре — в её мировые вершины.
-    if (node.shape === null) node.mesh.scale.setScalar(radiusOf(record) * scale);
-    const colorAt = record.colorAt;
-    this.applyColorAt(shell, colorAt !== undefined && phase >= colorAt.phase);
-    // Мигание — ЗА концом окна: заряд перезрел и рванёт в самом кастере.
-    const blink = record.blink;
-    const value = shell.view.stats?.get(range.stat) ?? 0;
-    const overcharged = blink !== undefined && value >= range.max;
-    const dark = overcharged && this.blinkDark(blink.periodMs);
-    node.material.opacity = dark ? alpha * blink.alpha : alpha;
-    return scale;
-  }
-
-  /**
-   * Тёмная половина цикла мигания по часам презентации подсистемы (REND-25).
-   * Общая точка: с окном стата это предупреждение о передержке, без окна —
-   * пульс луча и ленты, и цикл у них один и тот же.
-   */
-  private blinkDark(periodMs: number): boolean {
-    return periodMs > 0 && Math.floor(this.clockMs / (periodMs / 2)) % 2 === 0;
-  }
-
-  /**
-   * Альфа записи под пульсом: запись БЕЗ окна стата, назвавшая мигание,
-   * пульсирует всегда — так живёт луч и лента (REND-23).
-   */
-  private pulsed(record: VisualEffect, alpha: number): number {
-    const blink = record.blink;
-    // С окном стата мигание принадлежит ЕГО концу (передержка), и запись без
-    // доехавшего стата рисуется числами записи без ведения — в том числе без
-    // мигания: выдумывать передержку там, где величины нет, рендер не вправе.
-    if (blink === undefined || record.radiusFromStat !== undefined) return alpha;
-    return this.blinkDark(blink.periodMs) ? alpha * blink.alpha : alpha;
-  }
-
-  /**
-   * Второй цвет порога — только на СМЕНЕ состояния: `Color.set` разбирает
-   * строку, и вызов на каждую оболочку каждого кадра аллоцировал бы
-   * пропорционально числу эффектов (REND-26).
-   */
-  private applyColorAt(shell: EffectShell, taken: boolean): void {
-    if (taken === shell.colorAtTaken) return;
-    shell.colorAtTaken = taken;
-    const color = taken ? shell.record.colorAt?.color : undefined;
-    shell.instance.material.color.set(color ?? shell.record.color);
+  private shapeVisible(
+    record: VisualEffect,
+    x: number,
+    y: number,
+    z: number,
+    scale: number,
+  ): boolean {
+    if (!this.cull.active) return true;
+    const radius = groundExtentOf(record) * scale + SHAPE_CULL_MARGIN;
+    if (this.cull.visible(x, y, z, radius, 0)) return true;
+    this.shapesCulled++;
+    return false;
   }
 
   private poseShells(alpha: number): void {
@@ -605,6 +614,7 @@ export class EffectsSubsystem implements RenderSubsystem {
       // Приём `tileSize` — точка входной границы рендера (REND-1, TERR-2).
       tile: grid === undefined ? 0 : grid.tileSize / FIXED_ONE,
       tessellation: this.ctx?.config.curvatureTessellation ?? 1,
+      detail: this.shapeDetail,
     };
   }
 
