@@ -1,0 +1,33 @@
+{
+  "axis": "clients",
+  "small": 2,
+  "large": 8,
+  "footprint": {
+    "small": {
+      "tick": {
+        "commandsPeak": 12,
+        "entitiesAlive": 4,
+        "entitiesFree": 0,
+        "eventsPeak": 0,
+        "navBytes": 0,
+        "navHeapCapacity": 0,
+        "tagEntries": 4,
+        "ticks": 24,
+        "worldBytes": 7200
+      }
+    },
+    "large": {
+      "tick": {
+        "commandsPeak": 48,
+        "entitiesAlive": 10,
+        "entitiesFree": 0,
+        "eventsPeak": 0,
+        "navBytes": 0,
+        "navHeapCapacity": 0,
+        "tagEntries": 10,
+        "ticks": 24,
+        "worldBytes": 7200
+      }
+    }
+  }
+}

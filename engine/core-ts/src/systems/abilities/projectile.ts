@@ -16,6 +16,7 @@
  * физика (PHYS-8), а она в TimeScale опт-ин, — то есть замедленный снаряд
  * проживает те же тики, но пролетает меньше.
  */
+import { countCostProjectileSteps } from '../../debug.js';
 import { distSqLe } from '../../math/fixed.js';
 import { execute, systemError, type Action } from '../../dsl/actions.js';
 import { ABILITY_PROJECTILE_COMPONENT } from './components.js';
@@ -64,6 +65,9 @@ export class ProjectileSystem implements System {
       this.hits(ctx, projectile, owner, ability, published);
       this.exhaustion(ctx, h, projectile, owner, ability);
     }
+    // Продвинутые снаряды — работа тика (PERF-3), одним вызовом на проход.
+    // Мёртвых в счёте нет: запрос отдаёт только живые носители компонента.
+    countCostProjectileSteps(projectiles.length);
   }
 
   /**

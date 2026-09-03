@@ -65,12 +65,19 @@ export interface DiagnosticsContext {
    * не добавляет ни одной аллокации, а сквозь системы счётчики копятся (в
    * отличие от `counters`, которые обнуляются на границе каждой системы).
    */
-  costCommandsApplied: number;
-  costExpressions: number;
+  costAbilityCandidates: number;
   costBroadPhasePairs: number;
+  costBuffCandidates: number;
+  costBuffSteps: number;
+  costCommandsApplied: number;
+  costEventsEmitted: number;
+  costExpressions: number;
   costNavNodes: number;
   costNpcNeighbors: number;
+  costProjectileSteps: number;
   costRaycasts: number;
+  costTweenSteps: number;
+  costVisibilityPairs: number;
   /**
    * Величины занятой памяти тика (PERF-8). Живут теми же плоскими целыми
    * полями контекста и по той же причине, что счётчики стоимости выше:
@@ -121,12 +128,19 @@ export function withDiagnostics<T>(
     system: undefined,
     seq: 0,
     counters: zeroCounters(),
-    costCommandsApplied: 0,
-    costExpressions: 0,
+    costAbilityCandidates: 0,
     costBroadPhasePairs: 0,
+    costBuffCandidates: 0,
+    costBuffSteps: 0,
+    costCommandsApplied: 0,
+    costEventsEmitted: 0,
+    costExpressions: 0,
     costNavNodes: 0,
     costNpcNeighbors: 0,
+    costProjectileSteps: 0,
     costRaycasts: 0,
+    costTweenSteps: 0,
+    costVisibilityPairs: 0,
     footWorldBytes: 0,
     footEntitiesAlive: 0,
     footEntitiesFree: 0,
@@ -303,11 +317,20 @@ export function countEvent(): void {
   const ctx = current;
   if (ctx === undefined) return;
   ctx.counters.events++;
+  // Та же эмиссия, снятая в той же точке, идёт и в сводку стоимости тика
+  // (PERF-3): счётчик системы обнуляется на её границе, счётчик тика копится
+  // сквозь все системы. Одна калитка на все три величины — по тому же доводу,
+  // что у `countCommands`: вторая калитка рядом стоила бы ещё одного чтения
+  // контекста на КАЖДОМ событии, а событий за тик больше, чем систем.
+  ctx.costEventsEmitted++;
   // Длина журнала событий за тик (PERF-8). Считается ЭМИССИЯ, а не читается
   // длина шины перед сбросом: шина чистится в начале СЛЕДУЮЩЕГО тика
   // (`runSystems`), и снятая там длина уехала бы в чужую запись. Внутри тика
   // журнал только растёт, поэтому число эмиссий равно и длине на конец тика, и
-  // её пику.
+  // её пику — и по тому же построению `eventsPeak` сводки размера состояния
+  // численно совпадает с `eventsEmitted` сводки стоимости. Строки при этом
+  // разные и остаются разными: там занятое состояние, здесь работа платформ,
+  // которые событие произвели, и сводки живут порознь.
   ctx.footEvents++;
 }
 
@@ -322,6 +345,13 @@ export function countEvent(): void {
 // инструментирования. В горячих циклах счёт идёт в локальную переменную, а сюда
 // приходит готовой суммой: на кандидата broad-phase приходится ровно одно
 // целочисленное сложение, а не вызов.
+//
+// Строка у каждой платформы ядра СВОЯ, и это норма требования, а не вкус
+// (PERF-3): на нагрузке, где работа одной платформы превосходит работу другой
+// на порядок, регрессия меньшей в общей сумме не видна. Платформа, чья работа
+// за тик растёт контентом, заводит здесь счётчик или объявляет свою стоимость
+// константной — тот же долг, что `render-quality` QUAL-3 возлагает на фичу
+// рендера.
 
 /** Вычисленный узел выражения DSL — одно применение оператора (PERF-3). */
 export function countCostExpression(): void {
@@ -404,6 +434,106 @@ export function countCostRaycast(): void {
 }
 
 /**
+ * Кандидаты, осмотренные сканом таргетинга способности (`ability-system` ABIL-5,
+ * PERF-3). Единица — сущность, дошедшая до тела скана: кандидат, отброшенный
+ * фигурой шага или предикатом контента, считается наравне с выбранным — работа
+ * по его осмотру уже сделана (тот же учёт, что у кандидатов broad-phase).
+ *
+ * Своя строка, а не сумма с кандидатами физики: скан идёт запросом к миру на
+ * КАЖДОЕ подтверждение шага и растёт населённостью сцены, а не составом её
+ * статики. Сложи их в одну строку — и скан, начавший обходить весь мир вместо
+ * радиуса, утонул бы в обходе клеток сетки физики.
+ */
+export function countCostAbilityCandidates(examined: number): void {
+  const ctx = current;
+  if (ctx === undefined) return;
+  ctx.costAbilityCandidates += examined;
+}
+
+/**
+ * Снаряды, продвинутые за тик (`ability-system` ABIL-9, PERF-3). Единица — снаряд,
+ * дошедший до разбора попаданий и исчерпания; полёт как таковой здесь не
+ * считается, его интегрирует физика и считает своими счётчиками (PHYS-8).
+ *
+ * Своя строка: число снарядов в воздухе растёт темпом стрельбы сцены, а не
+ * числом её сущностей, и в общей сумме платформы способностей залп из сотни
+ * снарядов был бы неотличим от одного каста по сотне целей.
+ */
+export function countCostProjectileSteps(steps: number): void {
+  const ctx = current;
+  if (ctx === undefined) return;
+  ctx.costProjectileSteps += steps;
+}
+
+/**
+ * Инстансы баффов, обработанные проходами платформы (`buff-system` BUFF-1..BUFF-6,
+ * PERF-3). Единица — инстанс, обработанный ОДНИМ проходом: наложение и ход —
+ * два прохода по одному и тому же набору (условие воспроизводимости, см. шапку
+ * `abilities/buffs.ts`), и оба считаются, потому что оба исполнены.
+ *
+ * Своя строка рядом с `buffCandidates`: этот счётчик растёт линейно числом
+ * живых инстансов, а поиск хозяина — произведением наложений на инстансы, и
+ * именно РАСХОЖДЕНИЕ двух строк называет виновника квадратичности.
+ */
+export function countCostBuffSteps(steps: number): void {
+  const ctx = current;
+  if (ctx === undefined) return;
+  ctx.costBuffSteps += steps;
+}
+
+/**
+ * Инстансы, осмотренные поиском стакающегося хозяина (`buff-system` BUFF-3,
+ * PERF-3). Единица — осмотренный инстанс: перебор идёт по всем живым, и
+ * отброшенный чужой целью или чужим определением считается наравне с найденным.
+ *
+ * Своя строка: собственного индекса «цель → инстансы» платформа не строит (он
+ * был бы состоянием вне мира, TICK-4), поэтому величина растёт произведением
+ * наложений на инстансы. Именно её квадратичность и должен называть эталон
+ * стоимости строкой диффа, а не общая сумма работы баффов.
+ */
+export function countCostBuffCandidates(examined: number): void {
+  const ctx = current;
+  if (ctx === undefined) return;
+  ctx.costBuffCandidates += examined;
+}
+
+/**
+ * Пары «наблюдатель × цель», дошедшие до проверки видимости (`fog-of-war`
+ * FOW-5, PERF-3). Единица — пара: кандидат наблюдателя, отобранный запросом в
+ * радиус, независимо от того, чем он отсеян дальше — маской стелса, уровнем или
+ * укрытием.
+ *
+ * Отдельного счётчика линии видимости рядом нет намеренно: она идёт лучом
+ * Physics API и уже посчитана в `raycasts` — второй счётчик обещал бы одну
+ * работу дважды (тот же довод, что у `navNodes`).
+ *
+ * Своя строка: величина растёт ПРОИЗВЕДЕНИЕМ наблюдателей на цели (кандидаты
+ * берутся запросом на каждого наблюдателя), и в общей сумме тика этот рост
+ * читался бы как подорожавшая работа кого угодно.
+ */
+export function countCostVisibilityPairs(pairs: number): void {
+  const ctx = current;
+  if (ctx === undefined) return;
+  ctx.costVisibilityPairs += pairs;
+}
+
+/**
+ * Твины, продвинутые за тик (`time-system` TWEEN-1, PERF-3). Единица — твин,
+ * обработанный проходом системы: и продолженный, и завершившийся на этом тике,
+ * — работа шага у них одна и та же.
+ *
+ * Своя строка: число твинов растёт подачей сцены (каждый эффект, каждая
+ * анимация значения), а не населённостью мира, и с работой платформ способностей
+ * в одной сумме их движения не различить.
+ */
+export function countCostTweenSteps(steps: number): void {
+  const ctx = current;
+  if (ctx === undefined) return;
+  ctx.costTweenSteps += steps;
+}
+
+
+/**
  * Сводка объёма работы тика — одна запись на тик (PERF-3) обычной формы DIAG-2:
  * без отметки реального времени и данных окружения, номер — из той же сквозной
  * нумерации, что и трейс. Уровень — границы систем (DIAG-3): счётчики стоимости
@@ -419,6 +549,13 @@ export function countCostRaycast(): void {
  * Заказанные команды видны рядом — в `commands` записи SYSTEM_END (DIAG-3), где
  * тот же исход снят с точностью до системы; имена намеренно разные, потому что
  * величины разные.
+ *
+ * Состав `data` — по строке на платформу ядра, чья работа за тик растёт
+ * контентом (PERF-3): буфер команд и выражения DSL, кандидаты broad-phase и
+ * лучи физики, узлы поиска пути, соседи платформы поведения NPC, кандидаты
+ * таргетинга, шаги снарядов и инстансы баффов платформы способностей, пары
+ * видимости, шаги твинов и события шины. Поля в алфавитном порядке — тем же
+ * порядком их укладывает канонический JSON эталона (SER-6).
  *
  * Контракт числа записей:
  *
@@ -436,12 +573,19 @@ function recordTickCost(ctx: DiagnosticsContext): void {
   if (TRACE_ORDER[ctx.trace] < TRACE_ORDER.systems) return;
   record(ctx, 'tickCost', 'info', 'TICK_COST', {
     data: {
-      commandsApplied: ctx.costCommandsApplied,
-      expressions: ctx.costExpressions,
+      abilityCandidates: ctx.costAbilityCandidates,
       broadPhasePairs: ctx.costBroadPhasePairs,
+      buffCandidates: ctx.costBuffCandidates,
+      buffSteps: ctx.costBuffSteps,
+      commandsApplied: ctx.costCommandsApplied,
+      eventsEmitted: ctx.costEventsEmitted,
+      expressions: ctx.costExpressions,
       navNodes: ctx.costNavNodes,
       npcNeighbors: ctx.costNpcNeighbors,
+      projectileSteps: ctx.costProjectileSteps,
       raycasts: ctx.costRaycasts,
+      tweenSteps: ctx.costTweenSteps,
+      visibilityPairs: ctx.costVisibilityPairs,
     },
   });
 }

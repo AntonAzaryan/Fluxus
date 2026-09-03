@@ -36,6 +36,7 @@
  * счётчиков времени у системы нет.
  */
 import * as fixed from '../math/fixed.js';
+import { countCostVisibilityPairs } from '../debug.js';
 import { componentSchema } from '../ecs/world.js';
 import { BLOCKS_VISION } from './physics.js';
 import { optionalComponentHandle } from './optionalHandle.js';
@@ -465,6 +466,10 @@ function markSeenBy(
     all: [VISIBILITY_COMPONENT, POSITION_COMPONENT],
     withinRadius: { center: from, radius: effectiveRadius(ctx, h, observer, deps.lists.vision) },
   });
+  // Пары «наблюдатель × цель» этого наблюдателя — работа тика (PERF-3): один
+  // вызов на проход с числом кандидатов, а не вызов на пару. Считается пара,
+  // ДОШЕДШАЯ до проверки, — чем именно она отсеяна дальше, счёту безразлично.
+  countCostVisibilityPairs(found);
   for (let slot = 0; slot < found; slot++) {
     const candidate = candidates.ids[slot]!;
     const mask = next.get(candidate);

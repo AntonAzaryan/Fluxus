@@ -1,12 +1,19 @@
 {
   "tick": {
+    "abilityCandidates": 0,
     "broadPhasePairs": 0,
+    "buffCandidates": 0,
+    "buffSteps": 0,
     "commandsApplied": 428,
+    "eventsEmitted": 0,
     "expressions": 336,
     "navNodes": 0,
     "npcNeighbors": 0,
+    "projectileSteps": 0,
     "raycasts": 0,
-    "ticks": 24
+    "ticks": 24,
+    "tweenSteps": 0,
+    "visibilityPairs": 0
   },
   "extract": {
     "extractCalls": 24,
@@ -133,6 +140,22 @@
       "syncTickInstances": 384,
       "syncTickSubsystems": 192,
       "terrainChunksMarked": 48
+    }
+  },
+  "wire": {
+    "p1": {
+      "bytesOther": 1163,
+      "entitiesDelivered": 48,
+      "eventsDelivered": 0,
+      "snapshotBytes": 10156,
+      "snapshots": 24
+    },
+    "p2": {
+      "bytesOther": 1163,
+      "entitiesDelivered": 48,
+      "eventsDelivered": 0,
+      "snapshotBytes": 10156,
+      "snapshots": 24
     }
   }
 }

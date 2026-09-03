@@ -27,6 +27,7 @@
  * Следствие для дизайна: замедление цели не разрежает тики DoT и не удлиняет
  * бафф.
  */
+import { countCostBuffCandidates, countCostBuffSteps } from '../../debug.js';
 import { execute, systemError, type Action } from '../../dsl/actions.js';
 import { evaluate, typeError } from '../../dsl/expr.js';
 import { requireModifierList } from '../modifiers.js';
@@ -93,8 +94,12 @@ export class BuffSystem implements System {
     const instances = ctx.query(this.spec);
     if (instances.length === 0) return;
     const h = (this.handles ??= resolveBuffInstanceHandles(ctx));
+    // Проходов два, и оба — исполненная работа тика (PERF-3): счётчик зовётся
+    // по разу на проход с числом обработанных инстансов, а не на итерацию.
     for (const instance of instances) this.apply(ctx, h, instances, instance);
+    countCostBuffSteps(instances.length);
     for (const instance of instances) this.advance(ctx, h, instance);
+    countCostBuffSteps(instances.length);
   }
 
   // ------------------------------------------------------------- наложение
@@ -155,7 +160,14 @@ export class BuffSystem implements System {
     target: EntityId,
   ): EntityId {
     const buffId = ctx.getByHandle(instance, h.buffId);
+    // Осмотренные инстансы — работа поиска хозяина (PERF-3): считается всё, что
+    // перебор успел просмотреть, включая отброшенных. Число известно только
+    // после выхода из цикла, поэтому найденный уезжает переменной, а калитка
+    // зовётся один раз — на итерацию она не зовётся (design D1).
+    let examined = 0;
+    let host: EntityId = NO_ENTITY;
     for (const other of instances) {
+      examined++;
       if (other === instance) continue;
       if (!ctx.isAlive(other)) continue;
       // Класс читается через буфер: инстанс, наложенный на этом же тике
@@ -164,9 +176,11 @@ export class BuffSystem implements System {
       if (buffField(ctx, other, 'dispelled') !== 0) continue;
       if (ctx.getByHandle(other, h.target) !== target) continue;
       if (ctx.getByHandle(other, h.buffId) !== buffId) continue;
-      return other;
+      host = other;
+      break;
     }
-    return NO_ENTITY;
+    countCostBuffCandidates(examined);
+    return host;
   }
 
   /**

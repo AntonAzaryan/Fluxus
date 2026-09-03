@@ -9,60 +9,26 @@
  * (пейсинг, подстановка кадров, порядок канонического лога). Принятие —
  * явной командой `npm run record` (UPDATE_MATCHES=1) с диффом фикстур на
  * ревью, затем `npm run golden` ядра для пары к новому сценарию.
+ *
+ * Сами определения записей — генератор ввода, число тиков и конфиг — живут в
+ * `benchLoad.ts` (`MATCH_RECORDINGS`), а не здесь: этой же записью гейт
+ * стоимости меряет провод сервера (`performance-budget` PERF-12), и второй
+ * список рядом разошёлся бы с первым молча.
  */
 import { readFileSync, writeFileSync } from 'node:fs';
-import { dirname, join } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { duelConfig, fuzzInput, playMatch, propScene, walkRight, type PlayedMatch } from './fixtures.js';
+import { GOLDEN_DIR, MATCH_RECORDINGS, recordingFile } from './benchLoad.js';
 
-const GOLDEN_DIR = join(dirname(fileURLToPath(import.meta.url)), '..', '..', 'tests', 'golden');
 const UPDATE = process.env.UPDATE_MATCHES === '1';
 
-const FUZZ_TICKS = 60;
-const FUZZ_SEED = 977;
-
-interface Recording {
-  readonly file: string;
-  readonly play: () => Promise<PlayedMatch>;
-}
-
-const RECORDINGS: readonly Recording[] = [
-  {
-    // Движение одного игрока при молчащем втором: виден и ввод, и подстановка
-    // predicted-кадров молчащего слота (TICK-2) в каноническом логе.
-    file: 'match-walk.scenario.json',
-    play: () => playMatch(24, { a: walkRight(16) }, duelConfig({ name: 'match-walk' })),
-  },
-  {
-    // Seeded-фазз обоих слотов: пространство сценариев шире рукописного.
-    file: 'match-fuzz.scenario.json',
-    play: () =>
-      playMatch(
-        FUZZ_TICKS,
-        {
-          a: fuzzInput(FUZZ_SEED, 'record-p1', FUZZ_TICKS + 64),
-          b: fuzzInput(FUZZ_SEED, 'record-p2', FUZZ_TICKS + 64),
-        },
-        duelConfig({ name: 'match-fuzz', seed: FUZZ_SEED }),
-      ),
-  },
-  {
-    // Сцена с непустой расстановкой (SER-7, SER-8): реквизит сцены занимает
-    // первые ID, герои матча идут за ним. Забытая в прологе `buildMatchWorld`
-    // расстановка сцены краснеет здесь и в паре ядра к этому сценарию (NTR-8).
-    file: 'match-props.scenario.json',
-    play: () =>
-      playMatch(16, { a: walkRight(12) }, duelConfig({ name: 'match-props', scene: propScene() })),
-  },
-];
-
 describe('записанные матчи в golden-наборе (CLI-10)', () => {
-  for (const recording of RECORDINGS) {
-    it(`${recording.file}: свежая запись матча совпадает с фикстурой`, async () => {
+  for (const recording of MATCH_RECORDINGS) {
+    const file = recordingFile(recording.name);
+    it(`${file}: свежая запись матча совпадает с фикстурой`, async () => {
       const match = await recording.play();
       const produced = `${JSON.stringify(match.server.toScenario(), null, 2)}\n`;
-      const path = join(GOLDEN_DIR, recording.file);
+      const path = join(GOLDEN_DIR, file);
       if (UPDATE) {
         writeFileSync(path, produced);
         return;

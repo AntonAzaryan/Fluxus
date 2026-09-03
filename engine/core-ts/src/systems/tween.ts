@@ -20,6 +20,7 @@
  * решение закрыто именно этим: у системы единого решения нет, оно в данных.
  */
 import * as fixed from '../math/fixed.js';
+import { countCostTweenSteps } from '../debug.js';
 import { execute, systemError, TWEEN_COMPONENT, type Action } from '../dsl/actions.js';
 import {
   FIXED_ONE,
@@ -173,6 +174,9 @@ export class TweenSystem implements System {
       }
       this.step(ctx, h, entity, def);
     }
+    // Продвинутые твины — работа тика (PERF-3), одним вызовом на проход:
+    // число известно после цикла, и на итерацию калитка не зовётся.
+    countCostTweenSteps(entities.length);
   }
 
   private step(ctx: SystemContext, h: TweenHandles, entity: EntityId, def: ParsedDef): void {
