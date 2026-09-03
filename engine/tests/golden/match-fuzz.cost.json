@@ -19,6 +19,7 @@
   },
   "performance": {
     "frame": {
+      "effectsShapeVertices": 0,
       "fogDissolveTexels": 19968,
       "fogMaskClearTexels": 13568,
       "fogMaskSmoothTexels": 27136,
@@ -78,6 +79,7 @@
   },
   "ultra": {
     "frame": {
+      "effectsShapeVertices": 0,
       "fogDissolveTexels": 67328,
       "fogMaskClearTexels": 54272,
       "fogMaskSmoothTexels": 108544,

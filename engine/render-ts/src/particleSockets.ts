@@ -11,7 +11,7 @@
  * отцеплено от сцены и узел из него заморозил бы эмиттер в позе момента
  * пересборки.
  */
-import type * as THREE from 'three';
+import * as THREE from 'three';
 import type { EntityId } from '@fluxus/core';
 import type { VisualTier } from '@fluxus/assets';
 import type { WarnOnce } from './warnOnce.js';
@@ -33,14 +33,38 @@ interface SocketInstance {
 }
 
 /**
+ * Мировая поза узла-сокета: позиция и ориентация, записанные в переиспользуемую
+ * запись. Аллокаций на эмиттер на кадр нет — объект принадлежит вызывающему.
+ */
+export interface SocketPose {
+  readonly position: THREE.Vector3;
+  readonly quaternion: THREE.Quaternion;
+}
+
+/**
  * Инстансы моделей глазами подсистемы частиц — источник узлов-сокетов (REND-24).
  * Подсистема моделей удовлетворяет этому интерфейсу по форме, а импорта её сюда
  * нет: подсистемы друг о друге не знают (REND-8), и знать нужно ровно одно —
- * корень нарисованного инстанса, в котором ищется названный узел, плюс ярус, по
- * которому видно, появится ли он вообще.
+ * где в мире стоит названный узел инстанса.
+ *
+ * Ответов на это ДВА, и первый из них — временный. `instanceFor` отдаёт корень
+ * дерева узлов, в котором сокет ищется обходом: так умеет только ДЕТАЛЬНЫЙ ярус
+ * (REND-20) — у батчевого дерева узлов не существует вовсе, кости живут в
+ * VAT-текстуре, и записи с сокетом на нём играют в позиции сущности с
+ * предупреждением. `nodePose` — прямой ответ «где узел», который подсистема
+ * моделей вправе дать на ОБОИХ ярусах; появится он у неё — резолв переключается
+ * на него одной веткой ниже, и дерево узлов подсистеме частиц больше не нужно.
+ *
+ * Оба необязательны: источник, не умеющий ни того ни другого, — законный
+ * источник без сокетов, и записи с сокетом играют в позиции сущности.
  */
 export interface SocketSource {
-  instanceFor(entity: EntityId, decoration?: boolean): SocketInstance | null;
+  instanceFor?(entity: EntityId, decoration?: boolean): SocketInstance | null;
+  /**
+   * Мировая поза названного узла в кадре; `false` — узла нет (инстанс ещё
+   * строится, вид без такого узла). Пишет в `out` и ничего не аллоцирует.
+   */
+  nodePose?(entity: EntityId, node: string, out: SocketPose, decoration?: boolean): boolean;
 }
 
 /** Состояние привязки, которое оболочка эмиттера несёт на себе. */
@@ -71,18 +95,62 @@ export function dropSocketCache(binding: SocketBinding): void {
  * вовсе, и ждать нечего: предупреждение один раз и позиция сущности. Инстанс
  * есть, а узла в нём нет — то же самое, что у эффектов (REND-23).
  */
-export function resolveSocketNode(
+export function resolveSocketPose(
   binding: SocketBinding,
   entity: EntityId,
   sockets: SocketSource | undefined,
   warnOnce: WarnOnce,
-): THREE.Object3D | null {
+  out: SocketPose,
+): boolean {
   const name = binding.socketName;
-  if (name === undefined) return null;
+  if (name === undefined) return false;
   if (sockets === undefined) {
     warnOnce(
       'socket-source',
       `render: запись эмиттера называет сокет "${name}", но источник инстансов подсистеме не передан — эмиттер играет в позиции сущности (REND-24)`,
+    );
+    return false;
+  }
+  // Прямой ответ источника — там, где он есть: он работает на ОБОИХ ярусах
+  // (REND-20), и дерева узлов ему не нужно. Ветка одна, и переключение на неё —
+  // появление метода у подсистемы моделей, а не правка здесь.
+  if (sockets.nodePose !== undefined) {
+    dropSocketCache(binding);
+    if (sockets.nodePose(entity, name, out, binding.decoration)) return true;
+    warnOnce(
+      `socket:${name}`,
+      `render: узла-сокета "${name}" в инстансе нет — эмиттер играет в позиции сущности (REND-24)`,
+    );
+    return false;
+  }
+  const node = resolveSocketNode(binding, entity, sockets, warnOnce);
+  if (node === null) return false;
+  // Мировая поза узла инстанса — каждый кадр: инстанс уже поставлен подсистемой
+  // моделей, а мировая матрица узла обновляется по цепочке родителей, не
+  // обходом сцены.
+  node.updateWorldMatrix(true, false);
+  node.matrixWorld.decompose(out.position, out.quaternion, SCRATCH_SCALE);
+  return true;
+}
+
+/** Переиспользуемый приёмник масштаба: разложение матрицы требует все три. */
+const SCRATCH_SCALE = new THREE.Vector3();
+
+/**
+ * Узел-сокет по ДЕРЕВУ инстанса — детальный ярус (REND-20). Кэшируется вместе с
+ * корнем: каждый кадр сверяется только идентичность корня.
+ */
+function resolveSocketNode(
+  binding: SocketBinding,
+  entity: EntityId,
+  sockets: SocketSource,
+  warnOnce: WarnOnce,
+): THREE.Object3D | null {
+  const name = binding.socketName!;
+  if (sockets.instanceFor === undefined) {
+    warnOnce(
+      'socket-source',
+      `render: запись эмиттера называет сокет "${name}", но источник инстансов не умеет ни дерева узлов, ни позы узла — эмиттер играет в позиции сущности (REND-24)`,
     );
     return null;
   }

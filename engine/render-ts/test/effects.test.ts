@@ -270,12 +270,12 @@ describe('EffectsSubsystem: данные, а не код (REND-23)', () => {
   it('неизвестный примитив — предупреждение один раз и пропуск, а не отказ кадра', () => {
     const { subsystem, warnings } = makeRig({
       entities: {},
-      effects: { byKind: { Ghost: { primitive: 'ribbon', color: '#fff', radius: 1 } } },
+      effects: { byKind: { Ghost: { primitive: 'hologram', color: '#fff', radius: 1 } } },
     });
     subsystem.syncTick(makeTickView([makeEntityView(1, { kind: 'Ghost' })]));
     subsystem.syncTick(makeTickView([makeEntityView(2, { kind: 'Ghost' })]));
     expect(subsystem.activeCount).toBe(0);
-    expect(warnings.filter((message) => message.includes('ribbon'))).toHaveLength(1);
+    expect(warnings.filter((message) => message.includes('hologram'))).toHaveLength(1);
   });
 
   it('меши переиспользуются пулом: число эффектов растёт, число мешей — нет', () => {

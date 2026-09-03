@@ -1268,3 +1268,51 @@ describe('ParticlesSubsystem: пол ручки плотности (QUAL-2 че�
     expect(subsystem.particleCount).toBeGreaterThan(0);
   });
 });
+
+describe('ParticlesSubsystem: сокет через прямую позу узла (REND-24, REND-20)', () => {
+  it('источник, умеющий `nodePose`, двигает эмиттер без дерева узлов', () => {
+    // Шов на будущее: дерево узлов есть только у ДЕТАЛЬНОГО яруса, а поза узла
+    // — ответ, который подсистема моделей вправе дать на обоих. Резолв
+    // предпочитает её и обходом дерева не пользуется вовсе.
+    const calls: string[] = [];
+    const sockets: SocketSource = {
+      nodePose: (entity, node, out) => {
+        calls.push(`${String(entity)}:${node}`);
+        out.position.set(7, 8, 9);
+        out.quaternion.setFromAxisAngle(new THREE.Vector3(0, 0, 1), Math.PI / 2);
+        return true;
+      },
+    };
+    const { subsystem } = makeRig({ sockets });
+    subsystem.syncTick(makeTickView([makeEntityView(1, { kind: 'Fireball' })]));
+    subsystem.updateFrame(0.016, 1);
+
+    const object = subsystem.emitterFor(1)!.object;
+    expect(calls).toEqual([`1:${SOCKET_NAME}`]);
+    expect(object.position.toArray()).toEqual([7, 8, 9]);
+    expect(object.quaternion.z).toBeCloseTo(Math.SQRT1_2, 6);
+  });
+
+  it('узла нет — предупреждение один раз и позиция сущности', () => {
+    const sockets: SocketSource = { nodePose: () => false };
+    const { subsystem, warnings } = makeRig({ sockets });
+    for (let i = 0; i < 3; i++) {
+      subsystem.syncTick(
+        makeTickView([makeEntityView(1, { kind: 'Fireball', currX: 2, prevX: 2, currY: 3, prevY: 3 })]),
+      );
+      subsystem.updateFrame(0.016, 1);
+    }
+    const object = subsystem.emitterFor(1)!.object;
+    expect(object.position.x).toBeCloseTo(2, 6);
+    expect(object.position.y).toBeCloseTo(3, 6);
+    expect(warnings.filter((m) => m.includes(SOCKET_NAME))).toHaveLength(1);
+  });
+
+  it('источник без обоих ответов — законный источник без сокетов', () => {
+    const { subsystem, warnings } = makeRig({ sockets: {} });
+    subsystem.syncTick(makeTickView([makeEntityView(1, { kind: 'Fireball' })]));
+    subsystem.updateFrame(0.016, 1);
+    expect(subsystem.emitterFor(1)).not.toBeNull();
+    expect(warnings.filter((m) => m.includes('socket') || m.includes('сокет'))).toHaveLength(1);
+  });
+});

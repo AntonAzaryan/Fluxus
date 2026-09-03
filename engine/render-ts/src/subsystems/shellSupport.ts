@@ -389,6 +389,47 @@ export function eventPointOf(
 }
 
 /**
+ * Поля события, называющие ВТОРОЙ конец — цель (REND-23, design D5). Координаты
+ * события сюда не входят намеренно: их уже взял первый конец (`eventPointOf`), и
+ * второй смысл у одной пары чисел сделал бы луч «из точки в ту же точку».
+ */
+const EVENT_TARGET_FIELDS = ['target', 'other'] as const;
+
+/**
+ * Второй конец эффекта-луча в мировых координатах; `false` — цели у события нет,
+ * и рисовать отрезок не из чего. Молчит: событие без цели — обычное событие, а
+ * не сломанная запись, и луч по нему просто не играет.
+ */
+export function eventEndOf(
+  data: Readonly<Record<string, number>>,
+  view: TickView,
+  out: EventPoint,
+): boolean {
+  for (const field of EVENT_TARGET_FIELDS) {
+    const entity = data[field];
+    if (entity === undefined) continue;
+    const entityView = view.entities.get(entity);
+    if (entityView === undefined) continue;
+    out.x = entityView.currX;
+    out.y = entityView.currY;
+    return true;
+  }
+  return false;
+}
+
+/**
+ * Курс фигуры события, радианы: вектор направления события (`dirX`/`dirY` — та
+ * же конвенция, которой Extractor берёт направление каста для bone-контроля,
+ * REND-5), а без него — ноль. Выдумывать направление рендер не вправе.
+ */
+export function eventYawOf(data: Readonly<Record<string, number>>): number {
+  const dx = data.dirX;
+  const dy = data.dirY;
+  if (dx === undefined || dy === undefined) return 0;
+  return Math.atan2(dy, dx);
+}
+
+/**
  * Возраст эффекта, порождённого событием доставки, в секундах (REND-23,
  * REND-24, SHELL-4).
  *

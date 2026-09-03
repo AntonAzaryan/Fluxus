@@ -379,6 +379,35 @@ describe('прогрев подсистемы транзиентных эффе�
     expect(subsystem.pooledCount).toBe(1);
   });
 
+  it('греется по узлу на КАЖДЫЙ примитив манифеста, а не только на сферу', () => {
+    // Наземная фигура, луч и лента несут свой материал (`vertexColors` — бит
+    // ключа программы three) и свою сетку: прогрев обязан построить каждый,
+    // иначе первая же зона урона компилирует программу в кадре боя (REND-43).
+    const scene = new THREE.Scene();
+    const assets = makeAssets();
+    const subsystem = new EffectsSubsystem(
+      {
+        entities: {},
+        effects: {
+          byKind: {
+            Ball: { primitive: 'sphere', color: '#fff', radius: 1 },
+            Zone: { primitive: 'disc', color: '#fff', radius: 2 },
+            Link: { primitive: 'beam', color: '#fff', width: 0.3 },
+          },
+          byState: { Rush: { primitive: 'ribbon', color: '#fff', width: 0.3 } },
+        },
+      },
+      { warn: () => {} },
+    );
+    subsystem.init({ scene, assets: assets.service, config: { heightStep: 1 } });
+
+    const warm = subsystem.prewarm();
+
+    expect(warm.roots).toHaveLength(4);
+    warm.finish();
+    expect(subsystem.pooledCount).toBe(4);
+  });
+
   it('неизвестный примитив прогрев не роняет: предупреждение и пропуск', () => {
     const scene = new THREE.Scene();
     const assets = makeAssets();

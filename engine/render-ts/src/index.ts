@@ -183,12 +183,7 @@ export type {
   FollowTarget,
 } from './camera/rig.js';
 // Сэмпл ввода камеры и edge-pan — вход рига, заполняемый обвязкой окна (CAM-1).
-export {
-  createCameraInput,
-  createEdgePanAxes,
-  edgePanAxes,
-  resetCameraInput,
-} from './camera/input.js';
+export { createCameraInput, createEdgePanAxes, edgePanAxes, resetCameraInput } from './camera/input.js';
 export type { CameraInput, EdgePanAxes } from './camera/input.js';
 // Источник поверхности и границ камеры над сеткой террейна (CAM-2, CAM-7).
 export { terrainGroundApi } from './camera/terrainSource.js';
@@ -221,11 +216,7 @@ export type {
 export { CAMERA_EFFECTS_DESCRIPTION, CAMERA_EFFECT_TYPES } from './camera/effectTypes.js';
 // Машинный адрес конфига камеры (CAM-1): перечень параметров для валидации
 // секции манифеста (ASSET-10) и сборка частичного конфига из неё.
-export {
-  CAMERA_CONFIG_DESCRIPTION,
-  CAMERA_CONFIG_PARAMS,
-  cameraConfigFromManifest,
-} from './camera/config.js';
+export { CAMERA_CONFIG_DESCRIPTION, CAMERA_CONFIG_PARAMS, cameraConfigFromManifest } from './camera/config.js';
 export type { CameraConfigFromManifestOptions } from './camera/config.js';
 export type { CameraEffectsCatalog } from './camera/effectTypes.js';
 export { CameraEffectsDirector } from './camera/director.js';
@@ -267,12 +258,7 @@ export type { CellRect, TerrainGeometryData } from './subsystems/terrainGeometry
 // Подсистема моделей (REND-3..6) и переподача манифеста визуалов (REND-17).
 // Наружу инстанс виден преобразованием и границами, а не узлом сцены (REND-3).
 export { ANIMATION_STATES, ModelsSubsystem } from './subsystems/models.js';
-export type {
-  InstancePose,
-  ModelInstanceView,
-  ModelsOptions,
-  ModelsPrewarm,
-} from './subsystems/models.js';
+export type { InstancePose, ModelInstanceView, ModelsOptions, ModelsPrewarm } from './subsystems/models.js';
 
 // Подсистема тумана войны (FOW-7, FOW-9, FOW-10): маска видимости команды
 // игрока, конфигурация картинки данными и полноэкранный пост-проход затемнения.
@@ -396,10 +382,7 @@ export type { EffectsPrewarm } from './subsystems/effectsPrewarm.js';
 // инициализации и локальный сэмпл ввода своего игрока (REND-1); подтверждённые
 // шаги приходят обычным доставленным состоянием.
 export { AbilityPreviewSubsystem } from './subsystems/abilityPreview.js';
-export type {
-  AbilityPreviewColors,
-  AbilityPreviewOptions,
-} from './subsystems/abilityPreview.js';
+export type { AbilityPreviewColors, AbilityPreviewOptions } from './subsystems/abilityPreview.js';
 // Имена статов слотов способностей — ВХОД подсистемы, объявляемый сборкой
 // (HUD-8, ABIL-1), а не её устройство.
 export type { AbilitySlotStatNames, AbilityStepStatNames } from './subsystems/abilitySlots.js';
@@ -408,7 +391,7 @@ export type { AbilitySlotStatNames, AbilityStepStatNames } from './subsystems/ab
 // ассетов (ASSET-14) — оболочки от доставленного состояния, one-shot'ы от
 // событий и decoration-эмиттеры, все в одном батч-рендерере сцены.
 export { ParticlesSubsystem } from './subsystems/particles.js';
-export type { ParticlesOptions, ParticlesPrewarm, SocketSource } from './subsystems/particles.js';
+export type { ParticlesOptions, ParticlesPrewarm, SocketPose, SocketSource } from './subsystems/particles.js';
 
 // Сервисы вьюпорта редактора: picking по видимому изображению (REND-15) и
 // служебные наложения подсистемой рендера (REND-16). Игровой клиент ни того, ни
@@ -506,13 +489,7 @@ export {
 } from './model/batchSkins.js';
 
 // Bone-контроль (REND-5).
-export {
-  BoneControlState,
-  clampYaw,
-  smoothYaw,
-  stepYaw,
-  wrapAngle,
-} from './model/boneControl.js';
+export { BoneControlState, clampYaw, smoothYaw, stepYaw, wrapAngle } from './model/boneControl.js';
 export type { BoneControlDef, BoneLookup } from './model/boneControl.js';
 
 // Скины (REND-6).

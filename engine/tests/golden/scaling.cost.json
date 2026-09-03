@@ -7,6 +7,7 @@
       "cost": {
         "small": {
           "frame": {
+            "effectsShapeVertices": 0,
             "fogDissolveTexels": 4096,
             "fogMaskClearTexels": 4096,
             "fogMaskSmoothTexels": 8192,
@@ -66,6 +67,7 @@
         },
         "large": {
           "frame": {
+            "effectsShapeVertices": 0,
             "fogDissolveTexels": 4096,
             "fogMaskClearTexels": 4096,
             "fogMaskSmoothTexels": 8192,
@@ -132,6 +134,7 @@
       "cost": {
         "small": {
           "frame": {
+            "effectsShapeVertices": 0,
             "fogDissolveTexels": 4096,
             "fogMaskClearTexels": 4096,
             "fogMaskSmoothTexels": 8192,
@@ -191,6 +194,7 @@
         },
         "large": {
           "frame": {
+            "effectsShapeVertices": 0,
             "fogDissolveTexels": 4096,
             "fogMaskClearTexels": 4096,
             "fogMaskSmoothTexels": 8192,
@@ -257,6 +261,7 @@
       "cost": {
         "small": {
           "frame": {
+            "effectsShapeVertices": 0,
             "fogDissolveTexels": 4096,
             "fogMaskClearTexels": 4096,
             "fogMaskSmoothTexels": 8192,
@@ -316,6 +321,7 @@
         },
         "large": {
           "frame": {
+            "effectsShapeVertices": 0,
             "fogDissolveTexels": 4096,
             "fogMaskClearTexels": 4096,
             "fogMaskSmoothTexels": 8192,
@@ -382,6 +388,7 @@
       "cost": {
         "small": {
           "frame": {
+            "effectsShapeVertices": 0,
             "fogDissolveTexels": 4096,
             "fogMaskClearTexels": 4096,
             "fogMaskSmoothTexels": 8192,
@@ -441,6 +448,7 @@
         },
         "large": {
           "frame": {
+            "effectsShapeVertices": 0,
             "fogDissolveTexels": 16384,
             "fogMaskClearTexels": 16384,
             "fogMaskSmoothTexels": 32768,
@@ -507,6 +515,7 @@
       "cost": {
         "small": {
           "frame": {
+            "effectsShapeVertices": 0,
             "fogDissolveTexels": 4096,
             "fogMaskClearTexels": 4096,
             "fogMaskSmoothTexels": 8192,
@@ -566,6 +575,7 @@
         },
         "large": {
           "frame": {
+            "effectsShapeVertices": 0,
             "fogDissolveTexels": 4096,
             "fogMaskClearTexels": 4096,
             "fogMaskSmoothTexels": 8192,
@@ -632,6 +642,7 @@
       "cost": {
         "small": {
           "frame": {
+            "effectsShapeVertices": 0,
             "fogDissolveTexels": 4096,
             "fogMaskClearTexels": 4096,
             "fogMaskSmoothTexels": 8192,
@@ -691,6 +702,7 @@
         },
         "large": {
           "frame": {
+            "effectsShapeVertices": 0,
             "fogDissolveTexels": 4096,
             "fogMaskClearTexels": 4096,
             "fogMaskSmoothTexels": 8192,

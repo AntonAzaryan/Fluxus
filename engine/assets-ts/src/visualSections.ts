@@ -64,6 +64,16 @@ const EFFECT_FIELDS = [
   'radiusFromStat',
   'colorAt',
   'blink',
+  // Числа формы непроцедурных примитивов (REND-43, REND-23): перечня примитивов
+  // у валидации нет, а числа их формы она проверяет на общих основаниях.
+  'innerRadius',
+  'halfAngleDeg',
+  'length',
+  'width',
+  'edgeSoftness',
+  'lift',
+  'targetFromStat',
+  'trailSamples',
 ] as const;
 
 /** Числовые поля записи эффекта и их границы; вне границ — ошибка документа. */
@@ -78,6 +88,16 @@ const EFFECT_NUMBERS: readonly { readonly name: string; readonly min?: number; r
   // (REND-23) — по той же причине: отрицательный выносит назад.
   { name: 'height' },
   { name: 'offset' },
+  { name: 'innerRadius', min: 0 },
+  // Полураствор сектора: половина полного оборота и есть предел — больше него
+  // сектор перестаёт быть сектором.
+  { name: 'halfAngleDeg', min: 0, max: 180 },
+  { name: 'length', min: 0 },
+  { name: 'width', min: 0 },
+  { name: 'edgeSoftness', min: 0, max: 1 },
+  // Подъём над полем может быть отрицательным (фигура под настилом): границы у
+  // него нет, требуется ровно конечность числа.
+  { name: 'lift' },
 ];
 
 /**
@@ -98,8 +118,28 @@ function validateEffect(v: unknown, path: string, errors: string[]): void {
       errors.push(`${path}.${field}: обязательное поле — непустая строка, получено ${typeName(value)}`);
     }
   }
-  if (!isFiniteNumber(v.radius) || v.radius < 0) {
-    errors.push(`${path}.radius: обязательное поле — неотрицательный радиус, получено ${typeName(v.radius)}`);
+  // Радиус обязателен, пока запись не назвала ШИРИНУ: ширина и есть признак
+  // нерадиального примитива (луч, лента, полоса), у которого радиуса нет
+  // (REND-23). Перечня примитивов валидация при этом не знает — она смотрит на
+  // состав полей, а не на имя.
+  if ('width' in v) {
+    if ('radius' in v && (!isFiniteNumber(v.radius) || v.radius < 0)) {
+      errors.push(`${path}.radius: ожидался неотрицательный радиус, получено ${typeName(v.radius)}`);
+    }
+  } else if (!isFiniteNumber(v.radius) || v.radius < 0) {
+    errors.push(
+      `${path}.radius: обязательное поле — неотрицательный радиус (либо ширина width у нерадиального примитива), получено ${typeName(v.radius)}`,
+    );
+  }
+  if ('targetFromStat' in v && (typeof v.targetFromStat !== 'string' || v.targetFromStat.length === 0)) {
+    errors.push(
+      `${path}.targetFromStat: ожидалось имя доставленного стата (непустая строка), получено ${typeName(v.targetFromStat)}`,
+    );
+  }
+  if ('trailSamples' in v && (!Number.isInteger(v.trailSamples) || (v.trailSamples as number) < 2)) {
+    errors.push(
+      `${path}.trailSamples: ожидалось целое число выборок >= 2, получено ${typeName(v.trailSamples)}`,
+    );
   }
   validateEffectNumbers(v, path, errors);
   if ('verticalOffset' in v) {
@@ -126,11 +166,11 @@ const BLINK_FIELDS = ['periodMs', 'alpha'] as const;
  */
 function validateStatDriven(v: Record<string, unknown>, path: string, errors: string[]): void {
   if ('radiusFromStat' in v) validateStatWindow(v.radiusFromStat, `${path}.radiusFromStat`, errors);
-  for (const field of ['colorAt', 'blink'] as const) {
-    if (!(field in v) || 'radiusFromStat' in v) continue;
-    errors.push(
-      `${path}.${field}: поле ведётся фазой окна radiusFromStat, а окна в записи нет`,
-    );
+  // Порог цвета без окна привязать не к чему: фазы у записи тогда не
+  // существует. Мигание — другое дело: с окном оно предупреждает о передержке,
+  // без окна пульсирует всегда (луч, лента), и запретом это не является.
+  if ('colorAt' in v && !('radiusFromStat' in v)) {
+    errors.push(`${path}.colorAt: поле ведётся фазой окна radiusFromStat, а окна в записи нет`);
   }
   if ('colorAt' in v) validateColorAt(v.colorAt, `${path}.colorAt`, errors);
   if ('blink' in v) validateBlink(v.blink, `${path}.blink`, errors);
