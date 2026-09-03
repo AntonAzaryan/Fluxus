@@ -10,7 +10,7 @@
   },
   "extract": {
     "extractCalls": 16,
-    "extractChannelValues": 960,
+    "extractChannelValues": 1024,
     "extractEntitiesCopied": 64,
     "extractEntitiesScanned": 64,
     "extractEvents": 0,

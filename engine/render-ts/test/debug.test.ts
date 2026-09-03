@@ -32,6 +32,7 @@ import {
   type TickView,
 } from '../src/index.js';
 import {
+  buildFogMask,
   flatGrid,
   makeEntityView,
   makeRenderContext,
@@ -421,6 +422,73 @@ describe('RDBG-7: дамп кадра', () => {
     expect(section.entities.truncated).toBe(true);
     // Агрегат считается по ВСЕМ, а не по показанным.
     expect(section.entityCount).toBe(10);
+  });
+
+  it('два дампа одного доставленного состояния маски совпадают телом секции (RDBG-7)', () => {
+    // Перестройка маски идёт ПОРЦИЯМИ КАДРОВ, а рассеивание — кадрами
+    // рассеивания: величины, выведенные из них, воспроизводимыми не бывают и
+    // обязаны уезжать в часовую секцию, иначе всякий дифф разбора — шум.
+    const stage = new PresentationStage(makeRenderContext());
+    const layer = new RenderDebugLayer(stage);
+    const fog = new FogSubsystem({
+      grid: flatGrid(),
+      stats: { visionRadius: 'vision', team: 'team' },
+      hero: () => 1,
+      config: { resolution: 4, edgeWidth: 1.5 },
+    });
+    stage.register(fog);
+    layer.setEnabled('fog.mask', true);
+    const heroAt = (x: number, y: number): TickView =>
+      makeTickView(
+        [
+          makeEntityView(1, {
+            currX: x,
+            currY: y,
+            stats: new Map([
+              ['team', 0],
+              ['vision', 3],
+            ]),
+          }),
+        ],
+        { statNames: ['team', 'vision'] },
+      );
+    const lit = (raster: Uint8Array): number =>
+      raster.reduce((count, value) => (value > 0 ? count + 1 : count), 0);
+
+    // Первая маска доигрывается целиком: показанная равна целевой.
+    const producer = { name: 'test' };
+    stage.publish(producer, heroAt(2.5, 2.5));
+    buildFogMask(fog);
+    fog.updateFrame(10, 0);
+
+    // Герой ушёл в другой угол: прежде вскрытая зона ЗАКРЫВАЕТСЯ, и её тексели
+    // ползут к нулю кадрами — показанный растр всё это время «вскрытее»
+    // целевого. Здесь прежняя проба и врала: она считала долю по показанному.
+    const moved = heroAt(6.5, 6.5);
+    stage.publish(producer, moved);
+    buildFogMask(fog, 1 / 60);
+    fog.updateFrame(1 / 60, 0);
+
+    const shown = fog.postPass.mask.image.data as Uint8Array;
+    expect(lit(shown)).toBeGreaterThan(lit(fog.visibility.data));
+
+    layer.frame(frameState(moved));
+    const first = layer.dump();
+    for (let frame = 0; frame < 3; frame++) fog.updateFrame(1 / 60, 0);
+    layer.frame(frameState(moved));
+    const second = layer.dump();
+
+    // Тело секции — от доставленного состояния, и два дампа его совпадают.
+    expect(second.sections['fog.mask']).toEqual(first.sections['fog.mask']);
+    const section = first.sections['fog.mask'] as { revealedFraction: number };
+    expect(section.revealedFraction).toBeCloseTo(
+      lit(fog.visibility.data) / fog.visibility.data.length,
+      9,
+    );
+    // Кадровые величины названы — но в часовой секции.
+    expect(Object.keys(first.clock)).toContain('fog.mask.rebuildCount');
+    expect(first.clock['fog.mask.dissolving']).toBe(1);
+    expect(JSON.stringify(first.sections['fog.mask'])).not.toContain('dissolving');
   });
 
   it('маска в дамп растром не едет: разрешение, прямоугольник и число текселей', () => {

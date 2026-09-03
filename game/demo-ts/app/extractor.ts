@@ -33,11 +33,16 @@ export const DEMO_STATS: readonly StatSource[] = Object.freeze([
   { name: STATS.hpMax, component: 'Health', field: 'hpMax' },
   { name: STATS.deaths, component: 'Score', field: 'deaths' },
   // Входы маски тумана войны (FOW-7, design D4): команда наблюдателя и радиус
-  // обзора. `Vision.radius` — fixed, на границе он уедет float'ом мировых
-  // единиц (REND-1, `statSources.ts`); свёртка `VisionModifier` здесь не
-  // повторяется — консервативный коэффициент визуала покрывает дрейф (FOW-9).
+  // обзора. Радиус берётся из ОПУБЛИКОВАННОГО состояния `VisionState` (FOW-3),
+  // а не из авторского `Vision.radius`: эффективный радиус — произведение на
+  // свёртку `VisionModifier`, и считает его симуляция. Повторить свёртку здесь
+  // значило бы завести второе определение (FOW-5), а разойдясь с ней вниз —
+  // светить маской ШИРЕ круга симуляции, что FOW-9 запрещает прямо
+  // (консервативный коэффициент визуала запас на приближение растра, а не на
+  // неверную величину). Поле `fixed`, на границе уедет float'ом мировых единиц
+  // (REND-1, `statSources.ts`).
   { name: STATS.team, component: 'Team', field: 'id' },
-  { name: STATS.visionRadius, component: 'Vision', field: 'radius' },
+  { name: STATS.visionRadius, component: 'VisionState', field: 'radius' },
   // Радиус коллайдера — вход отладочного источника кругов коллизий
   // (`render-debug` RDBG-6): величина сущности едет к отладке ТОЛЬКО объявленным
   // статом, как радиус обзора едет к туману. Убрать эту строку — и источник

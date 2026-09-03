@@ -63,7 +63,15 @@ export const worldInitSpawn = worldModule.spawn;
 export type { PrefabDef, PlainWorld } from './ecs/world.js';
 export * as entityIndex from './ecs/entityIndex.js';
 export * as componentMask from './ecs/componentMask.js';
-export { query } from './ecs/query.js';
+/**
+ * Два входа отбора (QUERY-3): `query` с контейнером на вызов — форма SYS-5, ею
+ * живут JSON-системы, — и `queryInto` в буферы вызывающего (SYS-10). Второй
+ * публичен ради ВНЕШНИХ горячих обходов: воркер рендера снимает состояние мира
+ * каждый тик, и контейнер размером в мир на каждый снимок — ровно та
+ * аллокация, которую `rendering` REND-26 запрещает. Мутирующей поверхности это
+ * не расширяет (TICK-3): отбор мира не касается.
+ */
+export { query, queryInto } from './ecs/query.js';
 // Фабрики командного буфера в публичной поверхности нет намеренно (TICK-3):
 // `createCommandBuffer` принимает ЛЮБОЙ живой мир и отдаёт ровно те операции,
 // публикацию которых требование называет несуществующей (`spawn`, `destroy`,
@@ -135,6 +143,7 @@ export { SystemRegistry } from './systems/registry.js';
  */
 export {
   cellAt,
+  cellAtXY,
   createTerrainApi,
   createTerrainGrid,
   floorComponentSchema,
@@ -192,6 +201,7 @@ export {
   TEAM_COMPONENT,
   STEALTH_STATE_COMPONENT,
   DETECTION_STATE_COMPONENT,
+  VISION_STATE_COMPONENT,
   STEALTH_SOURCES_COMPONENT,
   DETECTION_SOURCES_COMPONENT,
   VISION_SCHEMA,
@@ -199,6 +209,7 @@ export {
   TEAM_SCHEMA,
   STEALTH_STATE_SCHEMA,
   DETECTION_STATE_SCHEMA,
+  VISION_STATE_SCHEMA,
   VISION_MODIFIER_COMPONENT,
   VISION_SCALE_MIN,
   VISION_SCALE_MAX,

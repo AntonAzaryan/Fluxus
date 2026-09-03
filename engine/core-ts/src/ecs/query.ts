@@ -77,12 +77,17 @@ export function query(state: WorldState, spec: QuerySpec): Float64Array {
  * ПОЛНОЕ число совпавших. Буфер короче него не ошибка: записаны первые
  * `min(совпавших, ёмкость)` в порядке QUERY-2, а по возвращённому числу
  * вызывающий растит свои буферы и повторяет запрос.
+ *
+ * `indices` необязателен: вызывающему, который читает поля по id, а не по
+ * слоту, второй буфер размером в мир не нужен вовсе, и требовать его значило бы
+ * навязывать аллокацию ради выброшенных чисел (`rendering` REND-26). Отбор,
+ * порядок (QUERY-2) и возвращаемое число от его наличия не зависят.
  */
 export function queryInto(
   state: WorldState,
   spec: QuerySpec,
   ids: Float64Array,
-  indices: Int32Array,
+  indices?: Int32Array,
 ): number {
   const allMask = spec.all ? maskOf(state, spec.all) : undefined;
   if (allMask === 'unknown') return 0;

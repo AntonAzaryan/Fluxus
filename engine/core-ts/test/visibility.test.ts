@@ -20,6 +20,7 @@ import {
   STEALTH_STATE_COMPONENT,
   VISION_COMPONENT,
   VISION_MODIFIER_COMPONENT,
+  VISION_STATE_COMPONENT,
   MAX_TEAMS,
   VISIBILITY_COMPONENT,
 } from '../src/systems/visibility.js';
@@ -627,6 +628,52 @@ describe('публикация свёрток StealthState/DetectionState (FOW-3
     // Первый тик: источник уже стоит, но свёртка публикуется якорем 900 —
     // проба видит прошлое значение; со второго тика — свежее (FOW-3).
     expect(seen).toEqual([0, CH]);
+  });
+});
+
+describe('публикация эффективного радиуса VisionState (FOW-3, FOW-5)', () => {
+  it('без источников — Vision.radius, с источником — произведение; эмит только при изменении', () => {
+    const h = harness();
+    const watcher = h.place('Watcher', { Position: { x: F(1), y: F(1) }, Vision: { radius: F(2) } });
+    const first = h.step();
+    // Компонент состояния prefab не объявлял — его дописал пересчёт (FOW-3).
+    expect(getField(h.world, watcher, VISION_STATE_COMPONENT, 'radius')).toBe(F(2));
+    expect([...first.changes.changedEntities(VISION_STATE_COMPONENT)]).toEqual([watcher]);
+
+    setField(h.world, watcher, 'VisionModifier', 'id0', 7);
+    setField(h.world, watcher, 'VisionModifier', 'value0', F(2));
+    h.step();
+    expect(getField(h.world, watcher, VISION_STATE_COMPONENT, 'radius')).toBe(F(4));
+
+    // Ни радиус, ни источники не менялись — состояние не dirty (FOW-6).
+    const idle = h.step();
+    expect(idle.changes.changedEntities(VISION_STATE_COMPONENT).size).toBe(0);
+  });
+
+  it('множитель ниже единицы уменьшает опубликованный радиус — вход маски тумана (FOW-9)', () => {
+    const h = harness();
+    const watcher = h.place('Watcher', { Position: { x: F(1), y: F(1) }, Vision: { radius: F(4) } });
+    setField(h.world, watcher, 'VisionModifier', 'id0', 9);
+    setField(h.world, watcher, 'VisionModifier', 'value0', F(0.5));
+    h.step();
+
+    // Ровно та величина, которой пересчёт набирает кандидатов: второго
+    // определения эффективного радиуса не существует (FOW-5).
+    expect(getField(h.world, watcher, VISION_STATE_COMPONENT, 'radius')).toBe(F(2));
+    const enemy = h.place('Enemy', { Position: { x: F(1), y: F(4) } });
+    h.step();
+    expect(h.mask(enemy)).toBe(teamBit(1));
+  });
+
+  it('носитель Vision без Team тоже публикуется: радиус — свойство носителя', () => {
+    const h = harness();
+    // Обзор без роли наблюдателя: стороны у сущности нет, и в OBSERVER_SPEC
+    // (Vision + Team + Position) она не попадает вовсе.
+    const beacon = h.place('Crate');
+    addComponent(h.world, beacon, VISION_COMPONENT, { radius: F(3) });
+    h.step();
+
+    expect(getField(h.world, beacon, VISION_STATE_COMPONENT, 'radius')).toBe(F(3));
   });
 });
 

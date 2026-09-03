@@ -10,7 +10,7 @@
   },
   "extract": {
     "extractCalls": 60,
-    "extractChannelValues": 2040,
+    "extractChannelValues": 2160,
     "extractEntitiesCopied": 120,
     "extractEntitiesScanned": 120,
     "extractEvents": 0,
@@ -119,7 +119,7 @@
       "waterBodiesDrawn": 60,
       "waterDepthTexels": 16384,
       "waterQuads": 240,
-      "waterRippleSources": 87
+      "waterRippleSources": 81
     },
     "syncTick": {
       "fogEntitiesScanned": 120,

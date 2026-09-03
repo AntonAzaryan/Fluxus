@@ -451,6 +451,7 @@ describe('EntityView.states: зеркалирование битов состо�
       mode: 'Running',
       isReplay: false,
       snapAll: false,
+      branchChanged: false,
       freshEvents: true,
       count: 1,
       id: new Float64Array([7]),
@@ -458,6 +459,7 @@ describe('EntityView.states: зеркалирование битов состо�
       x: new Float32Array([0]),
       y: new Float32Array([0]),
       level: new Uint8Array([0]),
+      simLevel: new Uint8Array([0]),
       // бит 0 — moving, бит 1 — levelOverride, биты выше — состояния (STATE_BITS_SHIFT).
       flags: new Uint8Array([0b1001]),
       facingYaw: new Float32Array([Number.NaN]),

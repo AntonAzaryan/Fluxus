@@ -12,7 +12,12 @@
  *   (change `fog-mask-budgeted-rebuild`, design D3): новый вход кладётся
  *   отложенным, а перестройка идёт порциями в кадре. Совпала сигнатура — не
  *   происходит вообще ничего. Уровень наблюдателя — доставленный
- *   `EntityView.currLevel` (TERR-4): тени маски направленные (FOW-9, PHYS-13).
+ *   `EntityView.simLevel`: уровень СУЩНОСТИ глазами симуляции (TERR-4,
+ *   `levelOf` — override, иначе клетка), а не уровень клетки под ней. Разница
+ *   наблюдаема ровно там, где override и стоит: прыгнувший на плато герой
+ *   (LOC-5) для симуляции остаётся внизу до приземления, и маска обязана
+ *   считать так же — иначе срез по уровню выключается, рёбра плато перестают
+ *   отбрасывать тень (FOW-9, PHYS-13) и верхний этаж подсвечивается на эти тики.
  * - Кадр (`updateFrame`) достраивает маску под ТЕКСЕЛЬНЫЙ БЮДЖЕТ и ведёт
  *   рассеивание по грязным блокам (design D1, D5). Перестройка в полёте никогда
  *   не перезапускается доставкой: она достраивается, публикуется атомарным
@@ -59,7 +64,6 @@ import type {
   QualityValues,
   RenderContext,
   RenderSubsystem,
-  ScenePostFrame,
   ScenePostSource,
   TickView,
 } from '../types.js';
@@ -69,6 +73,7 @@ import { fogMaskDebugSource } from '../debug/fogSource.js';
 import { resolveFogConfig, type FogRenderConfig } from '../fog/config.js';
 import type { FogRendererLike, FogStatNames, FogSubsystemOptions } from '../fog/contract.js';
 import { POST_FRAGMENT, POST_VERTEX, createMaskTexture } from '../fog/postPass.js';
+import { FogFrameTarget } from '../fog/frameTarget.js';
 import { FogMinimapSurface, type FogMinimapLayer } from '../fog/layer.js';
 import { FogBlitCadence, FogDirtyBlocks, dissolveWindow } from '../fog/dirty.js';
 import {
@@ -108,6 +113,16 @@ export class FogSubsystem implements RenderSubsystem {
   private readonly grid: TerrainGrid;
   private readonly statNames: FogStatNames;
   private readonly heroOf: () => EntityId | null;
+  /**
+   * Команда игрока — КОНСТАНТА МАТЧА, залатченная первым успешным чтением
+   * (FOW-11). Читается она со стата героя, а герой из доставки исчезает: он
+   * мёртв, он ещё не заспавнен, его вырезал фильтр снапшота. Выходя тогда до
+   * откладывания перестройки, подсистема переставала следовать за союзниками —
+   * маска черствела на устаревших reveal, то есть показывала освещённый пол
+   * там, где у команды зрения уже нет. Такая устарелость идёт в СВЕТ, а FOW-11
+   * допускает только устарелость в туман.
+   */
+  private team: number | undefined;
   /** Порт пост-обработки кадра (REND-34, design D2); null — её в сборке нет. */
   private readonly post: ScenePostSource | null;
 
@@ -173,13 +188,13 @@ export class FogSubsystem implements RenderSubsystem {
 
   // ------------------------------------------------------------ пост-проход
   private maskTexture: THREE.DataTexture;
-  private target: THREE.WebGLRenderTarget | null = null;
+  /** Своя цель кадра — путь без активной цепочки пост-обработки (design D2). */
+  private readonly frameTarget = new FogFrameTarget();
   private readonly postScene = new THREE.Scene();
   private readonly postCamera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
   private readonly postMaterial: THREE.ShaderMaterial;
   /** Полноэкранный квад пост-прохода: своя геометрия, отдаётся на сносе (REND-31). */
   private postQuad: THREE.Mesh | null = null;
-  private readonly sizeScratch = new THREE.Vector2();
 
   /** Слой миникарты (HUD-6, design D6): канвас, буфер пикселей и блит растра. */
   private readonly minimap: FogMinimapSurface;
@@ -207,7 +222,11 @@ export class FogSubsystem implements RenderSubsystem {
     // Фабрику канваса приносит сборка (в браузере — `document.createElement`):
     // пакет рендера DOM не трогает, и слой миникарты без фабрики просто не
     // существует — маска и пост-проход от этого не зависят.
-    this.minimap = new FogMinimapSurface(this.rect, () => this.current.strength, options.createCanvas);
+    this.minimap = new FogMinimapSurface(
+      this.mask.covered,
+      () => this.current.strength,
+      options.createCanvas,
+    );
 
     this.postMaterial = own('material', 'fog', new THREE.ShaderMaterial({
       vertexShader: POST_VERTEX,
@@ -217,8 +236,16 @@ export class FogSubsystem implements RenderSubsystem {
         tDepth: { value: null },
         tMask: { value: this.maskTexture },
         uInvViewProj: { value: new THREE.Matrix4() },
+        // ПОКРЫТЫЙ маской прямоугольник, а не прямоугольник террейна: число
+        // текселей округляется, и шейдер обязан отображать мир на ту же сетку,
+        // по которой CPU писал центры текселей (`VisibilityMask.covered`).
         uMaskRect: {
-          value: new THREE.Vector4(this.rect.x, this.rect.y, this.rect.width, this.rect.height),
+          value: new THREE.Vector4(
+            this.mask.covered.x,
+            this.mask.covered.y,
+            this.mask.covered.width,
+            this.mask.covered.height,
+          ),
         },
         uMaskTexel: { value: new THREE.Vector2(1 / this.mask.width, 1 / this.mask.height) },
         uStrength: { value: this.current.strength },
@@ -256,7 +283,7 @@ export class FogSubsystem implements RenderSubsystem {
     readonly mask: THREE.DataTexture;
     readonly target: THREE.WebGLRenderTarget | null;
   } {
-    return { scene: this.postScene, mask: this.maskTexture, target: this.target };
+    return { scene: this.postScene, mask: this.maskTexture, target: this.frameTarget.current };
   }
 
   init(ctx: RenderContext): void {
@@ -271,7 +298,7 @@ export class FogSubsystem implements RenderSubsystem {
    */
   dispose(): void {
     this.maskTexture.dispose();
-    this.releaseTarget();
+    this.frameTarget.release();
     this.postMaterial.dispose();
     this.postQuad?.geometry.dispose();
     this.postQuad?.removeFromParent();
@@ -286,13 +313,18 @@ export class FogSubsystem implements RenderSubsystem {
     this.dirty.clear();
     this.settling = false;
     this.minimapCadence.reset();
+    // Команда матча уходит вместе с подсистемой: следующий матч — своя.
+    this.team = undefined;
   }
 
   /**
    * Приём доставки (design D3, D4): наблюдатели своей команды из доставленного
-   * состояния по именам статов складываются в сигнатуру входов. Пока команда
-   * игрока не доставлена (нет героя или его статов), прежняя маска остаётся как
-   * есть — консервативнее мигания «всё открыто/всё закрыто».
+   * состояния по именам статов складываются в сигнатуру входов. Команда игрока
+   * — константа матча и ЛАТЧИТСЯ первым успешным чтением (см. `team`): герой из
+   * доставки исчезает — мёртв, ещё не заспавнен, вырезан фильтром снапшота, — а
+   * маска обязана продолжать следовать за союзниками (FOW-11). Пока команду не
+   * читали ни разу, прежняя маска остаётся как есть — консервативнее мигания
+   * «всё открыто/всё закрыто».
    *
    * Растра доставка не трогает: новый вход становится ОТЛОЖЕННЫМ, а строит его
    * кадр порциями. Сигнатура сравнивается с последним ИЗВЕСТНЫМ желаемым входом
@@ -307,8 +339,13 @@ export class FogSubsystem implements RenderSubsystem {
    */
   syncTick(view: TickView): void {
     const hero = this.heroOf();
-    if (hero === null) return;
-    const team = view.entities.get(hero)?.stats?.get(this.statNames.team);
+    const delivered =
+      hero === null ? undefined : view.entities.get(hero)?.stats?.get(this.statNames.team);
+    if (delivered !== undefined) this.team = delivered;
+    const team = this.team;
+    // Команду не читали ни разу — наблюдателей своей команды отобрать нечем, и
+    // прежняя маска остаётся как есть: консервативнее мигания «всё открыто/всё
+    // закрыто».
     if (team === undefined) return;
 
     // Отбор наблюдателей просматривает всё доставленное состояние — стоимость
@@ -348,13 +385,18 @@ export class FogSubsystem implements RenderSubsystem {
       const radius = stats.get(this.statNames.visionRadius);
       if (radius === undefined || radius <= 0) continue;
       if (length + 4 > candidate.length) candidate = this.growCandidate(length);
-      // Радиус статов уже во float мировых единицах (REND-1, `statSources.ts`);
-      // визуал консервативнее геймплея на коэффициент конфига (FOW-9). Уровень
-      // — доставленный `currLevel` (TERR-4): слот сигнатуры и поле наблюдателя.
+      // Радиус статов уже во float мировых единицах (REND-1, `statSources.ts`)
+      // и уже ЭФФЕКТИВНЫЙ — свёртку `VisionModifier` публикует симуляция
+      // (`VisionState`, FOW-3), рендер её не повторяет; визуал консервативнее
+      // геймплея на коэффициент конфига (FOW-9).
       candidate[length] = entity.currX;
       candidate[length + 1] = entity.currY;
       candidate[length + 2] = radius * this.current.conservatism;
-      candidate[length + 3] = entity.currLevel;
+      // Уровень СИМУЛЯЦИИ, а не клетки под наблюдателем (TERR-4): им фильтрует
+      // FOW-5, и им же обязана резать маска. Продюсер без него (документный
+      // набор, REND-11) отдаёт уровень клетки — у размещённого объекта другого
+      // и не бывает.
+      candidate[length + 3] = entity.simLevel ?? entity.currLevel;
       length += 4;
     }
     return length;
@@ -644,13 +686,17 @@ export class FogSubsystem implements RenderSubsystem {
     (this.postMaterial.uniforms.uStrength as { value: number }).value = next.strength;
     (this.postMaterial.uniforms.uColor as { value: THREE.Color }).value.set(next.color);
     if (next.resolution !== previous.resolution) {
+      const wasBuilt = this.built;
       this.mask = new VisibilityMask(this.rect, next.resolution, this.field);
+      // Показанная маска нового разрешения — НУЛИ, то есть весь мир под
+      // туманом. Это и есть консервативное состояние (FOW-9): «где приближение
+      // сомневается — туман, а не свет». Прежний растр не переносится — другая
+      // сетка, — а растянутым он врал бы формой.
       this.shown = new Uint8Array(this.mask.data.length);
       // Растр другого разрешения — другая блочная сетка и другой бюджет; порции
       // в полёте писали в прежний растр, и достраивать их некуда (design D3).
       this.dirty = new FogDirtyBlocks(this.mask.width, this.mask.height);
       this.rebuild.budget = this.budgetFor(this.mask);
-      this.rebuild.abort();
       this.settling = false;
       // Накопленное окно каденса — координаты прежнего растра: не переносится.
       this.minimapCadence.reset();
@@ -661,14 +707,32 @@ export class FogSubsystem implements RenderSubsystem {
         1 / this.mask.width,
         1 / this.mask.height,
       );
-      // Прежний растр другого разрешения не переносится: маска перестроится
-      // ближайшей доставкой, а до неё прежняя картинка честнее растянутой.
-      this.built = false;
+      // Покрытие сменилось вместе с числом текселей (F-4): и шейдер, и слой
+      // миникарты отображают мир на НОВЫЙ покрытый прямоугольник.
+      (this.postMaterial.uniforms.uMaskRect as { value: THREE.Vector4 }).value.set(
+        this.mask.covered.x,
+        this.mask.covered.y,
+        this.mask.covered.width,
+        this.mask.covered.height,
+      );
       this.minimap.reset();
-      // Разрешение в сигнатуру входов не входит — пустой растр честно требует
-      // перестройки ближайшей доставкой (design D4).
-      this.rebuild.forget();
-      return; // растр и слой заведутся заново ближайшей перестройкой
+      this.minimap.setWorld(this.mask.covered);
+      // `built` НЕ сбрасывается, если маска уже строилась: сброс выключал бы
+      // маскирующий проход целиком (`render`), и кадр уходил бы БЕЗ ТУМАНА —
+      // вся арена открыта — на всё время до следующей перестройки. В матче это
+      // ≥1 кадр на смене пресета (`performance` клампит 8 → 4), до ~3 кадров
+      // после следующей доставки и бесконечно в замороженном мире. Прежнее
+      // обоснование («прежняя картинка честнее растянутой») было неверным:
+      // прежней картинки при сброшенном флаге нет вовсе.
+      this.built = wasBuilt;
+      // Перестройке нужен вход, а доставки может не быть вовсе (пауза, конец
+      // матча): последний ИЗВЕСТНЫЙ желаемый вход становится отложенным, и
+      // ближайшие кадры достраивают маску под бюджетом сами (design D1).
+      this.rebuild.requeue();
+      // Текстура и слой миникарты показывают закрытый растр немедленно: до
+      // первой перестройки потребители обязаны видеть туман, а не пустоту.
+      if (wasBuilt) this.publishTexture(costSink());
+      return; // растр достроится ближайшими кадрами
     }
     // Смена тона — СОБЫТИЕ правки конфигурации, а не перестройка (FOW-10,
     // HUD-6): тон вбит в пиксели канваса миникарты и в растр не входит вовсе,
@@ -708,7 +772,7 @@ export class FogSubsystem implements RenderSubsystem {
     const chain = this.post?.active === true ? this.post : null;
     // Цепочка взяла отрисовку сцены на себя — своя цель тумана больше не нужна
     // ни одному проходу и отдаётся сразу, а не доживает до сноса (REND-31).
-    if (chain !== null) this.releaseTarget();
+    if (chain !== null) this.frameTarget.release();
     if (!this.built) {
       if (chain !== null) {
         chain.renderToScreen(renderer, camera);
@@ -719,7 +783,9 @@ export class FogSubsystem implements RenderSubsystem {
       return;
     }
     const frame =
-      chain !== null ? chain.renderToTexture(renderer, camera) : this.renderScene(renderer, ctx, camera);
+      chain !== null
+        ? chain.renderToTexture(renderer, camera)
+        : this.frameTarget.render(renderer, ctx.scene, camera);
 
     camera.updateMatrixWorld();
     (this.postMaterial.uniforms.uInvViewProj as { value: THREE.Matrix4 }).value
@@ -731,54 +797,6 @@ export class FogSubsystem implements RenderSubsystem {
     // Маскирующий проход — один; отрисовка сцены сюда добавляется только тогда,
     // когда её сделала САМА подсистема (неактивная цепочка).
     if (cost !== undefined) cost.fogRenderPasses += chain !== null ? 1 : 2;
-  }
-
-  /**
-   * Своя отрисовка сцены в промежуточную LDR-цель — путь без пост-обработки,
-   * ровно тот же, что был до REND-34. Возвращает вход маскирующего прохода в
-   * той же форме, в какой его отдаёт порт цепочки (design D2).
-   */
-  private renderScene(
-    renderer: FogRendererLike,
-    ctx: RenderContext,
-    camera: THREE.Camera,
-  ): ScenePostFrame {
-    const size = renderer.getDrawingBufferSize(this.sizeScratch);
-    const target = this.ensureTarget(size.x, size.y);
-    renderer.setRenderTarget(target);
-    renderer.render(ctx.scene, camera);
-    renderer.setRenderTarget(null);
-    // ponytail (REND-26): та же запись на кадр, что отдаёт порт цепочки, и по
-    // тому же основанию — одна на кадр с построенной маской, а не на инстанс.
-    // Форма ответа общая намеренно: два пути входа маски различаются тем, КТО
-    // нарисовал сцену, а не тем, что получает маскирующий проход.
-    return { color: target.texture, depth: target.depthTexture };
-  }
-
-  /**
-   * Отдаёт промежуточную цель кадра вместе с её текстурой глубины (REND-31).
-   * Текстуру заводит ПОДСИСТЕМА, а не цель: `dispose()` цели рассылает только
-   * собственное событие, поэтому без этой строки текстура пережила бы и смену
-   * размера окна, и снос подсистемы — молча, по одной на каждый ресайз.
-   */
-  private releaseTarget(): void {
-    if (this.target === null) return;
-    this.target.depthTexture?.dispose();
-    this.target.dispose();
-    this.target = null;
-  }
-
-  /** Render target кадра с текстурой глубины; пересоздаётся при смене размера окна. */
-  private ensureTarget(width: number, height: number): THREE.WebGLRenderTarget {
-    const w = Math.max(1, Math.floor(width));
-    const h = Math.max(1, Math.floor(height));
-    if (this.target !== null && this.target.width === w && this.target.height === h) {
-      return this.target;
-    }
-    this.releaseTarget();
-    const depthTexture = own('texture', 'fog', new THREE.DepthTexture(w, h));
-    this.target = own('renderTarget', 'fog', new THREE.WebGLRenderTarget(w, h, { depthTexture, depthBuffer: true }));
-    return this.target;
   }
 
   /**

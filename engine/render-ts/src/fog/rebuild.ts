@@ -191,6 +191,41 @@ export class MaskRebuild {
   }
 
   /**
+   * Перестроить последний ИЗВЕСТНЫЙ желаемый вход заново — смена разрешения
+   * маски (FOW-10). Растр другого разрешения достраивать нечем: полётные порции
+   * писали в прежний, а опубликованный не переносится. Но и ждать доставки
+   * нельзя: в замороженном мире (пауза, конец матча) её не будет вовсе, а до
+   * неё маска стояла бы пустой — то есть весь мир открытым либо весь закрытым.
+   *
+   * Вход берётся тот же, с которым сравнивается доставка (`matches`):
+   * отложенный, иначе полётный, иначе опубликованный. `false` — входа не было
+   * никогда: маска не строилась ни разу, и перестраивать нечего.
+   */
+  requeue(): boolean {
+    const source =
+      this.pendingLength >= 0
+        ? this.pending
+        : this.buildingLength >= 0
+          ? this.building
+          : this.signature;
+    const length =
+      this.pendingLength >= 0
+        ? this.pendingLength
+        : this.buildingLength >= 0
+          ? this.buildingLength
+          : this.signatureLength;
+    // Копия ДО `abort`: он снимает отложенный вход, а он же бывает источником.
+    const copy = length < 0 ? null : copySignature(new Float64Array(source.length), source, length);
+    this.abort();
+    // Опубликованного растра больше нет — сигнатура опубликованного лжёт.
+    this.signatureLength = -1;
+    if (copy === null) return false;
+    this.pending = copySignature(this.pending, copy, length);
+    this.pendingLength = length;
+    return true;
+  }
+
+  /**
    * Порции кадра под бюджет; `true` — в этом кадре перестройка ОПУБЛИКОВАНА.
    * Перестройка в полёте не перезапускается: кадр её достраивает, публикует и
    * только потом берёт последний отложенный вход (design D3).

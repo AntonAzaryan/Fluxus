@@ -59,9 +59,11 @@ export interface FogWorldRect {
 
 /**
  * Наблюдатель своей команды: позиция и эффективный радиус в мировых единицах.
- * Уровень — доставленный `EntityView.currLevel` (TERR-4 производное): по нему
- * рёбра не выше наблюдателя не отбрасывают тень (`segmentCasts`, PHYS-13); он
- * же — слот сигнатуры перестройки маски (design D4).
+ * Уровень — доставленный `EntityView.simLevel`, то есть уровень СУЩНОСТИ глазами
+ * симуляции (TERR-4, `levelOf`: override, иначе клетка), а не уровень клетки под
+ * ней: по нему рёбра не выше наблюдателя не отбрасывают тень (`segmentCasts`,
+ * PHYS-13) и режется reveal по высоте — ровно тем же значением, каким фильтрует
+ * FOW-5. Он же — слот сигнатуры перестройки маски (design D4).
  */
 export interface FogObserver {
   readonly x: number;
@@ -212,6 +214,20 @@ export type FogSmoothPass = 'horizontal' | 'vertical';
  */
 export class VisibilityMask {
   readonly rect: FogWorldRect;
+  /**
+   * ПОКРЫТЫЙ растром прямоугольник мира: `rect.x/y` плюс `width/texelsPerUnit`
+   * на `height/texelsPerUnit`. Отличается от `rect` тем, что число текселей
+   * ОКРУГЛЯЕТСЯ (см. конструктор): при нецелом `rect × разрешение` — ручка
+   * качества от 0.5, нечётная ширина арены, сценовое 1.5 — растр покрывает чуть
+   * больше или чуть меньше прямоугольника террейна.
+   *
+   * Публикуется он, а не `rect`, всем, кто отображает МИР на растр снаружи:
+   * пост-проход (`uMaskRect`) и слой миникарты. CPU пишет центры текселей по
+   * `rect + (t + 0.5) / разрешение`, то есть по этой же сетке; отображение
+   * потребителя по `rect` разъезжалось бы с ней тем сильнее, чем больше
+   * округление, — до юнита у дальнего края.
+   */
+  readonly covered: FogWorldRect;
   /** Текселей на мировую единицу — разрешение маски (FOW-10). */
   readonly texelsPerUnit: number;
   readonly width: number;
@@ -274,6 +290,12 @@ export class VisibilityMask {
     this.texelsPerUnit = texelsPerUnit;
     this.width = Math.max(1, Math.round(rect.width * texelsPerUnit));
     this.height = Math.max(1, Math.round(rect.height * texelsPerUnit));
+    this.covered = {
+      x: rect.x,
+      y: rect.y,
+      width: this.width / texelsPerUnit,
+      height: this.height / texelsPerUnit,
+    };
     this.front = new Uint8Array(this.width * this.height);
     this.field = field ?? NO_LEVEL_CUT;
     // Сторона пустой карты бесконечна, и множитель обращается в ноль сам —

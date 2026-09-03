@@ -368,9 +368,20 @@ function buildCliffs(grid: TerrainGrid): CliffEdge[] {
  * закреплено тестом на отрицательной мировой координате в `terrain.test.ts`.
  */
 export function cellAt(grid: TerrainGrid, position: Vec2): number {
-  const x = clamp(Math.floor(position.x / grid.tileSize), grid.width - 1);
-  const y = clamp(Math.floor(position.y / grid.tileSize), grid.height - 1);
-  return y * grid.width + x;
+  return cellAtXY(grid, position.x, position.y);
+}
+
+/**
+ * Та же клетка по РАЗДЁРНУТЫМ координатам. Вход горячих обходов, которым точка
+ * не нужна ни для чего, кроме этого вызова: воркер рендера спрашивает клетку
+ * под каждой сущностью каждый тик (`rendering` REND-26), и `Vec2` на сущность
+ * был бы объектом на сущность на тик. Правило клетки одно на оба входа —
+ * `cellAt` делегирует сюда, расходиться им не на чем.
+ */
+export function cellAtXY(grid: TerrainGrid, x: number, y: number): number {
+  const cellX = clamp(Math.floor(x / grid.tileSize), grid.width - 1);
+  const cellY = clamp(Math.floor(y / grid.tileSize), grid.height - 1);
+  return cellY * grid.width + cellX;
 }
 
 function clamp(value: number, max: number): number {

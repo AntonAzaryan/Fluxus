@@ -146,8 +146,18 @@ export type { DecorationInstance } from './decorations.js';
 
 // Половины хоста по границе потоков (client-shell SHELL-2): Extractor —
 // воркер-сторона (единственный читатель мира), ViewBuffer — main-сторона.
-export { Extractor, CHANNEL_COLUMNS, ENTITY_MOVING, ENTITY_LEVEL_OVERRIDE } from './extractor.js';
+export { Extractor } from './extractor.js';
 export type { ExtractedTick, ExtractorConfig } from './extractor.js';
+export {
+  channelColumns,
+  channelColumnsOf,
+  growChannelColumns,
+  CHANNEL_COLUMNS,
+  CHANNEL_LAYOUT,
+  ENTITY_LEVEL_OVERRIDE,
+  ENTITY_MOVING,
+} from './channelLayout.js';
+export type { ChannelArray, ChannelArrayValue, ChannelColumn } from './channelLayout.js';
 // Перевод нагрузки события на входной границе (REND-1). Наружу уходит потому,
 // что производителей событий у рендера два, и второй — сетевая оболочка
 // (SHELL-4): факты с провода входят в рендер мимо `Extractor`, и перевод у них
@@ -156,7 +166,7 @@ export { renderEventData } from './eventData.js';
 // Объявляемые сборкой источники величин: фаза полёта (REND-12) и статы (HUD-8).
 export { MAX_STATS } from './statSources.js';
 export type { FlightPhaseSource, StatSource } from './statSources.js';
-export { ViewBuffer } from './viewBuffer.js';
+export { ViewBuffer, interpolateYaw, tickStreamFrame } from './viewBuffer.js';
 export type { FrameTiming, ViewBufferConfig } from './viewBuffer.js';
 
 // Камера (capability camera): rig режимов и вход кадрирования, слой эффектов,
