@@ -65,6 +65,8 @@ const MAX_RIPPLE_SOURCES = WATER_MAX_RIPPLE_SOURCES;
 const MAX_DETAIL_LAYERS = 4;
 /** Шестнадцать текселей на клетку — предел, за которым берег уже не уточняется. */
 const MAX_DEPTH_TEXELS_PER_CELL = 16;
+/** Запрошенная анизотропия текстур детали; фактическую зажимает потолок устройства. */
+const WATER_DETAIL_ANISOTROPY = 8;
 
 export interface WaterOptions {
   /** Сетка террейна сцены: карта воды адресует её клетки (REND-35). */
@@ -516,6 +518,16 @@ export class WaterSubsystem implements RenderSubsystem {
         // размазалась бы на весь водоём одним экземпляром.
         texture.wrapS = THREE.RepeatWrapping;
         texture.wrapT = THREE.RepeatWrapping;
+        // Мип-цепочка и трилинейная выборка: под изометрией период детали
+        // занимает десятки пикселей, и без мипов сотни текселей на пиксель
+        // сворачиваются в искрящий шум (`DataTexture` по умолчанию берёт
+        // ближайший тексель и мипов не строит). Анизотропия — плоскость воды
+        // лежит под углом к взгляду, и изотропный мип размывал бы её вдоль
+        // взгляда; величину рендерер сам зажимает потолком устройства.
+        texture.generateMipmaps = true;
+        texture.minFilter = THREE.LinearMipmapLinearFilter;
+        texture.magFilter = THREE.LinearFilter;
+        texture.anisotropy = WATER_DETAIL_ANISOTROPY;
         this.textures.set(id, texture);
         // Приезд текстуры меняет `#define` источника детали — материал тела
         // пересобирается событием, а не кадром (ED-15).

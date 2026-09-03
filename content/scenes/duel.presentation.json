@@ -128,13 +128,13 @@
         "deepColor": "#14454f",
         "maxDepth": 0.1,
         "banding": 0,
-        "foam": { "width": 0.025, "color": "#dff3f7", "hardness": 0.7 },
+        "foam": { "width": 0.004, "color": "#dff3f7", "hardness": 0.6 },
         "detail": {
           "source": "textured",
           "layers": 3,
-          "scale": 2.5,
-          "speed": 0.1,
-          "strength": 0.4,
+          "scale": 7,
+          "speed": 0.35,
+          "strength": 0.6,
           "normalMap": "visuals/textures/water-normal.png",
           "foamNoise": "visuals/textures/water-foam.png"
         },
