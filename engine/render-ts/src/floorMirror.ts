@@ -14,8 +14,12 @@ import {
   type EntityId,
   type QuerySpec,
   type TerrainGrid,
+  type TickResult,
   type WorldState,
 } from '@fluxus/core';
+
+/** Пустая дельта — общий неизменяемый список: пол не менялся (REND-26). */
+const EMPTY_DELTA: readonly number[] = [];
 
 /** Тег singleton-сущности террейна — конвенция `terrainPrefab` ядра. */
 const TERRAIN_TAG = 'terrain';
@@ -88,6 +92,28 @@ export class FloorMirror {
       this.lastScanned += Math.max(0, top - base);
     }
     return changed;
+  }
+
+  /**
+   * Пары «клетка, бит» изменившихся клеток для доставки (TERR-6 → REND-7), либо
+   * пустой список. Карта перечитывается ТОЛЬКО когда дельта тика тронула
+   * компонент пола либо мир разорвался (`force`: rewind мог откатить пол без
+   * дельты, а первое извлечение не с чем сравнивать).
+   *
+   * Список пар выделяется лишь тогда, когда пол реально менялся, — это событие
+   * сцены, а не тик, и REND-26 такую аллокацию разрешает явно. Просмотренные
+   * клетки остаются в `lastScanned`: сток стоимости читается вызывающим один
+   * раз на извлечение (PERF-3).
+   */
+  delta(state: WorldState, result: TickResult, force: boolean): readonly number[] {
+    this.lastScanned = 0;
+    const floorDirty = result.changes.changedEntities(FLOOR_COMPONENT).size > 0;
+    if (!floorDirty && !force) return EMPTY_DELTA;
+    const changed = this.sync(state);
+    if (changed.length === 0) return EMPTY_DELTA;
+    const pairs: number[] = [];
+    for (const cell of changed) pairs.push(cell, this.bits[cell]!);
+    return pairs;
   }
 
   private findEntity(state: WorldState): EntityId | null {

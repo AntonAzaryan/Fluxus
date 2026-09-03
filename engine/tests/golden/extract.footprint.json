@@ -14,6 +14,17 @@
         "tagEntries": 32,
         "ticks": 8,
         "worldBytes": 25600
+      },
+      "state": {
+        "extractStateBytes": 6614,
+        "fogMaskBytes": 0,
+        "modelsBatchRecords": 0,
+        "modelsBatches": 0,
+        "modelsInstances": 0,
+        "particlesPooled": 0,
+        "terrainChunks": 0,
+        "viewFacingMemory": 0,
+        "viewRecords": 0
       }
     },
     "large": {
@@ -27,6 +38,17 @@
         "tagEntries": 256,
         "ticks": 8,
         "worldBytes": 25600
+      },
+      "state": {
+        "extractStateBytes": 53262,
+        "fogMaskBytes": 0,
+        "modelsBatchRecords": 0,
+        "modelsBatches": 0,
+        "modelsInstances": 0,
+        "particlesPooled": 0,
+        "terrainChunks": 0,
+        "viewFacingMemory": 0,
+        "viewRecords": 0
       }
     }
   }

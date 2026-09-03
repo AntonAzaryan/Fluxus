@@ -18,7 +18,6 @@
  */
 import {
   FIXED_ONE,
-  FLOOR_COMPONENT,
   LEVEL_OVERRIDE_COMPONENT,
   LOCOMOTION_AIRBORNE,
   LOCOMOTION_DODGE,
@@ -45,6 +44,7 @@ import {
   type StatSource,
 } from './statSources.js';
 import {
+  channelBytes,
   channelColumns,
   growChannelColumns,
   CHANNEL_COLUMNS,
@@ -55,7 +55,8 @@ import {
   type ChannelArrayValue,
 } from './channelLayout.js';
 import { AimTracker, DEFAULT_AIM_HOLD_TICKS } from './aimTracker.js';
-import { FrameMirror } from './frameMirror.js';
+import { FrameMirror, grownIds } from './frameMirror.js';
+import { peak } from './footprint.js';
 import { renderEventData } from './eventData.js';
 import type { RenderEvent } from './types.js';
 
@@ -272,13 +273,6 @@ type ChannelColumnFields = {
   [K in keyof ExtractedTick as ExtractedTick[K] extends ChannelArrayValue ? K : never]: ExtractedTick[K];
 };
 
-/** Рост буфера идентификаторов — событие сцены, не тик (REND-26). */
-function grownIds(current: Float64Array, needed: number): Float64Array<ArrayBuffer> {
-  const grown = new Float64Array(Math.max(16, Math.ceil(needed * 1.5)));
-  grown.set(current);
-  return grown;
-}
-
 const EMPTY_EVENTS: readonly RenderEvent[] = [];
 const EMPTY_DELTA: readonly number[] = [];
 
@@ -319,6 +313,13 @@ export class Extractor {
   private floorCells = 0;
   /** Строк, сравнённых с зеркалом последним обходом, — вход счётчика (PERF-3). */
   private comparedRows = 0;
+  /**
+   * Байты ёмкости колонок плоской формы и буферов обхода — вход величины
+   * памяти извлечения (PERF-8). Кэшируется РОСТОМ, а не считается на каждом
+   * извлечении: рост ёмкости — событие сцены, а обход четырнадцати колонок на
+   * тик был бы работой учёта в горячем пути (PERF-3).
+   */
+  private columnBytes = 0;
   private prevTick = 0;
   private prevMode: WorldMode = 'Running';
 
@@ -422,7 +423,14 @@ export class Extractor {
 
     const scanned = this.copyEntities(state, result.tick, full);
 
-    const floorDelta = this.syncFloor(state, result, snapAll);
+    // Зеркало пола (TERR-6 → REND-7) перечитывается только по дельте компонента
+    // либо на разрыве; просмотренные клетки уезжают полем — сток стоимости
+    // читается один раз на вызов, а не внутри (PERF-3).
+    const floorDelta =
+      this.mirror === null
+        ? EMPTY_DELTA
+        : this.mirror.delta(state, result, snapAll || !this.hasTick);
+    this.floorCells = this.mirror?.lastScanned ?? 0;
 
     out.tick = result.tick;
     out.mode = result.mode;
@@ -453,30 +461,15 @@ export class Extractor {
         out.count * CHANNEL_COLUMNS + out.statPairs * 2 + floorDelta.length + out.removedCount;
     }
 
+    // Величина памяти воркер-половины доставки (PERF-8): ёмкость колонок и
+    // зеркала доставленного кадра. Обе величины кэшированы ростом — здесь одно
+    // сложение, и без стока проба не делает даже его (`peak` инертен).
+    peak('extractStateBytes', this.columnBytes + this.frameMirror.byteLength);
+
     this.prevTick = result.tick;
     this.prevMode = result.mode;
     this.hasTick = true;
     return out;
-  }
-
-  /**
-   * Зеркало пола (TERR-6 → REND-7): перечитываем только когда дельта тика
-   * тронула компонент либо при разрыве непрерывности — rewind мог откатить пол
-   * без дельты. Просмотренные клетки уезжают полем: сток стоимости читается
-   * один раз на вызов, а не здесь (PERF-3).
-   */
-  private syncFloor(state: WorldState, result: TickResult, snapAll: boolean): readonly number[] {
-    this.floorCells = 0;
-    const mirror = this.mirror;
-    if (mirror === null) return EMPTY_DELTA;
-    const floorDirty = result.changes.changedEntities(FLOOR_COMPONENT).size > 0;
-    if (!floorDirty && !snapAll && this.hasTick) return EMPTY_DELTA;
-    const changed = mirror.sync(state);
-    this.floorCells = mirror.lastScanned;
-    if (changed.length === 0) return EMPTY_DELTA;
-    const pairs: number[] = [];
-    for (const cell of changed) pairs.push(cell, mirror.bits[cell]!);
-    return pairs;
   }
 
   /**
@@ -555,7 +548,10 @@ export class Extractor {
     let count = 0;
     for (const id of this.frameMirror.ids()) {
       if (seen.has(id)) continue;
-      if (count >= this.removed.length) this.removed = grownIds(this.removed, count + 1);
+      if (count >= this.removed.length) {
+        this.removed = grownIds(this.removed, count + 1);
+        this.measureColumns();
+      }
       this.removed[count] = id;
       count++;
     }
@@ -575,6 +571,7 @@ export class Extractor {
     const count = queryInto(state, ALIVE_SPEC, this.alive);
     if (count <= this.alive.length) return count;
     this.alive = new Float64Array(Math.max(16, Math.ceil(count * 1.5)));
+    this.measureColumns();
     return queryInto(state, ALIVE_SPEC, this.alive);
   }
 
@@ -656,6 +653,18 @@ export class Extractor {
     // прочими колонками, то есть только при росте сцены (SHELL-3).
     out.statIndex = new Int32Array(capacity * this.stats.size);
     out.statValue = new Float64Array(capacity * this.stats.size);
+    this.measureColumns();
+  }
+
+  /** Байты ёмкости воркер-половины доставки (PERF-8); зовётся ростом ёмкости. */
+  private measureColumns(): void {
+    this.columnBytes =
+      channelBytes(this.out as unknown as Record<string, ChannelArrayValue>) +
+      this.out.statCount.byteLength +
+      this.out.statIndex.byteLength +
+      this.out.statValue.byteLength +
+      this.alive.byteLength +
+      this.removed.byteLength;
   }
 
   /**

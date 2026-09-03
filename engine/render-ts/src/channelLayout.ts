@@ -70,6 +70,17 @@ export const CHANNEL_LAYOUT: readonly ChannelColumn[] = [
  */
 export const CHANNEL_COLUMNS = CHANNEL_LAYOUT.length;
 
+/**
+ * Байты ёмкости колонок плоской формы (PERF-8): сумма по таблице, а не по
+ * перечню имён — колонка, добавленная таблицей, входит сюда сама. Зовётся
+ * ростом ёмкости, то есть событием сцены, а не кадром.
+ */
+export function channelBytes(columns: Record<string, ChannelArrayValue>): number {
+  let bytes = 0;
+  for (const column of CHANNEL_LAYOUT) bytes += columns[column.name]!.byteLength;
+  return bytes;
+}
+
 /** Имена колонок заданной ширины в порядке таблицы — вход раскладки кодека. */
 export function channelColumnsOf(array: ChannelArray): readonly string[] {
   return CHANNEL_LAYOUT.filter((column) => column.array === array).map((column) => column.name);

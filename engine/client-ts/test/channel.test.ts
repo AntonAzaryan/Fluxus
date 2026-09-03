@@ -17,7 +17,7 @@ import {
   tick,
   world as coreWorld,
 } from '@fluxus/core';
-import { ViewBuffer, type RenderSubsystem, type TickView } from '@fluxus/render';
+import { ViewBuffer, type Extractor, type RenderSubsystem, type TickView } from '@fluxus/render';
 import {
   RemoteHost,
   ShellSender,
@@ -428,6 +428,137 @@ describe('факты разрыва не уезжают проигрываемы
     const delivered = readTick(posted[0]!.buffer, posted[0]!.events, []);
     expect(delivered.events.map((event) => event.type)).toEqual(['CastFireball']);
     expect(delivered.freshEvents).toBe(true);
+  });
+});
+
+describe('признаки разрыва копятся через окно конфляции (SHELL-4)', () => {
+  /** Стенд отправителя без пула: доставка не уходит, пока тест не вернёт буфер. */
+  function heldSender(): {
+    sender: ShellSender;
+    posted: TickEnvelope[];
+    extract: (options?: { replay?: boolean }) => ReturnType<Extractor['extract']>;
+  } {
+    const rig = makeRig();
+    const posted: TickEnvelope[] = [];
+    const port: ShellPort = {
+      post(message) {
+        posted.push(message as TickEnvelope);
+      },
+      onMessage() {
+        // Обратного канала стенду не нужно: он проверяет отправителя.
+      },
+    };
+    const sender = new ShellSender(port, { poolSize: 0 });
+    const extractor = makeExtractor(rig);
+    let seq = 0;
+    return {
+      sender,
+      posted,
+      extract: (options = {}) => {
+        seq += 1;
+        const result = tick(rig.sim, rig.state, [
+          {
+            tick: rig.state.tick + 1,
+            playerId: PLAYER_ID,
+            seq,
+            move: { x: 0, y: 0 },
+            aimDir: 0,
+            buttons: 0,
+          },
+        ]);
+        // Реплеевый проход (REW-4): экстрактор взводит по нему и разрыв, и
+        // смену ветви (SHELL-7) — ровно те признаки, что обязаны копиться.
+        return extractor.extract(options.replay === true ? { ...result, isReplay: true } : result);
+      },
+    };
+  }
+
+  it('разрыв тика, съеденного конфляцией, уезжает с ближайшим конвертом', () => {
+    const stand = heldSender();
+
+    // Обычный тик, затем реплеевый (разрыв + смена ветви), затем снова обычный.
+    // Уехать успеет только последний — состояние conflatable (SHELL-4).
+    stand.sender.push(stand.extract());
+    const replayed = stand.extract({ replay: true });
+    expect(replayed.snapAll).toBe(true);
+    expect(replayed.branchChanged).toBe(true);
+    stand.sender.push(replayed);
+    // Состояние реплеевого тика вытеснено следующим — оно conflatable; признаки
+    // разрыва вытеснению не подлежат.
+    stand.sender.push(stand.extract());
+    expect(stand.posted).toHaveLength(0);
+
+    stand.sender.ack(new ArrayBuffer(64 * 1024));
+    expect(stand.posted).toHaveLength(1);
+    const delivered = readTick(stand.posted[0]!.buffer, stand.posted[0]!.events, []);
+    // Состояние — последнего тика, у которого разрыва нет вовсе; признаки же
+    // накоплены ИЛИ-ом по всему окну: потеряй их приёмник — он проинтерполировал
+    // бы сквозь стёртую ветвь истории.
+    expect(delivered.snapAll).toBe(true);
+    expect(delivered.branchChanged).toBe(true);
+  });
+
+  it('окно без разрыва признаков не выдумывает', () => {
+    const stand = heldSender();
+    stand.sender.push(stand.extract());
+    stand.sender.push(stand.extract());
+    stand.sender.ack(new ArrayBuffer(64 * 1024));
+
+    const delivered = readTick(stand.posted[0]!.buffer, stand.posted[0]!.events, []);
+    expect(delivered.snapAll).toBe(false);
+    expect(delivered.branchChanged).toBe(false);
+  });
+
+  it('накопленное гаснет отправкой: следующее окно начинается чистым', () => {
+    const stand = heldSender();
+    stand.sender.push(stand.extract({ replay: true }));
+    stand.sender.ack(new ArrayBuffer(64 * 1024));
+    expect(readTick(stand.posted[0]!.buffer, stand.posted[0]!.events, []).snapAll).toBe(true);
+
+    stand.sender.push(stand.extract());
+    stand.sender.ack(new ArrayBuffer(64 * 1024));
+    expect(stand.posted).toHaveLength(2);
+    expect(readTick(stand.posted[1]!.buffer, stand.posted[1]!.events, []).snapAll).toBe(false);
+  });
+});
+
+describe('свежий подписчик получает полный кадр (SHELL-3)', () => {
+  it('оболочка, переиспользующая экстрактор, стирает зеркало на новом подписчике', () => {
+    const rig = makeRig();
+    const extractor = makeExtractor(rig);
+    const step = (): ReturnType<Extractor['extract']> =>
+      extractor.extract(
+        tick(rig.sim, rig.state, [
+          {
+            tick: rig.state.tick + 1,
+            playerId: PLAYER_ID,
+            seq: rig.state.tick + 1,
+            move: { x: 0, y: 0 },
+            aimDir: 0,
+            buttons: 0,
+          },
+        ]),
+      );
+
+    // Первый подписчик: полный кадр, затем частичные — зеркало живёт.
+    const first = step();
+    expect(first.full).toBe(true);
+    const rows = first.count;
+    expect(rows).toBeGreaterThan(0);
+    extractor.markDelivered();
+    const partial = step();
+    expect(partial.full).toBe(false);
+    extractor.markDelivered();
+
+    // Пришёл ВТОРОЙ подписчик: оболочка, живущая с одним экстрактором,
+    // объявляет зеркало недействительным — приёмнику не известно ничего
+    // (SHELL-5, handshake), и частичный кадр он применить не смог бы.
+    extractor.forgetDelivered();
+    const fresh = step();
+    expect(fresh.full).toBe(true);
+    expect(fresh.count).toBe(rows);
+    // Полный кадр авторитетен, и списка исчезнувших в нём не бывает.
+    expect(fresh.removedCount).toBe(0);
   });
 });
 

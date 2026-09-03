@@ -281,11 +281,22 @@ function measureTickSize(size: AxisSize): StateFootprint {
   return sorted(total);
 }
 
-/** Величины ядра одного размера оси экстракции: та же запись, свой путь прогона. */
-function measureExtractSize(size: AxisSize): StateFootprint {
+/**
+ * Величины ОБЕИХ сторон одного размера оси экстракции: запись ядра и величины
+ * воркер-половины доставки (PERF-8, change `presentation-time-scale`).
+ *
+ * Ось эта — единственная, где ёмкость извлечения растёт числом сущностей: у
+ * записанных матчей состав фиксирован, а синтетика осей рендера строит плоскую
+ * форму сама, мимо экстрактора. Без этой секции рост зеркала и колонок не
+ * читался бы отношением L/S нигде.
+ */
+function measureExtractSize(size: AxisSize): { tick: StateFootprint; state: StateFootprint } {
   const { sink, total } = tickFootprintCollector();
-  playExtraction(size.def, sink);
-  return sorted(total);
+  const footprint = createFootprint();
+  withFootprintSink(footprint, () => {
+    playExtraction(size.def, sink);
+  });
+  return { tick: sorted(total), state: sorted({ ...footprint.state }) };
 }
 
 /**
@@ -326,8 +337,23 @@ function measureNavPath(): unknown {
   return axisDocument('navAgents', navPathSizes(), measureTickSize);
 }
 
+/**
+ * Документ оси экстракции: та же форма, что у осей тика, но обе секции сразу —
+ * величины ядра и величины извлечения. Своя сборка, а не общий `axisDocument`:
+ * у осей `npcAgents`/`navAgents` презентационной стороны нет вовсе, и класть им
+ * пустую секцию значило бы утверждать про них то, чего не мерили.
+ */
 function measureExtract(): unknown {
-  return axisDocument('extractEntities', extractSizes(), measureExtractSize);
+  const sizes = extractSizes();
+  return {
+    axis: 'extractEntities',
+    small: sizes.small.magnitude,
+    large: sizes.large.magnitude,
+    footprint: {
+      small: measureExtractSize(sizes.small),
+      large: measureExtractSize(sizes.large),
+    },
+  };
 }
 
 // --------------------------------------------------------------- сверка эталона
@@ -473,6 +499,24 @@ describe('PERF-6: оси масштабирования — величины п�
     const extract = measureExtract() as AxisDocument;
     expect(extract.footprint.small.tick.entitiesAlive).toBe(extract.small);
     expect(extract.footprint.large.tick.entitiesAlive).toBe(extract.large);
+  });
+
+  it('ось экстракции: память воркер-половины растёт числом сущностей (PERF-8)', () => {
+    const extract = measureExtract() as AxisDocument & {
+      readonly footprint: {
+        readonly small: { readonly state: StateFootprint };
+        readonly large: { readonly state: StateFootprint };
+      };
+    };
+    const small = extract.footprint.small.state.extractStateBytes!;
+    const large = extract.footprint.large.state.extractStateBytes!;
+    const ratio = extract.large / extract.small;
+    expect(small).toBeGreaterThan(0);
+    // Линейность: восьмикратная сцена даёт примерно восьмикратную ёмкость.
+    // Точного равенства нет и быть не должно — ёмкость растёт ступенями ×1.5,
+    // — но суперлинейный рост (запись на ПАРУ сущностей) отношение поймало бы.
+    expect(large).toBeGreaterThan(small * (ratio / 2));
+    expect(large).toBeLessThan(small * ratio * 2);
   });
 });
 

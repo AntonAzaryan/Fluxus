@@ -280,6 +280,15 @@ export interface TickView {
    * потребитель вправе держать ссылку, поля переписываются на месте (REND-26).
    */
   cadence?: DeliveryCadence | undefined;
+  /**
+   * Действующий мировой множитель хода часов презентации (REND-25) — величина
+   * СМОТРЯЩЕГО, а не доставки: воркер о ней не знает, каналом она не едет.
+   * Здесь она лежит ради наблюдаемости (RDBG-7), рядом с записью каденса, и
+   * обновляется не только доставкой, но и кадром — сеттер вправе сработать
+   * между ними. `undefined` — продюсер множителя не ведёт (документный набор,
+   * REND-11): его часы идут единицей.
+   */
+  presentationTimeScale?: number | undefined;
 }
 
 /**
@@ -867,4 +876,9 @@ export interface RenderHostConfig extends ExtractorConfig {
   readonly snapDistance?: number;
   /** Часы в миллисекундах; по умолчанию performance.now — параметр ради тестов. */
   readonly clock?: () => number;
+  /**
+   * Начальный мировой множитель хода часов презентации (REND-25); не задан —
+   * единица. Дальше его ведёт `RenderHost.setTimeScale`.
+   */
+  readonly timeScale?: number;
 }

@@ -59,6 +59,7 @@ export class RenderHost implements TickObserver, PresentationProducer {
         ? { floorBits: new Uint8Array(config.terrainGrid.floor) }
         : {}),
       ...(config.clock !== undefined ? { clock: config.clock } : {}),
+      ...(config.timeScale !== undefined ? { timeScale: config.timeScale } : {}),
     });
   }
 
@@ -70,6 +71,20 @@ export class RenderHost implements TickObserver, PresentationProducer {
   /** Сцена подсистем — общая с документным источником, когда его завёл редактор (REND-11). */
   get stage(): PresentationStage {
     return this.presentation;
+  }
+
+  /**
+   * Мировой множитель хода часов презентации (REND-25) — slow-motion реплея,
+   * скорость скраба, заморозка фото-режима. Живёт в буфере: `dt` подсистемам
+   * выдаёт он, и второго места, где решается ход времени, быть не должно.
+   */
+  setTimeScale(scale: number): void {
+    this.buffer.setTimeScale(scale);
+  }
+
+  /** Действующий мировой множитель хода (REND-25). */
+  get timeScale(): number {
+    return this.buffer.timeScale;
   }
 
   /** Регистрирует подсистему; порядок регистрации = порядок вызовов (REND-8). */
