@@ -856,7 +856,29 @@ export class PresentationBench {
     // `lighting*` лежали бы нулями во всех эталонах, и теневой проход гейт бы
     // не стерёг (PERF-4). Сетка та же, что у террейна, — по ней обтянуты
     // фрустумы теневых камер (design D6).
-    this.lighting = new LightingSubsystem({ grid, config: BENCH_LIGHTING });
+    //
+    // Порт теневых проходов стенду обязателен: в `hybrid` подсистема ведёт их
+    // сама — рисует глубину яруса кадра и сводит ярусы в карту источника
+    // (REND-30), — а без порта исполняла бы режим как `full`, и эталон мерил бы
+    // не тот режим, что назван секцией. Живого WebGL двойнику не нужно: он
+    // повторяет единственное наблюдаемое следствие настоящего прохода — снятый
+    // флаг `needsUpdate` у нарисованного источника.
+    this.lighting = new LightingSubsystem({
+      grid,
+      config: BENCH_LIGHTING,
+      renderer: {
+        render: () => {},
+        setRenderTarget: () => {},
+        shadowMap: {
+          enabled: true,
+          render: (lights) => {
+            for (const light of lights) {
+              (light as THREE.DirectionalLight).shadow.needsUpdate = false;
+            }
+          },
+        },
+      },
+    });
     // Визуальная поверхность (REND-9) — общая на подсистемы; карта кривизны
     // ставится ДО регистрации, поэтому первая же сборка чанков идёт с рельефом,
     // а не пересобирает арену вторым проходом.

@@ -41,6 +41,7 @@ import {
   type PresentationProducer,
   type QualityPreset,
   type RenderContext,
+  type ShadowRendererLike,
 } from '@fluxus/render';
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), '../../..');
@@ -204,10 +205,34 @@ interface Stand {
 }
 
 /** Сцена в порядке регистрации сборок (REND-8): свет, террейн, модели. */
+/**
+ * Рендерер глазами теневых проходов (REND-30): в `hybrid` подсистема ведёт их
+ * сама — рисует глубину яруса и сводит ярусы в карту источника, — и без порта
+ * исполняла бы режим как `full`. Живого WebGL стенду не нужно: под тестом
+ * решения подсистемы, а двойник повторяет единственное наблюдаемое следствие
+ * настоящего прохода — снятый флаг `needsUpdate` у нарисованного источника.
+ */
+function shadowRenderer(): ShadowRendererLike {
+  return {
+    render: () => {},
+    setRenderTarget: () => {},
+    shadowMap: {
+      enabled: true,
+      render: (lights) => {
+        for (const light of lights) (light as THREE.DirectionalLight).shadow.needsUpdate = false;
+      },
+    },
+  };
+}
+
 function stand(config?: PresentationLighting, preset?: QualityPreset): Stand {
   const stage = new PresentationStage(contextOf(new THREE.Scene()));
   const grid = flatGrid();
-  const lighting = new LightingSubsystem({ grid, ...(config === undefined ? {} : { config }) });
+  const lighting = new LightingSubsystem({
+    grid,
+    renderer: shadowRenderer(),
+    ...(config === undefined ? {} : { config }),
+  });
   stage.register(lighting);
   stage.register(new TerrainSubsystem(grid, { shadows: lighting }));
   stage.register(new ModelsSubsystem(MANIFEST, { shadows: lighting, warn: () => {} }));
@@ -332,19 +357,26 @@ describe('гибридный режим на украшенной арене', (
     const rig = stand({ shadows: { mode: 'hybrid' } });
     rig.stage.publishDecorations(decorationSet([view(1000, 'Statue', 1)]));
     rig.stage.publish(PRODUCER, tickView([view(1, 'Prop', 0), view(2, 'Prop', 1)]));
-    const { sun, sunDynamic } = rig.lighting.lights;
+    const composite = rig.lighting.shadowComposite;
 
     // Пол мутирует каждый тик (TERR-6): пересборка чанка перерегистрирует его
     // статическим кастером, и кэш устаревает КАЖДЫМ кадром. Здесь это
     // выражается прямым событием инвалидации — тем же, которое до чередования
-    // фаз держало динамическую карту невидимой весь матч.
+    // фаз держало глубину динамики невидимой весь матч.
     const phases: ('static' | 'dynamic')[] = [];
+    let seen = { ...composite.draws };
     for (let frame = 0; frame < 10; frame++) {
       rig.lighting.invalidateStatic();
       rig.stage.frame(0.016, 0);
-      phases.push(sun.shadow.needsUpdate ? 'static' : 'dynamic');
-      // Динамическая карта рисуется ровно в свои кадры — те, что не отданы кэшу.
-      expect(sunDynamic.shadow.needsUpdate).toBe(!sun.shadow.needsUpdate);
+      const now = { ...composite.draws };
+      // Ярус за кадр ровно один: карта источника собирается сведением, а
+      // рисуется глубина того яруса, чей кадр (REND-30). Исключение —
+      // ПЕРВЫЙ кадр целей: во второй цели до её первого прохода лежит мусор
+      // драйвера, и свести её было бы нечем, поэтому он рисует оба яруса.
+      const step = now.static + now.dynamic - seen.static - seen.dynamic;
+      expect(step, `кадр ${frame}`).toBe(frame === 0 ? 2 : 1);
+      phases.push(now.static > seen.static ? 'static' : 'dynamic');
+      seen = now;
     }
 
     // Ни одной пары статических кадров подряд: динамическая карта обновляется

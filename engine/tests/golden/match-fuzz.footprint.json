@@ -22,9 +22,10 @@
         "texture": 1
       },
       "lighting": {
-        "geometry": 1,
-        "material": 1,
-        "texture": 1
+        "geometry": 2,
+        "material": 2,
+        "texture": 4,
+        "renderTarget": 3
       },
       "model": {
         "geometry": 11,
@@ -85,7 +86,7 @@
       },
       "postprocess": {
         "geometry": 1,
-        "material": 6,
+        "material": 10,
         "texture": 1,
         "renderTarget": 7
       },

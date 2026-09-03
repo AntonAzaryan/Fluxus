@@ -305,8 +305,7 @@ export type { WaterMaterialInput } from './water/material.js';
 // Подсистема освещения сцены (REND-8): источники света арены и теневые карты
 // из секции `lighting` парного документа (PRES-2). Свет всех потребителей
 // рендера — отсюда: своего они больше не заводят (`editor` ED-1).
-export { LightingSubsystem } from './subsystems/lighting.js';
-export type { LightingOptions } from './subsystems/lighting.js';
+export { LightingSubsystem, type LightingOptions } from './subsystems/lighting.js';
 // Локальные источники инстансов (REND-33): пул подсистемы освещения, его ручка
 // качества и её умолчание — вход тестов и документов пресетов (QUAL-1).
 export {
@@ -324,15 +323,18 @@ export {
   resolveLightingConfig,
   resolveLightingCycle,
   shadowModeRank,
+  type HemisphereConfig,
+  type LightingCycleConfig,
+  type LightingPhaseConfig,
+  type LightingRenderConfig,
+  type RimConfig,
+  type ShadowMode,
 } from './lighting/config.js';
-export type {
-  HemisphereConfig,
-  LightingCycleConfig,
-  LightingPhaseConfig,
-  LightingRenderConfig,
-  RimConfig,
-  ShadowMode,
-} from './lighting/config.js';
+// Сведение ярусов теней режима `hybrid` (REND-30): порт рендерера, которым
+// сборка потребителя даёт подсистеме вести теневые проходы, и тип самого поля
+// сведения — его отдаёт геттер подсистемы. Значением поле наружу не выходит:
+// заводит его подсистема, а не потребитель.
+export type { ShadowComposite, ShadowRendererLike } from './lighting/shadowComposite.js';
 
 // Подсистема транзиентных эффектов (REND-23): процедурные примитивы по записям
 // манифеста — оболочки от доставленного состояния и вспышки от событий.

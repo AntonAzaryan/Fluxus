@@ -274,7 +274,7 @@ describe('PRES-2: секция lighting — закрытая конфигура�
     const lighting = {
       ambient: { color: '#ffffff', intensity: 0.65 },
       directional: { color: '#fff0d0', intensity: 1.7, direction: { x: 8, y: -12, z: 18 } },
-      shadows: { mode: 'hybrid', mapSize: 1024, staticShare: 0.5 },
+      shadows: { mode: 'hybrid', mapSize: 1024 },
     };
     const result = validatePresentationScene({ decorations: [], lighting });
     expect(result.ok).toBe(true);
@@ -326,7 +326,7 @@ describe('PRES-2: секция lighting — закрытая конфигура�
         lighting: {
           ambient: { color: 'white', intensity: -1 },
           directional: { intensity: Number.NaN, direction: { x: 'далеко' } },
-          shadows: { mapSize: 0, staticShare: 2 },
+          shadows: { mapSize: 0 },
         },
       },
       /lighting\.ambient\.color: ожидался цвет формы "#rrggbb"/,
@@ -334,9 +334,8 @@ describe('PRES-2: секция lighting — закрытая конфигура�
       /lighting\.directional\.intensity: ожидалось неотрицательное число интенсивности/,
       /lighting\.directional\.direction\.x: ожидалось конечное число мировых единиц/,
       /lighting\.shadows\.mapSize: ожидалось целое положительное число текселей/,
-      /lighting\.shadows\.staticShare: ожидалось число из \[0, 1\] — доля интенсивности/,
     );
-    expect(errors).toHaveLength(6);
+    expect(errors).toHaveLength(5);
   });
 
   it('дробная сторона карты теней — не сторона карты', () => {
@@ -475,7 +474,7 @@ describe('REND-32: подсекция цикла времени суток — �
       { lighting: { cycle: { phases: [{ seconds: 1, shadows: { mode: 'none' } }, { seconds: 1 }] } } },
       /lighting\.cycle\.phases\[0\]\.shadows: параметров теней в фазе цикла нет и быть не может/,
     );
-    for (const key of ['mode', 'mapSize', 'staticShare']) {
+    for (const key of ['mode', 'mapSize']) {
       expectErrors(
         { lighting: { cycle: { phases: [{ seconds: 1, [key]: 1 }, { seconds: 1 }] } } },
         new RegExp(`phases\\[0\\]\\.${key}: параметров теней в фазе цикла нет`),

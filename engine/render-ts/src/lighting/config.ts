@@ -107,13 +107,6 @@ export interface LightingRenderConfig {
   readonly shadowMode: ShadowMode;
   /** Сторона карты теней в текселях (REND-30). */
   readonly shadowMapSize: number;
-  /**
-   * Доля статики (REND-30): доля интенсивности, отданная кэшированной карте
-   * статического яруса в `hybrid`; остальное достаётся покадровой карте
-   * динамического. Вне `hybrid` карта либо одна, либо её нет, и доля не
-   * применяется.
-   */
-  readonly staticShare: number;
 }
 
 /**
@@ -140,9 +133,6 @@ export const DEFAULT_LIGHTING_CONFIG: LightingRenderConfig = Object.freeze({
   // на которой кромка тени юнита ещё не пилится. Потолок пресета правит это
   // значение вниз (QUAL-1), вверх его правит только автор сцены.
   shadowMapSize: 2048,
-  // Ровно пополам: в `hybrid` тень статики и тень динамики гасят по половине
-  // вклада источника, и ни один ярус не выглядит нарисованным «поверх» другого.
-  staticShare: 0.5,
 } satisfies LightingRenderConfig);
 
 /**
@@ -335,7 +325,6 @@ export function resolveLightingConfig(section?: PresentationLighting): LightingR
     rim: resolveRim(section?.rim, DEFAULT_RIM),
     shadowMode: shadows?.mode ?? fallback.shadowMode,
     shadowMapSize: shadows?.mapSize ?? fallback.shadowMapSize,
-    staticShare: shadows?.staticShare ?? fallback.staticShare,
   };
 }
 

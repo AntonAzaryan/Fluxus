@@ -114,13 +114,6 @@ export interface PresentationShadows {
   readonly mode?: PresentationShadowMode;
   /** Сторона карты теней в текселях, целая и положительная (REND-30). */
   readonly mapSize?: number;
-  /**
-   * Доля статики (REND-30): доля интенсивности направленного источника,
-   * отданная кэшированной карте статического яруса в режиме `hybrid`, [0, 1];
-   * остальное достаётся покадровой карте динамического. В режимах `none`,
-   * `blob` и `full` карта либо одна, либо её нет — доля не применяется.
-   */
-  readonly staticShare?: number;
 }
 
 /**
@@ -128,7 +121,7 @@ export interface PresentationShadows {
  * того же состава, что статическая часть секции. Дыры фазы закрываются
  * статической частью секции, а её дыры — умолчаниями подсистемы (REND-29): те же
  * правила, что у всего документа (PRES-2). Параметров теней в фазе нет и быть не
- * может — режим, сторона карты и доля статики принадлежат секции целиком.
+ * может — режим и сторона карты принадлежат секции целиком.
  */
 export interface PresentationLightingPhase {
   /**
@@ -200,7 +193,7 @@ const AMBIENT_KEYS: readonly string[] = ['color', 'intensity'];
 const DIRECTIONAL_KEYS: readonly string[] = ['color', 'intensity', 'direction'];
 const HEMISPHERE_KEYS: readonly string[] = ['skyColor', 'groundColor', 'intensity'];
 const DIRECTION_KEYS: readonly string[] = ['x', 'y', 'z'];
-const SHADOW_KEYS: readonly string[] = ['mode', 'mapSize', 'staticShare'];
+const SHADOW_KEYS: readonly string[] = ['mode', 'mapSize'];
 const CYCLE_KEYS: readonly string[] = ['transitionSeconds', 'phases'];
 const PHASE_KEYS: readonly string[] = [
   'name',
@@ -275,13 +268,6 @@ function validateShadows(node: Record<string, unknown>, errors: string[]): void 
     { what: 'целое положительное число текселей — сторона карты теней', min: 1, integer: true },
     errors,
   );
-  numberField(
-    node,
-    path,
-    'staticShare',
-    { what: 'число из [0, 1] — доля интенсивности', min: 0, max: 1 },
-    errors,
-  );
 }
 
 /**
@@ -319,7 +305,7 @@ function validateCyclePhase(
     const shadowField = key === 'shadows' || SHADOW_KEYS.includes(key);
     errors.push(
       shadowField
-        ? `${path}.${key}: параметров теней в фазе цикла нет и быть не может — режим, сторона карты и доля статики принадлежат секции целиком (REND-32, REND-30)`
+        ? `${path}.${key}: параметров теней в фазе цикла нет и быть не может — режим и сторона карты принадлежат секции целиком (REND-32, REND-30)`
         : `${path}.${key}: неизвестное поле (допустимы: ${PHASE_KEYS.join(', ')})`,
     );
   }

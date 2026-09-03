@@ -44,10 +44,12 @@ import {
 } from './config.js';
 import {
   BLOOM_LEVELS,
+  bloomUpsampleScale,
   createDownsampleMaterial,
   createLutTexture,
   createResolveMaterial,
   createThresholdMaterial,
+  createUpsampleMaterial,
   toneMappingFunction,
 } from './passes.js';
 import { own } from '../footprint.js';
@@ -89,10 +91,15 @@ const LDR_BLOOM_THRESHOLD_MAX = 0.8;
  */
 export const DEFAULT_ANTIALIAS_SAMPLES = 4;
 
-/** Ярус пирамиды: цель и материал даунсемпла В НЕЁ; у вершины его нет — её пишет порог. */
+/**
+ * Ярус пирамиды: цель, материал даунсемпла В НЕЁ (у вершины его нет — её пишет
+ * порог) и материал апсемпла ИЗ СЛЕДУЮЩЕГО, более мелкого яруса (у самого
+ * мелкого его нет — из него только читают).
+ */
 interface BloomLevel {
   readonly target: THREE.WebGLRenderTarget;
   readonly material: THREE.ShaderMaterial | null;
+  readonly upsample: THREE.ShaderMaterial | null;
 }
 
 export interface PostprocessChainOptions {
@@ -309,7 +316,14 @@ export class PostprocessChain {
 
   // ------------------------------------------------------------- проходы
 
-  /** Порог и пирамида (design D4): вершина от цели сцены, дальше — даунсемплы. */
+  /**
+   * Порог и пирамида (design D4): вершина от цели сцены, вниз — даунсемплы,
+   * вверх — ПРОГРЕССИВНЫЙ АПСЕМПЛ (L-7). Ярусы складываются по дороге наверх, а
+   * не в сведении: мелкий ярус (кадр/32) билинейно растянутый сразу на весь кадр
+   * даёт вокруг яркой точки коробчатую звезду, а не свечение. Схемы без
+   * гауссианы на каждом ярусе именно этой цепочки и требуют, а сведение читает
+   * одну текстуру — вершину.
+   */
   private renderBloom(
     renderer: PostRendererLike,
     width: number,
@@ -324,14 +338,35 @@ export class PostprocessChain {
       const level = levels[index];
       const source = levels[index - 1];
       if (level === undefined || source === undefined || level.material === null) continue;
-      const material = level.material;
-      uniformOf(material, 'tSource').value = source.target.texture;
-      (material.uniforms.uTexel as { value: THREE.Vector2 }).value.set(
-        1 / source.target.width,
-        1 / source.target.height,
-      );
-      this.draw(renderer, material, level.target, cost);
+      this.drawTent(renderer, level.material, source.target, level.target, cost);
     }
+    // Наверх: самый мелкий ярус добавляется в следующий за ним, тот — в
+    // следующий, и так до вершины. Вклад мелкого яруса — авторская ширина
+    // свечения (REND-34), одна и та же на каждой ступени.
+    const scale = bloomUpsampleScale(this.config.bloomRadius);
+    for (let index = levels.length - 2; index >= 0; index--) {
+      const level = levels[index];
+      const source = levels[index + 1];
+      if (level === undefined || source === undefined || level.upsample === null) continue;
+      (level.upsample.uniforms.uScale as { value: number }).value = scale;
+      this.drawTent(renderer, level.upsample, source.target, level.target, cost);
+    }
+  }
+
+  /** Один проход тента: источник в униформы, его тексель — в шаг выборки. */
+  private drawTent(
+    renderer: PostRendererLike,
+    material: THREE.ShaderMaterial,
+    source: THREE.WebGLRenderTarget,
+    target: THREE.WebGLRenderTarget,
+    cost: RenderCostCounters | undefined,
+  ): void {
+    uniformOf(material, 'tSource').value = source.texture;
+    (material.uniforms.uTexel as { value: THREE.Vector2 }).value.set(
+      1 / source.width,
+      1 / source.height,
+    );
+    this.draw(renderer, material, target, cost);
   }
 
   /** Один полноэкранный проход: материал на квад, цель, счётчики (PERF-2, PERF-3). */
@@ -495,7 +530,12 @@ export class PostprocessChain {
           },
         ),
       );
-      levels.push({ target, material: index === 0 ? null : createDownsampleMaterial() });
+      levels.push({
+        target,
+        material: index === 0 ? null : createDownsampleMaterial(),
+        // У самого мелкого яруса ступени вверх нет: из него только читают.
+        upsample: index === BLOOM_LEVELS - 1 ? null : createUpsampleMaterial(),
+      });
     }
     this.levels = levels;
     return levels;
@@ -519,17 +559,16 @@ export class PostprocessChain {
         exposure: config.exposure,
         bloom: config.bloomEnabled,
         strength: config.bloomStrength,
-        radius: config.bloomRadius,
         lut: this.lutTexture,
         lutAmount: config.lutAmount,
       });
     this.resolveMaterial = material;
     uniformOf(material, 'tScene').value = sceneTarget.texture;
     if (config.bloomEnabled) {
-      for (let index = 0; index < BLOOM_LEVELS; index++) {
-        const uniform = material.uniforms[`tBloom${index}`];
-        if (uniform !== undefined) uniform.value = this.levels[index]?.target.texture ?? null;
-      }
+      // Вершина пирамиды и есть свечение кадра: ярусы сложены в неё цепочкой
+      // апсемплов (design D4, L-7), и второй текстуры сведению не нужно.
+      const uniform = material.uniforms.tBloom0;
+      if (uniform !== undefined) uniform.value = this.levels[0]?.target.texture ?? null;
     }
     return material;
   }
@@ -547,8 +586,9 @@ export class PostprocessChain {
     if (exposure !== undefined) exposure.value = config.exposure;
     const strength = resolve.uniforms.uStrength;
     if (strength !== undefined) strength.value = config.bloomStrength;
-    const radius = resolve.uniforms.uRadius;
-    if (radius !== undefined) radius.value = config.bloomRadius;
+    // Ширина свечения правится не в сведении, а на ступенях апсемпла: её вклад
+    // читается с конфигурации каждым кадром пирамиды (`renderBloom`), поэтому
+    // униформы здесь у неё нет вовсе.
     // Доля применения таблицы — число, а не define: правка `amount` в рантайме
     // идёт униформой и пересборки материала не требует (ED-15).
     const amount = resolve.uniforms.uLutAmount;
@@ -589,6 +629,7 @@ export class PostprocessChain {
     for (const level of this.levels) {
       level.target.dispose();
       level.material?.dispose();
+      level.upsample?.dispose();
     }
     this.levels = [];
     this.thresholdMaterial?.dispose();
