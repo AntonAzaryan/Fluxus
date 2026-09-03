@@ -24,6 +24,7 @@ import { FIXED_ONE } from '@fluxus/core';
 import type { DebugColor, DebugDraw, DebugPose, DebugRaster } from './contract.js';
 import type { VisualSurfaceSource } from '../surfaceSource.js';
 import { carrier, upload, type Carrier } from './carriers.js';
+import { disposeRasterPlane, rasterPlaneOf, type RasterPlane } from './rasterPlane.js';
 import { areaSubdivisions } from '../surfaceCells.js';
 import { DEFAULT_CURVATURE_TESSELLATION } from '../types.js';
 import { own } from '../footprint.js';
@@ -42,19 +43,6 @@ const BOX_EDGES: readonly (readonly [number, number])[] = [
   [4, 5], [5, 7], [7, 6], [6, 4],
   [0, 4], [1, 5], [2, 6], [3, 7],
 ];
-
-/** Плашка растрового источника: своя текстура и свой квад. */
-interface RasterPlane {
-  readonly mesh: THREE.Mesh;
-  readonly texture: THREE.DataTexture;
-  /** Растр текстуры: своя копия слоя, а не буфер подсистемы (RDBG-2). */
-  readonly texels: Uint8Array;
-  readonly material: THREE.MeshBasicMaterial;
-  readonly geometry: THREE.PlaneGeometry;
-  readonly widthTexels: number;
-  readonly heightTexels: number;
-  used: boolean;
-}
 
 export interface DebugPainterOptions {
   /** Сцена наложений; нет — слой не рисует вовсе (headless-дамп, RDBG-2). */
@@ -205,9 +193,7 @@ export class DebugPainter implements DebugDraw {
     for (const [id, plane] of this.rasters) {
       if (plane.used) continue;
       this.group.remove(plane.mesh);
-      plane.geometry.dispose();
-      plane.material.dispose();
-      plane.texture.dispose();
+      disposeRasterPlane(plane);
       this.rasters.delete(id);
     }
     this.syncAttachment();
@@ -241,9 +227,7 @@ export class DebugPainter implements DebugDraw {
     }
     for (const plane of this.rasters.values()) {
       this.group.remove(plane.mesh);
-      plane.geometry.dispose();
-      plane.material.dispose();
-      plane.texture.dispose();
+      disposeRasterPlane(plane);
     }
     this.rasters.clear();
   }
@@ -275,33 +259,42 @@ export class DebugPainter implements DebugDraw {
     if (closed && count > 2) this.pushEdge(points, count - 1, 0, color);
   }
 
+  /**
+   * Окружность НА визуальной поверхности (REND-9). Звено между сегментами
+   * дробится тем же правилом, что и полигон (`surfaceCells.ts`): на клетке с
+   * кривизной прямое звено режет холм насквозь ровно так же, как резал его
+   * плоский веер полигона.
+   */
   circle(x: number, y: number, radius: number, color: DebugColor): void {
-    let px = 0;
-    let py = 0;
-    for (let i = 0; i <= CIRCLE_SEGMENTS; i += 1) {
+    const steps = this.areaSteps(x - radius, y - radius, x + radius, y + radius);
+    let px = x + radius;
+    let py = y;
+    for (let i = 1; i <= CIRCLE_SEGMENTS; i += 1) {
       const angle = (i / CIRCLE_SEGMENTS) * Math.PI * 2;
       const qx = x + Math.cos(angle) * radius;
       const qy = y + Math.sin(angle) * radius;
-      if (i > 0) {
-        this.lines.buffer.push(px, py, this.heightAt(px, py), color);
-        this.lines.buffer.push(qx, qy, this.heightAt(qx, qy), color);
-      }
+      this.pushSurfaceEdge(px, py, qx, qy, steps, color);
       px = qx;
       py = qy;
     }
   }
 
+  /**
+   * Диск НА визуальной поверхности (REND-9): сектор — треугольник, и ложится он
+   * тем же дроблением, что и треугольник полигона.
+   */
   disc(x: number, y: number, radius: number, color: DebugColor): void {
+    const steps = this.areaSteps(x - radius, y - radius, x + radius, y + radius);
     for (let i = 0; i < CIRCLE_SEGMENTS; i += 1) {
       const a = (i / CIRCLE_SEGMENTS) * Math.PI * 2;
       const b = ((i + 1) / CIRCLE_SEGMENTS) * Math.PI * 2;
-      const ax = x + Math.cos(a) * radius;
-      const ay = y + Math.sin(a) * radius;
-      const bx = x + Math.cos(b) * radius;
-      const by = y + Math.sin(b) * radius;
-      this.triangles.buffer.push(x, y, this.heightAt(x, y), color);
-      this.triangles.buffer.push(ax, ay, this.heightAt(ax, ay), color);
-      this.triangles.buffer.push(bx, by, this.heightAt(bx, by), color);
+      this.pushSurfaceTriangle(
+        x, y,
+        x + Math.cos(a) * radius, y + Math.sin(a) * radius,
+        x + Math.cos(b) * radius, y + Math.sin(b) * radius,
+        steps,
+        color,
+      );
     }
   }
 
@@ -374,14 +367,8 @@ export class DebugPainter implements DebugDraw {
     return (surface === null ? 0 : surface.heightAt(x, y)) + SURFACE_LIFT;
   }
 
-  /**
-   * Делений стороны для полигона — по прямоугольнику, который он накрывает
-   * (`surfaceCells.ts`). Поверхности нет — плоскость нуля, дробить нечего.
-   */
+  /** Делений стороны для полигона — по прямоугольнику, который он накрывает. */
   private polygonSteps(points: readonly number[], count: number): number {
-    const source = this.options.surface;
-    const surface = source?.current ?? null;
-    if (source === undefined || surface === null) return 1;
     let minX = points[0]!;
     let maxX = minX;
     let minY = points[1]!;
@@ -394,6 +381,18 @@ export class DebugPainter implements DebugDraw {
       if (y < minY) minY = y;
       if (y > maxY) maxY = y;
     }
+    return this.areaSteps(minX, minY, maxX, maxY);
+  }
+
+  /**
+   * Делений стороны для мирового прямоугольника (`surfaceCells.ts`) — одно
+   * правило на все наложения, лежащие на поверхности: полигон, окружность и
+   * диск дробятся им одинаково. Поверхности нет — плоскость нуля, дробить нечего.
+   */
+  private areaSteps(minX: number, minY: number, maxX: number, maxY: number): number {
+    const source = this.options.surface;
+    const surface = source?.current ?? null;
+    if (source === undefined || surface === null) return 1;
     const grid = source.terrain;
     // Приём сетки — точка входной границы рендера (REND-1, TERR-2).
     const tile = grid.tileSize / FIXED_ONE;
@@ -404,6 +403,28 @@ export class DebugPainter implements DebugDraw {
       minX, minY, maxX, maxY,
       this.options.tessellation ?? DEFAULT_CURVATURE_TESSELLATION,
     );
+  }
+
+  /** Звено ломаной на поверхности: `steps` подшагов вместо одного (REND-9). */
+  private pushSurfaceEdge(
+    ax: number,
+    ay: number,
+    bx: number,
+    by: number,
+    steps: number,
+    color: DebugColor,
+  ): void {
+    let px = ax;
+    let py = ay;
+    for (let i = 1; i <= steps; i += 1) {
+      const t = i / steps;
+      const qx = ax + (bx - ax) * t;
+      const qy = ay + (by - ay) * t;
+      this.lines.buffer.push(px, py, this.heightAt(px, py), color);
+      this.lines.buffer.push(qx, qy, this.heightAt(qx, qy), color);
+      px = qx;
+      py = qy;
+    }
   }
 
   /**
@@ -466,50 +487,10 @@ export class DebugPainter implements DebugDraw {
     }
     if (existing !== undefined) {
       this.group.remove(existing.mesh);
-      existing.geometry.dispose();
-      existing.material.dispose();
-      existing.texture.dispose();
+      disposeRasterPlane(existing);
     }
-    // Одноканальный растр: цвет плашки задаёт источник, яркость — сам тексель.
-    const texels = new Uint8Array(raster.widthTexels * raster.heightTexels);
-    const texture = own(
-      'texture',
-      'debug',
-      new THREE.DataTexture(
-        texels,
-        raster.widthTexels,
-        raster.heightTexels,
-        THREE.RedFormat,
-        THREE.UnsignedByteType,
-      ),
-    );
-    texture.minFilter = THREE.LinearFilter;
-    texture.magFilter = THREE.NearestFilter;
-    texture.unpackAlignment = 1;
-    const material = own(
-      'material',
-      'debug',
-      new THREE.MeshBasicMaterial({
-        map: texture,
-        transparent: true,
-        opacity: 0.55,
-        depthWrite: false,
-      }),
-    );
-    const geometry = own('geometry', 'debug', new THREE.PlaneGeometry(1, 1));
-    const mesh = new THREE.Mesh(geometry, material);
-    mesh.name = `render-debug:${id}`;
-    const plane: RasterPlane = {
-      mesh,
-      texture,
-      texels,
-      material,
-      geometry,
-      widthTexels: raster.widthTexels,
-      heightTexels: raster.heightTexels,
-      used: true,
-    };
-    this.group.add(mesh);
+    const plane = rasterPlaneOf(id, raster);
+    this.group.add(plane.mesh);
     this.rasters.set(id, plane);
     return plane;
   }

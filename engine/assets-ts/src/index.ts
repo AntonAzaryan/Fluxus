@@ -90,6 +90,11 @@ export type {
 export type {
   CameraConfigDescription,
   CameraConfigSection,
+  CameraPathChannelSpec,
+  CameraPathDef,
+  CameraPathDescription,
+  CameraPathKeyDef,
+  CameraPathsSection,
   CameraEffectDef,
   CameraEffectKind,
   CameraEffectParamSpec,

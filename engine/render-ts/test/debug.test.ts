@@ -1040,9 +1040,49 @@ describe('RDBG-3: полигон ложится на визуальную пов
     return { layer, scene, surface };
   }
 
+  /** Слой над сеткой с кривизной; `draw` рисует то, что просит тест. */
+  function paintShape(
+    curvature: TerrainCurvatureMap | null,
+    draw: (out: DebugDraw) => void,
+  ): { layer: RenderDebugLayer; surface: VisualSurfaceSource } {
+    const scene = new THREE.Scene();
+    const context = { ...makeRenderContext(), scene };
+    const grid = flatGrid(3);
+    const surface = new VisualSurfaceSource(grid);
+    surface.init(context);
+    if (curvature !== null) surface.setCurvature(curvature);
+    const layer = new RenderDebugLayer(new PresentationStage(context), { scene, surface });
+    layer.register<DebugProbe>({ id: 'x.shape', probe: () => ({}), draw: (_p, out) => { draw(out); } });
+    layer.setEnabled('x.shape', true);
+    layer.frame(frameState(null));
+    return { layer, surface };
+  }
+
   it('плоская клетка идёт быстрым путём: два треугольника, как и было', () => {
     const { layer } = paintCell(null, 1, 1);
     expect(layer.vertexCount).toBe(6);
+  });
+
+  /**
+   * Окружность и диск ложатся на поверхность тем же правилом дробления, что и
+   * полигон (`surfaceCells.ts`): двух строителей «фигура на поверхности» разной
+   * точности у слоя больше нет.
+   */
+  it('окружность и диск на клетке с кривизной дробятся тем же правилом, что полигон', () => {
+    const curvature = curvatureMap(3, 3, [
+      [14, 14, 14, 14],
+      [7, 7, 7, 7],
+      [0, 0, 0, 0],
+      [0, 0, 0, 0],
+    ]);
+    const flat = paintShape(null, (out) => { out.circle(1.5, 1.5, 0.4, 0xffffff); });
+    const curved = paintShape(curvature, (out) => { out.circle(1.5, 1.5, 0.4, 0xffffff); });
+    // На плоской арене звено остаётся одним отрезком, на кривизне — дробится.
+    expect(curved.layer.vertexCount).toBeGreaterThan(flat.layer.vertexCount);
+
+    const flatDisc = paintShape(null, (out) => { out.disc(1.5, 1.5, 0.4, 0xffffff); });
+    const curvedDisc = paintShape(curvature, (out) => { out.disc(1.5, 1.5, 0.4, 0xffffff); });
+    expect(curvedDisc.layer.vertexCount).toBeGreaterThan(flatDisc.layer.vertexCount);
   });
 
   it('клетка с кривизной дробится, и вершины лежат на поле, а не на веере сквозь холм', () => {

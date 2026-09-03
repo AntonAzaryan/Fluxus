@@ -22,6 +22,7 @@ import {
   type MinimapFogLayer,
   type MinimapFogSource,
   type MinimapTerrainGrid,
+  type MinimapTerrainLayers,
 } from '../src/minimap/widget.js';
 import { asElement, fakeDom, walkElements, type FakeElement } from './support/fakeDom.js';
 import { CameraSpy, makeView } from './support/hud.js';
@@ -106,12 +107,20 @@ interface BenchOptions {
   readonly renderers?: MinimapRendererRegistry;
   readonly terrain?: MinimapTerrainGrid | null;
   readonly fog?: MinimapFogSource;
+  /** Слои подложки (HUD-6): их наполняет сборка, а не виджет. */
+  readonly layers?: MinimapTerrainLayers | null;
+  /** Дополнительные параметры записи композиции — палитра и цвета слоёв. */
+  readonly params?: HudParams;
 }
 
 function bench(options: BenchOptions = {}) {
   const registry = new HudRegistry();
-  const terrainSource: { terrain: MinimapTerrainGrid | null } = {
+  const terrainSource: {
+    terrain: MinimapTerrainGrid | null;
+    layers: MinimapTerrainLayers | null;
+  } = {
     terrain: options.terrain !== undefined ? options.terrain : squareGrid,
+    layers: options.layers ?? null,
   };
   registry.registerWidget(
     minimapWidgetKind({
@@ -143,7 +152,12 @@ function bench(options: BenchOptions = {}) {
   facade.start((action) => pressed.push(action));
   const runtime = new HudRuntime({ registry, host, actions: facade });
 
-  const params: HudParams = { width: 64, height: 64, markers: options.table ?? baseTable };
+  const params: HudParams = {
+    width: 64,
+    height: 64,
+    markers: options.table ?? baseTable,
+    ...(options.params ?? {}),
+  };
   runtime.apply({
     entries: [
       {
@@ -460,5 +474,126 @@ describe('туман на миникарте (HUD-6, FOW-7)', () => {
     const dark = bench({ fog: { fog: null } });
     dark.runtime.subsystem.syncTick(viewWith([entity(1, 'hero', 2, 3, 0)]));
     expect(dark.markerCtx.ops('drawImage')).toHaveLength(0);
+  });
+});
+
+// ------------------------------------------ слои подложки (HUD-6)
+
+/**
+ * Уровни клеток — то же поле сетки handshake, которым рисует основной вид
+ * (TERR-4, SHELL-5). Северная половина арены поднята на уровень 1, одна клетка —
+ * на уровень 3, которого в палитре теста нет.
+ */
+function leveledGrid(): MinimapTerrainGrid {
+  const levels = new Uint8Array(64);
+  for (let cell = 32; cell < 64; cell++) levels[cell] = 1;
+  levels[63] = 3;
+  return { ...squareGrid, levels };
+}
+
+const PALETTE = ['#101010', '#202020'];
+
+describe('слои подложки миникарты (HUD-6)', () => {
+  it('уровень клетки красится палитрой записи композиции, а не константой кода', () => {
+    const { runtime, floorCtx } = bench({
+      terrain: leveledGrid(),
+      params: { levelPalette: PALETTE },
+    });
+    runtime.subsystem.syncTick(viewWith([], { floorBits: new Uint8Array(64).fill(1) }));
+    const rects = floorCtx.ops('fillRect');
+    expect(rects).toHaveLength(64);
+    // Клетка 0 — уровень 0, клетка 32 — уровень 1: цвета разные и оба из палитры.
+    expect(rects[0]!.fillStyle).toBe(PALETTE[0]);
+    expect(rects[32]!.fillStyle).toBe(PALETTE[1]);
+  });
+
+  it('уровень выше последнего цвета прижимается к последнему (сценарий HUD-6)', () => {
+    const { runtime, floorCtx } = bench({
+      terrain: leveledGrid(),
+      params: { levelPalette: PALETTE },
+    });
+    runtime.subsystem.syncTick(viewWith([], { floorBits: new Uint8Array(64).fill(1) }));
+    // Клетка 63 объявлена уровнем 3, а цветов в палитре два.
+    expect(floorCtx.ops('fillRect')[63]!.fillStyle).toBe(PALETTE[1]);
+  });
+
+  it('без палитры подложка прежняя: один цвет пола на всю арену', () => {
+    const { runtime, floorCtx } = bench({ terrain: leveledGrid() });
+    runtime.subsystem.syncTick(viewWith([], { floorBits: new Uint8Array(64).fill(1) }));
+    const colors = new Set(floorCtx.ops('fillRect').map((call) => call.fillStyle));
+    expect([...colors]).toEqual(['#3d4450']);
+  });
+
+  it('клетки воды красятся поверх пола, а на дыре воды не бывает', () => {
+    const water = new Uint8Array(64);
+    water[0] = 1;
+    water[1] = 1;
+    const bits = new Uint8Array(64).fill(1);
+    bits[1] = 0; // дыра под водой: пола нет, и мели тоже
+    const { runtime, floorCtx } = bench({
+      layers: { water },
+      params: { waterColor: '#0000ff' },
+    });
+    runtime.subsystem.syncTick(viewWith([], { floorBits: bits }));
+    const blue = floorCtx.ops('fillRect').filter((call) => call.fillStyle === '#0000ff');
+    expect(blue).toHaveLength(1);
+    // Клетка 0 занимает мир [0..1] по y на арене 8×8 → верхний край 56 px.
+    expect(blue[0]!.args).toEqual([0, 56, 8, 8]);
+  });
+
+  it('маска не по этой сетке слоем не считается: чужая вода не рисуется', () => {
+    const { runtime, floorCtx } = bench({
+      layers: { water: new Uint8Array(16).fill(1) },
+      params: { waterColor: '#0000ff' },
+    });
+    runtime.subsystem.syncTick(viewWith([], { floorBits: new Uint8Array(64).fill(1) }));
+    expect(floorCtx.ops('fillRect').filter((c) => c.fillStyle === '#0000ff')).toHaveLength(0);
+  });
+
+  it('следы декораций ложатся поверх подложки мировыми кругами', () => {
+    const { runtime, floorCtx } = bench({
+      layers: { decorations: [{ x: 2, y: 3, radius: 0.5 }] },
+      params: { decorationColor: '#00ff00' },
+    });
+    runtime.subsystem.syncTick(viewWith([], { floorBits: new Uint8Array(64).fill(1) }));
+    const marks = floorCtx.ops('fillRect').filter((call) => call.fillStyle === '#00ff00');
+    expect(marks).toHaveLength(1);
+    // Центр (2,3) при масштабе 8 — px (16, 40); сторона 2·0.5·8 = 8.
+    expect(marks[0]!.args).toEqual([12, 36, 8, 8]);
+  });
+
+  it('дельта пола перерисовывает клетку со ВСЕМИ её слоями и возвращает следы', () => {
+    const water = new Uint8Array(64);
+    water[10] = 1;
+    const bits = new Uint8Array(64).fill(1);
+    const { runtime, floorCtx } = bench({
+      terrain: leveledGrid(),
+      layers: { water, decorations: [{ x: 2, y: 3, radius: 0.5 }] },
+      params: { levelPalette: PALETTE, waterColor: '#0000ff', decorationColor: '#00ff00' },
+    });
+    runtime.subsystem.syncTick(viewWith([], { floorBits: bits }));
+
+    floorCtx.calls.length = 0;
+    runtime.subsystem.syncTick(viewWith([], { tick: 1, floorBits: bits, floorChangedCells: [10] }));
+    const painted = floorCtx.ops('fillRect');
+    // Полного прохода по арене нет: клетка, её вода и след декорации.
+    expect(painted).toHaveLength(3);
+    expect(painted[0]!.fillStyle).toBe(PALETTE[0]);
+    expect(painted[1]!.fillStyle).toBe('#0000ff');
+    expect(painted[2]!.fillStyle).toBe('#00ff00');
+  });
+
+  it('слоёв нет — подложка рисуется ровно как до их появления', () => {
+    const { runtime, floorCtx } = bench();
+    runtime.subsystem.syncTick(viewWith([], { floorBits: new Uint8Array(64).fill(1) }));
+    const rects = floorCtx.ops('fillRect');
+    expect(rects).toHaveLength(64);
+    expect(new Set(rects.map((call) => call.fillStyle)).size).toBe(1);
+  });
+
+  it('негодная палитра — отказ до монтирования, а не молчаливая подложка', () => {
+    // Палитра — JSON-значение композиции (HUD-4), и числа в ней тип пропускает:
+    // ловит их резолв записи, до монтирования.
+    expect(() => bench({ params: { levelPalette: [1, 2] } })).toThrow(/levelPalette/);
   });
 });

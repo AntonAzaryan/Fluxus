@@ -22,6 +22,7 @@
 import {
   CameraRig,
   createCameraInput,
+  createEdgePanAxes,
   edgePanAxes,
   resetCameraInput,
   terrainGroundApi,
@@ -169,6 +170,8 @@ export function createSceneCamera(options: SceneCameraOptions): SceneCamera {
       ? null
       : terrainGroundApi(options.grid, options.heightStep, options.surface);
   const input = createCameraInput();
+  /** Оси края экрана — одна запись на вьюпорт: кадр её только переписывает (REND-26). */
+  const edge = createEdgePanAxes();
   const rig = new CameraRig({
     ...(ground === null
       ? {}
@@ -220,10 +223,15 @@ export function createSceneCamera(options: SceneCameraOptions): SceneCamera {
       const fly = rig.capturesMovement();
       input.panX = axis(keys, CAMERA_KEYS.panRight, CAMERA_KEYS.panLeft);
       input.panY = axis(keys, CAMERA_KEYS.panUp, CAMERA_KEYS.panDown);
-      const edge =
-        pointer === null
-          ? { x: 0, y: 0 }
-          : edgePanAxes(pointer.x, pointer.y, pointer.rect, rig.config.edgeMarginPx);
+      // Оси края — в СВОЮ запись, заведённую один раз: `sample` зовётся
+      // покадрово, и свежий литерал на кадр был бы аллокацией кадрового пути
+      // (`rendering` REND-26).
+      if (pointer === null) {
+        edge.x = 0;
+        edge.y = 0;
+      } else {
+        edgePanAxes(pointer.x, pointer.y, pointer.rect, rig.config.edgeMarginPx, edge);
+      }
       input.edgeX = edge.x;
       input.edgeY = edge.y;
       // Клавиши перемещения принадлежат облёту и только ему (CAM-2).
