@@ -10,7 +10,7 @@
  * пересборка чанков террейна (REND-7, ED-15).
  */
 import * as THREE from 'three';
-import type { TickView } from '../types.js';
+import { UNLIMITED_FRAME_BUDGET, type FrameBudget, type TickView } from '../types.js';
 import type { WaterBodyConfig } from './config.js';
 import {
   depthTexelRect,
@@ -189,16 +189,54 @@ export class WaterBodyView {
    * глубина не положительна, и вода там не рисуется (REND-35). `null` — пол
    * считается везде.
    */
-  flush(field: WaterFieldSampler, floor: Uint8Array | null = null): number {
+  flush(
+    field: WaterFieldSampler,
+    floor: Uint8Array | null = null,
+    budget: FrameBudget = UNLIMITED_FRAME_BUDGET,
+  ): number {
     if (this.dirty.x1 < this.dirty.x0 || this.layout.width === 0) return 0;
-    const rect = depthTexelRect(this.layout, this.dirty.x0, this.dirty.y0, this.dirty.x1, this.dirty.y1);
     const surfaceHeight = this.options.config.surfaceLevel * this.options.heightStep;
     this.cells.floor = floor;
-    this.fill.rect = rect;
-    const texels = fillWaterDepth(this.data, this.layout, field, surfaceHeight, this.fill);
-    this.dirty = { x0: 0, y0: 0, x1: -1, y1: -1 };
+    if (budget.unlimited) {
+      this.fill.rect = depthTexelRect(this.layout, this.dirty.x0, this.dirty.y0, this.dirty.x1, this.dirty.y1);
+      const texels = fillWaterDepth(this.data, this.layout, field, surfaceHeight, this.fill);
+      this.dirty = { x0: 0, y0: 0, x1: -1, y1: -1 };
+      if (texels > 0) this.texture.needsUpdate = true;
+      return texels;
+    }
+    // Под бюджетом (REND-44, design D9) прямоугольник режется ПОЛОСАМИ клеток
+    // сверху: заполненные ряды уходят, остаток остаётся прямоугольником — и
+    // состояния сверх уже существующего не заводится. Тексель заполняется ровно
+    // один раз, поэтому сумма `waterDepthTexels` за прогон от нарезки не
+    // меняется (PERF-3).
+    let texels = 0;
+    let row = this.dirty.y0;
+    while (row <= this.dirty.y1 && budget.hasTime()) {
+      this.fill.rect = depthTexelRect(this.layout, this.dirty.x0, row, this.dirty.x1, row);
+      texels += fillWaterDepth(this.data, this.layout, field, surfaceHeight, this.fill);
+      row++;
+    }
+    this.dirty =
+      row > this.dirty.y1
+        ? { x0: 0, y0: 0, x1: -1, y1: -1 }
+        : { x0: this.dirty.x0, y0: row, x1: this.dirty.x1, y1: this.dirty.y1 };
+    // Текстура уезжает целиком (`needsUpdate`), но НАБЛЮДАЕМО это не полурастр:
+    // незаполненные ряды несут глубину предыдущего кадра, а не мусор, — то же
+    // отличие «когда», которое REND-44 и разрешает.
     if (texels > 0) this.texture.needsUpdate = true;
     return texels;
+  }
+
+  /**
+   * Есть ли что перезаполнять (REND-44): им подсистема решает, звать ли выборку
+   * поля и осталась ли работа после прохода под бюджетом.
+   *
+   * Метод, а не геттер, намеренно: значение меняется вызовом `flush` в том же
+   * блоке кода, а сужение типа у геттера пережило бы этот вызов и сделало бы
+   * проверку «осталось ли» заведомо ложной для компилятора.
+   */
+  needsRefill(): boolean {
+    return this.dirty.x1 >= this.dirty.x0 && this.layout.width > 0;
   }
 
   /**

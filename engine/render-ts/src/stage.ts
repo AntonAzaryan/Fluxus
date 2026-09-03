@@ -21,7 +21,83 @@
  */
 import type { EntityId } from '@fluxus/core';
 import { costSink } from './cost.js';
-import type { EntityView, RenderContext, RenderSubsystem, TickView } from './types.js';
+import type { EntityView, FrameBudget, RenderContext, RenderSubsystem, TickView } from './types.js';
+
+/**
+ * Рекомендованный игре бюджет кадра в миллисекундах (REND-44): четверть кадра
+ * 60 Гц — столько тяжёлая пересборка вправе занять, не роняя частоту. Движок
+ * его СЕБЕ не назначает (умолчание — «не ограничен», design D6): величину
+ * называет хост, а замер счётных величин идёт без бюджета вовсе (PERF-3).
+ */
+export const DEFAULT_FRAME_BUDGET_MS = 4;
+
+/**
+ * Бюджет кадра сцены (REND-44) — один переиспользуемый объект на всю её жизнь:
+ * кадровый путь не аллоцирует (REND-26). Перевзводится началом фазы; отметка
+ * отложения идёт в сток стоимости через ambient-сток, а не через поле, чтобы
+ * подсистема не знала имени счётчика (design D7).
+ */
+class StageBudget implements FrameBudget {
+  private limitMs = Number.POSITIVE_INFINITY;
+  private startedAt = 0;
+  private clock: () => number = () => 0;
+  /**
+   * Первая порция прохода ещё не начата. Она начинается ВСЕГДА, каким бы малым
+   * ни был потолок: бюджет гарантирует ПРОГРЕСС, иначе медленная машина (или
+   * нулевой бюджет) не пересобрала бы ничего никогда, и «отложено, но не
+   * потеряно» стало бы неправдой в пределе (REND-44). Прогресс каждой
+   * вписавшейся подсистемы держит сдвиг старта обхода (design D5).
+   */
+  private first = true;
+
+  get unlimited(): boolean {
+    return this.limitMs === Number.POSITIVE_INFINITY;
+  }
+
+  /** Взвод фазы: часы и потолок этого прохода. */
+  arm(clock: () => number, limitMs: number): void {
+    this.clock = clock;
+    this.limitMs = limitMs;
+    this.first = true;
+    this.startedAt = limitMs === Number.POSITIVE_INFINITY ? 0 : clock();
+  }
+
+  hasTime(): boolean {
+    if (this.first) {
+      // Гарантия прогресса тратится ровно один раз на проход: вопрос задаётся
+      // перед порцией, и ответ «да» здесь означает, что порция начата.
+      this.first = false;
+      return true;
+    }
+    return !this.exhausted();
+  }
+
+  /**
+   * Время вышло — вопрос СЦЕНЫ, а не подсистемы: он не тратит гарантию первой
+   * порции и потому не крадёт её у той, чья очередь ещё не подошла.
+   */
+  exhausted(): boolean {
+    if (this.limitMs === Number.POSITIVE_INFINITY) return false;
+    return this.clock() - this.startedAt >= this.limitMs;
+  }
+
+  defer(): void {
+    const cost = costSink();
+    if (cost !== undefined) cost.frameBudgetDeferrals++;
+  }
+}
+
+/** Параметры сборки сцены: бюджет кадра и его часы (REND-44). */
+export interface PresentationStageOptions {
+  /**
+   * Потолок отложимой тяжёлой работы кадра в миллисекундах (REND-44). Не задан
+   * либо `Infinity` — нарезки нет: сцена ведёт себя ровно как до появления
+   * механизма, и это умолчание (design D6).
+   */
+  readonly frameBudgetMs?: number;
+  /** Часы бюджета в миллисекундах; по умолчанию `performance.now` — ради тестов. */
+  readonly clock?: () => number;
+}
 
 /**
  * Продюсер presentation-состояния (REND-11). Из продюсера сцене нужно только
@@ -109,8 +185,31 @@ export class PresentationStage {
    */
   private live = 0;
 
-  constructor(context: RenderContext) {
+  /**
+   * Бюджет кадра (REND-44) и его часы. Объект один на жизнь сцены; потолок
+   * приходит сборкой, а продюсер вправе назвать свой на один кадр (design D1).
+   */
+  private readonly budget = new StageBudget();
+  private readonly budgetMs: number;
+  private readonly clock: () => number;
+  /**
+   * Сколько зарегистрированных подсистем вписалось в бюджет (REND-44). Ноль —
+   * фазы не бывает вовсе: сцена без вписавшихся не читает часов и не платит
+   * за механизм ничем.
+   */
+  private budgeted = 0;
+  /**
+   * С какой подсистемы начинать бюджетную фазу следующего кадра (design D5):
+   * кончился бюджет на `i` — следующий кадр начинается с неё, иначе сосед за
+   * вечно грязной подсистемой не получал бы бюджета никогда. Порядка
+   * `syncTick` и `updateFrame` сдвиг не касается — тот регистрационный (REND-8).
+   */
+  private budgetCursor = 0;
+
+  constructor(context: RenderContext, options: PresentationStageOptions = {}) {
     this.context = context;
+    this.budgetMs = options.frameBudgetMs ?? Number.POSITIVE_INFINITY;
+    this.clock = options.clock ?? ((): number => performance.now());
   }
 
   /** Продюсер, наполняющий presentation-состояние сейчас; null — ни одного. */
@@ -121,6 +220,7 @@ export class PresentationStage {
   /** Регистрирует подсистему; порядок регистрации = порядок вызовов (REND-8). */
   register(subsystem: RenderSubsystem): this {
     this.subsystems.push(subsystem);
+    if (subsystem.updateBudgeted !== undefined) this.budgeted++;
     subsystem.init(this.context);
     for (const watcher of this.watchers) watcher(subsystem);
     return this;
@@ -213,14 +313,23 @@ export class PresentationStage {
    * Умолчание — модуль `dt`: продюсер, который различия не делает (документный
    * источник — мир там не идёт вовсе), передаёт одно число, и подсистемы
    * получают ту же величину, что и раньше.
+   *
+   * `budgetMs` — потолок отложимой работы ЭТОГО кадра (REND-44); не задан —
+   * действует потолок сборки сцены. Называет его продюсер, знающий темп своих
+   * кадров: документный источник редактора работает без потолка вовсе, потому
+   * что мазок кисти обязан быть виден в том же кадре (ED-15). Состояния это не
+   * заводит — аргумент живёт ровно один вызов.
    */
-  frame(dt: number, alpha: number, realDt: number = Math.abs(dt)): void {
+  frame(dt: number, alpha: number, realDt: number = Math.abs(dt), budgetMs?: number): void {
     const cost = costSink();
     if (cost !== undefined) {
       cost.frameCalls++;
       cost.frameSubsystems += this.subsystems.length;
       cost.frameInstances += this.live * this.subsystems.length;
     }
+    // Фаза отложимой работы — ДО покадрового обновления (REND-44): кадр рисует
+    // то, что она успела построить, а не то, что построится после него.
+    this.runBudget(budgetMs ?? this.budgetMs);
     for (const subsystem of this.subsystems) subsystem.updateFrame(dt, alpha, realDt);
     // Отладочный слой — ПОСЛЕ подсистем и после счётных величин (REND-27):
     // позы кадра уже поставлены, а счётчики стоимости он не двигает (RDBG-8).
@@ -240,12 +349,60 @@ export class PresentationStage {
    * доставляет, а `register` на снесённой сцене — заведение новой.
    */
   dispose(): void {
+    // Отложенное доделывается ДО сноса (REND-44): «отложено и снесено» не
+    // должно быть состоянием, из которого не видно, доделали работу или
+    // потеряли. Цена ограничена пометками, накопленными к смене сцены, — она
+    // несравнима с ценой самой смены (design D4).
+    this.flushBudget();
     for (let i = this.subsystems.length - 1; i >= 0; i--) this.subsystems[i]?.dispose?.();
     this.subsystems.length = 0;
     this.watchers.length = 0;
     this.debug = null;
     this.producer = null;
     this.live = 0;
+    this.budgeted = 0;
+    this.budgetCursor = 0;
+  }
+
+  /**
+   * Доделать отложенное целиком, без нарезки (REND-44). Зовётся синхронными
+   * точками: разрыв непрерывности доставки (`snapAll`), снос сцены (REND-31).
+   * Первая сборка геометрии сюда не относится — её синхронность держит сама
+   * подсистема: сцены с половиной арены в первом кадре не бывает.
+   */
+  flushBudget(): void {
+    this.runBudget(Number.POSITIVE_INFINITY);
+  }
+
+  /**
+   * Один проход бюджетной фазы (REND-44). Сцена без вписавшихся подсистем не
+   * читает часов и не платит за механизм ничем: одно сравнение с нулём.
+   *
+   * Обход начинается с курсора (design D5) и идёт циклически, чтобы подсистема,
+   * стоящая за вечно грязным соседом, получала бюджет: курсор помнит того, на
+   * ком бюджет кончился первым, и следующий кадр начинается со СЛЕДУЮЩЕЙ за
+   * ним.
+   */
+  private runBudget(limitMs: number): void {
+    const count = this.subsystems.length;
+    if (this.budgeted === 0 || count === 0) return;
+    this.budget.arm(this.clock, limitMs);
+    const start = this.budgetCursor % count;
+    let starved = -1;
+    for (let step = 0; step < count; step++) {
+      const index = (start + step) % count;
+      const subsystem = this.subsystems[index]!;
+      if (subsystem.updateBudgeted === undefined) continue;
+      // Фаза зовёт вписавшуюся подсистему ДАЖЕ БЕЗ ВРЕМЕНИ, а не пропускает
+      // её: пропущенная не узнала бы, что фаза была, и сделала бы свою работу
+      // целиком в покадровом обновлении — бюджет не ограничил бы ничего.
+      subsystem.updateBudgeted(this.budget);
+      // Кто первым остался без времени — с того сдвигается старт следующего
+      // кадра (design D5): начни он снова с той же, сосед за вечно грязной
+      // подсистемой не получил бы бюджета никогда.
+      if (starved < 0 && this.budget.exhausted()) starved = index;
+    }
+    this.budgetCursor = starved < 0 ? 0 : (starved + 1) % count;
   }
 
   private flush(): void {
@@ -267,6 +424,10 @@ export class PresentationStage {
     }
     this.live = view.entities.size;
     for (const subsystem of this.subsystems) subsystem.syncTick(view);
+    // Разрыв непрерывности (REND-2) не размазывается по кадрам (REND-44):
+    // перемотка, смена режима и первая доставка доделывают отложенное здесь же
+    // — тем же правилом, каким публикуется маска тумана (FOW-11).
+    if (view.snapAll) this.flushBudget();
     this.debug?.deliver(view);
   }
 }

@@ -64,6 +64,18 @@ export interface RemoteHostConfig {
   /** Часы в миллисекундах; по умолчанию performance.now — параметр ради тестов. */
   readonly clock?: () => number;
   /**
+   * Бюджет кадра сцены в миллисекундах (`rendering` REND-44) — потолок
+   * отложимой тяжёлой работы: пересборки геометрии террейна, перезаполнения
+   * глубинных текстур воды. Не задан либо `Infinity` — нарезки нет, и кадр
+   * ведёт себя ровно как до появления механизма; рекомендованное игре значение
+   * — `DEFAULT_FRAME_BUDGET_MS` пакета рендера.
+   *
+   * Действует только на сцену, которую хост заводит САМ: переданную опцией
+   * сцену (`stage`) настроил её владелец — редактор, у которого свой продюсер
+   * и свой темп кадров (ED-9, ED-15).
+   */
+  readonly frameBudgetMs?: number;
+  /**
    * Handshake получен (SHELL-5): terrain и полезная нагрузка сборки доступны,
    * пора регистрировать подсистемы — до первой доставки состояния.
    */
@@ -115,7 +127,12 @@ export class RemoteHost implements PresentationProducer {
   lastPause: PauseEnvelope | undefined;
 
   constructor(context: RenderContext, config: RemoteHostConfig = {}) {
-    this.presentation = config.stage ?? new PresentationStage(context);
+    this.presentation =
+      config.stage ??
+      new PresentationStage(context, {
+        ...(config.frameBudgetMs !== undefined ? { frameBudgetMs: config.frameBudgetMs } : {}),
+        ...(config.clock !== undefined ? { clock: config.clock } : {}),
+      });
     this.config = config;
   }
 

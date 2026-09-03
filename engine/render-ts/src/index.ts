@@ -14,6 +14,8 @@ export type {
   LightCarrier,
   LightCarrierPose,
   LightCarrierSink,
+  // бюджет кадра подсистем (REND-44): контракт отложимой работы
+  FrameBudget,
   LightingSink,
   LocalAimPoint,
   LocalInputSample,
@@ -38,6 +40,8 @@ export type {
 // контроллер, раздающий значения документа пресета. Имён пресетов пакет не
 // знает — их приносит приложение игры.
 export { QualityController, validateQualityPreset } from './quality.js';
+export { UNLIMITED_FRAME_BUDGET } from './types.js';
+
 export type {
   QualityDeclaration,
   QualityKnob,
@@ -128,8 +132,8 @@ export { FloorMirror } from './floorMirror.js';
 
 // Сцена подсистем (REND-8) — общая часть продюсеров presentation-состояния, и
 // документный источник инстансов как второй продюсер (REND-11).
-export { PresentationStage } from './stage.js';
-export type { PresentationProducer } from './stage.js';
+export { PresentationStage, DEFAULT_FRAME_BUDGET_MS } from './stage.js';
+export type { PresentationProducer, PresentationStageOptions } from './stage.js';
 export { DocumentSource } from './documentSource.js';
 export type { DocumentInstance, DocumentSourceOptions } from './documentSource.js';
 

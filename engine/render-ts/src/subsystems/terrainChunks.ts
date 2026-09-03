@@ -123,6 +123,57 @@ export class TerrainChunkMap {
     this.floor.clear();
   }
 
+  /**
+   * Первый помеченный в прежнем порядке (REND-7): сперва помеченные формой,
+   * затем полом. Им пересобирается сборка без камеры — порядок остаётся
+   * детерминированным (REND-44, design D8).
+   */
+  first(): number {
+    for (const chunk of this.shape) return chunk;
+    for (const chunk of this.floor) return chunk;
+    return -1;
+  }
+
+  /**
+   * Все помеченные по одному разу — вход выбора ближайшего к камере (REND-44).
+   * Чанк, помеченный обеими причинами, отдаётся один раз: пересборка у него
+   * одна, и второй проход по нему был бы лишним сравнением расстояния.
+   */
+  *marked(): IterableIterator<number> {
+    yield* this.shape;
+    for (const chunk of this.floor) {
+      if (!this.shape.has(chunk)) yield chunk;
+    }
+  }
+
+  /**
+   * Ближайший к точке помеченный чанк (REND-44, design D8): расстояние меряется
+   * до ЦЕНТРА чанка в мировых единицах, `span` — сторона чанка в них. `-1` —
+   * помеченных нет.
+   *
+   * Поиск линейный и без аллокаций (REND-26): чанков в арене десятки, и
+   * сортировка с массивом стоила бы дороже самой пересборки.
+   */
+  nearest(x: number, y: number, span: number): number {
+    let best = -1;
+    let bestDistance = Number.POSITIVE_INFINITY;
+    for (const chunk of this.marked()) {
+      const dx = ((chunk % this.countX) + 0.5) * span - x;
+      const dy = (Math.floor(chunk / this.countX) + 0.5) * span - y;
+      const distance = dx * dx + dy * dy;
+      if (distance >= bestDistance) continue;
+      bestDistance = distance;
+      best = chunk;
+    }
+    return best;
+  }
+
+  /** Чанк пересобран: обе его пометки сняты (REND-44 — остальные остаются). */
+  done(chunk: number): void {
+    this.shape.delete(chunk);
+    this.floor.delete(chunk);
+  }
+
   /** Пометка чанков всех клеток в радиусе `radius` от правки. */
   private markRadius(
     cell: number,

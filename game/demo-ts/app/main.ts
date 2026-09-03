@@ -42,6 +42,7 @@ import {
   CameraEffectsDirector,
   CameraRig,
   CursorSurface,
+  DEFAULT_FRAME_BUDGET_MS,
   SpectatorSubjects,
   DecorationSet,
   decorationInstanceOf,
@@ -1436,6 +1437,12 @@ async function main(): Promise<void> {
   const worker = spawnShellWorker(mode);
 
   remote = new RemoteHost(context, {
+    // Бюджет кадра сцены (REND-44): пересборка чанков террейна и перезаполнение
+    // глубины воды нарезаются по кадрам, а не выкладываются одним затыком. 4 мс
+    // — четверть кадра 60 Гц; величину называет ИГРА, движок себе бюджета не
+    // назначает (умолчание — «не ограничен»), потому что затыки складываются на
+    // устройстве игрока, а не в движке.
+    frameBudgetMs: DEFAULT_FRAME_BUDGET_MS,
     // Состояние паузы матча (NTR-20) — прямо в HUD: сборка его не трактует и
     // ничего по нему не решает, потому что решать по нему нечего. Мир идёт или
     // стоит по воле сервера, а картинка о паузе узнаёт единственным законным
@@ -1494,6 +1501,10 @@ async function main(): Promise<void> {
         new TerrainSubsystem(grid, {
           surface,
           shadows: lighting,
+          // Порядок пересборки под бюджетом кадра (REND-44): ближайшие к
+          // камере чанки первыми — отложенный чанк за спиной игрока не виден.
+          // Та же камера, что у освещения и отсечения инстансов (CAM-1).
+          camera,
           ...(manifest.terrain?.tileset === undefined ? {} : { tileset: manifest.terrain.tileset }),
           ...(manifest.terrain?.paintMap === undefined ? {} : { paintMap: manifest.terrain.paintMap }),
         }),
