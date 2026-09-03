@@ -101,7 +101,7 @@ export class DecorationSet {
   private readonly set = new KeyedInstanceSet<DecorationInstance>({
     owner: 'DecorationSet',
     requirement: 'REND-18',
-    write: (view, instance) => { writeDecoration(view, instance); },
+    write: (view, instance) => writeDecoration(view, instance),
   });
 
   constructor(stage: PresentationStage) {
@@ -132,7 +132,12 @@ export class DecorationSet {
    * правку, и результат виден не позже следующего кадра (ED-15).
    */
   apply(instances: Iterable<DecorationInstance>): void {
-    this.set.apply(instances);
+    // Набор не изменился — подсистемам его не переподаём (REND-18): в режиме
+    // правки документ отдаётся ЦЕЛИКОМ на каждую правку (ED-15), включая
+    // правки, декораций не касавшиеся вовсе, а сведение набора у подсистемы
+    // стоит обхода всех её decoration-инстансов. Сведение самого набора при
+    // этом уже сделано — оно и есть ответ на вопрос «изменилось ли».
+    if (!this.set.apply(instances)) return;
     this.stage.publishDecorations(this.set.entities);
   }
 
@@ -146,12 +151,28 @@ export class DecorationSet {
  * Поля инстанса из записи набора; prev = curr — интерполировать нечего
  * (REND-18). Уровень пришпилен к нулю: ступени уровня декорации взять неоткуда,
  * а сажает инстанс визуальная поверхность (REND-9, REND-10).
+ *
+ * Возвращает, ИЗМЕНИЛОСЬ ли хоть одно поле: набор отчитывается механизму
+ * (`keyedInstanceSet.ts`), а тот — потребителю, у которого переподача влечёт
+ * дорогую работу поодаль (REND-8, REND-9). Сравнение по значению здесь ровно то
+ * же, что и запись, — полей у размещённого шесть.
  */
-function writeDecoration(view: EntityView, instance: DecorationInstance): void {
+function writeDecoration(view: EntityView, instance: DecorationInstance): boolean {
+  const yaw = instance.yaw ?? 0;
+  if (
+    view.currX === instance.x &&
+    view.currY === instance.y &&
+    view.facingYaw === yaw &&
+    view.skin === instance.skin &&
+    view.scale === instance.scale &&
+    view.walkable === instance.walkable
+  ) {
+    return false;
+  }
   view.prevX = view.currX = instance.x;
   view.prevY = view.currY = instance.y;
   view.prevLevel = view.currLevel = 0;
-  view.facingYaw = instance.yaw ?? 0;
+  view.facingYaw = yaw;
   view.snap = true;
   view.skin = instance.skin;
   view.scale = instance.scale;
@@ -159,4 +180,5 @@ function writeDecoration(view: EntityView, instance: DecorationInstance): void {
   // у неё запись манифеста и готовность модели, а идентичность инстанса
   // при правке флага сохраняется — сведение выше её не пересоздало.
   view.walkable = instance.walkable;
+  return true;
 }

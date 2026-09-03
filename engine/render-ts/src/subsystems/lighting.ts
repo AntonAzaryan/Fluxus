@@ -99,6 +99,7 @@ import {
   applyShadowFlags,
   isShadowMode,
   releaseShadowMap,
+  shadowCameraFrustum,
 } from '../lighting/shadowMaps.js';
 
 /**
@@ -181,6 +182,12 @@ export class LightingSubsystem
   private readonly blobs = new BlobShadowField();
 
   private phase: ShadowPhase = 'none';
+  /**
+   * Пирамида теневой камеры и её матрица — переиспользуемые: их спрашивает
+   * отсечение каждым кадром, и своей записи на кадр у них быть не должно.
+   */
+  private readonly sunFrustum = new THREE.Frustum();
+  private readonly shadowFrustumMatrix = new THREE.Matrix4();
   /** Кэш статики устарел: ближайший кадр перерисует его (design D2). */
   private staticStale = true;
   /** Реестр кастеров изменился: флаги фазы надо расставить заново. */
@@ -460,6 +467,20 @@ export class LightingSubsystem
 
   invalidateStatic(): void {
     this.staticStale = true;
+  }
+
+  /**
+   * Пирамида теневой камеры солнца (REND-21, REND-30) — владельцу инстансов
+   * для отсечения: попавшее в неё обязано быть нарисовано, даже если камера
+   * кадра этого не видит, иначе инстанс за краем экрана перестанет отбрасывать
+   * тень ВНУТРЬ экрана. `null` — теней в кадре нет (фаза `none` либо пресет
+   * теней `none`). Матрицы теневой камеры производны от позы источника, и три
+   * сводит их только в теневом проходе — здесь это делается явно, потому что
+   * спрашивают их ДО кадра.
+   */
+  shadowFrustum(): THREE.Frustum | null {
+    if (this.phase === 'none' || !this.sun.castShadow) return null;
+    return shadowCameraFrustum(this.sun, this.sunFrustum, this.shadowFrustumMatrix);
   }
 
   // ------------------------------------------ носители контактных пятен

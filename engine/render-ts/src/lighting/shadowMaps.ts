@@ -45,6 +45,30 @@ const NORMAL_BIAS_TEXELS = 2;
 const DEPTH_BIAS_TEXELS = 1;
 
 /**
+ * Пирамида теневой камеры источника в мировых осях (REND-21, REND-30) — вход
+ * отсечения у владельца инстансов: инстанс, попадающий в неё, обязан быть
+ * нарисован, даже если камера кадра его не видит, иначе он перестанет
+ * отбрасывать тень внутрь экрана.
+ *
+ * Матрицы теневой камеры производны от позы источника и его цели, и three
+ * сводит их только в теневом проходе — здесь они сводятся явно, потому что
+ * спрашивают их ДО кадра. Пишет в поданные пирамиду и матрицу: на кадр у этого
+ * расчёта своих объектов быть не должно (REND-26).
+ */
+export function shadowCameraFrustum(
+  light: THREE.DirectionalLight,
+  out: THREE.Frustum,
+  scratch: THREE.Matrix4,
+): THREE.Frustum {
+  light.updateMatrixWorld();
+  light.target.updateMatrixWorld();
+  light.shadow.updateMatrices(light);
+  const camera = light.shadow.camera;
+  scratch.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse);
+  return out.setFromProjectionMatrix(scratch);
+}
+
+/**
  * Позиция, цель, тон и фрустум теневой камеры одного источника (design D6):
  * ортографический фрустум обтянут по границам арены — она мала, и стабильный
  * фрустум не даёт мерцания текселей при движении камеры кадра.
