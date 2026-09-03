@@ -704,3 +704,117 @@ describe('юбка обрыва по границе пола (REND-7)', () => {
     expect(ctx.scene.children.filter((node) => node instanceof THREE.Mesh)).toHaveLength(0);
   });
 });
+
+describe('покрытия пола и стенок текстурой (REND-7; временно, до стаба terrain-texturing)', () => {
+  const FLOOR_ID = 'visuals/textures/grass.png';
+  const WALL_ID = 'visuals/textures/cliff.png';
+  const FLOOR_PERIOD = 4;
+  const WALL_PERIOD = 2;
+  const image = { width: 2, height: 2, format: 'rgba8' as const, pixels: new Uint8Array(16) };
+
+  function setup() {
+    const assets = makeAssets();
+    const warnings: string[] = [];
+    const subsystem = new TerrainSubsystem(cliffGrid(), {
+      floorCover: { texture: FLOOR_ID, period: FLOOR_PERIOD },
+      wallCover: { texture: WALL_ID, period: WALL_PERIOD },
+      warn: (message) => warnings.push(message),
+    });
+    const ctx: RenderContext = {
+      scene: new THREE.Scene(),
+      assets: assets.service,
+      config: { heightStep: STEP },
+    };
+    subsystem.init(ctx);
+    const meshOf = (name: string): THREE.Mesh => {
+      const mesh = ctx.scene.getObjectByName(name);
+      if (!(mesh instanceof THREE.Mesh)) throw new Error(`меша ${name} нет в сцене`);
+      return mesh as THREE.Mesh;
+    };
+    const materialOf = (name: string): THREE.MeshStandardMaterial =>
+      meshOf(name).material as THREE.MeshStandardMaterial;
+    return { assets, warnings, subsystem, ctx, meshOf, materialOf };
+  }
+
+  it('без покрытий геометрия без uv, и модуль ассетов не спрашивается', () => {
+    const assets = makeAssets();
+    const subsystem = new TerrainSubsystem(cliffGrid());
+    const ctx: RenderContext = {
+      scene: new THREE.Scene(),
+      assets: assets.service,
+      config: { heightStep: STEP },
+    };
+    subsystem.init(ctx);
+    expect(assets.requests).toHaveLength(0);
+    const floor = ctx.scene.getObjectByName('terrain:chunk:0,0') as THREE.Mesh;
+    expect(floor.geometry.getAttribute('uv')).toBeUndefined();
+  });
+
+  it('пол проецируется сверху с периодом, стенки и юбка — вдоль стенки и по высоте', () => {
+    const { assets, meshOf } = setup();
+    expect(assets.requests.map((request) => request.id)).toEqual(
+      expect.arrayContaining([FLOOR_ID, WALL_ID]),
+    );
+
+    const floor = meshOf('terrain:chunk:0,0').geometry;
+    const floorPos = floor.getAttribute('position');
+    const floorUv = floor.getAttribute('uv');
+    expect(floorUv.count).toBe(floorPos.count);
+    for (let i = 0; i < floorPos.count; i++) {
+      expect(floorUv.getX(i)).toBeCloseTo(floorPos.getX(i) / FLOOR_PERIOD, 6);
+      expect(floorUv.getY(i)).toBeCloseTo(floorPos.getY(i) / FLOOR_PERIOD, 6);
+    }
+    for (const name of ['terrain:walls:0,0', 'terrain:skirt:0,0']) {
+      const geometry = meshOf(name).geometry;
+      const pos = geometry.getAttribute('position');
+      const uv = geometry.getAttribute('uv');
+      expect(uv.count, name).toBe(pos.count);
+      for (let i = 0; i < pos.count; i++) {
+        expect(uv.getX(i), name).toBeCloseTo((pos.getX(i) + pos.getY(i)) / WALL_PERIOD, 6);
+        expect(uv.getY(i), name).toBeCloseTo(pos.getZ(i) / WALL_PERIOD, 6);
+      }
+    }
+  });
+
+  it('доехавшая текстура становится картой материала, недоступная — предупреждение и заливка цветом', () => {
+    const { assets, warnings, materialOf } = setup();
+    assets.resolve('texture', FLOOR_ID, image);
+    const floor = materialOf('terrain:chunk:0,0');
+    expect(floor.map).not.toBeNull();
+    expect(floor.map!.wrapS).toBe(THREE.RepeatWrapping);
+    expect(floor.map!.generateMipmaps).toBe(true);
+    expect(floor.map!.minFilter).toBe(THREE.LinearMipmapLinearFilter);
+    // Цвет — множитель поверх карты: заливка уступает место текстуре.
+    expect(floor.color.getHex()).toBe(0xffffff);
+
+    assets.fail('texture', WALL_ID, 'файл не читается');
+    expect(materialOf('terrain:walls:0,0').map).toBeNull();
+    expect(materialOf('terrain:skirt:0,0').map).toBeNull();
+    expect(warnings.join('\n')).toContain(WALL_ID);
+    expect(warnings.join('\n')).toContain('файл не читается');
+    expect(warnings.join('\n')).toContain('заливка цветом');
+  });
+
+  it('стенки и юбка делят одну текстуру, юбка темнее тоном', () => {
+    const { assets, materialOf } = setup();
+    assets.resolve('texture', WALL_ID, image);
+    const walls = materialOf('terrain:walls:0,0');
+    const skirt = materialOf('terrain:skirt:0,0');
+    expect(walls.map).not.toBeNull();
+    expect(skirt.map).toBe(walls.map);
+    expect(walls.color.getHex()).toBe(0xffffff);
+    expect(skirt.color.getHex()).toBeLessThan(0xffffff);
+  });
+
+  it('снос отдаёт текстуры покрытий (REND-31)', () => {
+    const { assets, subsystem, materialOf } = setup();
+    assets.resolve('texture', FLOOR_ID, image);
+    const map = materialOf('terrain:chunk:0,0').map!;
+    let disposed = false;
+    map.addEventListener('dispose', () => {
+      disposed = true;
+    });
+    subsystem.dispose();
+    expect(disposed).toBe(true);
+  });
+});

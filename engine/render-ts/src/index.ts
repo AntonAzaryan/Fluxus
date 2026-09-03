@@ -237,11 +237,9 @@ export type { ManeuverEnds } from './model/verticalOffset.js';
 // Подсистема террейна (REND-7, REND-9) и её чистые генераторы геометрии.
 export { TerrainSubsystem } from './subsystems/terrain.js';
 export type { TerrainOptions } from './subsystems/terrain.js';
-export {
-  buildFloorGeometry,
-  buildWallGeometry,
-  toBufferGeometry,
-} from './subsystems/terrainGeometry.js';
+export type { TerrainCover, TerrainUvMapping } from './subsystems/terrainCover.js';
+export { buildFloorGeometry, buildWallGeometry } from './subsystems/terrainGeometry.js';
+export { toBufferGeometry } from './subsystems/terrainMesh.js';
 export { buildSkirtGeometry, SKIRT_BOTTOMLESS_Z } from './subsystems/terrainSkirt.js';
 export type { CellRect, TerrainGeometryData } from './subsystems/terrainGeometry.js';
 

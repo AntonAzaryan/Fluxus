@@ -64,6 +64,10 @@ npm run golden:cost # regenerate cost and memory baselines (*.cost.json, *.footp
 npm run bench:demo  # manual browser bench of the demo arena vs a device profile — diagnostic, not a gate
 npm run bots:sync   # sync bot-profile ability entries from the scene + its <base>.bots.json annotations (BOT-13);
                     # verification itself is a demo test inside npm run check — the CLI is the designer's pen, not the gate
+npm run textures:water # regenerate the water detail textures (content/visuals/textures/water-*.png) from the formulas
+                       # of scripts/gen-water-textures.mjs — deterministic, so a texture diff is a formula diff
+npm run textures:ground # same for the interim terrain covers (ground-grass.png, ground-cliff.png) from
+                        # scripts/gen-ground-textures.mjs — placeholders until the terrain-texturing change lands
 ```
 
 The inner loop has a selective run (CLI-14): `npm run check:impact` (`scripts/impact.mjs`) takes the diff from the merge-base with `main` plus the working tree, maps every changed path to a package, closes over declared `@fluxus/*` dependencies **and** the declared test edges of the map (who reads a foreign tree past the manifest), and runs type-check, lint and tests for that selection only; knip, jscpd, dependency-cruiser and `spec-graph check` always run whole, and the integration suite (CLI-9) joins any non-empty code selection. The map — wide gates, test edges, path rules — is data inside that script, like the guard lists of CLI-8: editing it lands in the review diff, an unknown path falls back to the full gate, and a test reading a foreign tree past the map reddens `engine/integration-ts/test/impactMap.test.ts` in the ordinary test run. **The selection is not the gate of `main`**: `pre-push` runs the full `npm run check` there, and a hole in the map costs an extra full run, never a missed regression.

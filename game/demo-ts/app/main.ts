@@ -1360,7 +1360,17 @@ async function main(): Promise<void> {
       });
       remote!.register(lighting);
       // Порядок подсистем нормативен (REND-8): сначала террейн, затем модели.
-      remote!.register(new TerrainSubsystem(grid, { surface, shadows: lighting }));
+      // Покрытия террейна — политика игры, не движка: ID текстур дерева контента
+      // (ASSET-2) называет демо. Временные, одно на пол и одно на стенки, до
+      // раскраски клеток из Blender (стаб `terrain-texturing`).
+      remote!.register(
+        new TerrainSubsystem(grid, {
+          surface,
+          shadows: lighting,
+          floorCover: { texture: 'visuals/textures/ground-grass.png', period: 6 },
+          wallCover: { texture: 'visuals/textures/ground-cliff.png', period: 2 },
+        }),
+      );
       // Вода (REND-35) — сразу за террейном и до моделей: глубину она берёт из
       // ТОЙ ЖЕ визуальной поверхности (REND-9), а рисуется прозрачным
       // материалом ниже прочих прозрачных (частицы и превью каста ложатся
