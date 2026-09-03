@@ -40,6 +40,8 @@ export interface ImportKinds {
   readonly manifest: DocumentKind;
   /** Документ карты кривизны (ASSET-7) — его адрес называет манифест. */
   readonly curvature: DocumentKind;
+  /** Документ карты раскраски (ASSET-15) — его адрес тоже называет манифест. */
+  readonly paint: DocumentKind;
 }
 
 export const DEFAULT_IMPORT_KINDS: ImportKinds = Object.freeze({
@@ -47,6 +49,7 @@ export const DEFAULT_IMPORT_KINDS: ImportKinds = Object.freeze({
   presentation: 'presentation',
   manifest: 'manifest',
   curvature: 'curvature',
+  paint: 'terrain-paint',
 });
 
 /**
@@ -59,6 +62,7 @@ export const DEFAULT_IMPORT_KINDS: ImportKinds = Object.freeze({
 export interface ImportSlots {
   readonly terrain?: boolean;
   readonly curvature?: boolean;
+  readonly paint?: boolean;
 }
 
 /** Манифест визуалов проекта (ASSET-9) — умолчание раскладки дерева контента. */
@@ -87,6 +91,8 @@ export interface ImportTarget {
   readonly manifestId: DocumentId | null;
   /** Документ карты кривизны (ASSET-7); `null` — манифест её не адресует либо источник её не даёт. */
   readonly curvatureId: DocumentId | null;
+  /** Документ карты раскраски (ASSET-15); `null` — по тем же двум причинам. */
+  readonly paintId: DocumentId | null;
   readonly initialPath: JsonPath;
   readonly decorationsPath: JsonPath;
   readonly terrainPath: JsonPath;
@@ -177,6 +183,9 @@ export function contextOfValues(
     // Адрес карты кривизны называет манифест (ASSET-7) — своей конвенции имени
     // у неё нет, и выдумывать её импортёр не вправе.
     curvatureMap: visuals?.terrain?.curvatureMap ?? null,
+    // И адрес карты раскраски — оттуда же (ASSET-15): своей конвенции имени у
+    // неё нет, выдумывать её импортёр не вправе.
+    paintMap: visuals?.terrain?.paintMap ?? null,
     ...(binding === undefined ? {} : { binding }),
   };
 }
@@ -252,28 +261,31 @@ async function openManifest(
 }
 
 /**
- * Документ карты кривизны открывается только под слой, который источник
- * действительно даёт (BLND-2): у сцены без curvature-объекта карта остаётся
- * за кистью редактора и руками, и импорт её не читает и не пишет.
+ * Документ производной карты (кривизны ASSET-7, раскраски ASSET-15)
+ * открывается только под слой, который источник действительно даёт (BLND-2): у
+ * сцены без соответствующего объекта карта остаётся за кистью редактора и
+ * руками, и импорт её не читает и не пишет. Обе карты открываются ОДНИМ
+ * вызовом: правило у них одно, и разойдись оно — одна из карт создавалась бы
+ * первым импортом, а вторая нет.
  */
-async function openCurvature(
+async function openDerivedMap(
   session: EditorSession,
   host: ContentTreeHost,
-  curvatureId: string | null | undefined,
+  documentId: string | null | undefined,
   wanted: boolean,
   kind: DocumentKind,
 ): Promise<DocumentId | null> {
-  if (!wanted || curvatureId == null) return null;
-  if (session.isOpen(curvatureId)) return curvatureId;
-  const opening = { id: curvatureId, kind };
-  if ((await host.stat(curvatureId))?.kind === 'file') {
+  if (!wanted || documentId == null) return null;
+  if (session.isOpen(documentId)) return documentId;
+  const opening = { id: documentId, kind };
+  if ((await host.stat(documentId))?.kind === 'file') {
     await openDocumentFromHost(session, host, opening);
   } else {
     // Карты ещё нет в дереве: первый импорт создаёт её так же, как первый
     // импорт создаёт парный presentation-документ (PRES-1, ED-21).
     session.openDocument({ ...opening, value: {} });
   }
-  return curvatureId;
+  return documentId;
 }
 
 export async function openImportTarget(
@@ -294,12 +306,19 @@ export async function openImportTarget(
   const openedManifest = await openManifest(session, host, manifestId, kinds.manifest);
 
   const context = contextOf(session, { sceneId, manifestId: openedManifest }, input.binding, terrainPath);
-  const curvatureId = await openCurvature(
+  const curvatureId = await openDerivedMap(
     session,
     host,
     context.curvatureMap,
     input.slots?.curvature === true,
     kinds.curvature,
+  );
+  const paintId = await openDerivedMap(
+    session,
+    host,
+    context.paintMap,
+    input.slots?.paint === true,
+    kinds.paint,
   );
 
   return {
@@ -307,6 +326,7 @@ export async function openImportTarget(
     presentationId,
     manifestId: openedManifest,
     curvatureId,
+    paintId,
     initialPath,
     decorationsPath,
     terrainPath,
@@ -321,7 +341,12 @@ export async function openImportTarget(
     // правок.
     group: {
       id: sceneId,
-      members: curvatureId === null ? [sceneId, presentationId] : [sceneId, presentationId, curvatureId],
+      members: [
+        sceneId,
+        presentationId,
+        ...(curvatureId === null ? [] : [curvatureId]),
+        ...(paintId === null ? [] : [paintId]),
+      ],
     },
   };
 }

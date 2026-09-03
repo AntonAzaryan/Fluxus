@@ -1,12 +1,13 @@
 /**
  * Меш чанка террейна из числовых данных генераторов (`terrainGeometry.ts`,
  * `terrainSkirt.ts`): BufferGeometry с позициями, индексами, нормалями и —
- * при покрытии — раскладкой UV проекцией мировых координат (`terrainCover.ts`).
+ * при покрытии стенок — раскладкой UV проекцией мировых координат
+ * (`terrainTileset.ts`) и — при текстурировании пола — весами слотов.
  * Отдельно от генераторов, потому что они — функции данных и о three не знают.
  */
 import * as THREE from 'three';
 import { own } from '../footprint.js';
-import { projectUv, type TerrainUvMapping } from './terrainCover.js';
+import { TERRAIN_PAINT_ATTRIBUTE, projectUv, type TerrainUvMapping } from './terrainTileset.js';
 import type { TerrainGeometryData } from './terrainGeometry.js';
 
 /**
@@ -29,6 +30,9 @@ export function toBufferGeometry(
   }
   if (mapping !== undefined) {
     geometry.setAttribute('uv', new THREE.BufferAttribute(projectUv(data.positions, mapping), 2));
+  }
+  if (data.paint !== undefined) {
+    geometry.setAttribute(TERRAIN_PAINT_ATTRIBUTE, new THREE.BufferAttribute(data.paint, 4));
   }
   return geometry;
 }

@@ -82,13 +82,16 @@ import {
   FLAG_MAP,
   LEVEL_MAP,
   OFFSET_MAP,
+  PAINT_MAP,
   assertKnownSlots,
   assertLayerAccepted,
   readCurvatureSlot,
+  readPaintSlot,
   readFindings,
   readRecords,
   readTerrainSlot,
   type CurvatureSlot,
+  type PaintSlot,
   type TerrainSlot,
 } from './layerParam.js';
 
@@ -140,6 +143,11 @@ const CURVATURE: OperationParamSpec = {
   type: 'document',
   optional: true,
   descriptionKey: 'blender.operation.param.curvature',
+};
+const PAINT: OperationParamSpec = {
+  type: 'document',
+  optional: true,
+  descriptionKey: 'blender.operation.param.paint',
 };
 
 /** Сколько записей слота операция тронула — то, из чего вызывающий строит отчёт. */
@@ -267,6 +275,20 @@ function writeCurvatureDocument(
   };
 }
 
+/** Документ карты раскраски: и размеры, и ряды — только при расхождении (ASSET-15). */
+function writePaintDocument(
+  ctx: OperationContext,
+  documentId: DocumentId,
+  paint: PaintSlot,
+): JsonValue {
+  return {
+    size:
+      writeScalar(ctx, documentId, ['width'], paint.width) +
+      writeScalar(ctx, documentId, ['height'], paint.height),
+    rows: { ...writeMap(ctx, documentId, [PAINT_MAP], paint.rows) },
+  };
+}
+
 /*
  * Читатели ниже — приведение типа, а не вторая проверка: схему параметров уже
  * сверил слой операций к моменту вызова `apply` (ED-30).
@@ -276,6 +298,23 @@ const asDocument = (params: OperationParams, name: string): DocumentId => params
 function optionalPath(params: OperationParams, name: string, fallback: JsonPath): JsonPath {
   const value = params[name];
   return value === undefined ? fallback : (value as JsonPath);
+}
+
+/**
+ * Документ производной карты, названный параметром операции; `null` — параметра
+ * нет. Слой, несущий карту, при неназванном документе отказывает ДО первой
+ * записи (BLND-6): переписывать нечего, а «импорт прошёл» было бы неправдой.
+ */
+function derivedDocument(
+  id: string,
+  params: OperationParams,
+  param: 'curvature' | 'paint',
+  map: unknown,
+  message: string,
+): DocumentId | null {
+  const document = params[param] === undefined ? null : asDocument(params, param);
+  if (document === null && map !== null) throw new OperationError(id, message, { param });
+  return document;
 }
 
 /**
@@ -291,6 +330,7 @@ export const importSpatialLayerOperation: AuthoringOperation = {
     scene: SCENE,
     presentation: PRESENTATION,
     curvature: CURVATURE,
+    paint: PAINT,
     layer: LAYER,
     initialPath: INITIAL_PATH,
     decorationsPath: DECORATIONS_PATH,
@@ -313,6 +353,7 @@ export const importSpatialLayerOperation: AuthoringOperation = {
     const decorations = readRecords(id, layer, 'decorations');
     const terrain = readTerrainSlot(id, layer);
     const curvature = readCurvatureSlot(id, layer);
+    const paint = readPaintSlot(id, layer);
     assertLayerAccepted(id, findings);
 
     const scene = asDocument(params, 'scene');
@@ -324,16 +365,23 @@ export const importSpatialLayerOperation: AuthoringOperation = {
         { param: 'presentation' },
       );
     }
-    const curvatureId = params.curvature === undefined ? null : asDocument(params, 'curvature');
-    if (curvatureId === null && curvature !== null) {
-      // Молчаливый пропуск карты — то же самое, что молчаливый пропуск слота:
-      // вызывающий получил бы «импорт прошёл» и не получил бы кривизны (ASSET-7).
-      throw new OperationError(
-        id,
-        'слой содержит карту кривизны, а документ карты не назван (ASSET-7 — его адресует манифест)',
-        { param: 'curvature' },
-      );
-    }
+    // Молчаливый пропуск карты — то же самое, что молчаливый пропуск слота:
+    // вызывающий получил бы «импорт прошёл» и не получил бы производного
+    // документа (ASSET-7, ASSET-15).
+    const paintId = derivedDocument(
+      id,
+      params,
+      'paint',
+      paint,
+      'слой содержит карту раскраски, а документ карты не назван (ASSET-15 — его адресует манифест)',
+    );
+    const curvatureId = derivedDocument(
+      id,
+      params,
+      'curvature',
+      curvature,
+      'слой содержит карту кривизны, а документ карты не назван (ASSET-7 — его адресует манифест)',
+    );
 
     const initialChange = writeSlot(
       ctx,
@@ -363,6 +411,7 @@ export const importSpatialLayerOperation: AuthoringOperation = {
         : writeTerrainMaps(ctx, scene, optionalPath(params, 'terrainPath', DEFAULT_TERRAIN_PATH), terrain);
     const curvatureChange =
       curvature === null || curvatureId === null ? null : writeCurvatureDocument(ctx, curvatureId, curvature);
+    const paintChange = paint === null || paintId === null ? null : writePaintDocument(ctx, paintId, paint);
 
     return {
       initial: { ...initialChange },
@@ -371,6 +420,7 @@ export const importSpatialLayerOperation: AuthoringOperation = {
       // вовсе, и нулевой счёт правок сказал бы «переписан без изменений».
       ...(terrainChange === null ? {} : { terrain: terrainChange }),
       ...(curvatureChange === null ? {} : { curvature: curvatureChange }),
+      ...(paintChange === null ? {} : { paint: paintChange }),
     };
   },
 };

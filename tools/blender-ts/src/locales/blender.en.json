@@ -3,6 +3,7 @@
   "blender.operation.param.scene": "The scene config — the document whose initial placement the import rewrites. By default the terrain asset lives in it as well.",
   "blender.operation.param.presentation": "The paired presentation document of the scene — the document whose decorations the import rewrites. When it is not named the layer must carry no decorations, otherwise the import refuses.",
   "blender.operation.param.curvature": "The curvature map document (ASSET-7) — the visual manifest names its address. When it is not named the layer must carry no curvature map, otherwise the import refuses.",
+  "blender.operation.param.paint": "The cell paint map document (ASSET-15) — the visual manifest names its address. When it is not named the layer must carry no paint map, otherwise the import refuses.",
   "blender.operation.param.layer": "The target spatial layer: the `initial` and `decorations` record lists, the terrain asset maps, the curvature map and the findings of parsing the source. A slot this operation does not write is a refusal, not a silent skip; an absent slot means the asset is not to be touched at all.",
   "blender.operation.param.initialPath": "Where the placement list lives in the scene config; absent means `initial` (SER-8).",
   "blender.operation.param.decorationsPath": "Where the decoration list lives in the paired document; absent means `decorations` (PRES-2).",

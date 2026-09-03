@@ -6,10 +6,15 @@
 import { describe, expect, it } from 'vitest';
 import * as THREE from 'three';
 import { FIXED_ONE, createTerrainGrid } from '@fluxus/core';
-import { validateCurvatureMap, type TerrainCurvatureMap } from '@fluxus/assets';
+import {
+  validateCurvatureMap,
+  validateTerrainPaint,
+  type TerrainCurvatureMap,
+} from '@fluxus/assets';
 import {
   DEFAULT_CURVATURE_TESSELLATION,
   SKIRT_BOTTOMLESS_Z,
+  TERRAIN_PAINT_ATTRIBUTE,
   TerrainSubsystem,
   VisualSurfaceSource,
   buildFloorGeometry,
@@ -328,10 +333,13 @@ describe('TerrainSubsystem.applyGrid: сетка документа (ED-10, ED-1
     // клетке (1,1) поднимает четыре её узла, а каждый узел общий у четырёх
     // клеток — итого девять клеток 3×3 вокруг мазка. Остальная арена осталась
     // квадом на клетку: цена платится там, где нарисован рельеф (REND-9).
+    // Вершин у разбитой клетки `(N+1)²`, а не `4N²`: подклетки сварены внутри
+    // клетки (REND-9, T-6 аудита) — позиция и нормаль суть функции клетки и
+    // точки, и на общем ребре подклеток совпадают побитово.
     const n = DEFAULT_CURVATURE_TESSELLATION;
     const curved = 9;
     expect(subsystem.floorVertexCount).toBe(
-      curved * n * n * 4 + (DOC_WIDTH * DOC_HEIGHT - curved) * 4,
+      curved * (n + 1) * (n + 1) + (DOC_WIDTH * DOC_HEIGHT - curved) * 4,
     );
   });
 
@@ -391,7 +399,10 @@ describe('разбиение клеток с кривизной (REND-9)', () =>
     expect(surface.hasCellCurvature(3, 1)).toBe(false);
 
     const curved = buildFloorGeometry(grid, grid.floor, STEP, 1, 1, 1, 1, surface, N);
-    expect(curved.positions.length / 3).toBe(N * N * 4);
+    // Квадов по-прежнему N×N, а вершин — сваренная решётка `(N+1)²` вместо
+    // `4N²` независимых четвёрок (T-6): индексы считает `terrainFloorQuads`,
+    // и цена кадра от сварки не меняется, а память геометрии падает.
+    expect(curved.positions.length / 3).toBe((N + 1) * (N + 1));
     expect(curved.indices.length).toBe(N * N * 6);
     // Вершины стоят НА поле: середина клетки поднята над хордой её углов.
     expect(Math.max(...vertices(curved).map(([, , z]) => z))).toBeGreaterThan(0);
@@ -414,8 +425,9 @@ describe('разбиение клеток с кривизной (REND-9)', () =>
       expect(z).toBeCloseTo(n00 + (n01 - n00) * t, 12);
       onEdge++;
     }
-    // Подквады ребра не сварены между собой, поэтому по две вершины на каждый.
-    expect(onEdge).toBe(2 * N);
+    // Подклетки сварены внутри клетки: на общем ребре подклеток вершина одна,
+    // и вдоль всего ребра клетки их `N + 1`, а не `2N` (T-6).
+    expect(onEdge).toBe(N + 1);
   });
 
   it('швов нет и между двумя разбитыми клетками: общие точки ребра совпадают по высоте', () => {
@@ -709,19 +721,36 @@ describe('юбка обрыва по границе пола (REND-7)', () => {
   });
 });
 
-describe('покрытия пола и стенок текстурой (REND-7; временно, до стаба terrain-texturing)', () => {
-  const FLOOR_ID = 'visuals/textures/grass.png';
-  const WALL_ID = 'visuals/textures/cliff.png';
-  const FLOOR_PERIOD = 4;
+describe('REND-39: текстурирование поверхности — tileset, раскраска, стенки', () => {
+  const GRASS = 'visuals/textures/ground-grass.png';
+  const DIRT = 'visuals/textures/ground-dirt.png';
+  const WALL_ID = 'visuals/textures/ground-cliff.png';
+  const PAINT_ID = 'visuals/duel.paint.json';
   const WALL_PERIOD = 2;
   const image = { width: 2, height: 2, format: 'rgba8' as const, pixels: new Uint8Array(16) };
 
-  function setup() {
+  /** Tileset из двух слотов пола и породы стенок — минимум, на котором виден шов. */
+  const tileset = {
+    slots: [
+      { texture: GRASS, period: 6 },
+      { texture: DIRT, period: 3 },
+    ],
+    wall: { texture: WALL_ID, period: WALL_PERIOD },
+  };
+
+  /** Карта раскраски 2×2: левый столбец — слот 0, правый — слот 1. */
+  function paintMap(rows: readonly string[] = ['01', '01']) {
+    const result = validateTerrainPaint({ width: 2, height: 2, rows: [...rows] });
+    if (!result.ok) throw new Error(result.errors.join('; '));
+    return result.map;
+  }
+
+  function setup(options: { rows?: readonly string[]; grid?: ReturnType<typeof cliffGrid> } = {}) {
     const assets = makeAssets();
     const warnings: string[] = [];
-    const subsystem = new TerrainSubsystem(cliffGrid(), {
-      floorCover: { texture: FLOOR_ID, period: FLOOR_PERIOD },
-      wallCover: { texture: WALL_ID, period: WALL_PERIOD },
+    const subsystem = new TerrainSubsystem(options.grid ?? cliffGrid(), {
+      tileset,
+      paintMap: PAINT_ID,
       warn: (message) => warnings.push(message),
     });
     const ctx: RenderContext = {
@@ -731,16 +760,23 @@ describe('покрытия пола и стенок текстурой (REND-7; 
     };
     subsystem.init(ctx);
     const meshOf = (name: string): THREE.Mesh => {
-      const mesh = ctx.scene.getObjectByName(name);
-      if (!(mesh instanceof THREE.Mesh)) throw new Error(`меша ${name} нет в сцене`);
-      return mesh as THREE.Mesh;
+      const mesh = ctx.scene.children.find(
+        (node): node is THREE.Mesh => node instanceof THREE.Mesh && node.name === name,
+      );
+      if (mesh === undefined) throw new Error(`меша ${name} нет в сцене`);
+      return mesh;
     };
     const materialOf = (name: string): THREE.MeshStandardMaterial =>
       meshOf(name).material as THREE.MeshStandardMaterial;
-    return { assets, warnings, subsystem, ctx, meshOf, materialOf };
+    const ready = (rows?: readonly string[]): void => {
+      assets.resolve('terrain-paint', PAINT_ID, paintMap(rows));
+      assets.resolve('texture', GRASS, image);
+      assets.resolve('texture', DIRT, image);
+    };
+    return { assets, warnings, subsystem, ctx, meshOf, materialOf, ready };
   }
 
-  it('без покрытий геометрия без uv, и модуль ассетов не спрашивается', () => {
+  it('без tileset модуль ассетов не спрашивается, а у пола нет ни uv, ни весов', () => {
     const assets = makeAssets();
     const subsystem = new TerrainSubsystem(cliffGrid());
     const ctx: RenderContext = {
@@ -752,22 +788,42 @@ describe('покрытия пола и стенок текстурой (REND-7; 
     expect(assets.requests).toHaveLength(0);
     const floor = ctx.scene.getObjectByName('terrain:chunk:0,0') as THREE.Mesh;
     expect(floor.geometry.getAttribute('uv')).toBeUndefined();
+    expect(floor.geometry.getAttribute(TERRAIN_PAINT_ATTRIBUTE)).toBeUndefined();
   });
 
-  it('пол проецируется сверху с периодом, стенки и юбка — вдоль стенки и по высоте', () => {
-    const { assets, meshOf } = setup();
-    expect(assets.requests.map((request) => request.id)).toEqual(
-      expect.arrayContaining([FLOOR_ID, WALL_ID]),
-    );
+  it('веса слотов: в центре клетки единица своего, в узле четырёх — поровну', () => {
+    const { meshOf, ready } = setup();
+    ready();
+    const geometry = meshOf('terrain:chunk:0,0').geometry;
+    const position = geometry.getAttribute('position');
+    const paint = geometry.getAttribute(TERRAIN_PAINT_ATTRIBUTE);
+    expect(paint.count).toBe(position.count);
 
-    const floor = meshOf('terrain:chunk:0,0').geometry;
-    const floorPos = floor.getAttribute('position');
-    const floorUv = floor.getAttribute('uv');
-    expect(floorUv.count).toBe(floorPos.count);
-    for (let i = 0; i < floorPos.count; i++) {
-      expect(floorUv.getX(i)).toBeCloseTo(floorPos.getX(i) / FLOOR_PERIOD, 6);
-      expect(floorUv.getY(i)).toBeCloseTo(floorPos.getY(i) / FLOOR_PERIOD, 6);
+    // Узел (1, 1) — общий угол четырёх клеток: два слота по две клетки каждый.
+    const node = (x: number, y: number): number[] | null => {
+      for (let i = 0; i < position.count; i++) {
+        if (Math.abs(position.getX(i) - x) > 1e-9 || Math.abs(position.getY(i) - y) > 1e-9) continue;
+        return [paint.getX(i), paint.getY(i), paint.getZ(i), paint.getW(i)];
+      }
+      return null;
+    };
+    expect(node(1, 1)).toEqual([0.5, 0.5, 0, 0]);
+    // Узел (0, 0) — угол арены: примыкает одна клетка слота 0, и вес нормирован.
+    expect(node(0, 0)).toEqual([1, 0, 0, 0]);
+    // Узел (2, 0) — правый край: примыкает одна клетка слота 1.
+    expect(node(2, 0)).toEqual([0, 1, 0, 0]);
+    // Сумма весов — единица в КАЖДОЙ вершине: кромка арены не выцветает.
+    for (let i = 0; i < paint.count; i++) {
+      expect(paint.getX(i) + paint.getY(i) + paint.getZ(i) + paint.getW(i)).toBeCloseTo(1, 6);
     }
+  });
+
+  it('стенки и юбка кроются своей записью: проекция вдоль стенки и по высоте', () => {
+    const { assets, meshOf, ready } = setup();
+    ready();
+    assets.resolve('texture', WALL_ID, image);
+    // У пола своего uv нет: слот проецируется фрагментом по мировой точке.
+    expect(meshOf('terrain:chunk:0,0').geometry.getAttribute('uv')).toBeUndefined();
     for (const name of ['terrain:walls:0,0', 'terrain:skirt:0,0']) {
       const geometry = meshOf(name).geometry;
       const pos = geometry.getAttribute('position');
@@ -777,26 +833,83 @@ describe('покрытия пола и стенок текстурой (REND-7; 
         expect(uv.getX(i), name).toBeCloseTo((pos.getX(i) + pos.getY(i)) / WALL_PERIOD, 6);
         expect(uv.getY(i), name).toBeCloseTo(pos.getZ(i) / WALL_PERIOD, 6);
       }
+      // Слоты пола на вертикальную грань не приезжают вовсе.
+      expect(geometry.getAttribute(TERRAIN_PAINT_ATTRIBUTE), name).toBeUndefined();
     }
   });
 
-  it('доехавшая текстура становится картой материала, недоступная — предупреждение и заливка цветом', () => {
-    const { assets, warnings, materialOf } = setup();
-    assets.resolve('texture', FLOOR_ID, image);
+  it('материал пола смешивает слоты, оставаясь стандартным: свет и тени прежним механизмом', () => {
+    const { materialOf, ready } = setup();
+    ready();
     const floor = materialOf('terrain:chunk:0,0');
-    expect(floor.map).not.toBeNull();
-    expect(floor.map!.wrapS).toBe(THREE.RepeatWrapping);
-    expect(floor.map!.generateMipmaps).toBe(true);
-    expect(floor.map!.minFilter).toBe(THREE.LinearMipmapLinearFilter);
-    // Цвет — множитель поверх карты: заливка уступает место текстуре.
+    expect(floor).toBeInstanceOf(THREE.MeshStandardMaterial);
+    // Цвет — множитель поверх смеси: белый отдаёт текстуры как есть.
     expect(floor.color.getHex()).toBe(0xffffff);
+    expect(floor.customProgramCacheKey()).toContain('2');
 
-    assets.fail('texture', WALL_ID, 'файл не читается');
-    expect(materialOf('terrain:walls:0,0').map).toBeNull();
-    expect(materialOf('terrain:skirt:0,0').map).toBeNull();
-    expect(warnings.join('\n')).toContain(WALL_ID);
+    // Текст программы собирается штатным `onBeforeCompile`: подменяется ровно
+    // карта цвета, а свет, тени и туман остаются механизмом three.
+    const shader = {
+      uniforms: {} as Record<string, THREE.IUniform>,
+      vertexShader: 'void main() {\n#include <begin_vertex>\n}',
+      fragmentShader: 'void main() {\n#include <map_fragment>\n}',
+    };
+    floor.onBeforeCompile(shader as never, null as never);
+    expect(shader.vertexShader).toContain(`attribute vec4 ${TERRAIN_PAINT_ATTRIBUTE};`);
+    expect(shader.vertexShader).toContain('vTerrainWorld = (modelMatrix * vec4(position, 1.0)).xyz;');
+    // Ровно два семпла — по числу слотов tileset'а, и период у каждого свой.
+    expect([...shader.fragmentShader.matchAll(/texture2D\(tSlot/gu)]).toHaveLength(2);
+    expect(shader.fragmentShader).toContain('uSlotPeriod.x');
+    expect(shader.fragmentShader).toContain('uSlotPeriod.y');
+    expect(shader.fragmentShader).toContain('diffuseColor.rgb *= blended;');
+    // Униформы — те же объекты, что держит подсистема: доехавшая текстура
+    // видна программе без пересборки материала.
+    expect((shader.uniforms.tSlot0!.value as THREE.Texture).wrapS).toBe(THREE.RepeatWrapping);
+    const period = shader.uniforms.uSlotPeriod!.value as THREE.Vector4;
+    expect([period.x, period.y]).toEqual([6, 3]);
+  });
+
+  it('потолок пресета убирает выборки из программы и сливает хвост tileset в последний слот', () => {
+    const { materialOf, meshOf, subsystem, ready } = setup();
+    ready();
+    subsystem.applyQuality(new Map([['terrain.textureSlots', 1]]));
+
+    const floor = materialOf('terrain:chunk:0,0');
+    const shader = {
+      uniforms: {} as Record<string, THREE.IUniform>,
+      vertexShader: '#include <begin_vertex>',
+      fragmentShader: '#include <map_fragment>',
+    };
+    floor.onBeforeCompile(shader as never, null as never);
+    expect([...shader.fragmentShader.matchAll(/texture2D\(tSlot/gu)]).toHaveLength(1);
+    // Веса пересчитаны: клетка слота 1 нарисована оставшимся слотом 0, а не чёрным.
+    const paint = meshOf('terrain:chunk:0,0').geometry.getAttribute(TERRAIN_PAINT_ATTRIBUTE);
+    for (let i = 0; i < paint.count; i++) expect(paint.getX(i)).toBeCloseTo(1, 6);
+  });
+
+  it('карта не той сетки — предупреждение и террейн без текстурирования', () => {
+    const { assets, warnings, meshOf } = setup();
+    const wrong = validateTerrainPaint({ width: 3, height: 3, rows: ['000', '000', '000'] });
+    if (!wrong.ok) throw new Error(wrong.errors.join('; '));
+    assets.resolve('terrain-paint', PAINT_ID, wrong.map);
+    assets.resolve('texture', GRASS, image);
+    expect(warnings.join('\n')).toContain('не совпадает с сеткой террейна');
+    expect(meshOf('terrain:chunk:0,0').geometry.getAttribute(TERRAIN_PAINT_ATTRIBUTE)).toBeUndefined();
+  });
+
+  it('слот за пределом объявленных — предупреждение с адресом клетки', () => {
+    const { warnings, ready } = setup();
+    ready(['05', '01']);
+    expect(warnings.join('\n')).toContain('клетка (1, 0)');
+    expect(warnings.join('\n')).toContain('за пределом объявленных');
+  });
+
+  it('недоступная текстура слота — предупреждение с причиной, а не отказ кадра', () => {
+    const { assets, warnings, meshOf } = setup();
+    assets.fail('texture', GRASS, 'файл не читается');
     expect(warnings.join('\n')).toContain('файл не читается');
     expect(warnings.join('\n')).toContain('заливка цветом');
+    expect(meshOf('terrain:chunk:0,0')).toBeDefined();
   });
 
   it('стенки и юбка делят одну текстуру, юбка темнее тоном', () => {
@@ -810,10 +923,13 @@ describe('покрытия пола и стенок текстурой (REND-7; 
     expect(skirt.color.getHex()).toBeLessThan(0xffffff);
   });
 
-  it('снос отдаёт текстуры покрытий (REND-31)', () => {
-    const { assets, subsystem, materialOf } = setup();
-    assets.resolve('texture', FLOOR_ID, image);
-    const map = materialOf('terrain:chunk:0,0').map!;
+  it('снос отдаёт текстуры слотов (REND-31)', () => {
+    const { assets, materialOf, subsystem, ready } = setup();
+    ready();
+    assets.resolve('texture', WALL_ID, image);
+    // Текстура стенок — обычная карта материала, и её видно снаружи; ею и
+    // меряется освобождение: слоты пола живут в тех же подписках и уходят с ней.
+    const map = materialOf('terrain:walls:0,0').map!;
     let disposed = false;
     map.addEventListener('dispose', () => {
       disposed = true;

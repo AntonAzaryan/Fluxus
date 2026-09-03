@@ -30,6 +30,7 @@ import {
   gridSource,
   levelHeights,
   objectsOf,
+  paintCells,
   packGlb,
   type GridObjectSpec,
 } from './support.js';
@@ -236,6 +237,85 @@ describe('BLND-10: карта кривизны из узловых данных'
     expect(both.curvature).toBeDefined();
     expect(cellsOf([CURVATURE_GRID]).terrain).toBeUndefined();
     expect(cellsOf([TERRAIN_GRID]).curvature).toBeUndefined();
+  });
+});
+
+describe('BLND-14: карта раскраски клеток из канала источника', () => {
+  /** Раскраска 4×4: два слота полосами — на границе виден шов, ради которого всё. */
+  const PAINT_ROWS: readonly string[] = ['0011', '0011', '0011', '0011'];
+
+  const painted = (rows: readonly string[] = PAINT_ROWS): GridObjectSpec => ({
+    ...TERRAIN_GRID,
+    paint: paintCells(rows),
+  });
+
+  it('канал раскраски даёт карту слотов рядами; ассет террейна тем же чтением', () => {
+    const layer = cellsOf([painted()]);
+    expect(messages(layer, 'error')).toEqual([]);
+    expect(layer.paint).toEqual({ width: 4, height: 4, rows: [...PAINT_ROWS] });
+    // Карты террейна тот же объект даёт по-прежнему: раскраска едет РЯДОМ с
+    // рампой и полом, потому что красится та же клетка (BLND-14).
+    expect(layer.terrain).toEqual({ levels: [...TERRAIN_LEVELS], flags: [...TERRAIN_FLAGS] });
+  });
+
+  it('источник без канала раскраски карты не даёт вовсе — документ не переписывается', () => {
+    // Нули отсутствующего канала неотличимы от нарисованных, поэтому слот
+    // берётся по НАЛИЧИЮ канала, а не по значениям (BLND-2).
+    const layer = cellsOf([TERRAIN_GRID]);
+    expect(messages(layer, 'error')).toEqual([]);
+    expect(layer.paint).toBeUndefined();
+  });
+
+  it('клетка без пола раскраску сохраняет: вернувшийся пол вернётся своим слотом', () => {
+    // Клетка (0, 0) снята флагом `_` (TERRAIN_FLAGS), и слот у неё свой.
+    const layer = cellsOf([painted(['1011', '0011', '0011', '0011'])]);
+    expect(messages(layer, 'error')).toEqual([]);
+    expect(layer.paint?.rows[0]).toBe('1011');
+  });
+
+  it('манифест без карты раскраски — отказ с именем ключа, а не молчаливый пропуск', () => {
+    const layer = cellsOf([painted()], { terrain: TARGET_TERRAIN, paintMap: null });
+    expect(messages(layer, 'error').join('\n')).toContain('terrain.paintMap');
+    expect(layer.paint).toBeUndefined();
+  });
+
+  it('дробное значение канала — отказ с адресом клетки, а не округление', () => {
+    const rows = paintCells(PAINT_ROWS);
+    rows[1]![2] = 1.4;
+    const layer = cellsOf([{ ...TERRAIN_GRID, paint: rows }]);
+    expect(messages(layer, 'error').join('\n')).toContain('клетка (2, 1)');
+    expect(messages(layer, 'error').join('\n')).toContain('не разрешается в целый индекс слота');
+    expect(layer.paint).toBeUndefined();
+  });
+
+  it('слот вне алфавита карты — отказ с адресом клетки', () => {
+    const rows = paintCells(PAINT_ROWS);
+    rows[0]![0] = 12;
+    const layer = cellsOf([{ ...TERRAIN_GRID, paint: rows }]);
+    expect(messages(layer, 'error').join('\n')).toContain('клетка (0, 0)');
+    expect(messages(layer, 'error').join('\n')).toContain('вне алфавита');
+  });
+
+  it('расхождение вершин одной клетки — ошибка с её адресом, а не большинство голосов', () => {
+    // Тот же читатель, что у рампы и пола: значение клетки — единогласие её
+    // вершин (BLND-14), и правило у всех каналов одно. Одна вершина правится
+    // прямо в бинарном чанке — так выглядела бы правка мимо кисти аддона.
+    const source = gridSource([painted()]);
+    const json = source.json as unknown as {
+      meshes: { primitives: { attributes: Record<string, number> }[] }[];
+      accessors: { bufferView: number }[];
+      bufferViews: { byteOffset?: number }[];
+    };
+    const accessor = json.accessors[json.meshes[0]!.primitives[0]!.attributes._PAINT!]!;
+    const offset = json.bufferViews[accessor.bufferView]!.byteOffset ?? 0;
+    // Вершина 1 — второй угол первой клетки: её слот расходится с остальными.
+    new DataView(source.binary.buffer, source.binary.byteOffset).setFloat32(offset + 4, 3, true);
+
+    const document = parseGltf(packGlb(source.json, source.binary));
+    const layer = generateCellLayer(document, normalizeDocument(document), context({ terrain: TARGET_TERRAIN }));
+    expect(messages(layer, 'error').join('\n')).toContain('клетка (0, 0)');
+    expect(messages(layer, 'error').join('\n')).toContain('_PAINT');
+    expect(layer.paint).toBeUndefined();
   });
 });
 

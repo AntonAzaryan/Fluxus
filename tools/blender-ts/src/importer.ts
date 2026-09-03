@@ -124,7 +124,13 @@ function slotsOf(objects: readonly SourceObject[]): ImportSlots {
   const has = (kind: SemanticKind): boolean => objects.some((object) => hasSingleSemantic(object, kind));
   // Скалпт-поверхность переписывает ОБА клеточных слоя (BLND-13).
   const sculpt = has('sculpt');
-  return { terrain: sculpt || has('terrain'), curvature: sculpt || has('curvature') };
+  // Раскраска едет тем же grid-объектом террейна, что рампа и пол (BLND-14):
+  // канала у скалпт-поверхности нет, и её документ импорт не открывает.
+  return {
+    terrain: sculpt || has('terrain'),
+    curvature: sculpt || has('curvature'),
+    paint: has('terrain'),
+  };
 }
 
 export async function runImport(request: ImportRequest): Promise<ImportResult> {
@@ -174,6 +180,7 @@ export async function runImport(request: ImportRequest): Promise<ImportResult> {
         scene: target.sceneId,
         presentation: target.presentationId,
         curvature: target.curvatureId,
+        paint: target.paintId,
         layer,
         initialPath: target.initialPath,
         decorationsPath: target.decorationsPath,

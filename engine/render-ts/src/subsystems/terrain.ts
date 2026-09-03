@@ -58,13 +58,19 @@ import {
 } from './terrainGeometry.js';
 import { TerrainChunkMap } from './terrainChunks.js';
 import { toBufferGeometry } from './terrainMesh.js';
-import { TerrainCoverLoader, type TerrainCover, type TerrainUvMapping } from './terrainCover.js';
+import type { TerrainTileset } from '@fluxus/assets';
+import {
+  TERRAIN_MAX_SLOTS,
+  TerrainTilesetView,
+  type TerrainUvMapping,
+} from './terrainTileset.js';
+import { createTerrainMaterials } from './terrainMaterials.js';
 import { buildSkirtGeometry } from './terrainSkirt.js';
 import type { DebugSource } from '../debug/contract.js';
 import { terrainSurfaceDebugSource } from '../debug/terrainSource.js';
 import type { VisualSurface } from '../visualSurface.js';
 import type { VisualSurfaceSource } from '../surfaceSource.js';
-import { own, peak } from '../footprint.js';
+import { peak } from '../footprint.js';
 
 /**
  * Ручка качества подсистемы (`render-quality` QUAL-1): плотность разбиения
@@ -72,6 +78,15 @@ import { own, peak } from '../footprint.js';
  * значение вместо него (design D3).
  */
 const TERRAIN_TESSELLATION = 'terrain.curvatureTessellation';
+
+/**
+ * Вторая ручка качества (QUAL-1, QUAL-3): потолок числа СМЕШИВАЕМЫХ слотов
+ * покрытия (REND-39). Потолок ниже числа слотов tileset'а сливает его хвост в
+ * последний оставшийся слот — выборок в фрагменте становится меньше, арена
+ * беднеет покрытиями, но не чернеет; единица означает покрытие первым слотом
+ * без смешивания вовсе.
+ */
+const TERRAIN_TEXTURE_SLOTS = 'terrain.textureSlots';
 
 // ---------------------------------------------------------------- подсистема
 
@@ -101,16 +116,15 @@ export interface TerrainOptions {
    */
   readonly shadows?: ShadowCasterSink;
   /**
-   * Покрытие площадок пола: тайлящаяся текстура по ID дерева контента (ASSET-2),
-   * спроецированная сверху с периодом в мировых единицах. Нет — пол одноцветен
-   * (`floorColor`). ВРЕМЕННЫЙ параметр рендера в ряду `floorColor`: одно
-   * покрытие на весь пол, пока текстурирование не приехало раскраской клеток
-   * из Blender (стаб `terrain-texturing`); недоступный ассет — предупреждение
-   * и заливка цветом, не отказ кадра (по образцу детали воды, REND-35).
+   * Tileset покрытий поверхности (REND-39, ASSET-15) — АВТОРСКИЙ перечень из
+   * раздела `terrain` манифеста визуалов (ASSET-6). Нет tileset'а либо нет
+   * карты раскраски — террейн одноцветен, и кадр тот же, каким был до
+   * текстурирования (PERF-2). Второго способа объявить покрытие у подсистемы
+   * нет: параметрами покрытие не задаётся (REND-39).
    */
-  readonly floorCover?: TerrainCover;
-  /** Покрытие стенок обрывов и юбки: проекция вдоль стенки и по высоте. */
-  readonly wallCover?: TerrainCover;
+  readonly tileset?: TerrainTileset;
+  /** ID карты раскраски клеток (ASSET-15) — производный документ импорта. */
+  readonly paintMap?: string;
   /** Канал предупреждений; не задан — `console.warn` (недоступное покрытие). */
   readonly warn?: (message: string) => void;
 }
@@ -158,8 +172,8 @@ export class TerrainSubsystem implements RenderSubsystem {
   private floorMaterial: THREE.MeshStandardMaterial | null = null;
   private wallMaterial: THREE.MeshStandardMaterial | null = null;
   private skirtMaterial: THREE.MeshStandardMaterial | null = null;
-  /** Покрытия пола и стенок: текстуры, подписки и раскладки UV чанков. */
-  private readonly covers: TerrainCoverLoader;
+  /** Текстурирование поверхности: tileset, карта раскраски и их подписки. */
+  private readonly tileset: TerrainTilesetView;
 
   constructor(grid: TerrainGrid, options: TerrainOptions = {}) {
     this.grid = grid;
@@ -170,8 +184,11 @@ export class TerrainSubsystem implements RenderSubsystem {
     this.skirtDepth = options.skirtDepth ?? DEFAULT_SKIRT_DEPTH;
     this.surfaceSource = options.surface;
     this.shadows = options.shadows;
-    const covers = { floor: options.floorCover, wall: options.wallCover };
-    this.covers = new TerrainCoverLoader(covers, options.warn);
+    this.tileset = new TerrainTilesetView({
+      tileset: options.tileset,
+      paintMap: options.paintMap,
+      warn: options.warn,
+    });
     this.floor = new Uint8Array(grid.floor);
     this.chunks = new TerrainChunkMap(grid, this.chunkSize);
   }
@@ -182,40 +199,26 @@ export class TerrainSubsystem implements RenderSubsystem {
     // Плотность — конфиг рендера под потолком пресета (REND-9, QUAL-1): порядок
     // «init, потом контроллер качества» и обратный дают одно и то же.
     this.tessellation = this.effectiveTessellation();
-    this.floorMaterial = own(
-      'material',
-      'terrain',
-      new THREE.MeshStandardMaterial({
-        color: this.floorColor,
-        roughness: 0.95,
-        metalness: 0,
-      }),
-    );
-    this.wallMaterial = own(
-      'material',
-      'terrain',
-      new THREE.MeshStandardMaterial({
-        color: this.wallColor,
-        roughness: 0.95,
-        metalness: 0,
-        side: THREE.DoubleSide,
-      }),
-    );
-    this.skirtMaterial = own(
-      'material',
-      'terrain',
-      new THREE.MeshStandardMaterial({
-        color: this.skirtColor,
-        roughness: 0.95,
-        metalness: 0,
-        side: THREE.DoubleSide,
-      }),
-    );
-    this.covers.attach(ctx, {
-      floor: this.floorMaterial,
-      wall: this.wallMaterial,
-      skirt: this.skirtMaterial,
+    const materials = createTerrainMaterials({
+      floor: this.floorColor,
+      wall: this.wallColor,
+      skirt: this.skirtColor,
     });
+    this.floorMaterial = materials.floor;
+    this.wallMaterial = materials.wall;
+    this.skirtMaterial = materials.skirt;
+    // Приезд текстуры слота и карты раскраски меняет и материал, и геометрию
+    // (веса слотов — атрибут вершины): чанки метятся событием, а не кадром.
+    this.tileset.attach(
+      ctx,
+      materials,
+      this.grid,
+      () => {
+        const sink = costSink();
+        this.chunks.markAll(sink);
+        this.flushDirty(sink);
+      },
+    );
 
     // Поверхность меняется асинхронной догрузкой карты кривизны (REND-9) и
     // правкой документа (ED-10, ED-11); в первом случае меняется вся, во втором
@@ -262,7 +265,7 @@ export class TerrainSubsystem implements RenderSubsystem {
     this.wallMaterial = null;
     this.skirtMaterial?.dispose();
     this.skirtMaterial = null;
-    this.covers.dispose();
+    this.tileset.dispose();
   }
 
 
@@ -377,6 +380,14 @@ export class TerrainSubsystem implements RenderSubsystem {
           min: 1,
           max: 16,
         },
+        {
+          name: TERRAIN_TEXTURE_SLOTS,
+          cost: 'выборки текстур покрытия на фрагмент пола: слот — одна выборка (REND-39)',
+          semantics: 'ceiling',
+          default: Number.POSITIVE_INFINITY,
+          min: 1,
+          max: TERRAIN_MAX_SLOTS,
+        },
       ],
     };
   }
@@ -412,8 +423,14 @@ export class TerrainSubsystem implements RenderSubsystem {
   applyQuality(values: QualityValues): void {
     const ceiling = values.get(TERRAIN_TESSELLATION);
     this.ceiling = typeof ceiling === 'number' ? ceiling : Number.POSITIVE_INFINITY;
+    const slots = values.get(TERRAIN_TEXTURE_SLOTS);
+    // Смена числа слотов пересобирает и программу материала, и веса вершин:
+    // оба — событие смены пресета, а не кадр (QUAL-1).
+    const slotsChanged = this.tileset.setCeiling(
+      typeof slots === 'number' ? slots : Number.POSITIVE_INFINITY,
+    );
     const next = this.effectiveTessellation();
-    if (next === this.tessellation) return;
+    if (next === this.tessellation && !slotsChanged) return;
     this.tessellation = next;
     // До init'а чанков ещё нет: плотность возьмётся при первой сборке.
     if (this.ctx === null) return;
@@ -538,11 +555,15 @@ export class TerrainSubsystem implements RenderSubsystem {
         rect.h,
         this.surface,
         this.tessellation,
+        // Раскраска клеток (REND-39); `undefined` — сцена без текстурирования,
+        // и атрибута весов у геометрии не появляется вовсе.
+        this.tileset.paintSource ?? undefined,
       ),
       this.floorMaterial,
       `terrain:chunk:${cx},${cy}`,
       true,
-      this.covers.floorMapping,
+      // У пола своего UV нет: слот проецируется фрагментом по мировой точке.
+      undefined,
     );
     if (shape) {
       this.wallMeshes[chunk] = this.swapMesh(
@@ -558,7 +579,7 @@ export class TerrainSubsystem implements RenderSubsystem {
         this.wallMaterial,
         `terrain:walls:${cx},${cy}`,
         true,
-        this.covers.wallMapping,
+        this.tileset.wallMapping,
       );
     }
     if (this.skirtMaterial === null) return;
@@ -581,7 +602,7 @@ export class TerrainSubsystem implements RenderSubsystem {
       // Юбка — не кастер: ниже неё нет приёмника тени, а карта теней платила
       // бы за её геометрию каждую перестройку (REND-7).
       false,
-      this.covers.wallMapping,
+      this.tileset.wallMapping,
     );
   }
 

@@ -34,6 +34,7 @@ import { cliValidationRules, main } from '../src/cli.js';
 import {
   CURVATURE_GRID,
   CURVATURE_ID,
+  PAINT_ID,
   CURVATURE_ROWS,
   MANIFEST_ID,
   PRESENTATION_ID,
@@ -45,6 +46,7 @@ import {
   TERRAIN_LEVELS,
   contentFiles,
   curvatureDocument,
+  paintCells,
   fixtureBytes,
   flagCells,
   gridGltf,
@@ -103,7 +105,7 @@ async function importAsEditor(root: string): Promise<EditorSession> {
   const target = await openImportTarget(session, host.content, {
     scene: SCENE_ID,
     manifest: MANIFEST_ID,
-    slots: { terrain: has('terrain'), curvature: has('curvature') },
+    slots: { terrain: has('terrain'), curvature: has('curvature'), paint: has('terrain') },
   });
   const layer = withCellLayer(
     generateSpatialLayer(objects, target.context),
@@ -115,6 +117,7 @@ async function importAsEditor(root: string): Promise<EditorSession> {
       scene: target.sceneId,
       presentation: target.presentationId,
       curvature: target.curvatureId,
+      paint: target.paintId,
       layer,
       initialPath: target.initialPath,
       decorationsPath: target.decorationsPath,
@@ -609,7 +612,10 @@ describe('BLND-6: результат импорта прогоняется ва�
   });
 });
 
-describe('BLND-9, BLND-10: ассеты в атомарной записи импорта', () => {
+describe('BLND-9, BLND-10, BLND-14: ассеты в атомарной записи импорта', () => {
+  /** Раскраска 4×4: два слота полосами — на границе виден шов (BLND-14). */
+  const PAINT_ROWS: readonly string[] = ['0011', '0011', '0011', '0011'];
+
   /** Дерево со сценой, у которой есть ассет террейна, и с картой кривизны рядом. */
   const withAssets = (source: Uint8Array): Record<string, string | Uint8Array> =>
     contentFiles(source, sceneDocument([], TERRAIN_ASSET), presentationDocument(), {
@@ -666,6 +672,62 @@ describe('BLND-9, BLND-10: ассеты в атомарной записи им�
     // одного пути внутрь sim-документов, и это видно на диске.
     expect(await contentOf(root, SCENE_ID)).toEqual(before.scene);
     expect(await contentOf(root, PRESENTATION_ID)).toEqual(before.presentation);
+  });
+
+  it('раскрашенный terrain-объект переписывает карту раскраски (BLND-14)', async () => {
+    const painted = { ...TERRAIN_GRID, paint: paintCells(PAINT_ROWS) };
+    const root = await tree({
+      ...withAssets(gridGltf([painted])),
+      [PAINT_ID]: JSON.stringify({ width: 4, height: 4, rows: ['0000', '0000', '0000', '0000'] }, null, 2),
+    });
+
+    const run = await runCli(root, [`content/${SOURCE_ID}`]);
+
+    expect(run.code).toBe(0);
+    expect(JSON.parse((await contentOf(root, PAINT_ID)).toString('utf8'))).toEqual({
+      width: 4,
+      height: 4,
+      rows: [...PAINT_ROWS],
+    });
+  });
+
+  it('режим проверки называет карту раскраски и не пишет ничего (BLND-14, BLND-6)', async () => {
+    const painted = { ...TERRAIN_GRID, paint: paintCells(PAINT_ROWS) };
+    const before = JSON.stringify({ width: 4, height: 4, rows: ['0000', '0000', '0000', '0000'] }, null, 2);
+    const root = await tree({ ...withAssets(gridGltf([painted])), [PAINT_ID]: before });
+
+    const run = await runCli(root, [`content/${SOURCE_ID}`, '--dry-run']);
+
+    expect(run.code).toBe(0);
+    const result = JSON.parse(run.out.join('\n')) as {
+      written: string[];
+      layer: { paint?: { width: number; height: number; rows: string[] } };
+    };
+    // Слой уезжает в отчёт целиком: читатель видит, ЧТО было бы записано, —
+    // ради этого проверка и зовётся.
+    expect(result.layer.paint).toEqual({ width: 4, height: 4, rows: [...PAINT_ROWS] });
+    expect(result.written).toEqual([]);
+    expect((await contentOf(root, PAINT_ID)).toString('utf8')).toBe(before);
+  });
+
+  it('повторный импорт раскраски не меняет ни байта (BLND-4)', async () => {
+    const painted = { ...TERRAIN_GRID, paint: paintCells(PAINT_ROWS) };
+    const root = await tree(withAssets(gridGltf([painted])));
+
+    expect((await runCli(root, [`content/${SOURCE_ID}`])).code).toBe(0);
+    const first = await contentOf(root, PAINT_ID);
+    expect((await runCli(root, [`content/${SOURCE_ID}`])).code).toBe(0);
+
+    expect(await contentOf(root, PAINT_ID)).toEqual(first);
+  });
+
+  it('источник без канала раскраски карту не трогает вовсе (BLND-2)', async () => {
+    const before = JSON.stringify({ width: 4, height: 4, rows: ['1111', '1111', '1111', '1111'] }, null, 2);
+    const root = await tree({ ...withAssets(gridGltf([TERRAIN_GRID])), [PAINT_ID]: before });
+
+    expect((await runCli(root, [`content/${SOURCE_ID}`])).code).toBe(0);
+
+    expect((await contentOf(root, PAINT_ID)).toString('utf8')).toBe(before);
   });
 
   it('ошибочный террейн отменяет запись целиком — включая законную карту кривизны (BLND-6)', async () => {

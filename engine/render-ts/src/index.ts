@@ -237,7 +237,17 @@ export type { ManeuverEnds } from './model/verticalOffset.js';
 // Подсистема террейна (REND-7, REND-9) и её чистые генераторы геометрии.
 export { TerrainSubsystem } from './subsystems/terrain.js';
 export type { TerrainOptions } from './subsystems/terrain.js';
-export type { TerrainCover, TerrainUvMapping } from './subsystems/terrainCover.js';
+export {
+  TERRAIN_MAX_SLOTS,
+  TERRAIN_PAINT_ATTRIBUTE,
+  TerrainTilesetView,
+  projectUv,
+} from './subsystems/terrainTileset.js';
+export type {
+  TerrainTilesetMaterials,
+  TerrainTilesetOptions,
+  TerrainUvMapping,
+} from './subsystems/terrainTileset.js';
 export {
   buildFloorGeometry,
   buildWallGeometry,
@@ -248,6 +258,8 @@ export {
 export { toBufferGeometry } from './subsystems/terrainMesh.js';
 export { buildSkirtGeometry, SKIRT_BOTTOMLESS_Z } from './subsystems/terrainSkirt.js';
 export type { CellRect, TerrainGeometryData } from './subsystems/terrainGeometry.js';
+export { TERRAIN_PAINT_SLOTS, pushPaintWeights } from './subsystems/terrainPaintWeights.js';
+export type { TerrainPaintSource } from './subsystems/terrainPaintWeights.js';
 
 // Подсистема моделей (REND-3..6) и переподача манифеста визуалов (REND-17).
 // Наружу инстанс виден преобразованием и границами, а не узлом сцены (REND-3).

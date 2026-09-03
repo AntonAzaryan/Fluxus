@@ -3,6 +3,10 @@
  * вертикальные стенки обрывов из сетки ядра и визуальной поверхности; юбка
  * границы пола — третий генератор, в соседнем `terrainSkirt.ts`.
  *
+ * Здесь обход прямоугольника клеток и упаковка буферов; то, что кладётся на
+ * ОДНОЙ клетке пола, — в `terrainFloorCells.ts`, а веса слотов текстурирования
+ * (REND-39) — в `terrainPaintWeights.ts`.
+ *
  * Отдельно от подсистемы, потому что генераторы — ФУНКЦИИ ДАННЫХ и ничего о
  * сцене не знают: их зовут и подсистема при пересборке чанка, и редактор, и
  * тесты, а результат один и тот же на одном и том же входе. Сцена, материалы,
@@ -17,6 +21,8 @@ import { FIXED_ONE, type TerrainGrid } from '@fluxus/core';
 import { DEFAULT_CURVATURE_TESSELLATION } from '../types.js';
 import { costSink } from '../cost.js';
 import { cornerLevels, type SurfaceNormal, type VisualSurface } from '../visualSurface.js';
+import { TERRAIN_PAINT_SLOTS, type TerrainPaintSource } from './terrainPaintWeights.js';
+import { pushFloorCell, type MeshBuffers } from './terrainFloorCells.js';
 
 export interface TerrainGeometryData {
   readonly positions: Float32Array;
@@ -27,6 +33,12 @@ export interface TerrainGeometryData {
    * `toBufferGeometry` по треугольникам, и стенка обрыва остаётся плоской.
    */
   readonly normals?: Float32Array;
+  /**
+   * Веса слотов текстурирования по вершинам (REND-39), четвёрка на вершину.
+   * Нет — сцена без tileset'а: атрибута у геометрии не появляется, и кадр
+   * остаётся тем же, каким был до текстурирования (PERF-2).
+   */
+  readonly paint?: Float32Array;
 }
 
 /** Прямоугольник клеток [x0..x0+w) × [y0..y0+h) — область пересборки чанка. */
@@ -35,13 +47,6 @@ export interface CellRect {
   readonly y0: number;
   readonly w: number;
   readonly h: number;
-}
-
-/** Накопитель плоских буферов: три массива, растущие вместе с геометрией. */
-interface MeshBuffers {
-  readonly positions: number[];
-  readonly normals: number[];
-  readonly indices: number[];
 }
 
 /**
@@ -70,6 +75,7 @@ export function buildFloorGeometry(
   h: number,
   surface?: VisualSurface,
   tessellation: number = DEFAULT_CURVATURE_TESSELLATION,
+  paint?: TerrainPaintSource,
 ): TerrainGeometryData {
   // Сток читается один раз на ВЫЗОВ, как у растра маски тумана (PERF-3): счётчик
   // живёт у генератора, а не у обвязки, — прямой вызов генератора (редактор,
@@ -77,7 +83,14 @@ export function buildFloorGeometry(
   const cost = costSink();
   // Приём `tileSize` — точка входной границы (REND-1, SHELL-5, TERR-2).
   const tile = grid.tileSize / FIXED_ONE;
-  const out: MeshBuffers = { positions: [], normals: [], indices: [] };
+  const source = paint ?? null;
+  const out: MeshBuffers = {
+    positions: [],
+    normals: [],
+    indices: [],
+    paint: source === null ? null : [],
+    source,
+  };
   const steps = Math.max(1, Math.floor(tessellation));
   const scratch: SurfaceNormal = { x: 0, y: 0, z: 0 };
 
@@ -93,160 +106,18 @@ export function buildFloorGeometry(
   // даёт один квад, клетка с кривизной — `divisions²` подклеток, клетка без пола
   // — ни одного. Одно деление в конце вместо инкремента в двух ветках цикла
   // (PERF-3): считать нечего, число уже собрано самим построением.
-  if (cost !== undefined) cost.terrainFloorQuads += out.indices.length / 6;
+  if (cost !== undefined) {
+    cost.terrainFloorQuads += out.indices.length / 6;
+    // Веса считаются на тех же вершинах, что позиции: величина растёт площадью
+    // арены и квадратом потолка разбиения (REND-39, PERF-3).
+    if (out.paint !== null) cost.terrainPaintVertices += out.paint.length / TERRAIN_PAINT_SLOTS;
+  }
   return {
     positions: new Float32Array(out.positions),
     indices: new Uint32Array(out.indices),
     normals: new Float32Array(out.normals),
+    ...(out.paint === null ? {} : { paint: new Float32Array(out.paint) }),
   };
-}
-
-/** Одна клетка пола: квад по углам либо разбиение по кривизне (REND-9). */
-function pushFloorCell(
-  out: MeshBuffers,
-  grid: TerrainGrid,
-  x: number,
-  y: number,
-  tile: number,
-  heightStep: number,
-  steps: number,
-  surface: VisualSurface | undefined,
-  scratch: SurfaceNormal,
-): void {
-  const divisions = surface?.hasCellCurvature(x, y) === true ? steps : 1;
-  if (surface === undefined || divisions === 1) {
-    pushFlatCell(out, grid, x, y, tile, heightStep, surface, scratch);
-    return;
-  }
-  // Разбиение: вершины стоят на поле, а не на хорде между углами клетки.
-  pushCurvedCell(out, surface, x, y, tile, divisions, scratch);
-}
-
-/** Клетка без кривизны — один квад по углам поля либо по ступеням уровней. */
-function pushFlatCell(
-  out: MeshBuffers,
-  grid: TerrainGrid,
-  x: number,
-  y: number,
-  tile: number,
-  heightStep: number,
-  surface: VisualSurface | undefined,
-  scratch: SurfaceNormal,
-): void {
-  let h00: number;
-  let h10: number;
-  let h11: number;
-  let h01: number;
-  if (surface !== undefined) {
-    [h00, h10, h11, h01] = surface.cornerHeights(x, y);
-  } else {
-    const [c00, c10, c11, c01] = cornerLevels(grid, x, y);
-    h00 = c00 * heightStep;
-    h10 = c10 * heightStep;
-    h11 = c11 * heightStep;
-    h01 = c01 * heightStep;
-  }
-  const base = out.positions.length / 3;
-  out.positions.push(
-    x * tile, y * tile, h00,
-    (x + 1) * tile, y * tile, h10,
-    (x + 1) * tile, (y + 1) * tile, h11,
-    x * tile, (y + 1) * tile, h01,
-  );
-  if (surface === undefined) {
-    // Поля нет вовсе — только база: у площадки нормаль вертикальна, у
-    // рампы постоянна, и вершины квада получают одну и ту же (REND-7).
-    quadNormal(h00, h10, h11, h01, 0.5, 0.5, tile, scratch);
-    for (let i = 0; i < 4; i++) out.normals.push(scratch.x, scratch.y, scratch.z);
-  } else {
-    pushSurfaceNormal(out.normals, surface, x, y, x * tile, y * tile, scratch);
-    pushSurfaceNormal(out.normals, surface, x, y, (x + 1) * tile, y * tile, scratch);
-    pushSurfaceNormal(out.normals, surface, x, y, (x + 1) * tile, (y + 1) * tile, scratch);
-    pushSurfaceNormal(out.normals, surface, x, y, x * tile, (y + 1) * tile, scratch);
-  }
-  // CCW при взгляде с +Z — нормаль вверх.
-  out.indices.push(base, base + 1, base + 2, base, base + 2, base + 3);
-}
-
-/** Клетка с кривизной — `divisions²` подклеток с вершинами на поле (REND-9). */
-function pushCurvedCell(
-  out: MeshBuffers,
-  surface: VisualSurface,
-  x: number,
-  y: number,
-  tile: number,
-  divisions: number,
-  scratch: SurfaceNormal,
-): void {
-  for (let j = 0; j < divisions; j++) {
-    for (let i = 0; i < divisions; i++) {
-      const ax = (x + i / divisions) * tile;
-      const bx = (x + (i + 1) / divisions) * tile;
-      const ay = (y + j / divisions) * tile;
-      const by = (y + (j + 1) / divisions) * tile;
-      const base = out.positions.length / 3;
-      pushSurfaceVertex(out, surface, x, y, ax, ay, scratch);
-      pushSurfaceVertex(out, surface, x, y, bx, ay, scratch);
-      pushSurfaceVertex(out, surface, x, y, bx, by, scratch);
-      pushSurfaceVertex(out, surface, x, y, ax, by, scratch);
-      out.indices.push(base, base + 1, base + 2, base, base + 2, base + 3);
-    }
-  }
-}
-
-/**
- * Вершина на поле: позиция и нормаль читаются в клетке-владельце (REND-9).
- * Выборка — ТЕРРЕЙН-ФОРМА: walkable-поверхность в геометрию террейна не
- * попадает — настил рисует меш самой декорации, и подклетки пола под ним были
- * бы вторым изображением той же поверхности (REND-9).
- */
-function pushSurfaceVertex(
-  out: MeshBuffers,
-  surface: VisualSurface,
-  cellX: number,
-  cellY: number,
-  wx: number,
-  wy: number,
-  scratch: SurfaceNormal,
-): void {
-  out.positions.push(wx, wy, surface.terrainFormHeightInCell(cellX, cellY, wx, wy));
-  pushSurfaceNormal(out.normals, surface, cellX, cellY, wx, wy, scratch);
-}
-
-function pushSurfaceNormal(
-  normals: number[],
-  surface: VisualSurface,
-  cellX: number,
-  cellY: number,
-  wx: number,
-  wy: number,
-  scratch: SurfaceNormal,
-): void {
-  surface.terrainFormNormalInCell(cellX, cellY, wx, wy, scratch);
-  normals.push(scratch.x, scratch.y, scratch.z);
-}
-
-/**
- * Нормаль билинейной площадки по её углам — вырожденный случай «поля нет»:
- * слагаемого кривизны не существует, остаётся производная базы. Второй
- * реализации ПОЛЯ это не заводит (REND-9): поля здесь нет вовсе.
- */
-function quadNormal(
-  h00: number,
-  h10: number,
-  h11: number,
-  h01: number,
-  u: number,
-  v: number,
-  tile: number,
-  out: SurfaceNormal,
-): void {
-  const dhdx = ((1 - v) * (h10 - h00) + v * (h11 - h01)) / tile;
-  const dhdy = ((1 - u) * (h01 - h00) + u * (h11 - h10)) / tile;
-  const invLen = 1 / Math.sqrt(dhdx * dhdx + dhdy * dhdy + 1);
-  out.x = -dhdx * invLen;
-  out.y = -dhdy * invLen;
-  out.z = invLen;
 }
 
 /**

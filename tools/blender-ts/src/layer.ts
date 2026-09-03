@@ -110,15 +110,28 @@ export interface CurvatureMap {
 }
 
 /**
- * Что клеточным слоям нужно знать о цели: сетка ассета террейна и адрес
- * документа карты кривизны (его называет манифест — `terrain.curvatureMap`,
- * ASSET-7). Оба — знание о ЦЕЛИ, а не об источнике: сетку импорт не выдумывает,
- * а сверяет.
+ * Карта раскраски клеток (ASSET-15): документ целиком — производные данные
+ * (BLND-2, BLND-14). Ряды строками, символ — индекс слота tileset'а; сам
+ * tileset авторский и живёт в манифесте, импорт его не трогает.
+ */
+export interface PaintMap {
+  readonly width: number;
+  readonly height: number;
+  readonly rows: readonly string[];
+}
+
+/**
+ * Что клеточным слоям нужно знать о цели: сетка ассета террейна и адреса
+ * документов карт кривизны (`terrain.curvatureMap`, ASSET-7) и раскраски
+ * (`terrain.paintMap`, ASSET-15) — их называет манифест. Всё это знание о
+ * ЦЕЛИ, а не об источнике: сетку импорт не выдумывает, а сверяет.
  */
 export interface CellLayerContext {
   readonly terrain?: TargetTerrain | null;
   /** ID документа карты кривизны; `null` — манифест её не адресует. */
   readonly curvatureMap?: string | null;
+  /** ID документа карты раскраски; `null` — манифест её не адресует. */
+  readonly paintMap?: string | null;
 }
 
 /**
@@ -155,6 +168,8 @@ export interface SpatialLayer {
   readonly terrain?: TerrainMaps;
   /** Карта кривизны (ASSET-7); нет — в источнике нет curvature-объекта. */
   readonly curvature?: CurvatureMap;
+  /** Карта раскраски (ASSET-15); нет — источник не несёт канала раскраски. */
+  readonly paint?: PaintMap;
   readonly findings: readonly Finding[];
 }
 

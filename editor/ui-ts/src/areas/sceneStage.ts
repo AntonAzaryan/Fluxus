@@ -515,7 +515,15 @@ export function registerViewportSubsystems(
   let water: WaterSubsystem | null = null;
   if (grid !== null) {
     surface = new VisualSurfaceSource(grid);
-    terrain = new TerrainSubsystem(grid, { surface, shadows: lighting });
+    // Текстурирование — раздел `terrain` манифеста визуалов (REND-39, ASSET-15):
+    // вьюпорт берёт его оттуда же, откуда игровой клиент, иначе кадр автора
+    // разошёлся бы с кадром игрока (ED-13).
+    terrain = new TerrainSubsystem(grid, {
+      surface,
+      shadows: lighting,
+      ...(visuals.terrain?.tileset === undefined ? {} : { tileset: visuals.terrain.tileset }),
+      ...(visuals.terrain?.paintMap === undefined ? {} : { paintMap: visuals.terrain.paintMap }),
+    });
     presentation.register(terrain);
     // Вода (REND-35) — сразу за террейном, как в игровой сборке: глубину она
     // берёт из той же визуальной поверхности, поэтому мазок кисти кривизны

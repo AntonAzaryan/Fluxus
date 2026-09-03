@@ -22,6 +22,7 @@
  */
 import { resolveLightBlock, type ResolvedVisualLight, type VisualLight } from './visualLight.js';
 import type { CameraConfigSection, CameraEffectsSection } from './cameraEffects.js';
+import type { TerrainVisualSection } from './visualSections.js';
 import type { AssetKind } from './types.js';
 
 /** Ключ — sim-идентификатор (имя prefab'а/архетипа). */
@@ -43,8 +44,8 @@ export interface VisualManifest {
   decorations?: Record<string, DecorationVisual>;
   /** Дефолт наклона по поверхности для записей без своего surfaceAlign (REND-10). */
   surfaceAlign?: SurfaceAlign;
-  /** Presentation-данные террейна арены. */
-  terrain?: { curvatureMap?: string };
+  /** Presentation-данные террейна арены: рельеф (ASSET-7) и текстурирование (ASSET-15). */
+  terrain?: TerrainVisualSection;
   /** Секция транзиентных эффектов сцены (REND-23); потребитель — подсистема эффектов. */
   effects?: VisualEffectsSection;
   /** Секция эмиттеров частиц (ASSET-14, REND-24); потребитель — подсистема частиц. */
@@ -262,6 +263,19 @@ export function manifestAssetRefs(
   const curvature = manifest.terrain?.curvatureMap;
   if (curvature !== undefined) {
     refs.push({ path: ['terrain', 'curvatureMap'], asset: curvature, kind: 'terrain-curvature' });
+  }
+  const paint = manifest.terrain?.paintMap;
+  if (paint !== undefined) {
+    refs.push({ path: ['terrain', 'paintMap'], asset: paint, kind: 'terrain-paint' });
+  }
+  const tileset = manifest.terrain?.tileset;
+  if (tileset !== undefined) {
+    tileset.slots.forEach((slot, index) => {
+      refs.push({ path: ['terrain', 'tileset', 'slots', String(index), 'texture'], asset: slot.texture, kind: 'texture' });
+    });
+    if (tileset.wall !== undefined) {
+      refs.push({ path: ['terrain', 'tileset', 'wall', 'texture'], asset: tileset.wall.texture, kind: 'texture' });
+    }
   }
   return refs;
 }

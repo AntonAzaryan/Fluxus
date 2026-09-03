@@ -33,6 +33,7 @@ from .grids import (
     CURVATURE_KEY,
     LEVEL_UNIT,
     NOFLOOR_ATTRIBUTE,
+    PAINT_ATTRIBUTE,
     RAMP_ATTRIBUTE,
     TERRAIN_KEY,
     cell_attribute,
@@ -103,7 +104,7 @@ class GridBrushBase:
         """Состояние до мазка — для отката по `Esc`."""
         self.saved_heights = [vertex.co.z for vertex in mesh.vertices]
         self.saved_attributes = {}
-        for name in (RAMP_ATTRIBUTE, NOFLOOR_ATTRIBUTE):
+        for name in (RAMP_ATTRIBUTE, NOFLOOR_ATTRIBUTE, PAINT_ATTRIBUTE):
             attribute = mesh.attributes.get(name)
             if attribute is not None:
                 self.saved_attributes[name] = [item.value for item in attribute.data]
@@ -267,6 +268,40 @@ class FLUXUS_OT_terrain_flag_brush(GridBrushBase, bpy.types.Operator):
         return True
 
 
+class FLUXUS_OT_terrain_paint_brush(GridBrushBase, bpy.types.Operator):
+    """Кисть раскраски: слот покрытия клетки (BLND-14, ASSET-15)"""
+
+    bl_idname = "fluxus.terrain_paint_brush"
+    bl_label = "Кисть раскраски террейна"
+    bl_options = {"REGISTER", "UNDO"}
+
+    grid_key = TERRAIN_KEY
+
+    action: bpy.props.EnumProperty(
+        name="Действие",
+        items=(
+            ("SET", "Красить", "Поставить клетке выбранный слот"),
+            ("PICK", "Взять", "Взять слот клетки в настройки кисти"),
+        ),
+        default="SET",
+    )
+
+    def apply_to_cell(self, context, mesh, index, weight):
+        settings = context.scene.fluxus
+        if ensure_int_attribute(mesh, PAINT_ATTRIBUTE) is None:
+            self.report({"ERROR"}, "атрибут %s занят другим доменом" % PAINT_ATTRIBUTE)
+            return False
+        if self.action == "PICK":
+            # Пипетка: слот клетки уезжает в настройки, сама клетка не меняется.
+            settings.brush_paint_slot = int(cell_attribute(mesh, PAINT_ATTRIBUTE, index))
+            return False
+        target = int(settings.brush_paint_slot)
+        if cell_attribute(mesh, PAINT_ATTRIBUTE, index) == target:
+            return False
+        set_cell_attribute(mesh, PAINT_ATTRIBUTE, index, target)
+        return True
+
+
 class FLUXUS_OT_curvature_brush(GridBrushBase, bpy.types.Operator):
     """Кисть кривизны: визуальное смещение узлов сетки (BLND-10)"""
 
@@ -408,6 +443,33 @@ class FLUXUS_TOOL_terrain_flags(bpy.types.WorkSpaceTool):
     draw_settings = _draw_flag_settings
 
 
+def _draw_paint_settings(context, layout, tool):
+    layout.prop(context.scene.fluxus, "brush_paint_slot", text="Слот")
+    layout.prop(context.scene.fluxus, "brush_radius", text="Радиус")
+
+
+class FLUXUS_TOOL_terrain_paint(bpy.types.WorkSpaceTool):
+    bl_space_type = "VIEW_3D"
+    bl_context_mode = "OBJECT"
+    bl_idname = "fluxus.terrain_paint_tool"
+    bl_label = "Fluxus: раскраска"
+    bl_description = "ЛКМ — покрасить клетку выбранным слотом, Ctrl — взять слот клетки"
+    bl_widget = None
+    bl_keymap = (
+        (
+            "fluxus.terrain_paint_brush",
+            {"type": "LEFTMOUSE", "value": "PRESS"},
+            {"properties": [("action", "SET")]},
+        ),
+        (
+            "fluxus.terrain_paint_brush",
+            {"type": "LEFTMOUSE", "value": "PRESS", "ctrl": True},
+            {"properties": [("action", "PICK")]},
+        ),
+    )
+    draw_settings = _draw_paint_settings
+
+
 class FLUXUS_TOOL_curvature(bpy.types.WorkSpaceTool):
     bl_space_type = "VIEW_3D"
     bl_context_mode = "OBJECT"
@@ -433,12 +495,14 @@ class FLUXUS_TOOL_curvature(bpy.types.WorkSpaceTool):
 OPERATORS = (
     FLUXUS_OT_terrain_level_brush,
     FLUXUS_OT_terrain_flag_brush,
+    FLUXUS_OT_terrain_paint_brush,
     FLUXUS_OT_curvature_brush,
 )
 
 TOOLS = (
     FLUXUS_TOOL_terrain_level,
     FLUXUS_TOOL_terrain_flags,
+    FLUXUS_TOOL_terrain_paint,
     FLUXUS_TOOL_curvature,
 )
 

@@ -932,7 +932,8 @@ describe('PERF-8: текстуру записывает тот, кто ею вл
     withFootprintSink(sink, () => {
       const terrain = new TerrainSubsystem(grid, {
         chunkSize: 8,
-        floorCover: { texture: 'visuals/grass.png', period: 4 },
+        tileset: { slots: [{ texture: 'visuals/grass.png', period: 4 }] },
+        paintMap: 'visuals/arena.paint.json',
       });
       terrain.init({
         scene: new THREE.Scene(),

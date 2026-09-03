@@ -72,9 +72,12 @@ export const MANIFEST: VisualManifest = {
     // Вид настила моста: цель walkable-фикстур (BLND-3, PRES-2).
     Bridge: { model: 'visuals/models/bridge.gltf' },
   },
-  // Адрес карты кривизны называет манифест (ASSET-7): своей конвенции имени у
-  // неё нет, и импорт её не выдумывает (BLND-10).
-  terrain: { curvatureMap: 'visuals/arena-curvature.json' },
+  // Адреса производных карт называет манифест (ASSET-7, ASSET-15): своей
+  // конвенции имени у них нет, и импорт их не выдумывает (BLND-10, BLND-14).
+  terrain: {
+    curvatureMap: 'visuals/arena-curvature.json',
+    paintMap: 'visuals/arena-paint.json',
+  },
 };
 
 export function context(overrides: Partial<SpatialLayerContext> = {}): SpatialLayerContext {
@@ -86,6 +89,7 @@ export function context(overrides: Partial<SpatialLayerContext> = {}): SpatialLa
     // законное состояние, и клеточные слои на ней отказывают (BLND-9).
     terrain: null,
     curvatureMap: MANIFEST.terrain?.curvatureMap ?? null,
+    paintMap: MANIFEST.terrain?.paintMap ?? null,
     ...overrides,
   };
 }
@@ -100,6 +104,7 @@ export const PRESENTATION_ID = 'scenes/duel.presentation.json';
 export const SOURCE_ID = 'scenes/duel.gltf';
 export const MANIFEST_ID = 'visuals/manifest.json';
 export const CURVATURE_ID = 'visuals/arena-curvature.json';
+export const PAINT_ID = 'visuals/arena-paint.json';
 
 /**
  * Ассет террейна цели (TERR-2, TERR-3): сетка 4×4 по клетке в мировую единицу.
@@ -261,11 +266,18 @@ export interface GridObjectSpec {
   readonly cellSize?: number;
   /** Разрез квада по второй диагонали — экспортёр вправе выбрать любую. */
   readonly flipDiagonal?: boolean;
+  /** Слоты раскраски по клеткам (BLND-14); нет — канала `_PAINT` в экспорте нет. */
+  readonly paint?: readonly (readonly number[])[];
 }
 
 /** Карта уровней (TERR-3) → высоты клеток: один уровень — одна мировая единица. */
 export function levelHeights(rows: readonly string[]): number[][] {
   return rows.map((row) => Array.from(row, (char) => parseInt(char, 16)));
+}
+
+/** Ряды карты раскраски (ASSET-15) → значения канала: цифра — индекс слота. */
+export function paintCells(rows: readonly string[]): number[][] {
+  return rows.map((row) => Array.from(row, (cell) => Number.parseInt(cell, 10)));
 }
 
 /** Ряды карты флагов (TERR-3) → значения канала: символ совпал — единица. */
@@ -333,6 +345,7 @@ export function gridSource(specs: readonly GridObjectSpec[]): {
     const indices: number[] = [];
     const ramp: number[] = [];
     const noFloor: number[] = [];
+    const paint: number[] = [];
     for (let y = 0; y < height; y++) {
       for (let x = 0; x < width; x++) {
         const z = spec.heights[y]![x]!;
@@ -355,6 +368,7 @@ export function gridSource(specs: readonly GridObjectSpec[]): {
         for (let corner = 0; corner < 4; corner++) {
           ramp.push(spec.ramp?.[y]?.[x] ?? 0);
           noFloor.push(spec.noFloor?.[y]?.[x] ?? 0);
+          paint.push(spec.paint?.[y]?.[x] ?? 0);
         }
       }
     }
@@ -362,6 +376,7 @@ export function gridSource(specs: readonly GridObjectSpec[]): {
     const attributes: Record<string, number> = { POSITION: push(floatChunk(positions, 3)) };
     if (spec.ramp !== undefined) attributes._RAMP = push(floatChunk(ramp, 1));
     if (spec.noFloor !== undefined) attributes._NOFLOOR = push(floatChunk(noFloor, 1));
+    if (spec.paint !== undefined) attributes._PAINT = push(floatChunk(paint, 1));
     const primitive = { attributes, indices: push(indexChunk(indices)), mode: 4 };
     meshes.push({ name: `${spec.name}-mesh`, primitives: [primitive] });
     nodes.push({ name: spec.name, mesh: meshes.length - 1, extras: { [spec.semantic]: 1 } });
