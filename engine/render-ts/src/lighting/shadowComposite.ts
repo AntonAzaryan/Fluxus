@@ -35,6 +35,20 @@
  * его машинерия (`customDepthMaterial` батчевого яруса REND-20, сторона теней,
  * скиннинг), и второй её реализации быть не должно.
  *
+ * ## Проход глубины — изнутри `render()`, а не рядом с ним
+ *
+ * `shadowMap.render` у `THREE.WebGLRenderer` — не самостоятельный вход: каждый
+ * объект прохода идёт через `setProgram`, а тот читает состояние кадра
+ * (`currentRenderState`), которое существует только между входом в `render()`
+ * и выходом из него. Вызванный снаружи проход падает на первом же кастере
+ * (`Cannot read properties of null (reading 'state')`), и живой WebGL этим
+ * отличается от двойника тестов, который снимает флаг и ничего не читает.
+ * Поэтому проход заказывается КРЮЧКОМ: у поля есть сцена из одного меша,
+ * который ничего не рисует (пустая геометрия, ни цвета, ни глубины), а из его
+ * `onBeforeRender` — уже внутри `render()` этой сцены — и зовётся теневой
+ * проход. Целью `render()` крючка стоит цель самого яруса: её проход всё равно
+ * очищает и переписывает, так что снаружи кадр не трогается ничем.
+ *
  * ## Порт рендерера
  *
  * Проходы выполняются в кадре ПОДСИСТЕМЫ (до отрисовки сцены потребителем),
@@ -140,6 +154,19 @@ void main() {
 }
 `;
 
+/** Шейдеры крючка: программа обязана собраться, а рисовать ей нечего. */
+const HOOK_VERTEX = `
+void main() {
+  gl_Position = vec4(0.0, 0.0, 0.0, 1.0);
+}
+`;
+
+const HOOK_FRAGMENT = `
+void main() {
+  gl_FragColor = vec4(0.0);
+}
+`;
+
 /**
  * Поле сведения теней: три цели, материал прохода и его квад. Всё, что из этого
  * живёт в GPU, оно отдаёт своей точкой освобождения (REND-31).
@@ -153,6 +180,17 @@ export class ShadowComposite {
   private quad: THREE.Mesh | null = null;
   private readonly passScene = new THREE.Scene();
   private readonly passCamera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
+  /**
+   * Сцена-крючок прохода глубины (см. шапку): один меш, ничего не рисующий, из
+   * чьего `onBeforeRender` — изнутри `render()` — заказывается теневой проход.
+   */
+  private readonly hookScene = new THREE.Scene();
+  private hook: THREE.Mesh | null = null;
+  /**
+   * Проход, заказанный на текущий `render()` крючка; `null` вне его — крючок не
+   * держит чужих источника и сцены дольше одного кадра.
+   */
+  private pending: (() => void) | null = null;
   /**
    * Ярусы, чья глубина уже нарисована хоть раз. До этого в цели лежит мусор
    * драйвера, и сводить её нельзя: первый кадр рисует ОБА яруса (REND-30 —
@@ -241,7 +279,21 @@ export class ShadowComposite {
     if (target === null) return false;
     light.shadow.map = target;
     light.shadow.needsUpdate = true;
-    renderer.shadowMap.render([light], scene, camera);
+    // Проход — изнутри `render()` крючка (см. шапку): снаружи у настоящего
+    // рендерера нет состояния кадра, и `shadowMap.render` падает на первом же
+    // кастере. Цель `render()` — цель яруса: её проход всё равно очищает и
+    // переписывает, а сам крючок не пишет ничего.
+    this.ensureHook();
+    this.pending = () => {
+      renderer.shadowMap.render([light], scene, camera);
+    };
+    try {
+      renderer.setRenderTarget(target);
+      renderer.render(this.hookScene, this.passCamera);
+      renderer.setRenderTarget(null);
+    } finally {
+      this.pending = null;
+    }
     // СОСТОЯЛСЯ ли проход, видно по флагу: его снимает сам теневой проход
     // three, отрисовав карту, — и не снимает, если тени у потребителя выключены
     // вовсе (`shadowMap.enabled === false`) либо контекст потерян. Заказ, о
@@ -288,6 +340,44 @@ export class ShadowComposite {
     this.quad?.geometry.dispose();
     this.quad?.removeFromParent();
     this.quad = null;
+    const hook = this.hook;
+    if (hook !== null) {
+      hook.geometry.dispose();
+      (hook.material as THREE.Material).dispose();
+      hook.removeFromParent();
+      this.hook = null;
+    }
+  }
+
+  /**
+   * Меш-крючок (см. шапку). Геометрия пуста, а материал не пишет ни цвета, ни
+   * глубины: `render()` сцены крючка обязан дойти до `onBeforeRender` меша — и
+   * не обязан нарисовать ничего. Материал всё же нужен: без него three не
+   * ставит объект в список отрисовки вовсе, а с ним компилирует программу один
+   * раз за жизнь поля.
+   */
+  private ensureHook(): THREE.Mesh {
+    const existing = this.hook;
+    if (existing !== null) return existing;
+    const material = own(
+      'material',
+      'lighting',
+      new THREE.ShaderMaterial({
+        vertexShader: HOOK_VERTEX,
+        fragmentShader: HOOK_FRAGMENT,
+        depthTest: false,
+        depthWrite: false,
+        colorWrite: false,
+      }),
+    );
+    const hook = new THREE.Mesh(own('geometry', 'lighting', new THREE.BufferGeometry()), material);
+    hook.frustumCulled = false;
+    hook.onBeforeRender = () => {
+      this.pending?.();
+    };
+    this.hookScene.add(hook);
+    this.hook = hook;
+    return hook;
   }
 
   /** Цели сведения; квад и материал переживают смену стороны карты. */

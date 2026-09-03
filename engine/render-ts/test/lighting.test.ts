@@ -86,6 +86,26 @@ interface Rig {
  * чью карту он нарисовал. Живого WebGL для этого не нужно: под тестом решения
  * подсистемы, а не содержимое карт (то же ограничение, что у GLSL-материалов).
  */
+/**
+ * То единственное, что делает настоящий `render()` с мешем, который ничего не
+ * рисует: зовёт его `onBeforeRender` — изнутри кадра. Так к двойнику доходит
+ * крючок прохода глубины (`ShadowComposite`, REND-30).
+ */
+function renderHooks(renderer: ShadowRendererLike, scene: THREE.Object3D, camera: THREE.Camera): void {
+  scene.traverse((object) => {
+    if (!('isMesh' in object)) return;
+    const mesh = object as THREE.Mesh;
+    mesh.onBeforeRender(
+      renderer as THREE.WebGLRenderer,
+      scene as THREE.Scene,
+      camera,
+      mesh.geometry,
+      mesh.material as THREE.Material,
+      null as unknown as THREE.Group,
+    );
+  });
+}
+
 class ShadowRendererSpy implements ShadowRendererLike {
   /** Цели теневых проходов в порядке заказа: по ним видно чередование ярусов. */
   readonly depthPasses: (THREE.RenderTarget | null)[] = [];
@@ -99,9 +119,18 @@ class ShadowRendererSpy implements ShadowRendererLike {
    * поднятым (REND-30).
    */
   drawing = true;
+  /** Внутри ли `render()` сейчас: теневой проход three законен только там. */
+  private rendering = false;
   readonly shadowMap = {
     enabled: true,
     render: (lights: readonly THREE.Light[]): void => {
+      // У `THREE.WebGLRenderer` состояние кадра живёт только внутри `render()`,
+      // и проход, заказанный снаружи, падает на первом же кастере — двойник
+      // повторяет и это, иначе тесты зеленели бы там, где браузер падает
+      // (`ShadowComposite`, REND-30).
+      if (!this.rendering) {
+        throw new Error('теневой проход three вне render(): состояния кадра здесь нет');
+      }
       for (const light of lights) {
         const shadow = (light as THREE.DirectionalLight).shadow;
         this.depthPasses.push(shadow.map);
@@ -112,8 +141,14 @@ class ShadowRendererSpy implements ShadowRendererLike {
     },
   };
 
-  render(scene: THREE.Object3D): void {
+  render(scene: THREE.Object3D, camera: THREE.Camera): void {
     this.rendered.push(scene);
+    this.rendering = true;
+    try {
+      renderHooks(this, scene, camera);
+    } finally {
+      this.rendering = false;
+    }
   }
 
   setRenderTarget(target: THREE.WebGLRenderTarget | null): void {
@@ -1014,6 +1049,31 @@ describe('режимы теней и кэш статики (design D2)', () => {
     // оба яруса, а не тот, чья глубина рисовалась последней (REND-30).
     expect(rig.lighting.lights.sun.shadow.map).toBe(composite.map);
     expect(composite.compositeCount).toBe(3);
+  });
+
+  it('глубина яруса рисуется ИЗНУТРИ render() рендерера — крючком, а не вызовом рядом', () => {
+    // У `THREE.WebGLRenderer` состояние кадра живёт только внутри `render()`,
+    // и `shadowMap.render`, вызванный снаружи, падает на первом же кастере.
+    // Двойник падает так же (см. `ShadowRendererSpy`): зелёный кадр здесь и
+    // значит, что каждый проход глубины заказан изнутри `render()` (REND-30).
+    const spy = new ShadowRendererSpy();
+    const rig = makeRig({ shadows: { mode: 'hybrid' } }, undefined, { renderer: spy });
+    rig.stage.publish(PRODUCER, makeTickView([makeEntityView(1, { kind: 'Rock' })]));
+    rig.stage.publishDecorations(decorations([makeEntityView(2, { kind: 'Rock' })]));
+
+    rig.stage.frame(0.016, 0);
+    rig.stage.frame(0.016, 0);
+    const composite = rig.lighting.shadowComposite;
+    // Проходов глубины ровно столько, сколько ярусов нарисовано, — и все они
+    // состоялись: флаг источника снят, кэш статики не остался устаревшим.
+    expect(spy.depthPasses.length).toBe(composite.draws.static + composite.draws.dynamic);
+    expect(spy.depthPasses.length).toBeGreaterThan(0);
+    expect(rig.lighting.staticRebuilds).toBe(1);
+    // Целью прохода яруса стоит цель самого яруса: снаружи кадр не трогается.
+    const tiers = composite.tiers;
+    for (const target of spy.depthPasses) {
+      expect(target === tiers.static || target === tiers.dynamic).toBe(true);
+    }
   });
 
   it('карта сведения несёт ОБА яруса: тень статики не гаснет в кадры динамики', () => {

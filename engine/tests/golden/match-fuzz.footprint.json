@@ -22,8 +22,8 @@
         "texture": 1
       },
       "lighting": {
-        "geometry": 2,
-        "material": 2,
+        "geometry": 3,
+        "material": 3,
         "texture": 4,
         "renderTarget": 3
       },

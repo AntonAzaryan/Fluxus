@@ -128,6 +128,7 @@ import {
   type MatchStepObserver,
   type PlayedMatch,
 } from './fixtures.js';
+import { shadowRendererFake } from './shadowRendererFake.js';
 
 /** Эталоны стоимости лежат рядом с парами матчей — там же, где вся golden-культура. */
 export const GOLDEN_DIR = join(dirname(fileURLToPath(import.meta.url)), '..', '..', 'tests', 'golden');
@@ -960,24 +961,12 @@ export class PresentationBench {
     // Порт теневых проходов стенду обязателен: в `hybrid` подсистема ведёт их
     // сама — рисует глубину яруса кадра и сводит ярусы в карту источника
     // (REND-30), — а без порта исполняла бы режим как `full`, и эталон мерил бы
-    // не тот режим, что назван секцией. Живого WebGL двойнику не нужно: он
-    // повторяет единственное наблюдаемое следствие настоящего прохода — снятый
-    // флаг `needsUpdate` у нарисованного источника.
+    // не тот режим, что назван секцией. Двойник — общий на стенды интеграции
+    // (`shadowRendererFake.ts`): живого WebGL ему не нужно.
     this.lighting = new LightingSubsystem({
       grid,
       config: BENCH_LIGHTING,
-      renderer: {
-        render: () => {},
-        setRenderTarget: () => {},
-        shadowMap: {
-          enabled: true,
-          render: (lights) => {
-            for (const light of lights) {
-              (light as THREE.DirectionalLight).shadow.needsUpdate = false;
-            }
-          },
-        },
-      },
+      renderer: shadowRendererFake(),
     });
     // Визуальная поверхность (REND-9) — общая на подсистемы; карта кривизны
     // ставится ДО регистрации, поэтому первая же сборка чанков идёт с рельефом,
