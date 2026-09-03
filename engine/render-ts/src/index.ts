@@ -360,6 +360,7 @@ export type {
 // манифеста — оболочки от доставленного состояния и вспышки от событий.
 export { EffectsSubsystem } from './subsystems/effects.js';
 export type { EffectsOptions } from './subsystems/effects.js';
+export type { EffectsPrewarm } from './subsystems/effectsPrewarm.js';
 
 // Подсистема превью каста (REND-28): что заденет способность, если подтвердить
 // её сейчас. Два входа и только два — скомпилированный каталог определений при
@@ -378,7 +379,7 @@ export type { AbilitySlotStatNames, AbilityStepStatNames } from './subsystems/ab
 // ассетов (ASSET-14) — оболочки от доставленного состояния, one-shot'ы от
 // событий и decoration-эмиттеры, все в одном батч-рендерере сцены.
 export { ParticlesSubsystem } from './subsystems/particles.js';
-export type { ParticlesOptions, SocketSource } from './subsystems/particles.js';
+export type { ParticlesOptions, ParticlesPrewarm, SocketSource } from './subsystems/particles.js';
 
 // Сервисы вьюпорта редактора: picking по видимому изображению (REND-15) и
 // служебные наложения подсистемой рендера (REND-16). Игровой клиент ни того, ни

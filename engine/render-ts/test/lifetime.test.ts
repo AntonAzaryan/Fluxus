@@ -471,6 +471,42 @@ describe('снос подсистемы частиц отдаёт разобра
     subsystem.dispose();
     for (const spy of spies) expect(spy).toHaveBeenCalledTimes(1);
   });
+
+  it('материалы батчей библиотеки тоже отдаются: их два, и dispose() батча их не трогает (V-3)', () => {
+    // `SpriteBatch.dispose()` три.quarks освобождает ОДНУ геометрию. Шейдерный
+    // материал `rebuildMaterial()` и клон материала настроек остаются, а с ними
+    // остаётся в кэше three и скомпилированная программа: каждое открытие сцены
+    // редактором (ED-15) теряло бы программу и два материала.
+    const assets = makeAssets();
+    const scene = new THREE.Scene();
+    const ctx: RenderContext = { scene, assets: assets.service, config: { heightStep: 0.5 } };
+    const manifest: VisualManifest = {
+      entities: {},
+      particles: { byKind: { Flame: { effect: SUB_EFFECT } } },
+    };
+    const subsystem = new ParticlesSubsystem(manifest, { warn: () => {} });
+    subsystem.init(ctx);
+    assets.resolve('particle-effect', SUB_EFFECT, subEffectDoc());
+    subsystem.syncTick(makeTickView([makeEntityView(HERO, { kind: 'Flame' })]));
+    subsystem.updateFrame(1 / 60, 1);
+
+    const batchRoot = scene.getObjectByName('particle-batches')!;
+    expect(batchRoot.children.length).toBeGreaterThan(0);
+    const spies: ReturnType<typeof vi.spyOn>[] = [];
+    for (const batch of batchRoot.children) {
+      const mesh = batch as THREE.Mesh & { settings: { material: THREE.Material } };
+      const shader = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
+      for (const material of [...shader, mesh.settings.material]) {
+        spies.push(vi.spyOn(material, 'dispose'));
+      }
+    }
+    // Материалов ровно два на батч: шейдерный и клон материала настроек.
+    expect(spies).toHaveLength(batchRoot.children.length * 2);
+
+    subsystem.dispose();
+
+    for (const spy of spies) expect(spy).toHaveBeenCalledTimes(1);
+  });
 });
 
 describe('снос подсистемы моделей (REND-31)', () => {

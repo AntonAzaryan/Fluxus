@@ -88,6 +88,29 @@ const SCENE: SceneDef = {
       effects: [],
     },
     {
+      id: 'capped',
+      trigger: { input: { bit: 4 } },
+      // Предел расстояния КОРОЧЕ радиуса фигуры: ядро возьмёт кандидатов не
+      // дальше `range` от начала шага (`abilities/runtime.ts`), и превью не
+      // вправе обещать больше (REND-28).
+      targeting: {
+        steps: [{ kind: 'point', range: F(1.5), shape: { kind: 'circle', radius: F(4) } }],
+      },
+      effects: [],
+    },
+    {
+      id: 'openCone',
+      trigger: { input: { bit: 5 } },
+      // Конус БЕЗ радиуса: ядро считает его неограниченным, и единственным его
+      // пределом остаётся `range` (`abilities/shape.ts`).
+      targeting: {
+        steps: [
+          { kind: 'point', range: F(2.5), shape: { kind: 'circle', halfAngle: F(0.125) } },
+        ],
+      },
+      effects: [],
+    },
+    {
       id: 'scaled',
       trigger: { input: { bit: 3 } },
       // Радиус здесь литеральный: вычисляемый размер документом невыразим —
@@ -104,7 +127,9 @@ const SCENE: SceneDef = {
 const ZONE = 0;
 const GRAB = 1;
 const CONE = 2;
-const SCALED = 3;
+const CAPPED = 3;
+const OPEN_CONE = 4;
+const SCALED = 5;
 
 /** Имена статов доставки слота — их объявляет сборка (HUD-8), не рендер. */
 function slotStats(slot: number): AbilitySlotStatNames {
@@ -756,5 +781,55 @@ describe('Отладочный источник превью каста (render-
     expect(withDebug).toEqual(without);
     // И проверялось не отсутствие работы: счётчики непустые.
     expect(without.syncTickSubsystems).toBeGreaterThan(0);
+  });
+});
+
+describe('Превью каста: предел расстояния шага (REND-28, ABIL-5) — V-7', () => {
+  it('range короче радиуса — рисуется min(range, radius), а не обещание лишнего', () => {
+    // Ядро ограничивает кандидатов шага радиусом `range` от начала шага; круг
+    // радиуса 4 при `range` 1.5 накроет от силы полтора метра, и превью обязано
+    // ошибаться ВНУТРЬ — как вписанная ломаная дуги сектора.
+    const rig = makeRig();
+    rig.stage.publish(
+      { name: 'test' },
+      makeTickView([withSlot(HERO, { ability: CAPPED, phase: 0, staged: 0 })]),
+    );
+    rig.preview.applyLocalInput({ entity: HERO, target: { x: F(1), y: F(0) } });
+    rig.stage.frame(0.016, 1);
+
+    const drawn = outlines(rig.scene);
+    expect(drawn.length).toBe(1);
+    expect(drawn[0]!.scale.x).toBeCloseTo(1.5, 6);
+  });
+
+  it('конус без радиуса рисуется пределом расстояния, а не пропадает', () => {
+    // Круг без радиуса пределом расстояния не является — им остаётся `range`
+    // (`abilities/shape.ts`). Прежде превью такой конус не рисовало вовсе.
+    const rig = makeRig();
+    rig.stage.publish(
+      { name: 'test' },
+      makeTickView([
+        withSlot(HERO, { ability: OPEN_CONE, phase: 0 }, { prevX: 0, currX: 0, prevY: 0, currY: 0 }),
+      ]),
+    );
+    rig.preview.applyLocalInput({ entity: HERO, target: { x: F(4), y: F(0) } });
+    rig.stage.frame(0.016, 1);
+
+    const drawn = outlines(rig.scene);
+    expect(drawn.length).toBe(1);
+    expect(drawn[0]!.scale.x).toBeCloseTo(2.5, 6);
+  });
+
+  it('range длиннее радиуса фигуру не раздувает', () => {
+    // Конус `cone` объявляет радиус 3 и предела расстояния не несёт вовсе —
+    // рисуется он ровно своим радиусом.
+    const rig = makeRig();
+    rig.stage.publish(
+      { name: 'test' },
+      makeTickView([withSlot(HERO, { ability: CONE, phase: 0 })]),
+    );
+    rig.preview.applyLocalInput({ entity: HERO, target: { x: F(9), y: F(0) } });
+    rig.stage.frame(0.016, 1);
+    expect(outlines(rig.scene)[0]!.scale.x).toBeCloseTo(3, 6);
   });
 });

@@ -46,7 +46,11 @@ const NO_SHAPE = -1;
 export interface PreviewShape {
   /** Код формы из словаря коллайдеров (PHYS-2) либо `NO_SHAPE`. */
   readonly kind: number;
-  /** Радиус круга либо полуось X прямоугольника, мировые единицы. */
+  /**
+   * Радиус круга либо полуось X прямоугольника, мировые единицы. У круга это
+   * уже УЧТЁННЫЙ предел расстояния шага (`CompiledStep.range`), см.
+   * `circleRadius`: превью не вправе обещать больше, чем возьмёт симуляция.
+   */
   readonly a: number;
   /** Полуось Y прямоугольника. */
   readonly b: number;
@@ -82,18 +86,52 @@ function literalRadians(expr: Expression | undefined): number {
 }
 
 /**
+ * Радиус круга шага с учётом ПРЕДЕЛА РАССТОЯНИЯ (REND-28, `ability-system`
+ * ABIL-5).
+ *
+ * Ядро ограничивает кандидатов шага радиусом `range` от начала шага, а конус
+ * без собственного радиуса считает неограниченным — `range` остаётся его
+ * единственным пределом (`abilities/shape.ts`, `abilities/runtime.ts`).
+ * Превью, читающее одну лишь фигуру, при `range < radius` обещало бы игроку
+ * лишнее, а конус без радиуса не рисовало бы вовсе.
+ *
+ * Для конуса пересечение «сектор радиуса `a`» с «круг радиуса `range` вокруг
+ * той же точки» — ровно сектор радиуса `min(a, range)`; для круга, центрованного
+ * НА точке шага, `min` — приближение (настоящее пересечение — линза), и знак
+ * ошибки выбран «внутрь»: превью обещает меньше настоящей зоны, а не больше, —
+ * то же правило, по которому дуга сектора рисуется вписанной ломаной.
+ *
+ * Круг БЕЗ радиуса пределом не становится: `range` считается от начала шага, а
+ * круг центрован на точке, и рисовать его радиусом предела значило бы выдумать
+ * фигуру, которой определение не объявляло.
+ */
+function circleRadius(a: number, range: number, sector: boolean): number {
+  if (!Number.isFinite(a)) return sector ? range : Number.NaN;
+  return Number.isFinite(range) && range < a ? range : a;
+}
+
+/**
  * Фигуры шагов каталога во float, индекс в индекс с `catalog.steps`. Это и есть
  * точка приёма (REND-1): глубже неё fixed-point значений у превью нет.
+ *
+ * Полуось прямоугольника шага-вектора пределом расстояния НЕ режется: этой
+ * фигуры ядро не читает вовсе (ни `shape.ts`, ни `runtime.ts`), и резать здесь
+ * было бы нечего — вопрос открыт и решается правилом валидации редактора, а не
+ * догадкой кадра.
  */
 export function previewShapes(catalog: AbilityCatalog): readonly PreviewShape[] {
-  return catalog.steps.map((step) => ({
-    kind: step.shapeKind,
-    a: literalWorld(step.shapeA),
-    b: literalWorld(step.shapeB),
-    halfAngle: literalRadians(step.halfAngle),
-    sector: step.halfAngle !== undefined,
-    directed: step.halfAngle !== undefined || step.kind === STEP_VECTOR,
-  }));
+  return catalog.steps.map((step) => {
+    const sector = step.halfAngle !== undefined;
+    const a = literalWorld(step.shapeA);
+    return {
+      kind: step.shapeKind,
+      a: step.shapeKind === SHAPE_CIRCLE ? circleRadius(a, literalWorld(step.range), sector) : a,
+      b: literalWorld(step.shapeB),
+      halfAngle: literalRadians(step.halfAngle),
+      sector,
+      directed: sector || step.kind === STEP_VECTOR,
+    };
+  });
 }
 
 /**

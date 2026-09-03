@@ -17,6 +17,7 @@ import {
   type PickProxy,
   type RenderContext,
 } from '../src/index.js';
+import { createStateReader, stateTableNames } from '../src/subsystems/shellSupport.js';
 import { makeAssets, makeEntityView, makeTickView } from './fixtures.js';
 
 /** Манифест только с секцией эффектов: моделей у этих типов нет и не нужно. */
@@ -339,5 +340,316 @@ describe('Эффекты и picking (REND-15, REND-23)', () => {
     const proxy: PickProxy = createPickProxy();
     expect(models.proxyOf(2, proxy)).toBe(true);
     expect(models.proxyOf(1, proxy)).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------- находки §2.6
+
+describe('EffectsSubsystem: возраст события доставки (REND-23, SHELL-4) — V-1', () => {
+  /** Манифест с одной вспышкой известной длительности: 400 мс. */
+  function flashManifest(): VisualManifest {
+    return {
+      entities: {},
+      effects: {
+        byEvent: {
+          Boom: {
+            primitive: 'sphere',
+            color: '#ff4020',
+            radius: 1,
+            radiusTo: 3,
+            durationMs: 400,
+            height: 0,
+          },
+        },
+      },
+    };
+  }
+
+  function makeAgedRig() {
+    const assets = makeAssets();
+    const scene = new THREE.Scene();
+    const ctx: RenderContext = { scene, assets: assets.service, config: { heightStep: 1 } };
+    const warnings: string[] = [];
+    const subsystem = new EffectsSubsystem(flashManifest(), {
+      // Шаг тика 100 мс: четыре тика — ровно длительность вспышки.
+      tickSeconds: 0.1,
+      warn: (m) => warnings.push(m),
+    });
+    subsystem.init(ctx);
+    return { subsystem, warnings };
+  }
+
+  /** Событие тика `tick` в точке (0,0). */
+  const boom = (tick: number) => ({ type: 'Boom', tick, data: { x: 0, y: 0 } });
+
+  it('пачка событий разных тиков стартует с РАЗНЫМ возрастом, а не одним кадром', () => {
+    const { subsystem } = makeAgedRig();
+    // Доставка тика 10 несёт события тиков 10, 9 и 8: конфляция отправителя
+    // (SHELL-4). Возрасты — 0, 100 и 200 мс при длительности 400.
+    subsystem.syncTick(
+      makeTickView([], {
+        tick: 10,
+        freshEvents: true,
+        events: [boom(10), boom(9), boom(8)],
+      }),
+    );
+    expect(subsystem.activeCount).toBe(3);
+
+    // Радиус растёт линейно 1 → 3, значит фаза видна в масштабе меша.
+    const scales = subsystem.pooledCount; // просто зафиксировать, что пул завёл три меша
+    expect(scales).toBe(3);
+
+    // 150 мс кадров: старший дожил до 350 из 400 — живы все трое.
+    subsystem.updateFrame(0.15, 1);
+    expect(subsystem.activeCount).toBe(3);
+    // Ещё 100 мс: старший (200 + 250 = 450) отжил, двое младших живы.
+    subsystem.updateFrame(0.1, 1);
+    expect(subsystem.activeCount).toBe(2);
+    // И ещё 60 мс: средний (100 + 310 = 410) отжил, младший (310) жив.
+    subsystem.updateFrame(0.06, 1);
+    expect(subsystem.activeCount).toBe(1);
+  });
+
+  it('отжившее к доставке событие не проигрывается вовсе', () => {
+    const { subsystem } = makeAgedRig();
+    // Пять тиков по 100 мс — 500 мс при длительности 400.
+    subsystem.syncTick(
+      makeTickView([], { tick: 10, freshEvents: true, events: [boom(5)] }),
+    );
+    expect(subsystem.activeCount).toBe(0);
+    // И пула он не тронул: меш не заводился.
+    expect(subsystem.pooledCount).toBe(0);
+  });
+
+  it('событие без тика (документный источник) идёт с нуля', () => {
+    const { subsystem } = makeAgedRig();
+    subsystem.syncTick(
+      makeTickView([], { tick: 10, freshEvents: true, events: [{ type: 'Boom', data: { x: 0, y: 0 } }] }),
+    );
+    expect(subsystem.activeCount).toBe(1);
+    // Полная длительность впереди: 390 мс кадров её не исчерпывают.
+    subsystem.updateFrame(0.39, 1);
+    expect(subsystem.activeCount).toBe(1);
+  });
+});
+
+describe('EffectsSubsystem: точка события и пустой словарь состояний — V-9, V-10', () => {
+  it('пустой список состояний сборки — законная сборка: таблица byState молча пропускается', () => {
+    // Вьюпорт редактора (ED-15) тика в кадре правки не имеет, и словаря
+    // состояний у него нет вовсе. Прежде эффекты печатали предупреждение на
+    // каждое открытие сцены, а частицы — молчали; трактовка теперь одна.
+    const assets = makeAssets();
+    const warnings: string[] = [];
+    const subsystem = new EffectsSubsystem(makeManifest(), { warn: (m) => warnings.push(m) });
+    subsystem.init({
+      scene: new THREE.Scene(),
+      assets: assets.service,
+      config: { heightStep: 1 },
+    });
+    subsystem.syncTick(makeTickView([makeEntityView(1, { kind: 'Hero', states: 0xff })]));
+    expect(subsystem.activeCount).toBe(0);
+    expect(warnings).toEqual([]);
+  });
+
+  it('незеркалируемое состояние обругано один раз на ИМЯ, а не на сущность × доставку', () => {
+    const { subsystem, warnings } = makeRig({
+      entities: {},
+      effects: { byState: { Burning: { primitive: 'sphere', color: '#f80', radius: 0.5 } } },
+    });
+    const crowd = [1, 2, 3, 4, 5].map((id) => makeEntityView(id, { states: 0xff }));
+    for (let i = 0; i < 3; i++) subsystem.syncTick(makeTickView(crowd));
+    expect(warnings.filter((m) => m.includes('Burning'))).toHaveLength(1);
+  });
+
+  it('событие только с `target` играет: поля сущностей события — четыре (filter.ts)', () => {
+    const { subsystem } = makeRig();
+    subsystem.syncTick(
+      makeTickView([makeEntityView(7, { kind: 'Hero', currX: 4, currY: 5, prevX: 4, prevY: 5 })], {
+        freshEvents: true,
+        events: [{ type: 'FireballExploded', tick: 1, data: { target: 7 } }],
+      }),
+    );
+    expect(subsystem.activeCount).toBe(1);
+  });
+
+  it('событие без координат и без доставленной сущности — предупреждение один раз', () => {
+    const { subsystem, warnings } = makeRig();
+    for (let i = 0; i < 3; i++) {
+      subsystem.syncTick(
+        makeTickView([], { freshEvents: true, events: [{ type: 'FireballExploded', tick: 1, data: {} }] }),
+      );
+    }
+    expect(subsystem.activeCount).toBe(0);
+    expect(warnings.filter((m) => m.includes('FireballExploded'))).toHaveLength(1);
+  });
+});
+
+describe('EffectsSubsystem: масштаб размещения и ведение статом (REND-23) — V-10', () => {
+  it('оболочка учитывает `EntityView.scale`, как эмиттер частиц', () => {
+    const { subsystem } = makeRig();
+    subsystem.syncTick(makeTickView([makeEntityView(1, { kind: 'Fireball', scale: 3 })]));
+    subsystem.updateFrame(0.016, 1);
+    // Радиус записи 0.25 × множитель размещения 3.
+    expect(subsystem.effectFor(1)!.object.scale.x).toBeCloseTo(0.75, 6);
+  });
+
+  /** Манифест шара заряда: окно стата, вынос вперёд, порог цвета и мигание. */
+  function chargeManifest(): VisualManifest {
+    return {
+      entities: {},
+      effects: {
+        byState: {
+          Charging: {
+            primitive: 'sphere',
+            color: '#ff8a3c',
+            radius: 0.15,
+            alpha: 0.8,
+            height: 0.3,
+            offset: 0.5,
+            radiusFromStat: { stat: 'charge', min: 1, max: 61, from: 1, to: 2 },
+            colorAt: { phase: 0.5, color: '#ff7020' },
+            blink: { periodMs: 180, alpha: 0.4 },
+          },
+        },
+      },
+    };
+  }
+
+  /** Сущность с состоянием `Charging` (бит 0 списка стенда) и статом заряда. */
+  function charging(ticks: number | undefined, aim: number | null = 0) {
+    const stats = ticks === undefined ? undefined : new Map([['charge', ticks]]);
+    return makeEntityView(1, {
+      kind: 'Hero',
+      states: 1,
+      aimYaw: aim,
+      ...(stats === undefined ? {} : { stats }),
+    });
+  }
+
+  function makeChargeRig() {
+    const assets = makeAssets();
+    const subsystem = new EffectsSubsystem(chargeManifest(), {
+      stateComponents: ['Charging'],
+      warn: () => {},
+    });
+    subsystem.init({
+      scene: new THREE.Scene(),
+      assets: assets.service,
+      config: { heightStep: 1 },
+    });
+    return subsystem;
+  }
+
+  it('радиус растёт по окну стата, а вынос идёт по доставленному прицелу', () => {
+    const subsystem = makeChargeRig();
+    subsystem.syncTick(makeTickView([charging(1)]));
+    subsystem.updateFrame(0.016, 1);
+    const object = subsystem.effectFor(1, 'state:Charging')!.object;
+    // Начало окна: множитель 1 — радиус записи как он есть.
+    expect(object.scale.x).toBeCloseTo(0.15, 6);
+    // Вынос вперёд по прицелу (0 радиан — вдоль +X).
+    expect(object.position.x).toBeCloseTo(0.5, 6);
+    expect(object.position.z).toBeCloseTo(0.3, 6);
+
+    // Половина окна: множитель 1.5.
+    subsystem.syncTick(makeTickView([charging(31)]));
+    subsystem.updateFrame(0.016, 1);
+    expect(object.scale.x).toBeCloseTo(0.15 * 1.5, 6);
+
+    // Конец окна и дальше: множитель 2 и не больше — заряд сверх окна не растёт.
+    subsystem.syncTick(makeTickView([charging(61)]));
+    subsystem.updateFrame(0.016, 1);
+    expect(object.scale.x).toBeCloseTo(0.3, 6);
+    subsystem.syncTick(makeTickView([charging(200)]));
+    subsystem.updateFrame(0.016, 1);
+    expect(object.scale.x).toBeCloseTo(0.3, 6);
+  });
+
+  it('порог цвета берётся с названной фазы окна, а не плавным переходом', () => {
+    const subsystem = makeChargeRig();
+    const material = () =>
+      (subsystem.effectFor(1, 'state:Charging')!.object as THREE.Mesh)
+        .material as THREE.MeshBasicMaterial;
+
+    subsystem.syncTick(makeTickView([charging(30)])); // фаза 0.483 — ещё базовый
+    subsystem.updateFrame(0.016, 1);
+    expect(material().color.getHexString()).toBe('ff8a3c');
+
+    subsystem.syncTick(makeTickView([charging(31)])); // фаза 0.5 — порог взят
+    subsystem.updateFrame(0.016, 1);
+    expect(material().color.getHexString()).toBe('ff7020');
+
+    // И обратно: заряд сброшен — цвет вернулся.
+    subsystem.syncTick(makeTickView([charging(2)]));
+    subsystem.updateFrame(0.016, 1);
+    expect(material().color.getHexString()).toBe('ff8a3c');
+  });
+
+  it('за концом окна шар мигает; часы презентации стоят — мигание замирает', () => {
+    const subsystem = makeChargeRig();
+    const opacity = () =>
+      (
+        (subsystem.effectFor(1, 'state:Charging')!.object as THREE.Mesh)
+          .material as THREE.MeshBasicMaterial
+      ).opacity;
+
+    subsystem.syncTick(makeTickView([charging(61)]));
+    subsystem.updateFrame(0, 1); // часы на нуле — тёмная половина цикла
+    expect(opacity()).toBeCloseTo(0.8 * 0.4, 6);
+    subsystem.updateFrame(0.1, 1); // 100 мс — светлая половина (полупериод 90)
+    expect(opacity()).toBeCloseTo(0.8, 6);
+
+    // Внутри окна мигания нет вовсе.
+    subsystem.syncTick(makeTickView([charging(30)]));
+    subsystem.updateFrame(0.1, 1);
+    expect(opacity()).toBeCloseTo(0.8, 6);
+  });
+
+  it('стата в доставленном состоянии нет — оболочка рисуется числами записи', () => {
+    const subsystem = makeChargeRig();
+    subsystem.syncTick(makeTickView([charging(undefined)]));
+    subsystem.updateFrame(0.016, 1);
+    const object = subsystem.effectFor(1, 'state:Charging')!.object;
+    expect(object.scale.x).toBeCloseTo(0.15, 6);
+    expect(((object as THREE.Mesh).material as THREE.MeshBasicMaterial).opacity).toBeCloseTo(0.8, 6);
+  });
+
+  it('прицела нет — вынос идёт по курсу движения (REND-2)', () => {
+    const subsystem = makeChargeRig();
+    subsystem.syncTick(
+      makeTickView([makeEntityView(1, { kind: 'Hero', states: 1, aimYaw: null, facingYaw: Math.PI / 2 })]),
+    );
+    subsystem.updateFrame(0.016, 1);
+    const object = subsystem.effectFor(1, 'state:Charging')!.object;
+    expect(object.position.x).toBeCloseTo(0, 6);
+    expect(object.position.y).toBeCloseTo(0.5, 6);
+  });
+});
+
+describe('createStateReader: колбэк промаха зовётся один раз на имя — V-9', () => {
+  it('второй и третий промах того же имени колбэка не будят', () => {
+    // Колбэк вызывающего строит ДВЕ шаблонные строки (ключ и текст) до дедупа
+    // `warnOnce`, а читатель зовётся на каждый источник каждой сущности каждой
+    // доставки — 30 Гц. Память о промахе живёт здесь, а не в дедупе текста.
+    const said: string[] = [];
+    const read = createStateReader(['Falling'], (name) => said.push(name));
+    const view = makeEntityView(1, { states: 0xff });
+    for (let i = 0; i < 5; i++) {
+      expect(read(view, 'Burning')).toBe(false);
+      expect(read(view, 'Poisoned')).toBe(false);
+    }
+    expect(said).toEqual(['Burning', 'Poisoned']);
+    // Зеркалируемое имя читается как обычно и колбэка не трогает.
+    expect(read(view, 'Falling')).toBe(true);
+    expect(said).toHaveLength(2);
+  });
+});
+
+describe('stateTableNames: пустой словарь сборки — короткое замыкание — V-9', () => {
+  it('без списка состояний сборки таблица byState не перечисляется вовсе', () => {
+    const table = { Shielded: {}, Burning: {} };
+    expect(stateTableNames(table, [])).toHaveLength(0);
+    expect(stateTableNames(undefined, ['Shielded'])).toHaveLength(0);
+    expect(stateTableNames(table, ['Shielded'])).toEqual(['Shielded', 'Burning']);
   });
 });

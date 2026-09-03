@@ -11,7 +11,12 @@ import { fileURLToPath } from 'node:url';
 import { describe, expect, it, vi } from 'vitest';
 import * as THREE from 'three';
 import type { DecodedImage, ParticleEffectDocument, VisualManifest } from '@fluxus/assets';
-import { ModelsSubsystem, ParticlesSubsystem, type RenderContext } from '../src/index.js';
+import {
+  EffectsSubsystem,
+  ModelsSubsystem,
+  ParticlesSubsystem,
+  type RenderContext,
+} from '../src/index.js';
 import { makeAssets, makeEntityView, makeModel, makeTickView } from './fixtures.js';
 
 const MODEL_ID = 'models/runner.mdx';
@@ -314,5 +319,82 @@ describe('прогрев подсистемы частиц (FOW-8, REND-24)', ()
     assets.fail('particle-effect', BURST, 'нет файла');
     await pending;
     expect(subsystem.pooledCount).toBe(1); // только доехавший TORCH
+  });
+
+  it('прогрев отдаёт текстуры образцов — вход `initTexture` (V-6)', async () => {
+    // Заливка текстуры на GPU — работа ПЕРВОГО draw'а, и без этого списка она
+    // ложится на кадр первого появления эмиттера. Документ без картинок —
+    // законный случай: список тогда пуст, а обещание разрешается сразу.
+    const { subsystem, assets } = makeParticlesRig();
+    const pending = subsystem.prewarm();
+    assets.resolve('particle-effect', TORCH, effectFixture('torch.effect.json'));
+    assets.resolve('particle-effect', BURST, effectFixture('burst.effect.json'));
+    const warm = await pending;
+
+    expect(Array.isArray(warm.textures)).toBe(true);
+    // Второе обещание разрешается и на документе без картинок: ждать его
+    // собирающему безопасно.
+    await expect(warm.texturesReady()).resolves.toBeDefined();
+  });
+});
+
+describe('прогрев подсистемы транзиентных эффектов (REND-23)', () => {
+  function makeEffectsRig(): { subsystem: EffectsSubsystem; scene: THREE.Scene } {
+    const manifest: VisualManifest = {
+      entities: {},
+      effects: {
+        byKind: { Fireball: { primitive: 'sphere', color: '#ff8a3c', radius: 0.2 } },
+        byEvent: {
+          FireballExploded: { primitive: 'sphere', color: '#ff4020', radius: 0.3, durationMs: 400 },
+        },
+      },
+    };
+    const scene = new THREE.Scene();
+    const assets = makeAssets();
+    const subsystem = new EffectsSubsystem(manifest, { warn: () => {} });
+    subsystem.init({ scene, assets: assets.service, config: { heightStep: 0.5 } });
+    return { subsystem, scene };
+  }
+
+  it('тёплый узел строится до первого кадра и возвращается в пул (V-6)', () => {
+    const { subsystem, scene } = makeEffectsRig();
+    expect(subsystem.pooledCount).toBe(0);
+
+    const warm = subsystem.prewarm();
+
+    // Узел один на ПРИМИТИВ: обе записи манифеста рисуются сферой, и программа
+    // у них одна и та же.
+    expect(warm.roots).toHaveLength(1);
+    // Наблюдаемого состояния прогрев не меняет: нарисованных эффектов нет —
+    // тёплый узел не оболочка и не вспышка, он просто существует.
+    expect(subsystem.activeCount).toBe(0);
+
+    warm.finish();
+    // Тёплый узел вернулся в пул — первая вспышка возьмёт ЕГО, а не заведёт
+    // второй меш с новой программой.
+    expect(subsystem.pooledCount).toBe(1);
+    expect(scene.children.some((child) => child.name === 'effects')).toBe(true);
+    subsystem.syncTick(makeTickView([makeEntityView(1, { kind: 'Fireball' })]));
+    expect(subsystem.activeCount).toBe(1);
+    expect(subsystem.pooledCount).toBe(1);
+  });
+
+  it('неизвестный примитив прогрев не роняет: предупреждение и пропуск', () => {
+    const scene = new THREE.Scene();
+    const assets = makeAssets();
+    const warnings: string[] = [];
+    const subsystem = new EffectsSubsystem(
+      {
+        entities: {},
+        effects: { byKind: { Ghost: { primitive: 'cube', color: '#fff', radius: 1 } } },
+      },
+      { warn: (m) => warnings.push(m) },
+    );
+    subsystem.init({ scene, assets: assets.service, config: { heightStep: 1 } });
+
+    const warm = subsystem.prewarm();
+
+    expect(warm.roots).toHaveLength(0);
+    expect(warnings.join('\n')).toContain('cube');
   });
 });

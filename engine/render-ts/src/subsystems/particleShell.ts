@@ -1,27 +1,28 @@
 /**
  * Оболочка эмиттера (REND-24) — запись «эмиттер, привязанный к сущности
- * доставленного состояния либо к размещённой декорации», её ключ и её публичный
- * вид.
+ * доставленного состояния либо к размещённой декорации», её публичный вид, её
+ * поза и её шаг.
  *
  * Вынесена из подсистемы частиц по той же причине, по какой из неё вынесены пул
  * экземпляров (`particleEffects.ts`) и привязка к узлу-сокету
  * (`particleSockets.ts`): «что такое оболочка» и «какие оболочки существуют» —
  * разные вопросы. Первый — данные и два коротких перевода между ними, второй —
- * сведение с доставленным состоянием, и оно остаётся в подсистеме целиком.
+ * сведение с доставленным состоянием, и оно остаётся общим набором
+ * (`shellSupport.ts`, `ShellSet`), разделяемым с подсистемой эффектов.
  *
- * Записи манифеста оболочка не держит — только разобранные поля: сравнивать по
- * ссылке нечего, редактор отдаёт документ разобранным заново после каждой
- * правки (REND-17).
+ * Сверх общей оболочки эмиттер несёт одно: КЭШ найденного узла-сокета и корня,
+ * из которого узел взят. Имя сокета лежит рядом с кэшем, а не читается из
+ * записи каждый кадр, ровно затем, чтобы смену имени было с чем сравнить:
+ * редактор отдаёт документ разобранным заново после каждой правки (REND-17), и
+ * сравнение по ссылке на запись здесь ничего не значит.
  */
 import * as THREE from 'three';
-import type { EntityId } from '@fluxus/core';
 import type { RenderCostCounters } from '../cost.js';
 import { stepInstance, type EffectInstance } from '../particleEffects.js';
-import { resolveSocketNode, type SocketSource } from '../particleSockets.js';
-import type { EntityView } from '../types.js';
+import { dropSocketCache, resolveSocketNode, type SocketSource } from '../particleSockets.js';
 import type { VisualSurface } from '../visualSurface.js';
 import type { WarnOnce } from '../warnOnce.js';
-import { poseShell, type ShellPose } from './shellSupport.js';
+import { ShellSet, poseShell, type Shell, type ShellPose } from './shellSupport.js';
 
 /**
  * Что подсистеме нужно от записи любого рода: ссылка на эффект, необязательный
@@ -35,30 +36,87 @@ export interface EmitterRecord {
   readonly scale?: number;
 }
 
-/** Оболочка: экземпляр эффекта плюс то, за чем он следует и чем он был задан. */
-export interface Shell {
-  instance: EffectInstance;
-  /** Ассет эффекта, которым оболочка играет сейчас. */
-  effect: string;
+/** Оболочка эмиттера: общая оболочка плюс кэш найденного узла-сокета. */
+export interface EmitterShell extends Shell<EmitterRecord, EffectInstance> {
+  /** Имя узла из записи манифеста; по нему и видно, что имя правлено (REND-17). */
   socketName: string | undefined;
-  scale: number;
   /** Кэш найденного узла-сокета и корня, из которого он взят (`particleSockets.ts`). */
   socket: THREE.Object3D | null;
   socketRoot: THREE.Object3D | null;
-  view: EntityView;
-  readonly decoration: boolean;
 }
 
-/** Ключ оболочки: сущность плюс имя источника (тип или состояние). */
-export function shellKey(entity: EntityId, source: string): string {
-  return `${String(entity)}|${source}`;
+/**
+ * Три ответа, которыми подсистема частиц отличается от других владельцев набора
+ * оболочек (`shellSupport.ts`): чем оболочка играет, куда она уходит погаснув и
+ * где брать узлы-сокеты. Собраны здесь, а не расписаны по колбэкам подсистемы:
+ * наборов ДВА — сущности доставленного состояния и декорации (REND-18), — и
+ * отличаются они между собой ровно одним флагом.
+ */
+export interface EmitterShellHooks {
+  /** Экземпляр эффекта, готовый играть; null — ассет не доехал или невалиден. */
+  acquire(effect: string): EffectInstance | null;
+  /**
+   * Оболочка погасла: эмиссия прекращается, живые частицы доживают (REND-24).
+   * В пул экземпляр возвращает подсистема — сама, концом догорания.
+   */
+  retire(instance: EffectInstance): void;
+  /** Источник узлов-сокетов; `undefined` — записи с сокетом играют в позиции сущности. */
+  sockets(): SocketSource | undefined;
+  warnOnce: WarnOnce;
+}
+
+/**
+ * Набор оболочек одного рода. Родов два — сущности доставленного состояния и
+ * декорации (REND-18), — и отличаются они ровно тем, чьими часами идут их
+ * эмиттеры (`stepShells`): у декорации сущности симуляции за спиной нет, и
+ * персональной шкалы времени у неё не бывает.
+ */
+export function createEmitterShellSet(
+  decoration: boolean,
+  hooks: EmitterShellHooks,
+): ShellSet<EmitterRecord, EffectInstance, EmitterShell> {
+  return new ShellSet<EmitterRecord, EffectInstance, EmitterShell>({
+    acquire: (key, source, view, record) => {
+      const instance = hooks.acquire(record.effect);
+      if (instance === null) return null; // ассет не доехал или невалиден — пропуск
+      return {
+        key,
+        source,
+        decoration,
+        instance,
+        record,
+        view,
+        socketName: record.socket,
+        socket: null,
+        socketRoot: null,
+      };
+    },
+    release: (shell) => {
+      hooks.retire(shell.instance);
+    },
+    rebind: (shell, record) => {
+      // Другой эффект в записи — другой ассет и другой экземпляр: играть его
+      // прежним нечем, и это не «мигание» (REND-17).
+      if (shell.record.effect !== record.effect) return false;
+      if (shell.socketName !== record.socket) {
+        shell.socketName = record.socket;
+        dropSocketCache(shell); // имя сокета правлено — ищем узел заново
+      }
+      return true;
+    },
+    pose: (shell, alpha, heightStep, surface, pose) => {
+      poseEmitterShell(shell, alpha, heightStep, surface, hooks.sockets(), hooks.warnOnce, pose);
+    },
+  });
 }
 
 /** Публичный вид оболочки — эффект и его узел; null, если оболочки нет. */
 export function publicShell(
-  shell: Shell | undefined,
+  shell: EmitterShell | undefined,
 ): { readonly effect: string; readonly object: THREE.Object3D } | null {
-  return shell === undefined ? null : { effect: shell.effect, object: shell.instance.object };
+  return shell === undefined
+    ? null
+    : { effect: shell.record.effect, object: shell.instance.object };
 }
 
 // Переиспользуемые между кадрами объекты — аллокаций на эмиттер на кадр нет.
@@ -74,8 +132,8 @@ const SCRATCH_SCALE = new THREE.Vector3();
  * замыканием на каждую оболочку каждого кадра — в установившемся кадре путь
  * не аллоцирует пропорционально числу эмиттеров.
  */
-export function poseEmitterShell(
-  shell: Shell,
+function poseEmitterShell(
+  shell: EmitterShell,
   alpha: number,
   heightStep: number,
   surface: VisualSurface | null,
@@ -87,7 +145,7 @@ export function poseEmitterShell(
   // Масштаб — множитель ЗАПИСИ (ASSET-14) поверх множителя размещения
   // (REND-11, REND-18), и от сокета он не зависит: нормализация модели по
   // высоте — свойство инстанса, а размер эффекта назначает автор эффекта.
-  object.scale.setScalar(shell.scale * (shell.view.scale ?? 1));
+  object.scale.setScalar((shell.record.scale ?? 1) * (shell.view.scale ?? 1));
   const node = resolveSocketNode(shell, shell.view.id, sockets, warnOnce);
   if (node !== null) {
     // Мировая поза узла инстанса — каждый кадр: инстанс уже поставлен
@@ -124,7 +182,7 @@ export function poseEmitterShell(
  * работа и делается. Число то же: те же оболочки, тот же кадр.
  */
 export function stepShells(
-  shells: Iterable<Shell>,
+  shells: Iterable<EmitterShell>,
   delta: number,
   warnOnce: WarnOnce,
   cost: RenderCostCounters | undefined,

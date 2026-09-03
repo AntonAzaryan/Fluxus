@@ -48,6 +48,7 @@ import {
   chargeHeld,
   stateBit,
 } from '../app/sim.js';
+import type { VisualEffectsSection } from '@fluxus/assets';
 import { createDemoExtractor } from '../app/extractor.js';
 import { DEMO_SCRUB_EVERY } from '../app/match.js';
 import sceneJson from '../../../content/scenes/duel.scene.json';
@@ -65,15 +66,13 @@ const SCENE = sceneJson as unknown as SceneDef;
  * механики ГЕРОЕВ; поведение самого босса — `demoBoss.test.ts`.
  */
 const DUEL = { ...SCENE, initial: [] } as unknown as SceneDef;
+/**
+ * Манифест визуалов формой самого модуля ассетов (ASSET-6): рукописная форма
+ * здесь была бы вторым описанием записи эффекта и молча отстала бы от него —
+ * ровно на тех полях, которыми живёт шар заряда (REND-23).
+ */
 const MANIFEST = manifestJson as unknown as {
-  readonly effects: {
-    readonly byKind: Record<string, { readonly radius: number }>;
-    readonly byState: Record<
-      string,
-      { readonly radius: number; readonly alpha: number; readonly color: string }
-    >;
-    readonly byEvent: Record<string, { readonly radius: number; readonly radiusTo: number }>;
-  };
+  readonly effects: Required<VisualEffectsSection>;
 };
 const MATCH = matchJson as unknown as {
   readonly seed: number;
@@ -574,9 +573,10 @@ describe('зеркала балансных чисел сцены', () => {
   });
 
   it('числа шара заряда — те же, по которым определение считает выстрел', () => {
-    // Шар заряда рисует главный поток (`chargeBalls.ts`): растёт он с зарядом и
-    // висит там, откуда стартует снаряд. Все четыре числа — зеркало определения
-    // `fireball`, и разойтись им нельзя молча: шар обещал бы не тот выстрел.
+    // Шар заряда рисует подсистема эффектов по записи `effects.byState.Charging`
+    // (REND-23): растёт он с доставленным статом заряда и висит там, откуда
+    // стартует снаряд. Все четыре числа — зеркало определения `fireball`, и
+    // разойтись им нельзя молча: шар обещал бы не тот выстрел.
     const numbers = numbersIn(abilityDef('fireball'));
     expect(numbers).toContain(CHARGE_VISUAL.ticks);
     expect(numbers).toContain(CHARGE_VISUAL.maxScale);
@@ -591,9 +591,43 @@ describe('зеркала балансных чисел сцены', () => {
     expect(chargeHeld(1)).toBe(0);
     expect(chargeHeld(CHARGE_VISUAL.ticks + 1)).toBe(CHARGE_VISUAL.ticks);
     expect(chargeHeld(CHARGE_VISUAL.ticks + 30)).toBe(CHARGE_VISUAL.ticks);
-    // Оболочки состояния у заряда больше нет: она рисовала бы ВТОРОЙ, статичный
-    // шар в позиции героя поверх растущего.
-    expect(MANIFEST.effects.byState.Charging).toBeUndefined();
+  });
+
+  it('запись шара заряда в манифесте — зеркало тех же чисел (REND-23)', () => {
+    // Модуля сборки у шара больше нет, и «зеркальность» держится не кодом, а
+    // этим тестом: запись манифеста обязана считать ровно то же, что считало
+    // определение и считал прежний `chargeBalls.ts`.
+    const record = MANIFEST.effects.byState.Charging!;
+    const base = MANIFEST.effects.byKind.Fireball!;
+    const heavy = MANIFEST.effects.byKind.HeavyFireball!;
+    // Внешность шара — снаряда, который улетит при нулевом заряде.
+    expect(record.color).toBe(base.color);
+    expect(record.radius).toBe(base.radius);
+    expect(record.height).toBe(base.height);
+    expect(record.alpha).toBe(base.alpha);
+    // Окно стата — та же арифметика `chargeHeld`: тик нажатия не считается
+    // (начало окна 1), окно длиной в окно роста определения.
+    const range = record.radiusFromStat!;
+    expect(range.stat).toBe(STATS.charge);
+    expect(range.min).toBe(1);
+    expect(range.max - (range.min ?? 0)).toBe(CHARGE_VISUAL.ticks);
+    // Множители радиуса — размер на полном заряде из определения.
+    expect(range.from).toBe(1);
+    expect(range.to).toBe(CHARGE_VISUAL.maxScale / FIXED_ONE);
+    // Порог второго цвета — ровно тот множитель, с которого определение спавнит
+    // `HeavyFireball`: фаза окна, дающая этот размер.
+    const at = record.colorAt!;
+    const from = range.from ?? 1;
+    expect(from + (range.to - from) * at.phase).toBeCloseTo(
+      CHARGE_VISUAL.heavyScale / FIXED_ONE,
+      6,
+    );
+    expect(at.color).toBe(heavy.color);
+    // Вынос вперёд — тот же, с которого стартует выстрел.
+    expect(record.offset).toBeCloseTo(CHARGE_VISUAL.offset / FIXED_ONE, 3);
+    // И мигание передержки: оно есть, иначе игрок не увидит, что заряд перезрел.
+    expect(record.blink!.periodMs).toBeGreaterThan(0);
+    expect(record.blink!.alpha).toBeLessThan(1);
   });
 });
 
@@ -3446,7 +3480,8 @@ describe('рывок — способность с кулдауном (ABIL-3, A
 });
 
 /**
- * Шар заряда — картинка главного потока (`chargeBalls.ts`), но растёт он по
+ * Шар заряда — картинка записи `effects.byState.Charging` (REND-23), но растёт
+ * он по
  * ДОСТАВЛЕННОМУ состоянию, а не по счётчику кадра: заряжающий соперник обязан
  * быть виден противнику (HUD-1), и знать о его нажатиях главному потоку нечем.
  * Отсюда пара, которую здесь и проверяем: система сцены `ChargeTick` проецирует
