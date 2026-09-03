@@ -56,7 +56,7 @@
  * эффект нельзя по построению — эффект есть изображение, а не сущность.
  */
 import * as THREE from 'three';
-import type { EntityId } from '@fluxus/core';
+import { NO_ENTITY, FIXED_ONE, type EntityId } from '@fluxus/core';
 import {
   resolveEffectByEvent,
   resolveEffectByKind,
@@ -73,38 +73,37 @@ import type {
 } from '../types.js';
 import type { VisualSurface } from '../visualSurface.js';
 import type { VisualSurfaceSource } from '../surfaceSource.js';
+import { costSink } from '../cost.js';
 import { jumpArc } from '../model/verticalOffset.js';
 import { createWarnOnce, type WarnOnce } from '../warnOnce.js';
 import {
   ShellSet,
+  createShellPose,
   createStateReader,
-  eventAgeSeconds,
-  eventPointOf,
   poseShell,
   shellKey,
   stateTableNames,
   syncShellSources,
-  type EventPoint,
   type Shell,
   type ShellPose,
   type StateReader,
 } from './shellSupport.js';
 import { effectPrimitives, warmEffectNodes, type EffectsPrewarm } from './effectsPrewarm.js';
-import { own } from '../footprint.js';
-
-/** Примитивы, которые умеет рисовать подсистема; перечень принадлежит рендеру. */
-const PRIMITIVE_SPHERE = 'sphere';
+import { EffectNodePool, type EffectNode, type ShapeContext } from './effectNodes.js';
+import {
+  PRIMITIVE_BEAM,
+  applyShapeEdge,
+  drawBeam,
+  drawGround,
+  drawTrail,
+  isGroundPrimitive,
+  radiusOf,
+} from './effectDraw.js';
+import { FlashSet } from './effectFlashes.js';
 
 /** Кривые фазы жизни; неизвестное имя — предупреждение и линейная кривая. */
 const CURVE_LINEAR = 'linear';
 const CURVE_EASE_OUT = 'easeOut';
-
-/** Разбиение общей сферы: круглая на глаз и дешёвая — эффектов в кадре десятки. */
-const SPHERE_SEGMENTS = 16;
-const SPHERE_RINGS = 12;
-
-/** Длительность вспышки, если запись её не назвала: короткая, но видимая. */
-const DEFAULT_FLASH_MS = 300;
 
 /**
  * Шаг тика по умолчанию, секунды — знаменатель возраста события (REND-23,
@@ -138,16 +137,6 @@ export interface EffectsOptions {
 }
 
 /**
- * Узел пула: меш с собственным материалом и НИЧЕГО больше. Ни записи манифеста,
- * ни presentation-среза он не держит — иначе возвращённый в пул узел удерживал
- * бы сущность, которой давно нет.
- */
-interface EffectNode {
-  readonly mesh: THREE.Mesh;
-  readonly material: THREE.MeshBasicMaterial;
-}
-
-/**
  * Оболочка эффекта: узел пула плюс запись, которой он нарисован. Своего сверх
  * общей оболочки (`shellSupport.ts`) у неё одно поле — взят ли второй цвет
  * порога: `Color.set` разбирает строку, и звать его каждый кадр на каждую
@@ -155,30 +144,6 @@ interface EffectNode {
  */
 interface EffectShell extends Shell<VisualEffect, EffectNode> {
   colorAtTaken: boolean;
-}
-
-/** Вспышка: эффект, проигрывающий свою длительность по часам кадра. */
-interface Flash {
-  readonly node: EffectNode;
-  readonly record: VisualEffect;
-  readonly x: number;
-  readonly y: number;
-  readonly z: number;
-  /** Сколько миллисекунд кадров прожито; `durationMs` — конец жизни. */
-  ageMs: number;
-  readonly durationMs: number;
-}
-
-/** Фаза жизни по кривой записи: `linear` как есть, `easeOut` — с замедлением. */
-function curveOf(curve: string | undefined, t: number): number {
-  if (curve === undefined || curve === CURVE_LINEAR) return t;
-  if (curve === CURVE_EASE_OUT) return 1 - (1 - t) * (1 - t);
-  return t;
-}
-
-/** Значение параметра по фазе: `from` → `to`, если конец назван. */
-function lerpParam(from: number, to: number | undefined, phase: number): number {
-  return to === undefined ? from : from + (to - from) * phase;
 }
 
 /**
@@ -212,18 +177,20 @@ export class EffectsSubsystem implements RenderSubsystem {
   private readonly hasState: StateReader;
   /** Об неизвестном примитиве/кривой сказано один раз на имя, а не на кадр. */
   private readonly warnOnce: WarnOnce;
-  /** Точка разбираемого события; переиспользуется — аллокаций на вспышку нет. */
-  private readonly eventPoint: EventPoint = { x: 0, y: 0 };
-
   private ctx: RenderContext | null = null;
   private readonly group = new THREE.Group();
-  private geometry: THREE.SphereGeometry | null = null;
+  /** Узлы и их пул (`effectNodes.ts`): раздельный по примитиву и топологии. */
+  private readonly pool: EffectNodePool;
 
   /** Оболочки по ключу «сущность + источник» — общий набор (`shellSupport.ts`). */
   private readonly shells: ShellSet<VisualEffect, EffectNode, EffectShell>;
-  private flashes: Flash[] = [];
-  /** Свободные меши пула: аллокация — только когда эффектов стало больше, чем было. */
-  private readonly pool: EffectNode[] = [];
+  /** Проигрываемые вспышки (`effectFlashes.ts`): свой набор, своя длительность. */
+  private readonly flashes: FlashSet;
+  /** Поза цели луча и три числа выборки следа: аллокаций на кадр нет. */
+  private readonly targetPose = createShellPose();
+  private readonly trailScratch = new Float32Array(3);
+  /** Вершины непроцедурных фигур, переписанные в этом кадре (PERF-3). */
+  private shapeVertices = 0;
 
   /** Последнее доставленное состояние: по нему считается поза кадра (REND-2). */
   private view: TickView | null = null;
@@ -254,6 +221,15 @@ export class EffectsSubsystem implements RenderSubsystem {
         `render: состояние "${name}" не зеркалируется Extractor'ом (stateComponents) — эффект-оболочка не появится (REND-23)`,
       );
     });
+    this.pool = new EffectNodePool(this.group, this.warnOnce);
+    this.flashes = new FlashSet({
+      acquire: (flashRecord) => this.acquire(flashRecord),
+      release: (node) => { this.release(node); },
+      surface: () => this.options.surface?.current ?? null,
+      countVertices: (vertices) => { this.shapeVertices += vertices; },
+      warnOnce: this.warnOnce,
+      tickSeconds: this.tickSeconds,
+    });
     this.shells = new ShellSet<VisualEffect, EffectNode, EffectShell>({
       acquire: (key, source, view, record) => {
         const node = this.acquire(record);
@@ -278,11 +254,7 @@ export class EffectsSubsystem implements RenderSubsystem {
     this.ctx = ctx;
     // Общий с подсистемами террейна и моделей источник поверхности; init идемпотентен.
     this.options.surface?.init(ctx);
-    this.geometry ??= own(
-      'geometry',
-      'effects',
-      new THREE.SphereGeometry(1, SPHERE_SEGMENTS, SPHERE_RINGS),
-    );
+    this.pool.init();
     ctx.scene.add(this.group);
   }
 
@@ -294,12 +266,8 @@ export class EffectsSubsystem implements RenderSubsystem {
    */
   dispose(): void {
     this.shells.clear();
-    for (const flash of this.flashes) this.release(flash.node);
-    this.flashes = [];
-    for (const node of this.pool) node.material.dispose();
-    this.pool.length = 0;
-    this.geometry?.dispose();
-    this.geometry = null;
+    this.flashes.dropAll();
+    this.pool.dispose();
     this.group.removeFromParent();
   }
 
@@ -310,13 +278,13 @@ export class EffectsSubsystem implements RenderSubsystem {
    */
   syncTick(view: TickView): void {
     this.view = view;
-    if (view.snapAll) this.dropFlashes();
+    if (view.snapAll) this.flashes.dropAll();
     this.syncShells(view);
     if (!view.freshEvents) return;
     for (const event of view.events) {
       const record = resolveEffectByEvent(this.manifest, event.type);
       if (record === undefined) continue;
-      this.spawnFlash(record, event.type, event.data, event.tick, view);
+      this.flashes.spawn(record, event.type, event.data, event.tick, view);
     }
   }
 
@@ -344,15 +312,21 @@ export class EffectsSubsystem implements RenderSubsystem {
   }
 
   updateFrame(dt: number, alpha: number): void {
+    // Сток кадра — один раз на вход (PERF-3).
+    const cost = costSink();
     // Мигание передержки идёт МОДУЛЕМ шага: направления у периодической
     // величины нет, а в стоящем мире часы стоят (REND-25).
     this.clockMs += Math.abs(dt) * 1000;
+    this.shapeVertices = 0;
     this.poseShells(alpha);
     // Вспышка необратима: отматывать её назад нечем, а играть вперёд в
     // стоящем мире REND-25 запрещает — вне `Running` она замирает. Терять при
     // этом нечего: вход в перемотку гасит проигрываемое (`syncTick`), а новых
     // событий вне живых тиков не бывает (REND-4).
-    this.advanceFlashes(dt > 0 ? dt : 0);
+    this.flashes.advance(dt > 0 ? dt : 0);
+    // Вершины непроцедурных фигур, переписанные этим кадром (REND-43, PERF-3):
+    // покадровая работа подсистемы, растущая с числом наземных телеграфов.
+    if (cost !== undefined) cost.effectsShapeVertices += this.shapeVertices;
   }
 
   /**
@@ -386,12 +360,12 @@ export class EffectsSubsystem implements RenderSubsystem {
 
   /** Сколько эффектов нарисовано сейчас — вход отладки и тестов. */
   get activeCount(): number {
-    return this.shells.size + this.flashes.length;
+    return this.shells.size + this.flashes.size;
   }
 
   /** Сколько мешей заведено всего (пул + живые): по нему видно, что пул работает. */
   get pooledCount(): number {
-    return this.pool.length + this.activeCount;
+    return this.pool.size;
   }
 
   /**
@@ -455,11 +429,76 @@ export class EffectsSubsystem implements RenderSubsystem {
       x += Math.cos(yaw) * offset;
       y += Math.sin(yaw) * offset;
     }
+    const scale = this.applyShellLook(shell);
+    const node = shell.instance;
+    if (node.shape !== null) {
+      // Фигура несёт МИРОВЫЕ вершины: меш стоит в начале координат группы, а
+      // место и размер живут в самих вершинах (REND-43).
+      this.drawShellShape(shell, x, y, pose.base, alpha, heightStep, surface, scale);
+      return;
+    }
     const arc = jumpArc(view.flightPhase, record.verticalOffset?.flightArc ?? 0);
     // Опорная высота берётся ПОД СУЩНОСТЬЮ, а не под вынесенной точкой: шар
     // висит перед кастером на высоте его пола, а не пола за краем плато.
-    shell.instance.mesh.position.set(x, y, pose.base + (record.height ?? 0) + arc);
-    this.applyShellLook(shell);
+    node.mesh.position.set(x, y, pose.base + (record.height ?? 0) + arc);
+  }
+
+  /**
+   * Фигура оболочки в кадре: наземная садится на поле (REND-43), луч тянется к
+   * цели доставленного стата, лента — по истории поз (REND-23, design D5, D6).
+   */
+  private drawShellShape(
+    shell: EffectShell,
+    x: number,
+    y: number,
+    base: number,
+    alpha: number,
+    heightStep: number,
+    surface: VisualSurface | null,
+    scale: number,
+  ): void {
+    const record = shell.record;
+    const node = shell.instance;
+    const shape = node.shape!;
+    node.mesh.visible = true;
+    this.shapeVertices += shape.vertices;
+    if (isGroundPrimitive(record.primitive)) {
+      const yaw = shell.view.aimYaw ?? shell.view.facingYaw;
+      drawGround(shape, record, surface, x, y, yaw, scale, base);
+      return;
+    }
+    const lift = record.height ?? 0;
+    if (record.primitive === PRIMITIVE_BEAM) {
+      const target = this.beamTarget(record, shell.view);
+      if (target === undefined) {
+        // Цели в доставленном состоянии нет — луч в этом кадре не рисуется, и
+        // невидимую сущность он не открывает (NET-12). Это не ошибка.
+        node.mesh.visible = false;
+        return;
+      }
+      poseShell(target, alpha, heightStep, surface, this.targetPose);
+      const end = this.targetPose;
+      drawBeam(shape, record, x, y, base + lift, end.x, end.y, end.base + lift);
+      return;
+    }
+    // Лента: разрыв непрерывности сбрасывает историю (REND-2, design D6).
+    const trail = node.trail!;
+    if (shell.view.snap) trail.reset();
+    trail.push(x, y, base + lift);
+    drawTrail(shape, record, trail, this.trailScratch);
+  }
+
+  /**
+   * Сущность цели луча-оболочки: доставленный стат записи называет её номером
+   * (HUD-8). Не названа, не доехала или не разрешается — цели нет.
+   */
+  private beamTarget(record: VisualEffect, source: EntityView): EntityView | undefined {
+    const name = record.targetFromStat;
+    const delivered = this.view;
+    if (name === undefined || delivered === null) return undefined;
+    const target = source.stats?.get(name);
+    if (target === undefined || !Number.isInteger(target) || target === NO_ENTITY) return undefined;
+    return delivered.entities.get(target);
   }
 
   /**
@@ -472,29 +511,54 @@ export class EffectsSubsystem implements RenderSubsystem {
    * Стата в доставленном состоянии нет — оболочка рисуется числами записи без
    * ведения: выдумывать значение рендер не вправе.
    */
-  private applyShellLook(shell: EffectShell): void {
+  private applyShellLook(shell: EffectShell): number {
     const record = shell.record;
     const node = shell.instance;
     const placement = shell.view.scale ?? 1;
     const alpha = record.alpha ?? 1;
     const phase = statPhase(record, shell.view);
     if (Number.isNaN(phase)) {
-      node.mesh.scale.setScalar(record.radius * placement);
-      node.material.opacity = alpha;
+      if (node.shape === null) node.mesh.scale.setScalar(radiusOf(record) * placement);
+      node.material.opacity = this.pulsed(record, alpha);
       this.applyColorAt(shell, false);
-      return;
+      return placement;
     }
     const range = record.radiusFromStat!;
     const from = range.from ?? 1;
-    node.mesh.scale.setScalar(record.radius * (from + (range.to - from) * phase) * placement);
+    const scale = (from + (range.to - from) * phase) * placement;
+    // Сфере множитель идёт в масштаб меша, фигуре — в её мировые вершины.
+    if (node.shape === null) node.mesh.scale.setScalar(radiusOf(record) * scale);
     const colorAt = record.colorAt;
     this.applyColorAt(shell, colorAt !== undefined && phase >= colorAt.phase);
     // Мигание — ЗА концом окна: заряд перезрел и рванёт в самом кастере.
     const blink = record.blink;
     const value = shell.view.stats?.get(range.stat) ?? 0;
     const overcharged = blink !== undefined && value >= range.max;
-    const dark = overcharged && Math.floor(this.clockMs / (blink.periodMs / 2)) % 2 === 0;
+    const dark = overcharged && this.blinkDark(blink.periodMs);
     node.material.opacity = dark ? alpha * blink.alpha : alpha;
+    return scale;
+  }
+
+  /**
+   * Тёмная половина цикла мигания по часам презентации подсистемы (REND-25).
+   * Общая точка: с окном стата это предупреждение о передержке, без окна —
+   * пульс луча и ленты, и цикл у них один и тот же.
+   */
+  private blinkDark(periodMs: number): boolean {
+    return periodMs > 0 && Math.floor(this.clockMs / (periodMs / 2)) % 2 === 0;
+  }
+
+  /**
+   * Альфа записи под пульсом: запись БЕЗ окна стата, назвавшая мигание,
+   * пульсирует всегда — так живёт луч и лента (REND-23).
+   */
+  private pulsed(record: VisualEffect, alpha: number): number {
+    const blink = record.blink;
+    // С окном стата мигание принадлежит ЕГО концу (передержка), и запись без
+    // доехавшего стата рисуется числами записи без ведения — в том числе без
+    // мигания: выдумывать передержку там, где величины нет, рендер не вправе.
+    if (blink === undefined || record.radiusFromStat !== undefined) return alpha;
+    return this.blinkDark(blink.periodMs) ? alpha * blink.alpha : alpha;
   }
 
   /**
@@ -515,122 +579,33 @@ export class EffectsSubsystem implements RenderSubsystem {
     this.shells.poseAll(alpha, heightStep, surface);
   }
 
-  // -------------------------------------------------------------- вспышки
-
-  /**
-   * Вспышка по событию (REND-23). Точка — координатные поля события, уже
-   * приведённые к float на входной границе рендера (REND-1, `eventData.ts`):
-   * делить здесь нечего. Нет координат — берётся позиция сущности события, а
-   * нет и её — играть вспышку негде, и об этом сказано один раз.
-   *
-   * Возраст СОБЫТИЯ (SHELL-4): доставка вправе привезти события нескольких
-   * тиков, и вспышка стартует уже прожившей своё расстояние до тика доставки.
-   * Отжившая к этому моменту не заводится вовсе — она уже кончилась в мире.
-   */
-  private spawnFlash(
-    record: VisualEffect,
-    type: string,
-    data: Readonly<Record<string, number>>,
-    tick: number | undefined,
-    view: TickView,
-  ): void {
-    const durationMs = record.durationMs ?? DEFAULT_FLASH_MS;
-    const ageMs = eventAgeSeconds(view, tick, this.tickSeconds) * 1000;
-    if (durationMs > 0 && ageMs >= durationMs) return;
-    const point = this.eventPoint;
-    if (!eventPointOf(type, data, view, point, this.warnOnce, 'REND-23')) return;
-    const x = point.x;
-    const y = point.y;
-    const node = this.acquire(record);
-    if (node === null) return;
-    const surface = this.options.surface?.current ?? null;
-    const base = surface === null ? 0 : surface.heightAt(x, y);
-    const flash: Flash = {
-      node,
-      record,
-      x,
-      y,
-      z: base + (record.height ?? 0),
-      ageMs,
-      durationMs,
-    };
-    flash.node.mesh.position.set(x, y, flash.z);
-    this.flashes.push(flash);
-    this.applyPhase(flash, durationMs <= 0 ? 1 : ageMs / durationMs);
-  }
-
-  /**
-   * Фаза жизни вспышек — по часам КАДРА (SHELL-7): доставки конвертов идут
-   * своим темпом, а вспышка обязана дожить свою длительность и умереть один
-   * раз. Отжившие возвращаются в пул тем же проходом.
-   */
-  private advanceFlashes(dt: number): void {
-    if (this.flashes.length === 0) return;
-    let alive = 0;
-    for (const flash of this.flashes) {
-      flash.ageMs += dt * 1000;
-      const phase = flash.durationMs <= 0 ? 1 : flash.ageMs / flash.durationMs;
-      if (phase >= 1) {
-        this.release(flash.node);
-        continue;
-      }
-      this.applyPhase(flash, phase);
-      this.flashes[alive++] = flash;
-    }
-    this.flashes.length = alive;
-  }
-
-  private dropFlashes(): void {
-    for (const flash of this.flashes) this.release(flash.node);
-    this.flashes.length = 0;
-  }
-
   // ------------------------------------------------------------- примитивы
 
   /**
-   * Меш из пула под запись: геометрия общая, материал — свой у каждого меша
-   * (цвет и альфа пер-инстансны, REND-3). null — примитив записи рендеру
-   * неизвестен: предупреждение один раз и пропуск, документ старше кода.
+   * Узел из пула под запись (`effectNodes.ts`). Мягкость кромки пишется здесь:
+   * она от позы не зависит, а зависит от записи — и переписывается вместе с ней.
    */
   private acquire(record: VisualEffect): EffectNode | null {
-    if (record.primitive !== PRIMITIVE_SPHERE) {
-      this.warnOnce(
-        `primitive:${record.primitive}`,
-        `render: примитив эффекта "${record.primitive}" рендеру неизвестен — запись пропущена (REND-23)`,
-      );
-      return null;
-    }
-    const node = this.pool.pop() ?? this.createNode();
-    node.mesh.visible = true;
-    this.group.add(node.mesh);
+    const node = this.pool.acquire(record, this.shapeContext());
+    if (node === null) return null;
     this.applyRecordLook(node, record);
     return node;
   }
 
-  private createNode(): EffectNode {
-    const geometry = this.geometry;
-    if (geometry === null) throw new Error('EffectsSubsystem: init() не вызван (REND-8)');
-    const material = own(
-      'material',
-      'effects',
-      new THREE.MeshBasicMaterial({
-        transparent: true,
-        depthWrite: false,
-      }),
-    );
-    const mesh = new THREE.Mesh(geometry, material);
-    mesh.name = 'effect';
-    // Эффект — изображение, а не сущность: в picking он не участвует (REND-15),
-    // и луч сцены его не видит даже там, где ищут не по прокси.
-    // eslint-disable-next-line @typescript-eslint/no-empty-function -- пустой raycast и есть «луч меня не видит»
-    mesh.raycast = () => {};
-    return { mesh, material };
+  private release(node: EffectNode): void {
+    this.pool.release(node);
   }
 
-  private release(node: EffectNode): void {
-    node.mesh.removeFromParent();
-    node.mesh.visible = false;
-    this.pool.push(node);
+  /** Что подсистема знает о поле в момент взятия узла — вход дробления фигуры. */
+  private shapeContext(): ShapeContext {
+    const surface = this.options.surface?.current ?? null;
+    const grid = this.options.surface?.terrain;
+    return {
+      surface,
+      // Приём `tileSize` — точка входной границы рендера (REND-1, TERR-2).
+      tile: grid === undefined ? 0 : grid.tileSize / FIXED_ONE,
+      tessellation: this.ctx?.config.curvatureTessellation ?? 1,
+    };
   }
 
   /** Правленая запись на живой оболочке: цвет порога снимается, числа — заново. */
@@ -642,8 +617,11 @@ export class EffectsSubsystem implements RenderSubsystem {
   /** Значения записи, не зависящие от фазы: цвет и стартовые радиус с альфой. */
   private applyRecordLook(node: EffectNode, record: VisualEffect): void {
     node.material.color.set(record.color);
-    node.mesh.scale.setScalar(record.radius);
     node.material.opacity = record.alpha ?? 1;
+    if (node.shape === null) node.mesh.scale.setScalar(radiusOf(record));
+    // Фигура несёт мировые вершины: масштаб меша остаётся единичным, а размер
+    // живёт в самих вершинах (REND-43). Мягкость кромки — тоже величина записи.
+    else applyShapeEdge(node.shape, record);
     if (record.curve !== undefined && record.curve !== CURVE_LINEAR && record.curve !== CURVE_EASE_OUT) {
       this.warnOnce(
         `curve:${record.curve}`,
@@ -652,11 +630,4 @@ export class EffectsSubsystem implements RenderSubsystem {
     }
   }
 
-  /** Радиус и альфа по фазе жизни: `radius → radiusTo`, `alpha → alphaTo`. */
-  private applyPhase(flash: Flash, phase: number): void {
-    const record = flash.record;
-    const curved = curveOf(record.curve, phase);
-    flash.node.mesh.scale.setScalar(lerpParam(record.radius, record.radiusTo, curved));
-    flash.node.material.opacity = lerpParam(record.alpha ?? 1, record.alphaTo, curved);
-  }
 }

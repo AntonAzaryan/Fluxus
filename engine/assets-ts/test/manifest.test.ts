@@ -681,6 +681,71 @@ describe('validateManifest: секция транзиентных эффекто
     expectErrors({ entities: {}, effects: [] }, /effects: ожидался объект/);
   });
 
+  it('числа формы непроцедурных примитивов — закрытый состав (REND-43)', () => {
+    // Перечня примитивов у валидации нет и здесь: она проверяет ЧИСЛА формы и
+    // состав ключей, а имя примитива разбирает рендер (REND-23).
+    const ok = validateManifest({
+      entities: {},
+      effects: {
+        byKind: {
+          Zone: {
+            primitive: 'ring',
+            color: '#6fd3ff',
+            radius: 3,
+            innerRadius: 2.5,
+            edgeSoftness: 0.4,
+            lift: 0.03,
+            height: 0,
+          },
+          Cone: { primitive: 'sector', color: '#fff', radius: 4, halfAngleDeg: 45 },
+          Lane: { primitive: 'line', color: '#fff', radius: 0, length: 6, width: 1.2 },
+          // Нерадиальный примитив радиуса не несёт вовсе — его признак ширина.
+          Link: { primitive: 'beam', color: '#fff', width: 0.4, targetFromStat: 'link' },
+          Trail: { primitive: 'ribbon', color: '#fff', width: 0.5, trailSamples: 12 },
+        },
+      },
+    });
+    expect(ok.ok).toBe(true);
+    if (!ok.ok) return;
+    expect(resolveEffectByKind(ok.manifest, 'Zone')!.innerRadius).toBe(2.5);
+    expect(resolveEffectByKind(ok.manifest, 'Link')!.targetFromStat).toBe('link');
+
+    const at = (over: Record<string, unknown>): Record<string, unknown> => ({
+      entities: {},
+      effects: { byKind: { X: { primitive: 'ring', color: '#fff', radius: 2, ...over } } },
+    });
+    expectErrors(at({ innerRadius: -1 }), /effects\.byKind\.X\.innerRadius: ожидалось число >= 0/);
+    expectErrors(at({ halfAngleDeg: 200 }), /effects\.byKind\.X\.halfAngleDeg: ожидалось число в \[0\.\.180\]/);
+    expectErrors(at({ edgeSoftness: 2 }), /effects\.byKind\.X\.edgeSoftness: ожидалось число в \[0\.\.1\]/);
+    expectErrors(at({ width: -1 }), /effects\.byKind\.X\.width: ожидалось число >= 0/);
+    expectErrors(at({ trailSamples: 1 }), /effects\.byKind\.X\.trailSamples: ожидалось целое число выборок >= 2/);
+    expectErrors(at({ targetFromStat: '' }), /effects\.byKind\.X\.targetFromStat: ожидалось имя доставленного стата/);
+    expectErrors(at({ lift: 'высоко' }), /effects\.byKind\.X\.lift: ожидалось конечное число/);
+    // Радиуса нет и ширины нет — запись не описывает ни радиальный примитив, ни
+    // нерадиальный: находка адресная, а не молчание.
+    expectErrors(
+      { entities: {}, effects: { byKind: { X: { primitive: 'ring', color: '#fff' } } } },
+      /effects\.byKind\.X\.radius: обязательное поле/,
+    );
+  });
+
+  it('мигание без окна стата законно: это пульс луча, а не передержка (REND-23)', () => {
+    const result = validateManifest({
+      entities: {},
+      effects: {
+        byKind: {
+          Link: {
+            primitive: 'beam',
+            color: '#fff',
+            width: 0.4,
+            blink: { periodMs: 200, alpha: 0.5 },
+          },
+        },
+      },
+    });
+    expect(result.ok).toBe(true);
+  });
+
   it('ведение статом — закрытый состав с адресными находками (REND-23)', () => {
     // Шар заряда каста живёт записью, а не модулем игровой сборки: окно
     // доставленного стата, вынос вперёд, порог цвета и мигание передержки.

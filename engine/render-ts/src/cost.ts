@@ -454,6 +454,20 @@ export interface RenderCostCounters {
    */
   particlesSystemsStepped: number;
 
+  // ------------------------ транзиентные эффекты: работа кадра (REND-23, REND-43)
+
+  /**
+   * Вершины НЕПРОЦЕДУРНЫХ фигур подсистемы эффектов, переписанные в этом кадре:
+   * наземные телеграфы (REND-43), лучи и ленты (REND-23). Именно вершины, а не
+   * фигуры: у наземной фигуры их число задано её размером и дроблением поля
+   * (REND-9), и телеграф во всю арену стоит кадру иного, чем кольцо под героем.
+   *
+   * Сфера сюда не входит: у неё разделяемая геометрия и постоянный трансформ —
+   * работа кадра на неё не растёт ни с размером, ни с рельефом (REND-3), и
+   * подсистема по-прежнему объявляет её стоимость константной (QUAL-3).
+   */
+  effectsShapeVertices: number;
+
   // ------------------------------------------- освещение: работа кадра (REND-8)
 
   /**
@@ -661,6 +675,7 @@ export const COST_COUNTER_STAGES: Readonly<Record<keyof RenderCostCounters, Cost
     particlesShellsPosed: 'frame',
     particlesShotsStepped: 'frame',
     particlesSystemsStepped: 'frame',
+    effectsShapeVertices: 'frame',
     lightingStaticCasters: 'frame',
     lightingDynamicCasters: 'frame',
     lightingBlobDecals: 'frame',
@@ -727,6 +742,7 @@ export function createCostCounters(): RenderCostCounters {
     particlesShellsPosed: 0,
     particlesShotsStepped: 0,
     particlesSystemsStepped: 0,
+    effectsShapeVertices: 0,
     lightingStaticCasters: 0,
     lightingDynamicCasters: 0,
     lightingBlobDecals: 0,

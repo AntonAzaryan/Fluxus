@@ -97,6 +97,7 @@ import {
   RESPAWN_EVENT,
   STATE_COMPONENTS,
   STATS,
+  TICK_SECONDS,
 } from './sim.js';
 import { createStealthTint, type StealthTint } from './stealthTint.js';
 import { attachBenchProbe, benchRequested, type BenchProbe, type BenchProbeHost } from './benchProbe.js';
@@ -1574,6 +1575,13 @@ async function main(): Promise<void> {
       const effects = new EffectsSubsystem(manifest, {
         surface,
         stateComponents: STATE_COMPONENTS,
+        // Шаг СИМУЛЯЦИОННОГО тика (REND-23, SHELL-4): им подсистема считает
+        // возраст события, приехавшего в пачке нескольких тиков. Именно
+        // симуляционный, а не `hello.tickSeconds`: последний — знаменатель
+        // альфы, то есть каденс ДОСТАВОК (у сетевой сборки это 1/snapshotRate,
+        // `netClient.ts`), а `RenderEvent.tick` — номер тика МИРА. Разница в
+        // `tickRate / snapshotRate` раз растянула бы вспышки втрое.
+        tickSeconds: TICK_SECONDS,
       });
       remote!.register(effects);
       // Частицы (REND-24) — после моделей: сокет эмиттера снимается с позы узла
@@ -1586,6 +1594,8 @@ async function main(): Promise<void> {
         surface,
         stateComponents: STATE_COMPONENTS,
         sockets: models,
+        // Тот же шаг мира, что у эффектов, и по той же причине (REND-24).
+        tickSeconds: TICK_SECONDS,
       });
       remote!.register(particles);
       // Превью каста (REND-28) — после частиц и до тумана: контур шага лежит

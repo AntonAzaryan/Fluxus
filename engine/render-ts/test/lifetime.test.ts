@@ -510,6 +510,52 @@ function subEffectDoc(): ParticleEffectDocument {
   return JSON.parse(readFileSync(path, 'utf8')) as ParticleEffectDocument;
 }
 
+describe('снос подсистемы эффектов отдаёт сетки наземных фигур (REND-43 → REND-31)', () => {
+  it('своя геометрия и свой материал каждого узла освобождаются ровно один раз', () => {
+    // У наземной фигуры, луча и ленты геометрия СВОЯ: вершины переписываются
+    // каждый кадр, разделять их с другими узлами нечем (REND-43). Значит и
+    // отдавать их обязан снос — иначе живое число PERF-9 не сойдётся с нулём.
+    const assets = makeAssets();
+    const scene = new THREE.Scene();
+    const ctx: RenderContext = {
+      scene,
+      assets: assets.service,
+      config: { heightStep: 1 },
+    };
+    const manifest: VisualManifest = {
+      entities: {},
+      effects: {
+        byKind: {
+          Zone: { primitive: 'disc', color: '#fff', radius: 2, edgeSoftness: 0.2 },
+          Ball: { primitive: 'sphere', color: '#fff', radius: 1 },
+        },
+      },
+    };
+    const subsystem = new EffectsSubsystem(manifest, { warn: () => {} });
+    subsystem.init(ctx);
+    subsystem.syncTick(
+      makeTickView([makeEntityView(HERO, { kind: 'Zone' }), makeEntityView(2, { kind: 'Ball' })]),
+    );
+    subsystem.updateFrame(1 / 60, 1);
+
+    const zone = subsystem.effectFor(HERO)!.object as THREE.Mesh;
+    const ball = subsystem.effectFor(2)!.object as THREE.Mesh;
+    // Сетка фигуры и разделяемая сфера — разные объекты по построению.
+    expect(zone.geometry).not.toBe(ball.geometry);
+    const spies = [
+      vi.spyOn(zone.geometry, 'dispose'),
+      vi.spyOn(ball.geometry, 'dispose'),
+      vi.spyOn(zone.material as THREE.Material, 'dispose'),
+      vi.spyOn(ball.material as THREE.Material, 'dispose'),
+    ];
+
+    subsystem.dispose();
+
+    for (const spy of spies) expect(spy).toHaveBeenCalledTimes(1);
+    expect(scene.children).toHaveLength(0);
+  });
+});
+
 describe('снос подсистемы частиц отдаёт разобранный граф (REND-24 → REND-31)', () => {
   it('ресурсы документа освобождаются, и каждый ровно один раз', () => {
     const assets = makeAssets();

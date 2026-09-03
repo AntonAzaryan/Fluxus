@@ -19,7 +19,12 @@
 import * as THREE from 'three';
 import type { RenderCostCounters } from '../cost.js';
 import { stepInstance, type EffectInstance } from '../particleEffects.js';
-import { dropSocketCache, resolveSocketNode, type SocketSource } from '../particleSockets.js';
+import {
+  dropSocketCache,
+  resolveSocketPose,
+  type SocketPose,
+  type SocketSource,
+} from '../particleSockets.js';
 import type { VisualSurface } from '../visualSurface.js';
 import type { WarnOnce } from '../warnOnce.js';
 import { ShellSet, poseShell, type Shell, type ShellPose } from './shellSupport.js';
@@ -119,10 +124,11 @@ export function publicShell(
     : { effect: shell.record.effect, object: shell.instance.object };
 }
 
-// Переиспользуемые между кадрами объекты — аллокаций на эмиттер на кадр нет.
-const SCRATCH_POSITION = new THREE.Vector3();
-const SCRATCH_QUATERNION = new THREE.Quaternion();
-const SCRATCH_SCALE = new THREE.Vector3();
+/** Переиспользуемая поза сокета — аллокаций на эмиттер на кадр нет. */
+const SCRATCH_SOCKET: SocketPose = {
+  position: new THREE.Vector3(),
+  quaternion: new THREE.Quaternion(),
+};
 
 /**
  * Поза эмиттера-оболочки в кадре. Привязанный к сокету следует МИРОВОЙ позе
@@ -146,15 +152,9 @@ function poseEmitterShell(
   // (REND-11, REND-18), и от сокета он не зависит: нормализация модели по
   // высоте — свойство инстанса, а размер эффекта назначает автор эффекта.
   object.scale.setScalar((shell.record.scale ?? 1) * (shell.view.scale ?? 1));
-  const node = resolveSocketNode(shell, shell.view.id, sockets, warnOnce);
-  if (node !== null) {
-    // Мировая поза узла инстанса — каждый кадр: инстанс уже поставлен
-    // подсистемой моделей, а мировая матрица узла обновляется по цепочке
-    // родителей, не обходом сцены.
-    node.updateWorldMatrix(true, false);
-    node.matrixWorld.decompose(SCRATCH_POSITION, SCRATCH_QUATERNION, SCRATCH_SCALE);
-    object.position.copy(SCRATCH_POSITION);
-    object.quaternion.copy(SCRATCH_QUATERNION);
+  if (resolveSocketPose(shell, shell.view.id, sockets, warnOnce, SCRATCH_SOCKET)) {
+    object.position.copy(SCRATCH_SOCKET.position);
+    object.quaternion.copy(SCRATCH_SOCKET.quaternion);
     return;
   }
   // Горизонталь — интерполяция двух доставленных тиков (REND-2), высота —
