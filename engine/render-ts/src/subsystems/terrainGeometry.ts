@@ -13,12 +13,10 @@
  * стоят здесь, в точке приёма, и должны там оставаться — глубже по коду
  * рендера fixed-point значений и их арифметики нет.
  */
-import * as THREE from 'three';
 import { FIXED_ONE, type TerrainGrid } from '@fluxus/core';
 import { DEFAULT_CURVATURE_TESSELLATION } from '../types.js';
 import { costSink } from '../cost.js';
 import { cornerLevels, type SurfaceNormal, type VisualSurface } from '../visualSurface.js';
-import { own } from '../footprint.js';
 
 export interface TerrainGeometryData {
   readonly positions: Float32Array;
@@ -532,21 +530,4 @@ export function sampleWallSide(
 ): number {
   if (surface === undefined) return grid.levels[cell]! * heightStep;
   return surface.terrainFormHeightInCell(cell % grid.width, Math.floor(cell / grid.width), wx, wy);
-}
-
-/**
- * BufferGeometry из числовых данных. Готовые нормали ставятся атрибутом (пол:
- * они посчитаны из поля высот, REND-9); если их нет — считаются по
- * треугольникам, и стенка обрыва остаётся плоской.
- */
-export function toBufferGeometry(data: TerrainGeometryData): THREE.BufferGeometry {
-  const geometry = own('geometry', 'terrain', new THREE.BufferGeometry());
-  geometry.setAttribute('position', new THREE.BufferAttribute(data.positions, 3));
-  geometry.setIndex(new THREE.BufferAttribute(data.indices, 1));
-  if (data.normals?.length === data.positions.length) {
-    geometry.setAttribute('normal', new THREE.BufferAttribute(data.normals, 3));
-  } else {
-    geometry.computeVertexNormals();
-  }
-  return geometry;
 }

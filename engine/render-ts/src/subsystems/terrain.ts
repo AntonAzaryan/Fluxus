@@ -54,10 +54,11 @@ import { costSink, type RenderCostCounters } from '../cost.js';
 import {
   buildFloorGeometry,
   buildWallGeometry,
-  toBufferGeometry,
   type CellRect,
   type TerrainGeometryData,
 } from './terrainGeometry.js';
+import { toBufferGeometry } from './terrainMesh.js';
+import { TerrainCoverLoader, type TerrainCover, type TerrainUvMapping } from './terrainCover.js';
 import { buildSkirtGeometry } from './terrainSkirt.js';
 import type { DebugSource } from '../debug/contract.js';
 import { terrainSurfaceDebugSource } from '../debug/terrainSource.js';
@@ -99,6 +100,19 @@ export interface TerrainOptions {
    * флагов теней меши чанков не получают вовсе.
    */
   readonly shadows?: ShadowCasterSink;
+  /**
+   * Покрытие площадок пола: тайлящаяся текстура по ID дерева контента (ASSET-2),
+   * спроецированная сверху с периодом в мировых единицах. Нет — пол одноцветен
+   * (`floorColor`). ВРЕМЕННЫЙ параметр рендера в ряду `floorColor`: одно
+   * покрытие на весь пол, пока текстурирование не приехало раскраской клеток
+   * из Blender (стаб `terrain-texturing`); недоступный ассет — предупреждение
+   * и заливка цветом, не отказ кадра (по образцу детали воды, REND-35).
+   */
+  readonly floorCover?: TerrainCover;
+  /** Покрытие стенок обрывов и юбки: проекция вдоль стенки и по высоте. */
+  readonly wallCover?: TerrainCover;
+  /** Канал предупреждений; не задан — `console.warn` (недоступное покрытие). */
+  readonly warn?: (message: string) => void;
 }
 
 const DEFAULT_CHUNK_SIZE = 16;
@@ -111,7 +125,6 @@ const DEFAULT_SKIRT_COLOR = 0x453a2f;
  * камера не заглядывала под нижнюю кромку на аренах масштаба демо (48×48).
  */
 const DEFAULT_SKIRT_DEPTH = 8;
-
 /**
  * Радиус влияния правки клетки в клетках. Уровень клетки виден на расстоянии
  * одной клетки — угол усредняется по смежным (REND-9), а угол рампы тянется к
@@ -160,6 +173,8 @@ export class TerrainSubsystem implements RenderSubsystem {
   private floorMaterial: THREE.MeshStandardMaterial | null = null;
   private wallMaterial: THREE.MeshStandardMaterial | null = null;
   private skirtMaterial: THREE.MeshStandardMaterial | null = null;
+  /** Покрытия пола и стенок: текстуры, подписки и раскладки UV чанков. */
+  private readonly covers: TerrainCoverLoader;
 
   constructor(grid: TerrainGrid, options: TerrainOptions = {}) {
     this.grid = grid;
@@ -170,6 +185,8 @@ export class TerrainSubsystem implements RenderSubsystem {
     this.skirtDepth = options.skirtDepth ?? DEFAULT_SKIRT_DEPTH;
     this.surfaceSource = options.surface;
     this.shadows = options.shadows;
+    const covers = { floor: options.floorCover, wall: options.wallCover };
+    this.covers = new TerrainCoverLoader(covers, options.warn);
     this.floor = new Uint8Array(grid.floor);
     this.chunksX = Math.ceil(grid.width / this.chunkSize);
     this.chunksY = Math.ceil(grid.height / this.chunkSize);
@@ -210,6 +227,11 @@ export class TerrainSubsystem implements RenderSubsystem {
         side: THREE.DoubleSide,
       }),
     );
+    this.covers.attach(ctx, {
+      floor: this.floorMaterial,
+      wall: this.wallMaterial,
+      skirt: this.skirtMaterial,
+    });
 
     // Поверхность меняется асинхронной догрузкой карты кривизны (REND-9) и
     // правкой документа (ED-10, ED-11); в первом случае меняется вся, во втором
@@ -250,7 +272,9 @@ export class TerrainSubsystem implements RenderSubsystem {
     this.wallMaterial = null;
     this.skirtMaterial?.dispose();
     this.skirtMaterial = null;
+    this.covers.dispose();
   }
+
 
   /**
    * Сетка редактируемого документа целиком (REND-14, ED-10, ED-15): уровни,
@@ -532,12 +556,16 @@ export class TerrainSubsystem implements RenderSubsystem {
       ),
       this.floorMaterial,
       `terrain:chunk:${cx},${cy}`,
+      true,
+      this.covers.floorMapping,
     );
     this.wallMeshes[chunk] = this.swapMesh(
       this.wallMeshes[chunk] ?? null,
       buildWallGeometry(this.grid, this.heightStep, this.surface, rect, this.tessellation),
       this.wallMaterial,
       `terrain:walls:${cx},${cy}`,
+      true,
+      this.covers.wallMapping,
     );
     if (this.skirtMaterial === null) return;
     this.skirtMeshes[chunk] = this.swapMesh(
@@ -559,6 +587,7 @@ export class TerrainSubsystem implements RenderSubsystem {
       // Юбка — не кастер: ниже неё нет приёмника тени, а карта теней платила
       // бы за её геометрию каждую перестройку (REND-7).
       false,
+      this.covers.wallMapping,
     );
   }
 
@@ -568,7 +597,8 @@ export class TerrainSubsystem implements RenderSubsystem {
     data: TerrainGeometryData,
     material: THREE.Material,
     name: string,
-    caster = true,
+    caster: boolean,
+    mapping: TerrainUvMapping | undefined,
   ): THREE.Mesh | null {
     const ctx = this.ctx;
     if (ctx === null) return previous;
@@ -580,7 +610,7 @@ export class TerrainSubsystem implements RenderSubsystem {
       previous.geometry.dispose();
     }
     if (data.indices.length === 0) return null;
-    const mesh = new THREE.Mesh(toBufferGeometry(data), material);
+    const mesh = new THREE.Mesh(toBufferGeometry(data, mapping), material);
     mesh.name = name;
     ctx.scene.add(mesh);
     // Террейн — статический кастер и приёмник теней при любом режиме, кроме

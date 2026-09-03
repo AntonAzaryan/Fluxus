@@ -36,6 +36,8 @@
     "agent:pair": "node game/server-agent-ts/bin/agent.mjs pair",
     "host:bundle": "node game/server-agent-ts/bin/bundle.mjs",
     "manager": "npm run dev -w @fluxus/server-manager",
+    "textures:water": "node scripts/gen-water-textures.mjs",
+    "textures:ground": "node scripts/gen-ground-textures.mjs",
     "bots:sync": "node game/demo-ts/bin/bots-sync.mjs",
     "bench:demo": "npm run bench:demo -w @fluxus/demo --",
     "lint": "eslint . --max-warnings 0",

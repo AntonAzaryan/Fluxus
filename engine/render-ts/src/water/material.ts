@@ -9,11 +9,22 @@
  * у потребителя — `npm run demo` и `npm run bench:demo`.
  *
  * Ядро считает, в таком порядке: глубину из глубинной текстуры тела (design
- * D1), глубинный цвет с управляемым бэндингом, полосу пены у берега, возмущение
- * нормали (деталь плюс рябь REND-36), Fresnel-tint и блик направленного света
- * сцены. На выходе — ЛИНЕЙНЫЙ цвет (REND-34): сведение яркости, bloom, LUT и
- * маска тумана идут после, штатной цепочкой кадра, и собственного
- * полноэкранного прохода вода не добавляет.
+ * D1), возмущение нормали (деталь плюс рябь REND-36), глубинный цвет с
+ * управляемым бэндингом, каустику на мелководье, полосу пены у берега,
+ * Fresnel-tint и блик направленного света сцены. На выходе — ЛИНЕЙНЫЙ цвет
+ * (REND-34): сведение яркости, bloom, LUT и маска тумана идут после, штатной
+ * цепочкой кадра, и собственного полноэкранного прохода вода не добавляет.
+ *
+ * ## Что делает воду водой под изометрией
+ *
+ * Камера смотрит под ~50° и не двигается, поэтому зеркальное отражение неба
+ * и блик солнца сами по себе почти не работают: Френель у такого угла —
+ * единицы процентов, а зеркальная конфигурация с солнцем случается лишь в
+ * одной фазе суточного цикла. Живость поверхности даёт другое: диффузное
+ * освещение ВОЗМУЩЁННОЙ нормали (рябь читается светотенью), каустика на
+ * мелководье, рваная и набегающая пена у берега и дно, просвечивающее через
+ * мелкую воду. Блик остаётся — нормированный Blinn-Phong под Френелем Шлика,
+ * то есть искры там и только там, где наклон ряби ловит солнце.
  *
  * ## Деталь — `#define`, а не второй материал
  *
@@ -33,9 +44,11 @@
  */
 import * as THREE from 'three';
 import {
+  WATER_CAUSTICS,
   WATER_FRESNEL_F0,
   WATER_FRESNEL_STRENGTH,
   WATER_MAX_OPACITY,
+  WATER_MIN_OPACITY,
   WATER_SHININESS,
   WATER_SKY_TINT,
   WATER_SPECULAR,
@@ -57,7 +70,11 @@ void main() {
 }
 `;
 
-/** Программный источник детали: две-три октавы value-шума, ноль ассетов. */
+/**
+ * Программный источник детали: две-три октавы value-шума, ноль ассетов.
+ * Наклон — градиент шума; слои с шагом масштаба 1.7 и встречным сносом,
+ * веса убывают с частотой, чтобы мелкий слой оживлял, а не зашумлял.
+ */
 const DETAIL_PROCEDURAL = /* glsl */ `
 float waterHash(vec2 p) {
   return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453123);
@@ -78,24 +95,39 @@ vec3 sampleWaterDetail(vec2 world, float t) {
   vec2 uv = world / uDetailScale;
   vec2 slope = vec2(0.0);
   float foam = 0.0;
-  float amp = 1.0;
   float total = 0.0;
   const float e = 0.08;
   for (int i = 0; i < WATER_DETAIL_LAYERS; i++) {
     float octave = 1.0 + float(i) * 1.7;
     float dir = mod(float(i), 2.0) < 0.5 ? 1.0 : -0.6;
+    float weight = inversesqrt(octave);
     vec2 p = uv * octave + vec2(0.7, -0.4) * (t * uDetailSpeed * dir / uDetailScale);
     float h = waterNoise(p);
-    slope += amp * octave * vec2(waterNoise(p + vec2(e, 0.0)) - h, waterNoise(p + vec2(0.0, e)) - h) / e;
-    foam += amp * h;
-    total += amp;
-    amp *= 0.5;
+    slope += weight * vec2(waterNoise(p + vec2(e, 0.0)) - h, waterNoise(p + vec2(0.0, e)) - h) / e;
+    foam += weight * h;
+    total += weight;
   }
   return vec3(slope / max(total, 1e-4), foam / max(total, 1e-4));
 }
+
+float sampleWaterCaustic(vec2 world, float t) {
+  vec2 uv = world / (uDetailScale * 0.6);
+  vec2 drift = vec2(0.7, -0.4) * (t * uDetailSpeed / uDetailScale);
+  float a = 1.0 - abs(2.0 * waterNoise(uv + drift) - 1.0);
+  float b = 1.0 - abs(2.0 * waterNoise(uv * 1.31 + vec2(0.37, 0.61) - drift * 0.8) - 1.0);
+  float c = min(a, b);
+  return c * c * c;
+}
 `;
 
-/** Текстурный источник детали: tileable-нормали, шум пены и flow map (ASSET-2). */
+/**
+ * Текстурный источник детали: tileable-нормали, шум пены и flow map (ASSET-2).
+ * Карта нормалей читается в стандартной раскладке (`rg` — xy нормали), поэтому
+ * наклон — её xy со знаком минус. Нечётные слои берутся с переставленными
+ * осями: одна и та же карта в трёх масштабах иначе выдаёт себя решёткой.
+ * Шум пены — по каналам: R — сеть каустики, G — пятна рваной кромки, B —
+ * зерно пузырьков внутри пены (`scripts/gen-water-textures.mjs`).
+ */
 const DETAIL_TEXTURED = /* glsl */ `
 uniform sampler2D tDetailNormal;
 uniform sampler2D tDetailFoam;
@@ -103,24 +135,39 @@ uniform sampler2D tDetailFoam;
 uniform sampler2D tDetailFlow;
 #endif
 
+vec2 waterFlow(vec2 uv) {
+#ifdef WATER_FLOW_MAP
+  return texture2D(tDetailFlow, uv * 0.25).xy * 2.0 - 1.0;
+#else
+  return vec2(0.7, -0.4);
+#endif
+}
+
 vec3 sampleWaterDetail(vec2 world, float t) {
   vec2 uv = world / uDetailScale;
-#ifdef WATER_FLOW_MAP
-  vec2 flow = texture2D(tDetailFlow, uv * 0.25).xy * 2.0 - 1.0;
-#else
-  vec2 flow = vec2(0.7, -0.4);
-#endif
+  vec2 flow = waterFlow(uv);
   vec2 slope = vec2(0.0);
   float total = 0.0;
   for (int i = 0; i < WATER_DETAIL_LAYERS; i++) {
     float octave = 1.0 + float(i) * 1.7;
-    float dir = mod(float(i), 2.0) < 0.5 ? 1.0 : -0.6;
-    vec2 p = uv * octave + flow * (t * uDetailSpeed * dir / uDetailScale);
-    slope += (texture2D(tDetailNormal, p).xy * 2.0 - 1.0) * octave;
-    total += 1.0;
+    bool odd = mod(float(i), 2.0) >= 0.5;
+    float dir = odd ? -0.6 : 1.0;
+    float weight = inversesqrt(octave);
+    vec2 p = (odd ? uv.yx : uv) * octave + flow * (t * uDetailSpeed * dir / uDetailScale);
+    vec2 n = texture2D(tDetailNormal, p).xy * 2.0 - 1.0;
+    slope -= (odd ? n.yx : n) * weight;
+    total += weight;
   }
-  float foam = texture2D(tDetailFoam, uv * 0.5 + flow * (t * uDetailSpeed * 0.3 / uDetailScale)).r;
-  return vec3(slope / max(total, 1e-4), foam);
+  vec3 grain = texture2D(tDetailFoam, uv * 1.5 + flow * (t * uDetailSpeed * 0.3 / uDetailScale)).rgb;
+  return vec3(slope / max(total, 1e-4), grain.g * (0.8 + 0.2 * grain.b));
+}
+
+float sampleWaterCaustic(vec2 world, float t) {
+  vec2 uv = world / (uDetailScale * 0.6);
+  vec2 drift = waterFlow(uv) * (t * uDetailSpeed / uDetailScale);
+  float a = texture2D(tDetailFoam, uv + drift).r;
+  float b = texture2D(tDetailFoam, uv.yx * 1.31 + vec2(0.37, 0.61) - drift * 0.8).r;
+  return min(a, b) * 1.6 + (a + b) * 0.1;
 }
 `;
 
@@ -170,6 +217,8 @@ uniform float uTime;
 uniform float uDetailScale;
 uniform float uDetailSpeed;
 uniform float uDetailStrength;
+uniform float uCaustics;
+uniform float uMinOpacity;
 uniform float uMaxOpacity;
 uniform float uFresnelF0;
 uniform float uFresnelStrength;
@@ -215,34 +264,62 @@ void main() {
   vec3 albedo = mix(uShallowColor, uDeepColor, waterBanded(t));
 
   // Полоса пены живёт ГЛУБИНОЙ, а не границей клеток: она следует берегу.
-  float band = 1.0 - smoothstep(0.0, max(uFoamWidth, 1e-4), depth);
-  float ragged = clamp(band * (0.55 + 0.9 * detail.z), 0.0, 1.0);
-  float foam = mix(ragged, smoothstep(0.45, 0.55, ragged), uFoamHardness);
+  // Глубина для пены зашумлена — кромка рваная, а не контур поля; сама линия
+  // воды (discard выше) остаётся точной линией пересечения уреза полем.
+  float w = max(uFoamWidth, 1e-4);
+  float noise = detail.z;
+  float ragged = depth + (noise - 0.5) * w * 0.8;
+  float shore = 1.0 - smoothstep(0.0, w, ragged);
+  float breath = 0.5 + 0.5 * sin(uTime * 1.3 + noise * 6.2832);
+  float crest = smoothstep(0.25, 0.7, shore * (0.6 + 0.5 * noise + 0.2 * breath));
+  // Набегающие гребни: тонкие линии, идущие к берегу по глубине.
+  float lap = (1.0 - smoothstep(w, 2.5 * w, ragged)) *
+    smoothstep(0.85, 0.97, 0.5 + 0.5 * sin(ragged / w * 3.0 - uTime * 2.0 + noise * 0.8));
+  float mixed = clamp(crest + 0.5 * lap, 0.0, 1.0);
+  float foam = mix(mixed, smoothstep(0.4, 0.6, mixed), uFoamHardness);
+
+  // Каустика — сеть света на мелководье; с глубиной гаснет вместе с дном, а
+  // под пеной её нет: пена — на поверхности, сеть — на дне под ней.
+  float caustic = sampleWaterCaustic(world, uTime);
+  float shallow = 1.0 - t;
+  albedo *= 1.0 + caustic * uCaustics * shallow * shallow * (1.0 - foam);
   albedo = mix(albedo, uFoamColor, foam);
 
   vec3 viewNormal = normalize((viewMatrix * vec4(normal, 0.0)).xyz);
   vec3 viewDir = normalize(vViewPosition);
+  float facing = clamp(dot(viewNormal, viewDir), 0.0, 1.0);
+  float fresnel = uFresnelF0 + (1.0 - uFresnelF0) * pow(1.0 - facing, 5.0);
+
   vec3 irradiance = ambientLightColor;
   vec3 specular = vec3(0.0);
 #if NUM_DIR_LIGHTS > 0
   for (int i = 0; i < NUM_DIR_LIGHTS; i++) {
     vec3 toLight = directionalLights[i].direction;
-    irradiance += directionalLights[i].color * max(dot(viewNormal, toLight), 0.0);
+    float lit = max(dot(viewNormal, toLight), 0.0);
+    irradiance += directionalLights[i].color * lit;
     vec3 halfDir = normalize(toLight + viewDir);
-    specular += directionalLights[i].color * pow(max(dot(viewNormal, halfDir), 0.0), uShininess);
+    float ndh = max(dot(viewNormal, halfDir), 0.0);
+    float vdh = max(dot(viewDir, halfDir), 0.0);
+    // Шлик по полувектору: у воды в упор отражается ~2%, и блик обязан это
+    // помнить — иначе солнце заливает всю плоскость одним пятном.
+    float schlick = uFresnelF0 + (1.0 - uFresnelF0) * pow(1.0 - vdh, 5.0);
+    // Нормированный Blinn-Phong, (n + 8) / 8π: острее лепесток — ярче искра.
+    float lobe = pow(ndh, uShininess) * (uShininess + 8.0) / 25.1327;
+    specular += directionalLights[i].color * lobe * schlick * min(lit * 4.0, 1.0);
   }
 #endif
 
-  float facing = clamp(dot(normal, normalize(cameraPosition - vWorld)), 0.0, 1.0);
-  float fresnel = uFresnelF0 + (1.0 - uFresnelF0) * pow(1.0 - facing, 5.0);
   float tint = clamp(fresnel * uFresnelStrength, 0.0, 1.0);
   vec3 color = mix(albedo * irradiance, uSkyTint * irradiance, tint);
-  color += specular * uSpecular;
+  specular *= uSpecular;
+  color += specular;
 
-  // Мелкая вода прозрачнее глубокой — дно обязано читаться; пена и блик
-  // скользящего угла, наоборот, укрывают его.
-  float alpha = mix(0.35, uMaxOpacity, t);
-  alpha = mix(max(alpha, foam), 1.0, tint);
+  // Мелкая вода прозрачнее глубокой — дно обязано читаться; пена, искра и
+  // блик скользящего угла, наоборот, укрывают его.
+  float alpha = mix(uMinOpacity, uMaxOpacity, t);
+  alpha = max(alpha, foam);
+  alpha = max(alpha, clamp(dot(specular, vec3(0.3333)), 0.0, 1.0));
+  alpha = mix(alpha, 1.0, tint);
   gl_FragColor = vec4(color, clamp(alpha, 0.0, 1.0));
 }
 `;
@@ -318,6 +395,8 @@ export function createWaterMaterial(input: WaterMaterialInput): THREE.ShaderMate
       uDetailScale: { value: 1 },
       uDetailSpeed: { value: 0 },
       uDetailStrength: { value: 0 },
+      uCaustics: { value: WATER_CAUSTICS },
+      uMinOpacity: { value: WATER_MIN_OPACITY },
       uMaxOpacity: { value: WATER_MAX_OPACITY },
       uFresnelF0: { value: WATER_FRESNEL_F0 },
       uFresnelStrength: { value: WATER_FRESNEL_STRENGTH },
