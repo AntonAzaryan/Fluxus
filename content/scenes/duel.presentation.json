@@ -19,6 +19,7 @@
       "intensity": 1.7,
       "direction": { "x": 8, "y": -12, "z": 18 }
     },
+    "environment": { "background": { "color": "#1a1a2e" } },
     "shadows": { "mode": "full", "mapSize": 2048 },
     "cycle": {
       "transitionSeconds": 15,

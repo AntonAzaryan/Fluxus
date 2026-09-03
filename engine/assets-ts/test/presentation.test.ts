@@ -406,6 +406,76 @@ describe('PRES-2: секция lighting — закрытая конфигура�
 
 });
 
+describe('REND-29: подсекция environment — фон кадра и освещение окружением', () => {
+  it('плоский тон и градиент — валидны оба, и секция выходит наружу как есть', () => {
+    for (const background of [{ color: '#1a1a2e' }, { top: '#101830', bottom: '#402010' }]) {
+      const lighting = { environment: { background, intensity: 0.4 } };
+      const result = validatePresentationScene({ decorations: [], lighting });
+      expect(result.ok, JSON.stringify(background)).toBe(true);
+      if (!result.ok) return;
+      expect(result.scene.lighting).toEqual(lighting);
+    }
+    // Подсекция целиком необязательна, и её поля — тоже.
+    expect(validatePresentationScene({ lighting: { environment: {} } }).ok).toBe(true);
+  });
+
+  it('плоский тон и градиент в одной подсекции — отказ, а не выбор за автора', () => {
+    expectErrors(
+      { lighting: { environment: { background: { color: '#101010', top: '#202020' } } } },
+      /lighting\.environment\.background: фон либо плоский \(color\), либо градиент/,
+    );
+  });
+
+  it('половина градиента — та же неоднозначность с другой стороны', () => {
+    expectErrors(
+      { lighting: { environment: { background: { top: '#101830' } } } },
+      /lighting\.environment\.background: у вертикального градиента фона обязательны ОБА края — написан только top/,
+    );
+    expectErrors(
+      { lighting: { environment: { background: { bottom: '#101830' } } } },
+      /написан только bottom/,
+    );
+  });
+
+  it('состав подсекции закрыт, а тона — та же форма `#rrggbb`, что везде', () => {
+    expectErrors(
+      { lighting: { environment: { asset: 'sky.png' } } },
+      /lighting\.environment\.asset: неизвестное поле/,
+    );
+    expectErrors(
+      { lighting: { environment: { background: { sky: '#101830' } } } },
+      /lighting\.environment\.background\.sky: неизвестное поле/,
+    );
+    expectErrors(
+      { lighting: { environment: { background: { color: 'тёмно-синий' } } } },
+      /lighting\.environment\.background\.color: ожидался цвет формы "#rrggbb"/,
+    );
+    expectErrors(
+      { lighting: { environment: { intensity: -1 } } },
+      /lighting\.environment\.intensity: ожидалось неотрицательное число/,
+    );
+  });
+
+  it('окружения в фазе цикла нет и быть не может (REND-32)', () => {
+    // Карта окружения строится один раз на текстуру и кэшируется по объекту:
+    // водить её по кругу значило бы пересобирать её каждым кадром перехода.
+    expectErrors(
+      {
+        lighting: {
+          environment: { background: { color: '#101010' } },
+          cycle: {
+            phases: [
+              { seconds: 10, environment: { background: { color: '#202020' } } },
+              { seconds: 10 },
+            ],
+          },
+        },
+      },
+      /lighting\.cycle\.phases\[0\]\.environment: окружения в фазе цикла нет и быть не может/,
+    );
+  });
+});
+
 describe('REND-32: подсекция цикла времени суток — фазы в данных', () => {
   /** Секция с циклом: две фазы, дыры второй закрывает статическая часть. */
   const cycled = {

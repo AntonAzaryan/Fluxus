@@ -162,6 +162,11 @@ export class PostprocessSubsystem implements RenderSubsystem, ScenePostSource {
     return this.chain.passes;
   }
 
+  /** Проходы кадра в порядке исполнения (REND-34, L-12): порядок читается именами. */
+  get passNames(): readonly string[] {
+    return this.chain.passNames;
+  }
+
   /**
    * Есть ли у цепочки работа (REND-34): false — кадр как до появления
    * capability. Спрашивается у ЦЕПОЧКИ, а не у конфигурации: объявленная, но

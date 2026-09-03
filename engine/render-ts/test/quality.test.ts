@@ -35,9 +35,11 @@ import {
   OverlaySubsystem,
   ParticlesSubsystem,
   PresentationStage,
+  FRAME_RENDER_SCALE,
   QualityController,
   TerrainSubsystem,
   VisualSurfaceSource,
+  resolveRenderScale,
   validateQualityPreset,
   type QualityDeclaration,
   type QualityKnob,
@@ -45,6 +47,7 @@ import {
   type RenderContext,
   type RenderSubsystem,
 } from '../src/index.js';
+import { FRAME_KNOB_OWNER, frameScaleKnob } from '../src/quality.js';
 import {
   buildFogMask,
   flatGrid,
@@ -960,5 +963,107 @@ describe('константная стоимость объявляется яв�
       max: undefined,
       values: ['batched', 'detailed'],
     });
+  });
+});
+
+// ------------------------------------- 2.4: ручки, объявляемые хостом (QUAL-5)
+
+describe('QUAL-5: ручку объявляет и хост кадра, а не только подсистема', () => {
+  /** Хост-стенд: журнал доставленных ему значений — то же, что у `Probe`. */
+  function hostProbe(): { declaration: QualityDeclaration; applied: QualityValues[] } {
+    return {
+      declaration: { subsystem: FRAME_KNOB_OWNER, knobs: [frameScaleKnob()] },
+      applied: [],
+    };
+  }
+
+  it('ручка хоста живёт в реестре наравне с ручками подсистем', () => {
+    // Реестр — реестр стоимостных ОСЕЙ с владельцами, а не список подсистем:
+    // масштаб буфера отрисовки не принадлежит ни одной из них, потому что кадр
+    // приходит подсистемам уже нужного размера.
+    const stage = makeStage();
+    const controller = new QualityController(stage);
+    const host = hostProbe();
+    controller.declareHost(host.declaration, (values) => {
+      host.applied.push(new Map(values));
+    });
+
+    expect(controller.knobs.map((knob) => knob.name)).toContain(FRAME_RENDER_SCALE);
+    // Значения приходят СРАЗУ объявлением — тем же правилом, что у подсистемы.
+    expect(host.applied).toHaveLength(1);
+    expect(host.applied[0]!.get(FRAME_RENDER_SCALE)).toBe(Number.POSITIVE_INFINITY);
+    // И действующее значение видно отчётом (QUAL-1).
+    expect(controller.effective().get(FRAME_RENDER_SCALE)).toBe(Number.POSITIVE_INFINITY);
+  });
+
+  it('смена пресета в рантайме доезжает до хоста, как до подсистемы', () => {
+    const stage = makeStage();
+    const controller = new QualityController(stage);
+    const host = hostProbe();
+    controller.declareHost(host.declaration, (values) => {
+      host.applied.push(new Map(values));
+    });
+
+    controller.apply({ [FRAME_RENDER_SCALE]: 0.5 });
+
+    expect(host.applied).toHaveLength(2);
+    expect(host.applied[1]!.get(FRAME_RENDER_SCALE)).toBe(0.5);
+  });
+
+  it('документ пресета проверяется против ручки хоста адресно', () => {
+    const stage = makeStage();
+    const controller = new QualityController(stage);
+    controller.declareHost({ subsystem: FRAME_KNOB_OWNER, knobs: [frameScaleKnob()] }, () => {});
+
+    // Значение вне объявленных границ — отказ с именем ручки и тем, чего ждали.
+    expect(() => {
+      controller.apply({ [FRAME_RENDER_SCALE]: 0 });
+    }).toThrow(/frame\.renderScale/u);
+    // …и состав документа знает её имя: неизвестной она не считается.
+    expect(controller.validate().ok).toBe(true);
+    expect(validateQualityPreset({ [FRAME_RENDER_SCALE]: 0.75 }, controller.knobs).ok).toBe(true);
+  });
+
+  it('имя ручки хоста занято подсистемой — декларация отвергается', () => {
+    // Двух владельцев у стоимостной оси не бывает, и вход в реестр у хоста тот
+    // же самый: правило одно на оба входа, а не переписано для второго.
+    const stage = makeStage();
+    const controller = new QualityController(stage);
+    controller.declareHost({ subsystem: FRAME_KNOB_OWNER, knobs: [frameScaleKnob()] }, () => {});
+
+    expect(() => {
+      controller.declareHost({ subsystem: FRAME_KNOB_OWNER, knobs: [frameScaleKnob()] }, () => {});
+    }).toThrow(/уже объявлена/u);
+  });
+
+  it('ручка хоста — в неймспейсе своего владельца, как и всякая другая', () => {
+    const stage = makeStage();
+    const controller = new QualityController(stage);
+
+    expect(() => {
+      controller.declareHost(
+        {
+          subsystem: FRAME_KNOB_OWNER,
+          knobs: [{ name: 'renderScale', cost: 'ось стенда', semantics: 'ceiling', default: 1 }],
+        },
+        () => {},
+      );
+    }).toThrow(/неймспейс/u);
+  });
+
+  it('масштаб буфера — min(плотность устройства, потолок сборки, ручка)', () => {
+    // Потолок сборки остаётся у сборки: это её граница разумного (буфер,
+    // кратный плотности дорогого экрана), а не политика уровня качества.
+    const noCeiling = new Map<string, unknown>([[FRAME_RENDER_SCALE, Number.POSITIVE_INFINITY]]);
+    expect(resolveRenderScale(noCeiling as QualityValues, 3, 2)).toBe(2);
+    expect(resolveRenderScale(noCeiling as QualityValues, 1, 2)).toBe(1);
+
+    const half = new Map<string, unknown>([[FRAME_RENDER_SCALE, 0.5]]);
+    expect(resolveRenderScale(half as QualityValues, 3, 2)).toBe(0.5);
+    // Потолок ВЫШЕ плотности устройства картинку не улучшает (семантика `min`).
+    const four = new Map<string, unknown>([[FRAME_RENDER_SCALE, 4]]);
+    expect(resolveRenderScale(four as QualityValues, 1.5, 2)).toBe(1.5);
+    // Ручки в значениях нет вовсе — прежнее поведение сборки.
+    expect(resolveRenderScale(new Map() as QualityValues, 3, 2)).toBe(2);
   });
 });

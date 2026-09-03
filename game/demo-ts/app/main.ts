@@ -123,6 +123,7 @@ import { DEMO_STAND_SERVICE, demoStandHost } from './desktopStand.js';
 import { demoMode, demoServerUrl, localModeUrl, serverModeUrl, type DemoMode } from './mode.js';
 import {
   QUALITY_PRESET_NAMES,
+  DEMO_PIXEL_RATIO_CAP,
   createDemoQuality,
   createQualitySelection,
   qualityPresetName,
@@ -153,7 +154,10 @@ const app: HTMLElement = appElement;
 
 const renderer3 = new THREE.WebGLRenderer({ antialias: true });
 renderer3.setSize(window.innerWidth, window.innerHeight);
-renderer3.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+// Плотность буфера отрисовки до сборки сцены — потолок сборки (QUAL-5): реестр
+// ручек собирается вместе с подсистемами, и до него объявлять ручке нечего.
+// Дальше её ведёт `frame.renderScale`, и пресет вправе опустить масштаб ниже.
+renderer3.setPixelRatio(Math.min(window.devicePixelRatio, DEMO_PIXEL_RATIO_CAP));
 // Теневые карты включает ВЛАДЕЛЕЦ рендерера (design D8): рендерер принадлежит
 // сборке, а не подсистемам. Включённый shadowMap без кастеров бесплатен —
 // фактическую стоимость задаёт действующий режим теней секции `lighting`.
@@ -167,7 +171,11 @@ renderer3.shadowMap.type = THREE.PCFShadowMap;
 app.appendChild(renderer3.domElement);
 
 const scene3 = new THREE.Scene();
-scene3.background = new THREE.Color(0x1a1a2e);
+// Фона здесь нет намеренно: его ставит подсистема освещения из подсекции
+// `environment` секции `lighting` парного документа (PRES-2, REND-29). Тон,
+// который до сих пор стоял этой строкой, переехал в документ дуэли — иначе
+// кадр вьюпорта редактора и кадр игрока расходились бы ПО ПОСТРОЕНИЮ (ED-1),
+// а не по недосмотру: вьюпорт фона не ставил вовсе.
 
 const camera = new THREE.PerspectiveCamera(45, window.innerWidth / window.innerHeight, 0.1, 300);
 camera.up.set(0, 0, 1);
@@ -1776,7 +1784,18 @@ async function main(): Promise<void> {
       // на обе воркер-стороны оболочки (SHELL-8) — подсистемы регистрируются
       // здесь независимо от того, кто наполняет тик, — поэтому и переключатель
       // работает в любом режиме страницы, и второй проводки для него нет.
-      qualitySelection.attach((preset) => createDemoQuality(remote!.stage, { preset }));
+      qualitySelection.attach((preset) =>
+        createDemoQuality(remote!.stage, {
+          preset,
+          // Масштаб буфера отрисовки — ручка ХОСТА (QUAL-5): подсистемам кадр
+          // приходит уже нужного размера, и объявить эту ось может только тот,
+          // кто зовёт `setPixelRatio`.
+          devicePixels: window.devicePixelRatio,
+          renderScale: (scale) => {
+            renderer3.setPixelRatio(scale);
+          },
+        }),
+      );
       // Действующий пресет может отличаться от выбранного: отвергнутый документ
       // уводит демо на запасной, и переключатель показывает то, что применено.
       if (qualitySelect !== null) qualitySelect.value = qualitySelection.pending;

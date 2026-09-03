@@ -442,3 +442,82 @@ export function createResolveMaterial(config: {
   // а тесты пакета headless, — поэтому версия закреплена тестом.
   return fullscreenMaterial(RESOLVE_FRAGMENT, uniforms, defines);
 }
+
+/**
+ * Программа ЭКРАННОГО сглаживания (REND-34, FXAA): один полноэкранный проход по
+ * готовому кадру — запасной путь для устройств, где мультисэмплированной цели
+ * нет вовсе (ручка `postprocess.antialias` на нуле).
+ *
+ * Алгоритм классический (Timothy Lottes, FXAA 1.0): найти локальный контраст по
+ * яркости пяти отсчётов, оценить направление ребра разностями углов, пройти
+ * вдоль него двумя парами выборок и взять более узкую из двух оценок, если
+ * широкая вылезла за локальный диапазон яркости. Ни истории кадров, ни векторов
+ * движения ему не нужно — потому он и годится там, где мультисэмплинга нет.
+ *
+ * ЯРКОСТЬ берётся приближением к воспринимаемой (`sqrt` от линейной): цепочка
+ * работает в линейном пространстве, а ступени человек видит по кривой дисплея, и
+ * поиск рёбер по линейной яркости пропускал бы их в тенях — там, где кадр темнее,
+ * линейные разности малы, а видимые велики.
+ */
+export const FXAA_FRAGMENT = `
+precision highp float;
+varying vec2 vUv;
+uniform sampler2D tSource;
+uniform vec2 uTexel;
+
+// Ниже этой доли яркости ребро не ищется вовсе: шум сведения — не ребро.
+const float FXAA_REDUCE_MIN = 1.0 / 128.0;
+const float FXAA_REDUCE_MUL = 1.0 / 8.0;
+// Дальше этого числа текселей размах вдоль ребра не уходит: длинное почти
+// горизонтальное ребро иначе размазывало бы кадр на полэкрана.
+const float FXAA_SPAN_MAX = 8.0;
+
+float fxaaLuma(vec3 rgb) {
+  return sqrt(dot(rgb, vec3(0.299, 0.587, 0.114)));
+}
+
+void main() {
+  vec3 rgbNW = texture2D(tSource, vUv + vec2(-1.0, -1.0) * uTexel).rgb;
+  vec3 rgbNE = texture2D(tSource, vUv + vec2(1.0, -1.0) * uTexel).rgb;
+  vec3 rgbSW = texture2D(tSource, vUv + vec2(-1.0, 1.0) * uTexel).rgb;
+  vec3 rgbSE = texture2D(tSource, vUv + vec2(1.0, 1.0) * uTexel).rgb;
+  vec3 rgbM = texture2D(tSource, vUv).rgb;
+
+  float lumaNW = fxaaLuma(rgbNW);
+  float lumaNE = fxaaLuma(rgbNE);
+  float lumaSW = fxaaLuma(rgbSW);
+  float lumaSE = fxaaLuma(rgbSE);
+  float lumaM = fxaaLuma(rgbM);
+  float lumaMin = min(lumaM, min(min(lumaNW, lumaNE), min(lumaSW, lumaSE)));
+  float lumaMax = max(lumaM, max(max(lumaNW, lumaNE), max(lumaSW, lumaSE)));
+
+  vec2 dir = vec2(
+    -((lumaNW + lumaNE) - (lumaSW + lumaSE)),
+    ((lumaNW + lumaSW) - (lumaNE + lumaSE))
+  );
+  float reduce = max((lumaNW + lumaNE + lumaSW + lumaSE) * 0.25 * FXAA_REDUCE_MUL, FXAA_REDUCE_MIN);
+  float rcpDirMin = 1.0 / (min(abs(dir.x), abs(dir.y)) + reduce);
+  dir = min(vec2(FXAA_SPAN_MAX), max(vec2(-FXAA_SPAN_MAX), dir * rcpDirMin)) * uTexel;
+
+  vec3 rgbA = 0.5 * (
+    texture2D(tSource, vUv + dir * (1.0 / 3.0 - 0.5)).rgb +
+    texture2D(tSource, vUv + dir * (2.0 / 3.0 - 0.5)).rgb
+  );
+  vec3 rgbB = rgbA * 0.5 + 0.25 * (
+    texture2D(tSource, vUv + dir * -0.5).rgb +
+    texture2D(tSource, vUv + dir * 0.5).rgb
+  );
+  // Широкая оценка вылезла за локальный диапазон яркости — ребро было не тем,
+  // чем показалось, и берётся узкая: так FXAA не съедает тонкие детали.
+  float lumaB = fxaaLuma(rgbB);
+  gl_FragColor = vec4(lumaB < lumaMin || lumaB > lumaMax ? rgbA : rgbB, 1.0);
+}
+`;
+
+/** Материал экранного сглаживания: источник — готовый кадр, шаг — его тексель. */
+export function createFxaaMaterial(): THREE.ShaderMaterial {
+  return fullscreenMaterial(FXAA_FRAGMENT, {
+    tSource: { value: null },
+    uTexel: { value: new THREE.Vector2() },
+  });
+}

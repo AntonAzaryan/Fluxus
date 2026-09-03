@@ -2616,3 +2616,131 @@ describe('Отладочный источник освещения (render-debug
     expect(layer.vertexCount).toBe(0);
   });
 });
+
+// ------------------------------- окружение сцены: фон и IBL (REND-29, §4.1.8)
+
+describe('REND-29: окружение сцены — данные секции, а не код потребителя', () => {
+  it('плоский тон — цвет сцены, и ни одной текстуры за него не платится', () => {
+    // Ровно тот тон, который до сих пор стоял строкой в коде демо: переезд в
+    // документ не меняет ни кадра, ни цены.
+    const rig = makeRig({ environment: { background: { color: '#1a1a2e' } } });
+
+    const background = rig.scene.background as THREE.Color;
+    expect(background.getHexString()).toBe('1a1a2e');
+    expect(rig.lighting.environmentTexture).toBeNull();
+    // Освещения окружением автор не просил — карты нет, и программы материалов
+    // сцены от подсекции не пересобираются.
+    expect(rig.scene.environment).toBeNull();
+  });
+
+  it('сцена без подсекции — ни фона, ни окружения: кадр прежний', () => {
+    const rig = makeRig({ ambient: { intensity: 0.4 } });
+
+    expect(rig.scene.background).toBeNull();
+    expect(rig.scene.environment).toBeNull();
+    expect(rig.lighting.environmentTexture).toBeNull();
+  });
+
+  it('градиент — равнопромежуточная текстура, повёрнутая под мир Z-вверх', () => {
+    // Карта у three ориентирована на +Y, а верх мира арены — +Z: без поворота
+    // градиент шёл бы вдоль горизонта, а не от земли к небу.
+    const rig = makeRig({
+      environment: { background: { top: '#101830', bottom: '#402010' } },
+    });
+
+    const texture = rig.lighting.environmentTexture!;
+    expect(rig.scene.background).toBe(texture);
+    expect(texture.mapping).toBe(THREE.EquirectangularReflectionMapping);
+    expect(texture.colorSpace).toBe(THREE.SRGBColorSpace);
+    expect(rig.scene.backgroundRotation.x).toBeCloseTo(Math.PI / 2, 6);
+    // Нулевой ряд — НИЗ карты: там тон «земли», в последнем ряду — тон «неба».
+    const data = texture.image.data as Uint8Array;
+    const last = (texture.image.height - 1) * texture.image.width * 4;
+    expect([data[0], data[1], data[2]]).toEqual([0x40, 0x20, 0x10]);
+    expect([data[last], data[last + 1], data[last + 2]]).toEqual([0x10, 0x18, 0x30]);
+  });
+
+  it('интенсивность зажигает окружение той же текстурой, что и фон', () => {
+    const rig = makeRig({
+      environment: { background: { top: '#101830', bottom: '#402010' }, intensity: 0.4 },
+    });
+
+    const texture = rig.lighting.environmentTexture!;
+    expect(rig.scene.environment).toBe(texture);
+    expect(rig.scene.environmentIntensity).toBe(0.4);
+    expect(rig.scene.environmentRotation.x).toBeCloseTo(Math.PI / 2, 6);
+    // Фон и окружение — ОДНА текстура: производные объекты (кубическая карта
+    // фона и PMREM окружения) строит из неё сам three.
+    expect(rig.scene.background).toBe(texture);
+  });
+
+  it('фона нет — окружение строится из тонов полусферной подсветки (REND-29)', () => {
+    const rig = makeRig({
+      hemisphere: { skyColor: '#b4c8ff', groundColor: '#6b5a3a' },
+      environment: { intensity: 0.5 },
+    });
+
+    const texture = rig.lighting.environmentTexture!;
+    expect(rig.scene.environment).toBe(texture);
+    // Фон при этом не появляется: автор его не писал, и выдумывать тон
+    // подсистема не вправе.
+    expect(rig.scene.background).toBeNull();
+    const data = texture.image.data as Uint8Array;
+    expect([data[0], data[1], data[2]]).toEqual([0x6b, 0x5a, 0x3a]);
+  });
+
+  it('интенсивности без тонов не из чего строить — окружения нет', () => {
+    // Ни фона, ни полусферной подсветки: строить карту не из чего, и объявлять
+    // её «нулевой» значило бы пересобрать программы всех материалов ради ничего.
+    const rig = makeRig({ environment: { intensity: 0.8 } });
+
+    expect(rig.scene.environment).toBeNull();
+    expect(rig.lighting.environmentTexture).toBeNull();
+    expect(rig.scene.environmentIntensity).toBe(1);
+  });
+
+  it('правка подсекции в рантайме меняет фон не позже следующего кадра (ED-15)', () => {
+    const rig = makeRig({ environment: { background: { color: '#1a1a2e' } } });
+
+    rig.lighting.applyConfig({ environment: { background: { color: '#204020' } } });
+    expect((rig.scene.background as THREE.Color).getHexString()).toBe('204020');
+
+    // Снятая подсекция снимает и фон: сцена возвращается к тому кадру, каким
+    // рисовалась до неё.
+    rig.lighting.applyConfig({ ambient: { intensity: 0.5 } });
+    expect(rig.scene.background).toBeNull();
+    expect(rig.lighting.environmentTexture).toBeNull();
+  });
+
+  it('снос отдаёт текстуру градиента и снимает фон со сцены (REND-31)', () => {
+    const rig = makeRig({
+      environment: { background: { top: '#101830', bottom: '#402010' }, intensity: 0.4 },
+    });
+    const texture = rig.lighting.environmentTexture!;
+    let disposed = false;
+    texture.addEventListener('dispose', () => {
+      disposed = true;
+    });
+
+    rig.lighting.dispose();
+
+    expect(disposed).toBe(true);
+    expect(rig.scene.background).toBeNull();
+    expect(rig.scene.environment).toBeNull();
+    expect(rig.lighting.environmentTexture).toBeNull();
+  });
+
+  it('те же тона текстуру не пересобирают: правка соседнего поля — не событие', () => {
+    const rig = makeRig({
+      environment: { background: { top: '#101830', bottom: '#402010' }, intensity: 0.4 },
+    });
+    const texture = rig.lighting.environmentTexture;
+
+    rig.lighting.applyConfig({
+      ambient: { intensity: 0.42 },
+      environment: { background: { top: '#101830', bottom: '#402010' }, intensity: 0.4 },
+    });
+
+    expect(rig.lighting.environmentTexture).toBe(texture);
+  });
+});

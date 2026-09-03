@@ -191,6 +191,8 @@ export {
 export type {
   PresentationAmbientLight,
   PresentationDirectionalLight,
+  PresentationEnvironment,
+  PresentationEnvironmentBackground,
   PresentationHemisphereLight,
   PresentationLightDirection,
   PresentationLighting,

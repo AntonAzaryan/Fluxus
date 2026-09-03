@@ -38,9 +38,9 @@
       },
       "postprocess": {
         "geometry": 1,
-        "material": 1,
+        "material": 2,
         "texture": 1,
-        "renderTarget": 2
+        "renderTarget": 3
       },
       "terrain": {
         "geometry": 3,

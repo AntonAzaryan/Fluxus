@@ -1,4 +1,5 @@
 {
+  "frame.renderScale": 0.75,
   "fog.maskResolution": 4,
   "terrain.curvatureTessellation": 2,
   "models.lodThresholdScale": 2,

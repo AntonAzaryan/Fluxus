@@ -15,6 +15,7 @@
  * тем же кадром, что рисовалась.
  */
 import type {
+  PresentationEnvironment,
   PresentationHemisphereLight,
   PresentationLighting,
   PresentationLightingPhase,
@@ -36,6 +37,25 @@ export interface HemisphereConfig {
   readonly skyColor: string;
   /** Тон «земли», `#rrggbb`. */
   readonly groundColor: string;
+  readonly intensity: number;
+}
+
+/**
+ * Окружение сцены с закрытыми дырами (REND-29): чем покрашен фон и насколько
+ * ярко окружение освещает PBR-материалы.
+ *
+ * `top`/`bottom` — ОДИН тон, повторённый дважды, если автор написал плоский фон:
+ * так «плоский» и «градиент» перестают быть двумя случаями для всех, кроме
+ * того единственного места, где решается, нужна ли текстура вовсе.
+ */
+export interface EnvironmentConfig {
+  /** Верх фона, `#rrggbb`; `undefined` — фона автор не написал. */
+  readonly backgroundTop: string | undefined;
+  /** Низ фона, `#rrggbb`; равен верху у плоского фона. */
+  readonly backgroundBottom: string | undefined;
+  /** Плоский ли фон: тон один, и текстуры он не требует. */
+  readonly backgroundFlat: boolean;
+  /** Интенсивность освещения окружением; 0 — окружения нет. */
   readonly intensity: number;
 }
 
@@ -103,6 +123,13 @@ export interface LightingRenderConfig {
   readonly hemisphere: HemisphereConfig | undefined;
   /** Контровой источник (REND-29) — под тем же правилом «нет — значит нет». */
   readonly rim: RimConfig | undefined;
+  /**
+   * Окружение (REND-29) — либо его значения, либо `undefined`: подсекции нет,
+   * и тогда у сцены нет ни фона, ни освещения окружением. Умолчания тона
+   * подсистема не выдумывает — фон, которого автор не написал, не бывает
+   * «фоном по умолчанию», он бывает отсутствующим.
+   */
+  readonly environment: EnvironmentConfig | undefined;
   /** Режим теней: `none` < `blob` < `hybrid` < `full` по стоимости (REND-30). */
   readonly shadowMode: ShadowMode;
   /** Сторона карты теней в текселях (REND-30). */
@@ -127,6 +154,7 @@ export const DEFAULT_LIGHTING_CONFIG: LightingRenderConfig = Object.freeze({
   // (REND-29): их отсутствие — и есть сегодняшний кадр байт-в-байт.
   hemisphere: undefined,
   rim: undefined,
+  environment: undefined,
   shadowMode: 'none',
   // Половина типовой карты теней: у арены на десять игроков ортографический
   // фрустум обтягивает всю сетку, и 2048 текселей на её сторону — та плотность,
@@ -306,6 +334,28 @@ function resolveRim(
   };
 }
 
+/**
+ * Подсекция окружения в значения кадра (REND-29); нет подсекции — `undefined`.
+ *
+ * Плоский фон приводится к паре одинаковых тонов с поднятым флагом: дальше по
+ * коду «фон» — это всегда пара, и лишь одно место спрашивает, плоский ли он.
+ */
+function resolveEnvironment(
+  section: PresentationEnvironment | undefined,
+): EnvironmentConfig | undefined {
+  if (section === undefined) return undefined;
+  const background = section.background;
+  const flat = background?.color;
+  const top = flat ?? background?.top;
+  const bottom = flat ?? background?.bottom;
+  return {
+    backgroundTop: top,
+    backgroundBottom: bottom,
+    backgroundFlat: flat !== undefined,
+    intensity: section.intensity ?? 0,
+  };
+}
+
 /** Секция документа поверх умолчаний: отсутствующее поле — умолчание (PRES-2). */
 export function resolveLightingConfig(section?: PresentationLighting): LightingRenderConfig {
   const ambient = section?.ambient;
@@ -323,6 +373,7 @@ export function resolveLightingConfig(section?: PresentationLighting): LightingR
     directionZ: direction?.z ?? fallback.directionZ,
     hemisphere: resolveHemisphere(section?.hemisphere, DEFAULT_HEMISPHERE),
     rim: resolveRim(section?.rim, DEFAULT_RIM),
+    environment: resolveEnvironment(section?.environment),
     shadowMode: shadows?.mode ?? fallback.shadowMode,
     shadowMapSize: shadows?.mapSize ?? fallback.shadowMapSize,
   };

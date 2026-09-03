@@ -43,15 +43,12 @@ import {
   type PostprocessRenderConfig,
 } from './config.js';
 import {
-  BLOOM_LEVELS,
-  bloomUpsampleScale,
-  createDownsampleMaterial,
+  createFxaaMaterial,
   createLutTexture,
   createResolveMaterial,
-  createThresholdMaterial,
-  createUpsampleMaterial,
   toneMappingFunction,
 } from './passes.js';
+import { BloomPyramid } from './bloom.js';
 import { own } from '../footprint.js';
 
 /**
@@ -92,14 +89,31 @@ const LDR_BLOOM_THRESHOLD_MAX = 0.8;
 export const DEFAULT_ANTIALIAS_SAMPLES = 4;
 
 /**
- * Ярус пирамиды: цель, материал даунсемпла В НЕЁ (у вершины его нет — её пишет
- * порог) и материал апсемпла ИЗ СЛЕДУЮЩЕГО, более мелкого яруса (у самого
- * мелкого его нет — из него только читают).
+ * Один проход цепочки (L-12 аудита 2026-09-03): единица, из которых складывается
+ * кадр, вместо фиксированной последовательности внутри одной функции. Новый
+ * полноэкранный проход — сглаживание, виньетка, контур — добавляется ЗАПИСЬЮ
+ * СПИСКА, а не правкой программы сведения и не ещё одной веткой в `render`.
+ *
+ * `input` — текстура, которую проход читает как кадр; `output` — куда лечь его
+ * результату, `null` — на канвас. Цель прохода выбирает ЦЕПОЧКА: только она
+ * знает, какой проход последний и чем кадр заканчивается — целью захвата для
+ * маскирующего прохода тумана (FOW-7) или экраном.
  */
-interface BloomLevel {
-  readonly target: THREE.WebGLRenderTarget;
-  readonly material: THREE.ShaderMaterial | null;
-  readonly upsample: THREE.ShaderMaterial | null;
+export interface PostPass {
+  /** Имя прохода: вход тестов и диагностики — порядок кадра читается по именам. */
+  readonly name: string;
+  /**
+   * Двигает ли проход КАДР. `true` — его выход читает следующий проход
+   * (сведение, экранное сглаживание); `false` — проход готовит СВОИ цели, а
+   * кадр остаётся прежним: так работает пирамида bloom — её результат читает не
+   * следующий проход, а сведение, из своей униформы.
+   */
+  readonly advances: boolean;
+  render(
+    renderer: PostRendererLike,
+    input: THREE.Texture,
+    output: THREE.WebGLRenderTarget | null,
+  ): void;
 }
 
 export interface PostprocessChainOptions {
@@ -110,22 +124,26 @@ export interface PostprocessChainOptions {
 export class PostprocessChain {
   private config: PostprocessRenderConfig = DEFAULT_POSTPROCESS_CONFIG;
   /**
-   * Потолок ширины вершины пирамиды от пресета качества (QUAL-1, design D5);
-   * бесконечность — потолка нет, действует производное от кадра разрешение.
-   */
-  private ceiling = Number.POSITIVE_INFINITY;
-  /**
    * Сэмплов мультисэмплинга у цели сцены — значение ручки `postprocess.antialias`
    * (QUAL-1). Ноль — цель обычная, сглаживания у кадра цепочки нет.
    */
   private samples = DEFAULT_ANTIALIAS_SAMPLES;
 
   private sceneTarget: THREE.WebGLRenderTarget | null = null;
-  /** Выход сведения для маскирующего прохода (design D2); null — цепочка пишет на экран. */
+  /** Выход последнего прохода для маскирующего прохода (design D2); null — на экран. */
   private outputTarget: THREE.WebGLRenderTarget | null = null;
-  private levels: BloomLevel[] = [];
-  private thresholdMaterial: THREE.ShaderMaterial | null = null;
+  /**
+   * Промежуточная цель между двумя двигающими кадр проходами: её заводит только
+   * экранное сглаживание — сведению нужно куда-то лечь, чтобы FXAA прочитал уже
+   * готовый кадр. Одного прохода в кадре достаточно, чтобы её не было вовсе.
+   */
+  private relayTarget: THREE.WebGLRenderTarget | null = null;
+  /** Пирамида свечения (design D4) — её цели, материалы и ход живут в `bloom.ts`. */
+  private readonly pyramid = new BloomPyramid((renderer, material, target) => {
+    this.draw(renderer, material, target);
+  });
   private resolveMaterial: THREE.ShaderMaterial | null = null;
+  private fxaaMaterial: THREE.ShaderMaterial | null = null;
   /**
    * Трёхмерная таблица цвета (REND-34); `null` — подсекции `lut` нет, ассет ещё
    * грузится либо не загрузился. Строит её цепочка из разделяемых данных ассета
@@ -144,9 +162,47 @@ export class PostprocessChain {
   private readonly size = new THREE.Vector2();
   /** Тексели кадра этой отрисовки — знаменатель прохода, пишущего на канвас. */
   private frameTexels = 0;
+  /** Размер буфера отрисовки этого кадра: его читают пирамида и экранный проход. */
+  private frameWidth = 1;
+  private frameHeight = 1;
+  /** Сток стоимости этого кадра: спрашивается раз за кадр, а не раз за проход. */
+  private frameCost: RenderCostCounters | undefined;
+
+  /**
+   * Проходы кадра списком (L-12). Записи постоянны — они лишь зовут методы
+   * цепочки, — а СОСТАВ списка пересобирается СОБЫТИЕМ (правка секции, смена
+   * значений ручек, готовность таблицы цвета): кадровый путь не аллоцирует
+   * (REND-26).
+   */
+  private readonly bloomPass: PostPass = {
+    name: 'bloom',
+    advances: false,
+    render: (renderer, input) => {
+      this.renderBloom(renderer, input);
+    },
+  };
+
+  private readonly resolvePass: PostPass = {
+    name: 'resolve',
+    advances: true,
+    render: (renderer, input, output) => {
+      this.draw(renderer, this.ensureResolve(input), output);
+    },
+  };
+
+  private readonly fxaaPass: PostPass = {
+    name: 'fxaa',
+    advances: true,
+    render: (renderer, input, output) => {
+      this.draw(renderer, this.ensureFxaa(input), output);
+    },
+  };
+
+  private passList: readonly PostPass[] = [];
 
   constructor(options: PostprocessChainOptions = {}) {
     this.warnOnce = createWarnOnce(options.warn);
+    this.rebuildPasses();
   }
 
   /** Действующая конфигурация цепочки — её пушит подсистема (QUAL-1, ED-15). */
@@ -175,17 +231,21 @@ export class PostprocessChain {
     readonly scene: THREE.WebGLRenderTarget | null;
     readonly output: THREE.WebGLRenderTarget | null;
     readonly pyramid: readonly THREE.WebGLRenderTarget[];
+    readonly relay: THREE.WebGLRenderTarget | null;
     readonly resolve: THREE.ShaderMaterial | null;
     readonly threshold: THREE.ShaderMaterial | null;
+    readonly fxaa: THREE.ShaderMaterial | null;
     readonly lut: THREE.Data3DTexture | null;
     readonly hdr: boolean;
   } {
     return {
       scene: this.sceneTarget,
       output: this.outputTarget,
-      pyramid: this.levels.map((level) => level.target),
+      pyramid: this.pyramid.targets,
+      relay: this.relayTarget,
       resolve: this.resolveMaterial,
-      threshold: this.thresholdMaterial,
+      threshold: this.pyramid.threshold,
+      fxaa: this.fxaaMaterial,
       lut: this.lutTexture,
       hdr: this.hdr,
     };
@@ -200,6 +260,7 @@ export class PostprocessChain {
   apply(next: PostprocessRenderConfig): void {
     const previous = this.config;
     this.config = next;
+    this.rebuildPasses();
     if (!this.active) {
       this.release();
       return;
@@ -211,7 +272,7 @@ export class PostprocessChain {
       this.resolveMaterial?.dispose();
       this.resolveMaterial = null;
     }
-    if (!next.bloomEnabled) this.releaseBloom();
+    if (!next.bloomEnabled) this.pyramid.release();
     this.pushUniforms();
   }
 
@@ -234,15 +295,13 @@ export class PostprocessChain {
     // снятие меняют define, а старая униформа держала бы снесённую текстуру.
     this.resolveMaterial?.dispose();
     this.resolveMaterial = null;
+    this.rebuildPasses();
     if (!this.active) this.release();
   }
 
   /** Потолок ширины вершины пирамиды (QUAL-1): `min(производное, потолок)`. */
   applyResolutionCeiling(ceiling: number): void {
-    if (ceiling === this.ceiling) return;
-    this.ceiling = ceiling;
-    // Пирамида другого разрешения — другие цели; они заведутся ближайшим кадром.
-    this.releaseBloom();
+    this.pyramid.applyCeiling(ceiling);
   }
 
   /**
@@ -258,6 +317,35 @@ export class PostprocessChain {
     this.sceneTarget?.depthTexture?.dispose();
     this.sceneTarget?.dispose();
     this.sceneTarget = null;
+    // Ноль сэмплов ставит в конец списка экранное сглаживание, ненулевое —
+    // снимает его вместе с промежуточной целью (design D2).
+    this.rebuildPasses();
+    if (this.samples !== 0) this.releaseRelay();
+  }
+
+  /**
+   * Состав списка проходов (design D1) — СОБЫТИЕМ, а не кадром. Порядок один и
+   * тот же и читается прямо здесь: свечение готовит пирамиду, сведение сводит
+   * кадр, экранное сглаживание — последний проход цепочки (маска тумана
+   * остаётся финальным проходом кадра, FOW-7).
+   */
+  private rebuildPasses(): void {
+    if (!this.active) {
+      this.passList = [];
+      return;
+    }
+    const passes: PostPass[] = [];
+    if (this.config.bloomEnabled) passes.push(this.bloomPass);
+    passes.push(this.resolvePass);
+    // Сглаживание экранным проходом — только там, где мультисэмплинга цели нет
+    // вовсе: он дешёвый запасной путь, а не второе сглаживание поверх первого.
+    if (this.samples === 0) passes.push(this.fxaaPass);
+    this.passList = passes;
+  }
+
+  /** Проходы кадра в порядке исполнения — вход тестов и диагностики (REND-34). */
+  get passNames(): readonly string[] {
+    return this.passList.map((pass) => pass.name);
   }
 
   /**
@@ -272,11 +360,14 @@ export class PostprocessChain {
     capture: boolean,
   ): ScenePostFrame | null {
     const cost = costSink();
+    this.frameCost = cost;
     const size = renderer.getDrawingBufferSize(this.size);
     // Целые тексели — и целями, и счётчиками (PERF-3): дробный размер буфера
     // сделал бы число текселей прохода зависимым от устройства.
     const width = Math.max(1, Math.floor(size.x));
     const height = Math.max(1, Math.floor(size.y));
+    this.frameWidth = width;
+    this.frameHeight = height;
     this.frameTexels = width * height;
     this.checkFloatTarget(renderer);
     const target = this.ensureSceneTarget(width, height);
@@ -287,9 +378,26 @@ export class PostprocessChain {
     renderer.render(scene, camera);
     if (cost !== undefined) cost.postprocessPasses++;
 
-    if (this.config.bloomEnabled) this.renderBloom(renderer, width, height, cost);
+    // Кадр идёт СПИСКОМ проходов (design D1): вход первого — цель сцены, вход
+    // следующего — выход предыдущего, а выход последнего двигающего кадр
+    // прохода и есть конец кадра.
+    const passes = this.passList;
     const output = capture ? this.ensureOutputTarget(width, height) : null;
-    this.draw(renderer, this.ensureResolve(target), output, cost);
+    let advancing = 0;
+    for (const pass of passes) if (pass.advances) advancing++;
+    let input = target.texture;
+    let done = 0;
+    for (const pass of passes) {
+      if (!pass.advances) {
+        pass.render(renderer, input, null);
+        continue;
+      }
+      done++;
+      const last = done === advancing;
+      const into = last ? output : this.ensureRelayTarget(width, height);
+      pass.render(renderer, input, into);
+      if (into !== null) input = into.texture;
+    }
     // Цель кадра всегда возвращается на канвас: следующий проход — чужой
     // (маскирующий проход тумана), и оставлять ему свою цель нельзя.
     renderer.setRenderTarget(null);
@@ -324,49 +432,17 @@ export class PostprocessChain {
    * гауссианы на каждом ярусе именно этой цепочки и требуют, а сведение читает
    * одну текстуру — вершину.
    */
-  private renderBloom(
-    renderer: PostRendererLike,
-    width: number,
-    height: number,
-    cost: RenderCostCounters | undefined,
-  ): void {
-    const levels = this.ensurePyramid(width, height);
-    const threshold = this.ensureThreshold();
-    uniformOf(threshold, 'tScene').value = this.sceneTarget?.texture ?? null;
-    this.draw(renderer, threshold, levels[0]?.target ?? null, cost);
-    for (let index = 1; index < levels.length; index++) {
-      const level = levels[index];
-      const source = levels[index - 1];
-      if (level === undefined || source === undefined || level.material === null) continue;
-      this.drawTent(renderer, level.material, source.target, level.target, cost);
-    }
-    // Наверх: самый мелкий ярус добавляется в следующий за ним, тот — в
-    // следующий, и так до вершины. Вклад мелкого яруса — авторская ширина
-    // свечения (REND-34), одна и та же на каждой ступени.
-    const scale = bloomUpsampleScale(this.config.bloomRadius);
-    for (let index = levels.length - 2; index >= 0; index--) {
-      const level = levels[index];
-      const source = levels[index + 1];
-      if (level === undefined || source === undefined || level.upsample === null) continue;
-      (level.upsample.uniforms.uScale as { value: number }).value = scale;
-      this.drawTent(renderer, level.upsample, source.target, level.target, cost);
-    }
-  }
-
-  /** Один проход тента: источник в униформы, его тексель — в шаг выборки. */
-  private drawTent(
-    renderer: PostRendererLike,
-    material: THREE.ShaderMaterial,
-    source: THREE.WebGLRenderTarget,
-    target: THREE.WebGLRenderTarget,
-    cost: RenderCostCounters | undefined,
-  ): void {
-    uniformOf(material, 'tSource').value = source.texture;
-    (material.uniforms.uTexel as { value: THREE.Vector2 }).value.set(
-      1 / source.width,
-      1 / source.height,
+  private renderBloom(renderer: PostRendererLike, input: THREE.Texture): void {
+    this.pyramid.render(
+      renderer,
+      input,
+      { width: this.frameWidth, height: this.frameHeight },
+      {
+        threshold: this.thresholdValue,
+        radius: this.config.bloomRadius,
+        type: this.texelType,
+      },
     );
-    this.draw(renderer, material, target, cost);
   }
 
   /** Один полноэкранный проход: материал на квад, цель, счётчики (PERF-2, PERF-3). */
@@ -374,8 +450,8 @@ export class PostprocessChain {
     renderer: PostRendererLike,
     material: THREE.ShaderMaterial,
     target: THREE.WebGLRenderTarget | null,
-    cost: RenderCostCounters | undefined,
   ): void {
+    const cost = this.frameCost;
     const quad = this.ensureQuad(material);
     quad.material = material;
     renderer.setRenderTarget(target);
@@ -484,7 +560,29 @@ export class PostprocessChain {
    *   sRGB, то есть с той же точностью, что видит глаз.
    */
   private ensureOutputTarget(width: number, height: number): THREE.WebGLRenderTarget {
-    const existing = this.outputTarget;
+    const target = this.ensureFrameTarget(this.outputTarget, width, height);
+    this.outputTarget = target;
+    return target;
+  }
+
+  /**
+   * Промежуточная цель между двумя двигающими кадр проходами (design D1, D2):
+   * сведение пишет в неё, экранное сглаживание читает её как готовый кадр.
+   * Свойства те же, что у выхода, и по тем же причинам — это тот же кадр, лишь
+   * на проход раньше.
+   */
+  private ensureRelayTarget(width: number, height: number): THREE.WebGLRenderTarget {
+    const target = this.ensureFrameTarget(this.relayTarget, width, height);
+    this.relayTarget = target;
+    return target;
+  }
+
+  /** Общее тело обеих полноразмерных целей кадра: один их вид — одно место. */
+  private ensureFrameTarget(
+    existing: THREE.WebGLRenderTarget | null,
+    width: number,
+    height: number,
+  ): THREE.WebGLRenderTarget {
     if (existing !== null && existing.width === width && existing.height === height) return existing;
     existing?.dispose();
     const target = own(
@@ -496,61 +594,11 @@ export class PostprocessChain {
     // диапазон и так линейный и полный, а объявленный sRGB заставил бы GL
     // кодировать её значения без всякой на то нужды.
     if (!this.hdr) target.texture.colorSpace = THREE.SRGBColorSpace;
-    this.outputTarget = target;
     return target;
   }
 
-  /**
-   * Пирамида bloom (design D4): вершина вдвое мельче кадра и не крупнее потолка
-   * пресета (`min(производное, потолок)`, QUAL-1), каждый следующий ярус вдвое
-   * мельче предыдущего. Пропорции кадра держатся: потолок режет обе стороны
-   * одним множителем, иначе свечение растягивалось бы по одной оси.
-   */
-  private ensurePyramid(width: number, height: number): readonly BloomLevel[] {
-    const half = Math.max(1, Math.floor(width / 2));
-    const topWidth = Math.max(1, Math.floor(Math.min(half, this.ceiling)));
-    const topHeight = Math.max(1, Math.floor((height / 2) * (topWidth / half)));
-    const top = this.levels[0]?.target;
-    if (top?.width === topWidth && top.height === topHeight) return this.levels;
-    this.releaseBloom();
-    const levels: BloomLevel[] = [];
-    for (let index = 0; index < BLOOM_LEVELS; index++) {
-      const divisor = 2 ** index;
-      const target = own(
-        'renderTarget',
-        'postprocess',
-        new THREE.WebGLRenderTarget(
-          Math.max(1, Math.floor(topWidth / divisor)),
-          Math.max(1, Math.floor(topHeight / divisor)),
-          {
-            depthBuffer: false,
-            type: this.texelType,
-            minFilter: THREE.LinearFilter,
-            magFilter: THREE.LinearFilter,
-          },
-        ),
-      );
-      levels.push({
-        target,
-        material: index === 0 ? null : createDownsampleMaterial(),
-        // У самого мелкого яруса ступени вверх нет: из него только читают.
-        upsample: index === BLOOM_LEVELS - 1 ? null : createUpsampleMaterial(),
-      });
-    }
-    this.levels = levels;
-    return levels;
-  }
-
-  private ensureThreshold(): THREE.ShaderMaterial {
-    const existing = this.thresholdMaterial;
-    if (existing !== null) return existing;
-    const material = createThresholdMaterial(this.thresholdValue);
-    this.thresholdMaterial = material;
-    return material;
-  }
-
   /** Материал сведения; вход — цель сцены и ярусы пирамиды (design D3, D4). */
-  private ensureResolve(sceneTarget: THREE.WebGLRenderTarget): THREE.ShaderMaterial {
+  private ensureResolve(scene: THREE.Texture): THREE.ShaderMaterial {
     const config = this.config;
     const material =
       this.resolveMaterial ??
@@ -563,23 +611,36 @@ export class PostprocessChain {
         lutAmount: config.lutAmount,
       });
     this.resolveMaterial = material;
-    uniformOf(material, 'tScene').value = sceneTarget.texture;
+    uniformOf(material, 'tScene').value = scene;
     if (config.bloomEnabled) {
       // Вершина пирамиды и есть свечение кадра: ярусы сложены в неё цепочкой
       // апсемплов (design D4, L-7), и второй текстуры сведению не нужно.
       const uniform = material.uniforms.tBloom0;
-      if (uniform !== undefined) uniform.value = this.levels[0]?.target.texture ?? null;
+      if (uniform !== undefined) uniform.value = this.pyramid.top;
     }
+    return material;
+  }
+
+  /**
+   * Материал экранного сглаживания (REND-34): источник — ГОТОВЫЙ кадр, шаг
+   * выборки — его тексель. Заводится лениво, первым кадром со снятым
+   * мультисэмплингом, и отдаётся вместе с остальными целями (REND-31).
+   */
+  private ensureFxaa(input: THREE.Texture): THREE.ShaderMaterial {
+    const material = this.fxaaMaterial ?? createFxaaMaterial();
+    this.fxaaMaterial = material;
+    uniformOf(material, 'tSource').value = input;
+    (material.uniforms.uTexel as { value: THREE.Vector2 }).value.set(
+      1 / this.frameWidth,
+      1 / this.frameHeight,
+    );
     return material;
   }
 
   /** Числа секции на живые материалы (ED-15): пересборки они не требуют. */
   private pushUniforms(): void {
     const config = this.config;
-    const threshold = this.thresholdMaterial;
-    if (threshold !== null) {
-      uniformOf(threshold, 'uThreshold').value = this.thresholdValue;
-    }
+    this.pyramid.applyThreshold(this.thresholdValue);
     const resolve = this.resolveMaterial;
     if (resolve === null) return;
     const exposure = resolve.uniforms.toneMappingExposure;
@@ -605,7 +666,7 @@ export class PostprocessChain {
    * поводу при живой таблице невозможно по построению.
    */
   private release(): void {
-    this.releaseBloom();
+    this.pyramid.release();
     // Текстуру глубины HDR-цели завела ЦЕПОЧКА, а не цель: `dispose()` цели
     // рассылает только собственное событие, и без этой строки текстура
     // пережила бы и смену размера окна, и снос (REND-31, PERF-9).
@@ -614,8 +675,17 @@ export class PostprocessChain {
     this.sceneTarget = null;
     this.outputTarget?.dispose();
     this.outputTarget = null;
+    this.releaseRelay();
     this.resolveMaterial?.dispose();
     this.resolveMaterial = null;
+  }
+
+  /** Промежуточная цель и материал экранного сглаживания — вместе: они пара. */
+  private releaseRelay(): void {
+    this.relayTarget?.dispose();
+    this.relayTarget = null;
+    this.fxaaMaterial?.dispose();
+    this.fxaaMaterial = null;
   }
 
   /** Трёхмерная текстура таблицы цвета — её строила цепочка, ей и отдавать. */
@@ -624,15 +694,4 @@ export class PostprocessChain {
     this.lutTexture = null;
   }
 
-  /** Пирамида и порог: их отдаёт и выключение bloom, и смена его разрешения. */
-  private releaseBloom(): void {
-    for (const level of this.levels) {
-      level.target.dispose();
-      level.material?.dispose();
-      level.upsample?.dispose();
-    }
-    this.levels = [];
-    this.thresholdMaterial?.dispose();
-    this.thresholdMaterial = null;
-  }
 }
