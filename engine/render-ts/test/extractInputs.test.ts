@@ -165,7 +165,7 @@ describe('REND-26: путь извлечения не аллоцирует пр�
       },
     ];
     const violations: string[] = [];
-    for (const file of ['extractor.ts', 'statSources.ts']) {
+    for (const file of ['extractor.ts', 'statSources.ts', 'floorMirror.ts']) {
       const lines = readFileSync(join(SRC, file), 'utf8').split('\n');
       lines.forEach((line, index) => {
         // Комментарии называют запрещённое по имени — они и объясняют запрет.
@@ -316,5 +316,142 @@ describe('P-4: кэши экстрактора живут ровно одну в
     const second = extractor.extract(stand.result());
     expect(second.kind[0]).toBe(first.kind[0]);
     expect(second.kindTable[second.kind[0]!]).toBe('Runner');
+  });
+});
+
+describe('SHELL-3: кадр несёт только изменившиеся строки', () => {
+  /** Стенд: двое стоят, третьего двигает система по требованию теста. */
+  function stand(): {
+    extract: () => ReturnType<Extractor['extract']>;
+    replay: () => ReturnType<Extractor['extract']>;
+    deliver: () => void;
+    forget: () => void;
+    move: (dx: number) => void;
+    kill: () => void;
+    ids: readonly number[];
+  } {
+    let shift = 0;
+    let alive = true;
+    const scene = loadScene({
+      components: [{ name: 'Position', fields: { x: 'fixed', y: 'fixed' } }],
+      prefabs: [{ name: 'Runner', components: { Position: {} }, tags: ['Runner'] }],
+    });
+    const ids = [1.5, 2.5, 3.5].map((x) =>
+      worldInitSpawn(scene.world, 'Runner', { Position: { x: F(x), y: F(1) } }),
+    );
+    const walker = ids[2]!;
+    scene.systems.register({
+      name: 'Walker',
+      order: 10,
+      run: (ctx) => {
+        if (!alive) {
+          if (ctx.has(walker, 'Position')) ctx.commands.destroy(walker);
+          return;
+        }
+        if (shift === 0) return;
+        ctx.commands.setField(walker, 'Position', 'x', ctx.get(walker, 'Position', 'x') + F(shift));
+        shift = 0;
+      },
+    });
+    const sim: Simulation = { systems: scene.systems, worldSeed: 7, math: mathApi };
+    const state = initialState(scene.world, 7);
+    const extractor = new Extractor({ kindOf: kindByTags(['Runner']) });
+    return {
+      extract: () => extractor.extract(tick(sim, state)),
+      // Реплеевый проход: тот же тик, но с признаком смены ветви (SHELL-7).
+      replay: () => extractor.extract({ ...tick(sim, state), isReplay: true }),
+      deliver: () => { extractor.markDelivered(); },
+      forget: () => { extractor.forgetDelivered(); },
+      move: (dx) => { shift = dx; },
+      kill: () => { alive = false; },
+      ids,
+    };
+  }
+
+  it('первый кадр полный, второй по стоящему миру — пустой', () => {
+    const rig = stand();
+    const first = rig.extract();
+    expect(first.full).toBe(true);
+    expect(first.count).toBe(3);
+    rig.deliver();
+
+    // Никто не двигался — приёмнику нечего сообщать: объём кадра растёт
+    // ИЗМЕНЕНИЕМ, а не числом живых (SHELL-3).
+    const second = rig.extract();
+    expect(second.full).toBe(false);
+    expect(second.count).toBe(0);
+    expect(second.removedCount).toBe(0);
+  });
+
+  it('едет только изменившаяся строка', () => {
+    const rig = stand();
+    rig.extract();
+    rig.deliver();
+    rig.move(0.5);
+    const moved = rig.extract();
+    expect(moved.count).toBe(1);
+    expect(moved.id[0]).toBe(rig.ids[2]);
+  });
+
+  it('изменение переживает конфляцию: кадр не уехал — строка едет следующим (SHELL-4)', () => {
+    const rig = stand();
+    rig.extract();
+    rig.deliver();
+
+    // Сущность сдвинулась, но кадр НЕ доставлен (свободного буфера не было).
+    rig.move(0.5);
+    const dropped = rig.extract();
+    expect(dropped.count).toBe(1);
+
+    // Следующий тик её не двигает — и всё равно она обязана уехать: зеркало
+    // двигает факт доставки, а не факт извлечения.
+    const next = rig.extract();
+    expect(next.count).toBe(1);
+    expect(next.id[0]).toBe(rig.ids[2]);
+    rig.deliver();
+
+    // Теперь доставлено — и следующий кадр пуст.
+    expect(rig.extract().count).toBe(0);
+  });
+
+  it('исчезнувшая едет списком идентификаторов, а не отсутствием строки', () => {
+    const rig = stand();
+    rig.extract();
+    rig.deliver();
+    rig.kill();
+    const frame = rig.extract();
+    expect(frame.full).toBe(false);
+    expect(frame.count).toBe(0);
+    expect(frame.removedCount).toBe(1);
+    expect(frame.removed[0]).toBe(rig.ids[2]);
+    rig.deliver();
+    // Забыта: второй раз о ней не сообщают.
+    expect(rig.extract().removedCount).toBe(0);
+  });
+
+  it('разрыв непрерывности возвращает полный кадр', () => {
+    const rig = stand();
+    rig.extract();
+    rig.deliver();
+    expect(rig.extract().full).toBe(false);
+    rig.deliver();
+
+    // Реплеевый проход (смена ветви, SHELL-7): приёмнику не известно ничего, и
+    // кадр обязан приехать полным — иначе он не смог бы удалить лишнее.
+    const snapped = rig.replay();
+    expect(snapped.full).toBe(true);
+    expect(snapped.count).toBe(3);
+  });
+
+  it('свежий подписчик получает полный кадр: зеркало доставленного стёрто', () => {
+    const rig = stand();
+    rig.extract();
+    rig.deliver();
+    expect(rig.extract().full).toBe(false);
+
+    rig.forget();
+    const fresh = rig.extract();
+    expect(fresh.full).toBe(true);
+    expect(fresh.count).toBe(3);
   });
 });

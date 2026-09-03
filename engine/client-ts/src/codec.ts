@@ -17,9 +17,15 @@
  * буферная дисциплина остаётся прежней: кадр без статов длиннее не стал, а
  * кадр со статами растёт ровно на реально доставленные значения.
  *
+ * Кадр по умолчанию ЧАСТИЧНЫЙ (SHELL-3): в нём едут строки только изменившихся
+ * сущностей, а исчезнувшие — отдельной секцией идентификаторов. Флаг заголовка
+ * объявляет кадр полным (разрыв непрерывности, начало сессии), и тогда набор
+ * строк авторитетен: запись без строки у приёмника мертва.
+ *
  * Раскладка (все секции подряд, смещения выровнены по типу):
- *   заголовок   u32×8: версия, tick, mode, флаги, count, floorPairs, statPairs, резерв
+ *   заголовок   u32×8: версия, tick, mode, флаги, count, floorPairs, statPairs, removed
  *   f64×count   — колонки восьмибайтной ширины таблицы (`id`)
+ *   removed     f64×removed — идентификаторы исчезнувших (частичный кадр)
  *   statValue   f64×pairs   — значения статов подряд по сущностям (HUD-8)
  *   f32×count   — колонки четырёхбайтной ширины: x, y, facingYaw, aimYaw,
  *                 motionPhase, flightPhase, timeScale
@@ -40,11 +46,11 @@ import { channelColumnsOf, type ExtractedTick, type RenderEvent } from '@fluxus/
 import type { WorldMode } from '@fluxus/core';
 
 /**
- * 6: колонка уровня сущности глазами симуляции (`simLevel`, FOW-9) и бит
- * заголовка «сменилась ветвь истории» (SHELL-7). Обе стороны канала живут в
- * одном пакете — совместимости со старой версией не требуется (SHELL-3).
+ * 7: частичный кадр — бит «кадр полный», слово «сколько исчезнувших» и их
+ * секция (SHELL-3). Обе стороны канала живут в одном пакете — совместимости со
+ * старой версией не требуется.
  */
-export const CODEC_VERSION = 6;
+export const CODEC_VERSION = 7;
 
 const HEADER_WORDS = 8;
 const HEADER_BYTES = HEADER_WORDS * 4;
@@ -56,6 +62,7 @@ const H_FLAGS = 3;
 const H_COUNT = 4;
 const H_FLOOR_PAIRS = 5;
 const H_STAT_PAIRS = 6;
+const H_REMOVED = 7;
 
 const FLAG_IS_REPLAY = 1;
 const FLAG_SNAP_ALL = 2;
@@ -67,6 +74,13 @@ const FLAG_FRESH_EVENTS = 4;
  * взводит первый и не взводит второй.
  */
 const FLAG_BRANCH_CHANGED = 8;
+/**
+ * Кадр ПОЛНЫЙ: набор строк авторитетен (SHELL-3). Признак заголовка, а не
+ * вывод из числа строк: полный кадр пустого мира и частичный кадр без
+ * изменений выглядят одинаково, а означают противоположное — «все умерли»
+ * против «ничего не менялось».
+ */
+const FLAG_FULL = 16;
 
 /**
  * Имена колонок по ширине элемента — из таблицы плоской формы, в её порядке.
@@ -101,6 +115,7 @@ const align8Safe = (bytes: number): number => Math.ceil(bytes / 8) * 8;
  */
 interface Layout {
   f64: number;
+  removed: number;
   statValue: number;
   f32: number;
   i32: number;
@@ -110,11 +125,12 @@ interface Layout {
   total: number;
 }
 
-function layout(count: number, floorPairs: number, statPairs: number): Layout {
+function layout(count: number, floorPairs: number, statPairs: number, removed: number): Layout {
   const f64 = align8(HEADER_BYTES);
-  // Секция f64 статов идёт сразу за колонками той же ширины — выравнивание
-  // держится без дополнения между ними.
-  const statValue = f64 + count * F64_NAMES.length * 8;
+  // Секции идентификаторов и значений статов идут сразу за колонками той же
+  // ширины — все восьмибайтные, и выравнивание держится без дополнения.
+  const removedAt = f64 + count * F64_NAMES.length * 8;
+  const statValue = removedAt + removed * 8;
   const f32 = statValue + statPairs * 8;
   const i32 = f32 + count * F32_NAMES.length * 4;
   const statIndex = i32 + count * I32_NAMES.length * 4;
@@ -124,6 +140,7 @@ function layout(count: number, floorPairs: number, statPairs: number): Layout {
   // f64 при любом count, и целочисленные view поверх всего кадра законны.
   return {
     f64,
+    removed: removedAt,
     statValue,
     f32,
     i32,
@@ -149,8 +166,13 @@ type ColumnFields = {
 };
 
 /** Сколько байт нужно под тик; вход для перевыделения пула (SHELL-3). */
-export function requiredBytes(count: number, floorPairs: number, statPairs = 0): number {
-  return layout(count, floorPairs, statPairs).total;
+export function requiredBytes(
+  count: number,
+  floorPairs: number,
+  statPairs = 0,
+  removed = 0,
+): number {
+  return layout(count, floorPairs, statPairs, removed).total;
 }
 
 /**
@@ -177,7 +199,8 @@ export function writeTick(
   const floorDelta = overrides?.floorDelta ?? ext.floorDelta;
   const floorPairs = floorDelta.length >>> 1;
   const statPairs = ext.statPairs;
-  const at = layout(count, floorPairs, statPairs);
+  const removed = ext.removedCount;
+  const at = layout(count, floorPairs, statPairs, removed);
   if (buffer.byteLength < at.total) {
     throw new Error(`codec: буфер ${buffer.byteLength} байт, нужно ${at.total}`);
   }
@@ -201,10 +224,12 @@ export function writeTick(
     (ext.isReplay ? FLAG_IS_REPLAY : 0) |
     (snapAll ? FLAG_SNAP_ALL : 0) |
     (freshEvents ? FLAG_FRESH_EVENTS : 0) |
-    (branchChanged ? FLAG_BRANCH_CHANGED : 0);
+    (branchChanged ? FLAG_BRANCH_CHANGED : 0) |
+    (ext.full ? FLAG_FULL : 0);
   header[H_COUNT] = count;
   header[H_FLOOR_PAIRS] = floorPairs;
   header[H_STAT_PAIRS] = statPairs;
+  header[H_REMOVED] = removed;
 
   // Колонки перекладываются по таблице плоской формы, секция за секцией:
   // порядок внутри секции — порядок таблицы, и второго перечня имён у кодека
@@ -215,6 +240,7 @@ export function writeTick(
   for (const [i, name] of F64_NAMES.entries()) {
     f64.set(columnOf(columns, name).subarray(0, count), i * count);
   }
+  new Float64Array(buffer, at.removed, removed).set(ext.removed.subarray(0, removed));
   new Float64Array(buffer, at.statValue, statPairs).set(ext.statValue.subarray(0, statPairs));
   const f32 = new Float32Array(buffer, at.f32, count * F32_NAMES.length);
   for (const [i, name] of F32_NAMES.entries()) {
@@ -287,7 +313,8 @@ export function readTick(
   const count = headerWord(header, H_COUNT);
   const floorPairs = headerWord(header, H_FLOOR_PAIRS);
   const statPairs = headerWord(header, H_STAT_PAIRS);
-  const at = layout(count, floorPairs, statPairs);
+  const removed = headerWord(header, H_REMOVED);
+  const at = layout(count, floorPairs, statPairs, removed);
   /**
    * `count`/`floorPairs` приезжают из заголовка, то есть определяют раскладку
    * данными самого кадра. Без этой проверки несогласованный кадр вылетал бы
@@ -297,7 +324,7 @@ export function readTick(
    */
   if (buffer.byteLength < at.total) {
     throw new Error(
-      `codec: кадр ${buffer.byteLength} байт, заголовок обещает ${at.total} (count=${count}, floorPairs=${floorPairs}, statPairs=${statPairs})`,
+      `codec: кадр ${buffer.byteLength} байт, заголовок обещает ${at.total} (count=${count}, floorPairs=${floorPairs}, statPairs=${statPairs}, removed=${removed})`,
     );
   }
   const modeIndex = headerWord(header, H_MODE);
@@ -330,6 +357,9 @@ export function readTick(
     snapAll: (flags & FLAG_SNAP_ALL) !== 0,
     branchChanged: (flags & FLAG_BRANCH_CHANGED) !== 0,
     freshEvents: (flags & FLAG_FRESH_EVENTS) !== 0,
+    full: (flags & FLAG_FULL) !== 0,
+    removed: new Float64Array(buffer, at.removed, removed),
+    removedCount: removed,
     count,
     floorDelta: new Uint32Array(buffer, at.floor, floorPairs * 2),
     statNames,

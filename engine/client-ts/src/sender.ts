@@ -50,12 +50,20 @@ export interface SenderOptions {
    * после разморозки звук/VFX минутной давности не проигрываются пачкой.
    */
   readonly maxEventAgeTicks?: number;
+  /**
+   * Кадр УЕХАЛ — сообщить об этом извлечению (SHELL-3, SHELL-4): зеркало
+   * последнего доставленного состояния двигает факт доставки, а не факт
+   * извлечения, и знает о нём только отправитель. Не задан — извлечение
+   * частичных кадров не ведёт (стенды, прямые вызовы кодека).
+   */
+  readonly onDelivered?: () => void;
 }
 
 export class ShellSender {
   private readonly port: ShellPort;
   private readonly pool: ArrayBuffer[] = [];
   private readonly maxEventAgeTicks: number;
+  private readonly onDelivered: (() => void) | null;
 
   /** Последний extract; его колонки живы между тиками — источник отправки. */
   private latest: ExtractedTick | null = null;
@@ -104,6 +112,7 @@ export class ShellSender {
   constructor(port: ShellPort, options: SenderOptions = {}) {
     this.port = port;
     this.maxEventAgeTicks = options.maxEventAgeTicks ?? 120;
+    this.onDelivered = options.onDelivered ?? null;
     const poolSize = options.poolSize ?? 2;
     const initialBytes = options.initialBytes ?? 16 * 1024;
     for (let i = 0; i < poolSize; i++) this.pool.push(new ArrayBuffer(initialBytes));
@@ -199,7 +208,12 @@ export class ShellSender {
     if (buffer === undefined) return;
 
     const floorDelta = this.flattenFloor();
-    const needed = requiredBytes(ext.count, floorDelta.length >>> 1, ext.statPairs);
+    const needed = requiredBytes(
+      ext.count,
+      floorDelta.length >>> 1,
+      ext.statPairs,
+      ext.removedCount,
+    );
     if (buffer.byteLength < needed) {
       // Единственное легальное место аллокации канала: рост сцены (SHELL-3).
       buffer = new ArrayBuffer(Math.ceil(needed * 1.5));
@@ -234,6 +248,10 @@ export class ShellSender {
     this.dirty = false;
 
     this.port.post(envelope, [buffer]);
+    // Кадр уехал: зеркало извлечения двигается на него (SHELL-3). Строго ПОСЛЕ
+    // записи буфера — до неё кадр ещё не доставлен, и ранний сдвиг зеркала
+    // потерял бы изменения, если бы запись бросила (SHELL-4).
+    this.onDelivered?.();
   }
 
   private flattenFloor(): ArrayLike<number> {

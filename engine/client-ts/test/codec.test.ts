@@ -49,6 +49,9 @@ function syntheticTick(overrides: Partial<ExtractedTick> = {}): ExtractedTick {
     snapAll: false,
     branchChanged: false,
     freshEvents: true,
+    full: true,
+    removed: zeros((n) => new Float64Array(n)),
+    removedCount: 0,
     count,
     id: zeros((n) => new Float64Array(n)),
     kind: zeros((n) => new Int32Array(n)),
@@ -77,7 +80,9 @@ function syntheticTick(overrides: Partial<ExtractedTick> = {}): ExtractedTick {
 
 /** Кадр целиком: буфер ровно нужного размера, записанный тик. */
 function frameOf(ext: ExtractedTick): ArrayBuffer {
-  const buffer = new ArrayBuffer(requiredBytes(ext.count, ext.floorDelta.length >>> 1));
+  const buffer = new ArrayBuffer(
+    requiredBytes(ext.count, ext.floorDelta.length >>> 1, ext.statPairs, ext.removedCount),
+  );
   writeTick(buffer, ext);
   return buffer;
 }
@@ -312,5 +317,44 @@ describe('кодек: кадр как недоверенные байты (SHELL
     header[0] = CODEC_VERSION + 1;
     header[H_COUNT] = 1000;
     expect(() => readTick(buffer, [], [])).toThrow(/версия раскладки/);
+  });
+});
+
+describe('кодек: частичный кадр и исчезнувшие (SHELL-3)', () => {
+  it('признак полноты и список исчезнувших переживают roundtrip', () => {
+    const ext = syntheticTick({
+      count: 2,
+      full: false,
+      removed: Float64Array.from([41, 42, 43]),
+      removedCount: 3,
+    });
+    ext.id[0] = 7;
+    ext.id[1] = 9;
+
+    const wire = readTick(frameOf(ext), [], []);
+    expect(wire.full).toBe(false);
+    expect(wire.count).toBe(2);
+    expect(wire.removedCount).toBe(3);
+    expect([...wire.removed.subarray(0, 3)]).toEqual([41, 42, 43]);
+    expect([...wire.id]).toEqual([7, 9]);
+  });
+
+  it('полный кадр объявляет себя флагом, а не отсутствием исчезнувших', () => {
+    // Полный кадр пустого мира и частичный кадр без изменений выглядят
+    // одинаково по числам, а означают противоположное: «все умерли» против
+    // «ничего не менялось». Различает их ровно признак заголовка.
+    const empty = readTick(frameOf(syntheticTick({ count: 0, full: true })), [], []);
+    expect(empty.full).toBe(true);
+    expect(empty.count).toBe(0);
+    const idle = readTick(frameOf(syntheticTick({ count: 0, full: false })), [], []);
+    expect(idle.full).toBe(false);
+    expect(idle.count).toBe(0);
+  });
+
+  it('кадр с исчезнувшими просит под них место: размер растёт списком', () => {
+    const withoutRemoved = requiredBytes(4, 0, 0, 0);
+    const withRemoved = requiredBytes(4, 0, 0, 3);
+    // Идентификатор — f64, как и в колонке `id`.
+    expect(withRemoved - withoutRemoved).toBe(3 * 8);
   });
 });

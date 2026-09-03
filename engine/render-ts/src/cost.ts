@@ -87,6 +87,17 @@ export interface RenderCostCounters {
   /** Сущности, доехавшие в колонки плоской формы, — размер доставки этого тика. */
   extractEntitiesCopied: number;
   /**
+   * Строки, СРАВНЁННЫЕ с зеркалом последнего доставленного кадра (SHELL-3,
+   * change `delivery-interpolation-and-dirty-extract`): цена отбора
+   * изменившихся. На полном кадре сравнивать не с чем — там ноль.
+   *
+   * Своя строка рядом с `extractEntitiesCopied` намеренно: разрыв между ними и
+   * есть экономия отбора — сколько строк просмотрено против того, сколько
+   * уехало. Сравнение стоит десятков сравнений на сущность, и сцена, где
+   * меняется всё, платит его сверх прежней работы: это видно тем же диффом.
+   */
+  extractRowsCompared: number;
+  /**
    * Пары «индекс имени → значение» геймплейных статов (`match-hud` HUD-8),
    * записанные в плоскую форму. Своя строка, а не сумма с сущностями: форма
    * разреженная, и стат, добавленный сборкой, двигает именно её.
@@ -598,6 +609,7 @@ export const COST_COUNTER_STAGES: Readonly<Record<keyof RenderCostCounters, Cost
     extractCalls: 'extract',
     extractEntitiesScanned: 'extract',
     extractEntitiesCopied: 'extract',
+    extractRowsCompared: 'extract',
     extractStatPairs: 'extract',
     extractEvents: 'extract',
     extractFloorCellsScanned: 'extract',
@@ -671,6 +683,7 @@ export function createCostCounters(): RenderCostCounters {
     extractCalls: 0,
     extractEntitiesScanned: 0,
     extractEntitiesCopied: 0,
+    extractRowsCompared: 0,
     extractStatPairs: 0,
     extractEvents: 0,
     extractFloorCellsScanned: 0,

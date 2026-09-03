@@ -153,6 +153,17 @@ export function deliveryDebugSource(
   const snapColor = options.snapColor ?? DEFAULT_SNAP_COLOR;
   const clock = { spanTicks: 0, lastTick: Number.NaN };
   /**
+   * Часовая секция пробы — стабильный объект (RDBG-2): каденс доставок, его
+   * дрожание и действующее отставание показа (REND-2) приезжают доставленным
+   * состоянием и переписываются на месте.
+   */
+  const clockSection = {
+    deliverySpanTicks: 0,
+    deliveryIntervalSeconds: 0,
+    deliveryJitterSeconds: 0,
+    renderDelaySeconds: 0,
+  };
+  /**
    * Имена статов доставки — СВОЙ массив, а не массив доставки (RDBG-2): проба
    * самодостаточна, ссылок на живые структуры рендера не несёт. Массив тот же
    * между пробами, переписывается его содержимое (REND-26).
@@ -171,7 +182,7 @@ export function deliveryDebugSource(
     eventCount: 0,
     statNames: statNames as readonly string[],
     entities: rows.list,
-    clock: { deliverySpanTicks: 0 },
+    clock: clockSection,
     noData: undefined as string | undefined,
   };
 
@@ -204,7 +215,15 @@ export function deliveryDebugSource(
       // кадр, а проба обязана быть самодостаточной (RDBG-2).
       statNames.length = view.statNames.length;
       for (let i = 0; i < view.statNames.length; i += 1) statNames[i] = view.statNames[i]!;
-      probe.clock.deliverySpanTicks = clock.spanTicks;
+      clockSection.deliverySpanTicks = clock.spanTicks;
+      // Каденс и отставание — то, что наблюдает САМ приёмник доставок
+      // (`ViewBuffer`): выдумывать их по номеру тика значило бы показывать не то,
+      // что знает клиент (RDBG-6). Продюсер без доставок (документный набор,
+      // REND-11) записи не несёт, и величины остаются нулями.
+      const cadence = view.cadence;
+      clockSection.deliveryIntervalSeconds = cadence?.intervalSeconds ?? 0;
+      clockSection.deliveryJitterSeconds = cadence?.jitterSeconds ?? 0;
+      clockSection.renderDelaySeconds = cadence?.delaySeconds ?? 0;
       let snapped = 0;
       let spawned = 0;
       rows.begin();

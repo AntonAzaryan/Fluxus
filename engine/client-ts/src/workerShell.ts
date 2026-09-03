@@ -194,7 +194,13 @@ export class WorkerShell {
     this.liveFrontier = config.state.tick;
     this.clock = config.clock ?? (() => performance.now());
     this.tickMs = config.tickSeconds * 1000;
-    this.sender = new ShellSender(config.port, config.sender);
+    // Факт доставки кадра принадлежит отправителю, а зеркало частичного кадра
+    // — извлечению (SHELL-3, SHELL-4): шов между ними сшивает оболочка, у
+    // которой на руках оба.
+    this.sender = new ShellSender(config.port, {
+      ...config.sender,
+      onDelivered: () => { config.extractor.markDelivered(); },
+    });
     this.observer = {
       name: 'shell',
       onTick: (result) => { this.sender.push(config.extractor.extract(result)); },

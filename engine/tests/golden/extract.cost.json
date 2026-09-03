@@ -6,23 +6,25 @@
     "small": {
       "extract": {
         "extractCalls": 8,
-        "extractChannelValues": 4608,
-        "extractEntitiesCopied": 256,
+        "extractChannelValues": 576,
+        "extractEntitiesCopied": 32,
         "extractEntitiesScanned": 256,
         "extractEvents": 0,
         "extractFloorCellsScanned": 0,
-        "extractStatPairs": 512
+        "extractRowsCompared": 224,
+        "extractStatPairs": 64
       }
     },
     "large": {
       "extract": {
         "extractCalls": 8,
-        "extractChannelValues": 36864,
-        "extractEntitiesCopied": 2048,
+        "extractChannelValues": 4608,
+        "extractEntitiesCopied": 256,
         "extractEntitiesScanned": 2048,
         "extractEvents": 0,
         "extractFloorCellsScanned": 0,
-        "extractStatPairs": 4096
+        "extractRowsCompared": 1792,
+        "extractStatPairs": 512
       }
     }
   }
