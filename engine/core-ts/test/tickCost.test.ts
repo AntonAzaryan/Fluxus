@@ -15,19 +15,34 @@ import { mathApi } from '../src/math/mathApi.js';
 import { evaluate } from '../src/dsl/expr.js';
 import { createWorld, spawn } from '../src/ecs/world.js';
 import { createPhysicsApi, PhysicsSystem, PhysicsWorld, SHAPE_AABB } from '../src/systems/physics.js';
+import { requireModifierList } from '../src/systems/modifiers.js';
 import { SystemRegistry } from '../src/systems/registry.js';
+import { CandidatePicker } from '../src/systems/abilities/runtime.js';
+import { StepShapeGate } from '../src/systems/abilities/shape.js';
+import { EASING_LINEAR } from '../src/systems/tween.js';
+import {
+  DETECTION_SOURCES_COMPONENT,
+  STEALTH_SOURCES_COMPONENT,
+  VISION_MODIFIER_COMPONENT,
+  VisibilitySystem,
+} from '../src/systems/visibility.js';
+import { loadScene, type Scene, type SceneDef } from '../src/sim/scene.js';
 import { initialState, tick, type Simulation } from '../src/sim/tick.js';
 import { runScenarioBytes, type ScenarioDef } from '../src/sim/scenario.js';
 import { traceLine } from '../src/sim/trace.js';
 import type { PrefabDef } from '../src/ecs/world.js';
 import type { StaticCollider } from '../src/systems/collisionGeometry.js';
-import type {
-  ComponentSchema,
-  DiagnosticRecord,
-  DiagnosticsSink,
-  SimulationState,
-  System,
-  TraceLevel,
+import {
+  FIXED_ONE,
+  NO_ENTITY,
+  type ComponentSchema,
+  type DiagnosticRecord,
+  type DiagnosticsSink,
+  type EntityId,
+  type FieldOverrides,
+  type SimulationState,
+  type System,
+  type TraceLevel,
 } from '../src/types.js';
 
 const GOLDEN_DIR = join(dirname(fileURLToPath(import.meta.url)), '..', '..', 'tests', 'golden');
@@ -115,16 +130,23 @@ function measuredWork(): System {
   };
 }
 
-// `npcNeighbors` и `navNodes` — свои строки сводки (NPC-6, NPC-9; NAV-5): на
-// сцене без агентов и без навигации они нули, и именно нулём отличают «работы
-// не было» от «её сложили с чужой».
+// У каждой платформы ядра своя строка сводки (PERF-3): на сцене без агентов,
+// без навигации, без способностей, баффов, твинов и тумана их счётчики нули, и
+// именно нулём отличают «работы не было» от «её сложили с чужой».
 const EXPECTED_COST = {
-  commandsApplied: 2,
-  expressions: 2,
+  abilityCandidates: 0,
   broadPhasePairs: 1,
+  buffCandidates: 0,
+  buffSteps: 0,
+  commandsApplied: 2,
+  eventsEmitted: 0,
+  expressions: 2,
   navNodes: 0,
   npcNeighbors: 0,
+  projectileSteps: 0,
   raycasts: 1,
+  tweenSteps: 0,
+  visibilityPairs: 0,
 };
 
 /** Сколько тиков прогоняет тест «счётчики обнуляются на каждом тике». */
@@ -148,8 +170,12 @@ function costLines(def: ScenarioDef): string[] {
   return costRecords(entries).map((entry) => traceLine(entry));
 }
 
-/** Сценарии со счётчиками: в сумме по набору обязан двигаться каждый счётчик. */
-const SCENARIOS = ['movement', 'physics', 'visibility', 'dsl-raycast'] as const;
+/**
+ * Сценарии со счётчиками: в сумме по набору обязан двигаться каждый счётчик,
+ * у которого в golden-наборе есть нагрузка. Платформ способностей и баффов в
+ * наборе нет ни одной — их счётчики меряются стендами платформ ниже.
+ */
+const SCENARIOS = ['movement', 'physics', 'visibility', 'dsl-raycast', 'arena-time'] as const;
 
 // ------------------------------- стенд динамики broad-phase (PHYS-2, PHYS-5)
 
@@ -279,12 +305,19 @@ describe('PERF-3: сводка стоимости — обычная запис�
 
     const data = costRecords(entries)[0]?.data ?? {};
     expect(Object.keys(data).sort()).toEqual([
+      'abilityCandidates',
       'broadPhasePairs',
+      'buffCandidates',
+      'buffSteps',
       'commandsApplied',
+      'eventsEmitted',
       'expressions',
       'navNodes',
       'npcNeighbors',
+      'projectileSteps',
       'raycasts',
+      'tweenSteps',
+      'visibilityPairs',
     ]);
     for (const value of Object.values(data)) expect(Number.isInteger(value)).toBe(true);
   });
@@ -364,20 +397,23 @@ describe('PERF-3: счётчики считают отмеренную рабо�
       initialState(world, WORLD_SEED),
     );
 
-    expect(costRecords(entries)[0]?.data).toEqual({
-      commandsApplied: EXPECTED_COST.commandsApplied * 2,
-      expressions: EXPECTED_COST.expressions * 2,
-      broadPhasePairs: EXPECTED_COST.broadPhasePairs * 2,
-      // Вдвое от нуля — ноль: навигации на этой сцене нет вовсе.
-      navNodes: EXPECTED_COST.navNodes * 2,
-      // Вдвое от нуля — ноль: агентов на этой сцене нет, и это тоже удвоение.
-      npcNeighbors: EXPECTED_COST.npcNeighbors * 2,
-      raycasts: EXPECTED_COST.raycasts * 2,
-    });
+    // Удваивается КАЖДАЯ строка сводки, включая нулевые: вдвое от нуля — ноль,
+    // и платформа, которой на этой сцене нет вовсе, обязана остаться нулём.
+    const doubled: Record<string, number> = {};
+    for (const [name, value] of Object.entries(EXPECTED_COST)) doubled[name] = value * 2;
+    expect(costRecords(entries)[0]?.data).toEqual(doubled);
   });
 
   it('на записанных сценариях двигается каждый счётчик', () => {
-    const total = { commandsApplied: 0, expressions: 0, broadPhasePairs: 0, raycasts: 0 };
+    const total = {
+      broadPhasePairs: 0,
+      commandsApplied: 0,
+      eventsEmitted: 0,
+      expressions: 0,
+      raycasts: 0,
+      tweenSteps: 0,
+      visibilityPairs: 0,
+    };
     for (const name of SCENARIOS) {
       const { sink, entries } = collector('systems');
       runScenarioBytes(loadScenario(name), sink);
@@ -428,5 +464,240 @@ describe('DIAG-4/PERF-3: учёт инертен, а без стока не ис
     const { entries } = collector('systems');
     tick(sim(), state);
     expect(entries).toHaveLength(0);
+  });
+});
+
+// ------------------------------- стенды платформ ядра (PERF-3, design D1)
+
+/**
+ * Сцена трёх платформ на одном мире: способности (снаряд), баффы и твины.
+ * Стенд общий намеренно — каждый тест читает не только своё число, но и нули
+ * соседей: платформа, приписавшая работу чужой строке, красит его.
+ */
+const PLATFORM_SCENE: SceneDef = {
+  components: [
+    { name: 'Position', fields: { x: 'fixed', y: 'fixed' } },
+    { name: 'Health', fields: { hp: 'fixed' } },
+  ],
+  prefabs: [
+    { name: 'Target', components: { Position: { x: 0, y: 0 }, Health: { hp: FIXED_ONE } } },
+    // Снаряд без пределов: ни времени жизни, ни дальности (оба включаются
+    // только положительным значением, ABIL-9) — он летит, пока стенд тикает, и
+    // каждый тик стоит ровно одного шага.
+    { name: 'Ball', components: { Position: { x: 0, y: 0 }, AbilityProjectile: {} } },
+    { name: 'Instance', components: { BuffInstance: {} } },
+    {
+      name: 'Tweened',
+      components: {
+        Health: { hp: 0 },
+        // Секунда при шаге 1/60 (TIME-1): на первом же тике твин не завершается,
+        // и шаг у него настоящий. Личной оси времени у стенда нет — флаг
+        // `ignoreTimeScale` берёт глобальную (TWEEN-7).
+        Tween: {
+          def: 0,
+          duration: FIXED_ONE,
+          easing: EASING_LINEAR,
+          elapsed: 0,
+          from: 0,
+          to: FIXED_ONE,
+          ignoreTimeScale: 1,
+        },
+      },
+    },
+  ],
+  abilities: [{ id: 'shot', trigger: { always: {} }, effects: [], projectile: {} }],
+  buffs: [{ id: 'mark', class: 'positive', stacking: 'refresh' }],
+  tweens: [{ target: 'Health.hp' }],
+};
+
+/** Ровная сетка 4×4: обрывов нет, уровень у всех один — фильтр высоты никого не режет. */
+const FLAT_TERRAIN = {
+  width: 4,
+  height: 4,
+  tileSize: fixed.fromInt(1),
+  levels: Array.from({ length: 4 }, () => '0000'),
+  flags: Array.from({ length: 4 }, () => '....'),
+};
+
+/**
+ * Сцена тумана войны: наблюдатель и цели. Наблюдатель объявлен БЕЗ `Visibility`
+ * намеренно — иначе он попадал бы в собственную выборку кандидатов, и пар
+ * оказалось бы на одну больше числа целей.
+ */
+const FOG_SCENE: SceneDef = {
+  components: [{ name: 'Position', fields: { x: 'fixed', y: 'fixed' } }],
+  prefabs: [
+    {
+      name: 'Eye',
+      components: {
+        Position: { x: 0, y: 0 },
+        Vision: { radius: fixed.fromInt(5) },
+        Team: { id: 0 },
+        VisionModifier: {},
+        DetectionSources: {},
+      },
+    },
+    {
+      name: 'Mark',
+      components: {
+        Position: { x: fixed.fromInt(1), y: 0 },
+        Visibility: { visibleTo: 0 },
+        StealthSources: {},
+      },
+    },
+  ],
+  fog: true,
+  terrain: FLAT_TERRAIN,
+};
+
+interface Stand {
+  place(prefab: string, overrides?: FieldOverrides): EntityId;
+  /** Один тик со снятой сводкой стоимости: числа `data` записи `TICK_COST`. */
+  step(): Record<string, number>;
+}
+
+/** Стенд сцены: `extend` дописывает системы, которые сцена не регистрирует сама. */
+function sceneStand(def: SceneDef, extend?: (scene: Scene) => void): Stand {
+  const scene = loadScene(def);
+  extend?.(scene);
+  const state = initialState(scene.world, WORLD_SEED);
+  return {
+    place: (prefab, overrides) => spawn(scene.world, prefab, overrides),
+    step: () => {
+      const { sink, entries } = collector('systems');
+      tick(
+        {
+          systems: scene.systems,
+          worldSeed: WORLD_SEED,
+          math: mathApi,
+          modifiers: scene.modifiers,
+          ...(scene.terrain !== undefined ? { terrain: scene.terrain } : {}),
+          ...(scene.abilities !== undefined ? { abilities: scene.abilities } : {}),
+          physics: createPhysicsApi(scene.world, new PhysicsWorld([])),
+          diagnostics: sink,
+        },
+        state,
+      );
+      return costData(entries);
+    },
+  };
+}
+
+/** Числа последней сводки: `data` объявлена как «число или строка» (DIAG-2). */
+function costData(entries: readonly DiagnosticRecord[]): Record<string, number> {
+  const data = costRecords(entries).at(-1)?.data ?? {};
+  const out: Record<string, number> = {};
+  for (const [name, value] of Object.entries(data)) out[name] = Number(value);
+  return out;
+}
+
+/** Сводка одного тика мира с одной системой — стенд для платформ вне сцены. */
+function costOfSystem(system: System, spawns: number): Record<string, number> {
+  const world = createWorld(SCHEMAS, PREFABS);
+  for (let i = 0; i < spawns; i++) spawn(world, 'unit');
+  const registry = new SystemRegistry();
+  registry.register(system);
+  const { sink, entries } = collector('systems');
+  tick(
+    { systems: registry, worldSeed: WORLD_SEED, math: mathApi, diagnostics: sink },
+    initialState(world, WORLD_SEED),
+  );
+  return costData(entries);
+}
+
+describe('PERF-3: у каждой платформы ядра — своя строка сводки', () => {
+  it('снаряд в полёте стоит один шаг за тик (ABIL-9)', () => {
+    const stand = sceneStand(PLATFORM_SCENE);
+    stand.place('Ball');
+    expect(stand.step().projectileSteps).toBe(1);
+    expect(stand.step().projectileSteps).toBe(1);
+    stand.place('Ball');
+    // Второй снаряд — второй шаг того же тика: единица счётчика — шаг, а не тик.
+    expect(stand.step().projectileSteps).toBe(2);
+  });
+
+  it('твин стоит один шаг за тик, и строка у него своя (TWEEN-1)', () => {
+    const stand = sceneStand(PLATFORM_SCENE);
+    stand.place('Tweened');
+    const cost = stand.step();
+    expect(cost.tweenSteps).toBe(1);
+    // Соседние платформы стенда не тронуты: на этом тике их сущностей нет вовсе.
+    expect(cost.projectileSteps).toBe(0);
+    expect(cost.buffSteps).toBe(0);
+  });
+
+  it('проходы баффов и поиск хозяина — РАЗНЫЕ строки (BUFF-3, BUFF-5)', () => {
+    const stand = sceneStand(PLATFORM_SCENE);
+    const target = stand.place('Target');
+    const instance = { target, source: NO_ENTITY, buffId: 0 };
+    stand.place('Instance', { BuffInstance: instance });
+    stand.place('Instance', { BuffInstance: instance });
+    const cost = stand.step();
+
+    // Проходов по инстансам два — наложение и ход (см. шапку `buffs.ts`), — и
+    // каждый обходит оба инстанса: работа исполнена дважды и считается дважды.
+    expect(cost.buffSteps).toBe(4);
+    // Поиск стакающегося хозяина — отдельная величина: первый инстанс
+    // осматривает оба (хозяина ещё нет), второй находит первого сразу и перебор
+    // обрывает. Именно расхождение двух строк и называет виновника, когда поиск
+    // станет квадратичным.
+    expect(cost.buffCandidates).toBe(3);
+  });
+
+  it('пара «наблюдатель × цель» — своя строка, а линия видимости — нет (FOW-5)', () => {
+    const stand = sceneStand(FOG_SCENE, (scene) => {
+      scene.systems.register(
+        new VisibilitySystem({
+          lists: {
+            vision: requireModifierList(scene.modifiers, VISION_MODIFIER_COMPONENT),
+            stealth: requireModifierList(scene.modifiers, STEALTH_SOURCES_COMPONENT),
+            detection: requireModifierList(scene.modifiers, DETECTION_SOURCES_COMPONENT),
+          },
+          hardStealthMask: scene.stealthHardMask ?? ~0,
+        }),
+      );
+    });
+    stand.place('Eye');
+    stand.place('Mark');
+    stand.place('Mark', { Position: { x: fixed.fromInt(2), y: 0 } });
+
+    const cost = stand.step();
+    expect(cost.visibilityPairs).toBe(2);
+    // Второго счётчика линии видимости рядом нет намеренно: она идёт лучом
+    // Physics API и уже посчитана в `raycasts` — по лучу на пару, дошедшую до
+    // проверки. Два счётчика обещали бы одну работу дважды (design D1).
+    expect(cost.raycasts).toBe(2);
+  });
+
+  it('скан кандидатов таргетинга считает ОСМОТР, а не исход (ABIL-5)', () => {
+    // Скан — цикл `CandidatePicker` по запросу к миру; фигура шага не связана,
+    // то есть не сужает ничего, и предиката контента нет: осмотрены все живые
+    // носители `Position`, а выбран из них один.
+    const picker = new CandidatePicker();
+    const shape = new StepShapeGate();
+    const scan: System = {
+      name: 'Scan',
+      order: 1,
+      run: (ctx) => {
+        picker.nearest(ctx, 0, 0, 0, 0, undefined, undefined, shape, {});
+      },
+    };
+    expect(costOfSystem(scan, 3).abilityCandidates).toBe(3);
+    expect(costOfSystem(scan, 5).abilityCandidates).toBe(5);
+  });
+
+  it('эмиссия события считается по событию (EVT-1)', () => {
+    const emitter: System = {
+      name: 'Emitter',
+      order: 1,
+      run: (ctx) => {
+        ctx.events.emit('Boom');
+        ctx.events.emit('Boom');
+      },
+    };
+    expect(costOfSystem(emitter, 1).eventsEmitted).toBe(2);
+    // Тик без единой эмиссии — ноль, а не отсутствие строки: сводка держит
+    // строку каждой платформы всегда (PERF-3).
+    expect(costOfSystem({ name: 'Idle', order: 1, run: () => {} }, 1).eventsEmitted).toBe(0);
   });
 });

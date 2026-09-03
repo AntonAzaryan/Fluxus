@@ -65,6 +65,7 @@ import {
   type InputFrame,
   type ScenarioDef,
   type ScenarioSpawn,
+  type SystemDef,
   type TerrainGrid,
   type TickResult,
 } from '@fluxus/core';
@@ -1141,4 +1142,391 @@ export function syntheticTick(load: SyntheticLoad): ExtractedTick {
     ext.statPairs++;
   }
   return ext;
+}
+
+// ------------------- ось платформы способностей (PERF-6, ABIL-5, ABIL-9, BUFF-3)
+
+/**
+ * Синтетическая нагрузка платформы способностей: N кастеров, каждый со своим
+ * слотом, каждые четыре тика подтверждают шаг прицеливания по фигуре, кладут
+ * бафф на общую цель и выпускают снаряд, и все они наблюдают друг друга сквозь
+ * туман войны. Записью матча она не является — участников у неё нет, — поэтому
+ * лежит не парой golden-набора, а строится здесь, как и её размеры.
+ *
+ * Нагрузка эта заведена ровно затем, зачем PERF-6 требует оси: без неё
+ * счётчики платформ способностей, баффов, твинов и видимости лежали бы во ВСЕХ
+ * эталонах нулями (записанные матчи их платформ не поднимают вовсе), и гейт
+ * стоимости не видел бы ни квадратичного поиска хозяина баффа, ни скана всего
+ * мира на каждый каст — то есть ровно тех регрессий, ради которых счётчики
+ * заведены (PERF-3).
+ *
+ * Документом на диске она не лежит по той же причине, по какой им не лежит ось
+ * DSL: сцена есть ФУНКЦИЯ размера оси, и держать два рукописных документа с
+ * шестьюдесятью четырьмя расстановками значило бы держать два документа,
+ * расходящихся молча.
+ */
+export const ABILITY_STRESS = 'ability-stress';
+
+/**
+ * Полный размер оси: кастеров сеткой `ABILITY_GRID × ABILITY_GRID`. Сторона
+ * НЕЧЁТНАЯ намеренно: малый размер берёт каждую вторую линию сетки, и только у
+ * нечётной стороны в него попадают обе крайние — то есть охват арены у размеров
+ * совпадает ТОЧНО, а не с точностью до шага сетки.
+ */
+const ABILITY_GRID = 9;
+const ABILITY_CASTERS = ABILITY_GRID * ABILITY_GRID;
+
+/**
+ * Прореживание малого размера: каждый второй СТОЛБЕЦ и каждая вторая СТРОКА
+ * сетки (см. `abilityStressSizes`), то есть вчетверо меньше кастеров при том же
+ * охвате арены. Оно же — сторона блока сетки, внутри которого кастеры делят
+ * цель шага и сторону: в прореженном размере от каждого блока остаётся ровно
+ * один кастер, поэтому набор целей и сторон у обоих размеров один и тот же.
+ */
+const ABILITY_THIN = 2;
+
+/** Блоков сетки по стороне — они же кастеры малого размера по стороне. */
+const ABILITY_BLOCKS = Math.ceil(ABILITY_GRID / ABILITY_THIN);
+
+/** Тиков в прогоне — столько же, сколько у соседних осей стороны симуляции. */
+const ABILITY_STRESS_TICKS = 24;
+
+/** Цели шага прицеливания: их число НЕ зависит от оси — ось двигает кастеров. */
+const ABILITY_ANCHORS = 4;
+
+/** Укрытия линии видимости: тоже вне оси — иначе она двигала бы две величины. */
+const ABILITY_COVERS = 4;
+
+/** Сторона арены в тайлах; сетка ровная — обрывов у нагрузки нет. */
+const ABILITY_ARENA = 16;
+
+/** Шаг сетки кастеров и её начало, в тайлах. */
+const ABILITY_STEP = 1.75;
+const ABILITY_ORIGIN = 1;
+
+/** Биты сцены (INP-4): каст — 0, подтверждение шага — 1. */
+const ABILITY_CAST_BIT = 0;
+const ABILITY_CONFIRM_BIT = 1;
+
+const F = (value: number): number => fixed.fromFloat(value);
+
+/** Центр сетки кастеров — точка прицела всех: цель шага у них общая (BUFF-3). */
+const ABILITY_CENTER = ABILITY_ORIGIN + ((ABILITY_GRID - 1) * ABILITY_STEP) / 2;
+
+/**
+ * Полураствор конуса шага — 90°. Угол здесь — Q16.16-ДОЛЯ ОБОРОТА (EXPR-2,
+ * FP-7), а не радианы: 16384 и есть четверть оборота.
+ */
+const ABILITY_HALF_ANGLE = 16384;
+
+/** Цель шага номер `i`: их четыре, стоят рядом в середине сетки кастеров. */
+function anchorAt(i: number): { readonly x: number; readonly y: number } {
+  return { x: ABILITY_CENTER + (i % 2) * 0.5, y: ABILITY_CENTER + Math.floor(i / 2) * 0.5 };
+}
+
+/**
+ * Расстановка нагрузки: сначала кастеры сеткой (их и прореживает малый размер),
+ * затем цели и укрытия. Порядок записей нормативен (SER-8, ID-2), поэтому
+ * прореживание только выбрасывает записи, а не переставляет их.
+ */
+function abilityStressSpawns(): ScenarioSpawn[] {
+  const spawns: ScenarioSpawn[] = [];
+  for (let i = 0; i < ABILITY_CASTERS; i++) {
+    const col = i % ABILITY_GRID;
+    const row = Math.floor(i / ABILITY_GRID);
+    // Номер блока сетки: цель шага и сторона — свойства БЛОКА, а не
+    // порядкового номера кастера. Прореживание оставляет от каждого блока ровно
+    // одного кастера, поэтому у обоих размеров одни и те же четыре цели и обе
+    // стороны: иначе ось двигала бы заодно разброс наложений по целям и состав
+    // сторон, а наложения сводились бы не в четыре инстанса, а в один (BUFF-3).
+    const block = Math.floor(col / ABILITY_THIN) + Math.floor(row / ABILITY_THIN) * ABILITY_BLOCKS;
+    const aim = anchorAt(block % ABILITY_ANCHORS);
+    spawns.push({
+      prefab: 'Caster',
+      overrides: {
+        Position: { x: F(ABILITY_ORIGIN + col * ABILITY_STEP), y: F(ABILITY_ORIGIN + row * ABILITY_STEP) },
+        Input: { targetX: F(aim.x), targetY: F(aim.y) },
+        // Стороны чередуются теми же блоками: у одной стороны пересчёт
+        // видимости не доходил бы до линии видимости вовсе — свой всегда виден
+        // своему (FOW-2).
+        Player: { slot: block % 2 },
+        Team: { id: block % 2 },
+      },
+    });
+  }
+  for (let i = 0; i < ABILITY_ANCHORS; i++) {
+    const at = anchorAt(i);
+    spawns.push({ prefab: 'Anchor', overrides: { Position: { x: F(at.x), y: F(at.y) } } });
+  }
+  for (let i = 0; i < ABILITY_COVERS; i++) {
+    spawns.push({
+      prefab: 'Cover',
+      overrides: { Position: { x: F(ABILITY_CENTER - 2 - i), y: F(ABILITY_CENTER - 2) } },
+    });
+  }
+  return spawns;
+}
+
+/**
+ * Ввод кастера — не кадрами протокола, а системой сцены: величина оси здесь
+ * число КАСТУЮЩИХ агентов, и заводить под неё шестьдесят четыре игрока с
+ * потоком кадров значило бы двигать заодно и раскладку ввода (TICK-2, TICK-5).
+ * Цикл в четыре тика: фронт бита каста, фронт бита подтверждения при удержанном
+ * бите каста (иначе отпускание прервало бы каст, ABIL-4), и два тика покоя.
+ */
+function abilityDriveSystem(): SystemDef {
+  // Фаза цикла читается БИТАМИ номера тика: остатка от деления в словаре
+  // выражений нет (арифметика там Q16.16, EXPR-2), а `bitTest` над сырым целым
+  // есть — и четвёрка цикла ровно два младших бита и занимает.
+  const low = { bitTest: [{ tick: [] }, 0] };
+  const high = { bitTest: [{ tick: [] }, 1] };
+  const cast = 1 << ABILITY_CAST_BIT;
+  const confirm = 1 << ABILITY_CONFIRM_BIT;
+  return {
+    name: 'Drive',
+    order: -900,
+    query: { all: ['Input'] },
+    as: 'e',
+    do: [
+      {
+        modifyComponent: {
+          entity: { var: 'e' },
+          component: 'Input',
+          values: {
+            // Прежняя маска — та же, что читает платформа (ABIL-3, TICK-4):
+            // обе записи видят мир до flush, поэтому фронт считается верно.
+            prevButtons: { getComponent: [{ var: 'e' }, 'Input', 'buttons'] },
+            buttons: {
+              if: [
+                // Тик ≡ 1 (mod 4) — фронт бита каста.
+                { and: [low, { '!': [high] }] },
+                cast,
+                // Тик ≡ 2 (mod 4) — фронт подтверждения при удержанном касте.
+                { and: [{ '!': [low] }, high] },
+                cast | confirm,
+                0,
+              ],
+            },
+          },
+        },
+      },
+    ],
+  };
+}
+
+/** Полный документ прогона нагрузки: сцена целиком плюс расстановка. */
+function abilityStressScenario(): ScenarioDef {
+  const row = '0'.repeat(ABILITY_ARENA);
+  const flags = '.'.repeat(ABILITY_ARENA);
+  return {
+    name: ABILITY_STRESS,
+    seed: 20260903,
+    ticks: ABILITY_STRESS_TICKS,
+    physics: {},
+    visibility: {},
+    scene: {
+      capacity: 1024,
+      components: [
+        { name: 'Position', fields: { x: 'fixed', y: 'fixed' } },
+        { name: 'Velocity', fields: { x: 'fixed', y: 'fixed' } },
+        {
+          name: 'Collider',
+          fields: {
+            blockMask: 'i32',
+            cliffRise: 'i32',
+            halfX: 'fixed',
+            halfY: 'fixed',
+            hitMask: 'i32',
+            layer: 'i32',
+            radius: 'fixed',
+            shape: 'i32',
+          },
+        },
+        {
+          name: 'Input',
+          fields: {
+            aimDir: 'fixed',
+            buttons: 'i32',
+            moveX: 'fixed',
+            moveY: 'fixed',
+            prevButtons: 'i32',
+            seq: 'i32',
+            targetX: 'fixed',
+            targetY: 'fixed',
+          },
+        },
+        { name: 'Player', fields: { slot: 'i32' } },
+        { name: 'Health', fields: { hp: 'fixed' } },
+        // Маркер цели шага: предикат шага — политика контента (ABIL-5), и
+        // «во что целиться» описывается компонентом сцены, а не платформой.
+        { name: 'Anchor', fields: { flag: 'i32' } },
+        { name: 'Granted', fields: { atTick: 'i32' } },
+      ],
+      prefabs: [
+        {
+          name: 'Caster',
+          components: {
+            Position: { x: 0, y: 0 },
+            // Точку прицела задаёт расстановка (`abilityStressSpawns`): у
+            // каждого кастера она своя из четырёх целей сцены.
+            Input: {},
+            Player: { slot: 0 },
+            Health: { hp: FIXED_ONE },
+            Vision: { radius: fixed.fromInt(8) },
+            Visibility: { visibleTo: 0 },
+            Team: { id: 0 },
+            VisionModifier: {},
+            StealthSources: {},
+            DetectionSources: {},
+          },
+        },
+        { name: 'Anchor', components: { Position: { x: 0, y: 0 }, Health: { hp: FIXED_ONE }, Anchor: { flag: 1 } } },
+        {
+          name: 'Cover',
+          components: {
+            Position: { x: 0, y: 0 },
+            Collider: {
+              blockMask: 0,
+              cliffRise: 0,
+              halfX: F(0.5),
+              halfY: F(0.5),
+              hitMask: 0,
+              layer: 0,
+              radius: F(0.5),
+              shape: 1,
+            },
+          },
+          tags: ['blocksVision'],
+        },
+        { name: 'Slot', components: { AbilitySlot: { abilityId: 0, slotIndex: 0 }, AbilityCooldown: { remaining: 0, total: 0 } } },
+        { name: 'Buff', components: { BuffInstance: {} } },
+        { name: 'Bolt', components: { Position: { x: 0, y: 0 }, AbilityProjectile: { abilityId: 0, range: 0, ticksLeft: 6 } } },
+      ],
+      systems: [
+        // Слот выдаётся обычным спавном (ABIL-1) — тем же приёмом, каким его
+        // выдаёт сцена дуэли: платформа своего канала «дать способность» не имеет.
+        {
+          name: 'Grant',
+          order: -950,
+          query: { all: ['Input', 'Player'], not: ['Granted'] },
+          as: 'e',
+          do: [
+            { spawnEntity: { prefab: 'Slot', overrides: { AbilitySlot: { owner: { var: 'e' } } } } },
+            { addComponent: { entity: { var: 'e' }, component: 'Granted', values: { atTick: { tick: [] } } } },
+          ],
+        },
+        abilityDriveSystem(),
+        // Твин на каждом носителе здоровья: величина оси двигает и его — твинов
+        // столько же, сколько кастеров плюс постоянные цели (TWEEN-1).
+        {
+          name: 'Pulse',
+          order: 30,
+          query: { all: ['Health'], not: ['Tween'] },
+          as: 'e',
+          do: [
+            {
+              addTween: {
+                entity: { var: 'e' },
+                def: 0,
+                from: 0,
+                to: FIXED_ONE,
+                duration: FIXED_ONE,
+                easing: 0,
+                ignoreTimeScale: 1,
+              },
+            },
+          ],
+        },
+      ],
+      tweens: [{ target: 'Health.hp' }],
+      abilities: [
+        {
+          id: 'mark',
+          trigger: { input: { bit: ABILITY_CAST_BIT } },
+          confirmBit: ABILITY_CONFIRM_BIT,
+          // Шаг `unit` с направленной фигурой — это и есть скан кандидатов
+          // (ABIL-5): запрос к миру в радиусе, фигура-гейт, предикат контента.
+          targeting: {
+            steps: [
+              {
+                kind: 'unit',
+                range: fixed.fromInt(24),
+                filter: { hasComponent: [{ var: 'candidate' }, 'Anchor'] },
+                shape: { kind: 'circle', radius: fixed.fromInt(24), halfAngle: ABILITY_HALF_ANGLE },
+              },
+            ],
+          },
+          phases: [{ id: 'aim', trigger: 'commit', durationTicks: 8, timeout: { then: 'cancel' } }],
+          effects: [
+            { spawnEntity: { prefab: 'Buff', overrides: { BuffInstance: { target: { var: 'unit0' }, source: { var: 'owner' }, buffId: 0 } } } },
+            {
+              spawnEntity: {
+                prefab: 'Bolt',
+                overrides: {
+                  AbilityProjectile: {
+                    owner: { var: 'owner' },
+                    originX: { getComponent: [{ var: 'owner' }, 'Position', 'x'] },
+                    originY: { getComponent: [{ var: 'owner' }, 'Position', 'y'] },
+                  },
+                  Position: {
+                    x: { getComponent: [{ var: 'owner' }, 'Position', 'x'] },
+                    y: { getComponent: [{ var: 'owner' }, 'Position', 'y'] },
+                  },
+                },
+              },
+            },
+          ],
+          projectile: {
+            onFade: [{ emitEvent: { type: 'BoltFaded', data: { entity: { var: 'self' } } } }],
+          },
+        },
+      ],
+      buffs: [
+        // `refresh` на общей цели — то самое наложение, поиск хозяина которого
+        // перебирает живые инстансы (BUFF-3): ось делает его квадратичность числом.
+        { id: 'marked', class: 'negative', durationTicks: 6, stacking: 'refresh' },
+      ],
+      abilityRuntime: { teamField: ['Player', 'slot'] },
+      terrain: {
+        width: ABILITY_ARENA,
+        height: ABILITY_ARENA,
+        tileSize: FIXED_ONE,
+        levels: Array.from({ length: ABILITY_ARENA }, () => row),
+        flags: Array.from({ length: ABILITY_ARENA }, () => flags),
+      },
+      fog: true,
+      initial: abilityStressSpawns(),
+    },
+  };
+}
+
+/**
+ * Два размера оси «число кастующих агентов» (ABIL-5, BUFF-3, PERF-6).
+ *
+ * Малый размер — каждый второй СТОЛБЕЦ и каждая вторая СТРОКА сетки, а не
+ * каждый четвёртый кастер по порядку и тем более не первая четверть сетки: ось
+ * обязана двигать ровно одну величину (PERF-6), а оба этих прореживания сжимали
+ * бы заодно охват сетки — при радиусе обзора в восемь тайлов геометрия двигала
+ * бы `visibilityPairs` и `abilityCandidates` наравне с числом кастеров, и
+ * отношение L/S нечему было бы приписать. Прореживание по сетке оставляет её
+ * углы на местах: охват по обеим осям, цели шага, укрытия, сетка террейна и все
+ * таблицы у размеров одни и те же, а различается только число кастующих
+ * агентов — вчетверо.
+ */
+export function abilityStressSizes(): { readonly small: AxisSize; readonly large: AxisSize } {
+  const full = abilityStressScenario();
+  const initial = full.scene.initial ?? [];
+  let caster = 0;
+  const thinned = initial.filter((spawn) => {
+    if (spawn.prefab !== 'Caster') return true;
+    const i = caster++;
+    return (i % ABILITY_GRID) % ABILITY_THIN === 0 && Math.floor(i / ABILITY_GRID) % ABILITY_THIN === 0;
+  });
+  return {
+    small: {
+      magnitude: ABILITY_BLOCKS * ABILITY_BLOCKS,
+      def: { ...full, scene: { ...full.scene, initial: thinned } },
+    },
+    large: { magnitude: ABILITY_CASTERS, def: full },
+  };
 }

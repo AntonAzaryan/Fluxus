@@ -11,9 +11,9 @@
  *   владельцу и виду и величинами состояния. Секции `tick` и `history` — по
  *   одной: симуляция пресета не знает (QUAL-2), и равенство между прогонами
  *   двух пресетов здесь проверяется, а не предполагается.
- * - На осях PERF-6 — те же четыре документа, что у стоимости: `scaling`
- *   (величины рендера на двух размерах каждой оси), `npc-stress`, `nav-path` и
- *   `extract` (величины ядра на двух размерах).
+ * - На осях PERF-6 — те же пять документов, что у стоимости: `scaling`
+ *   (величины рендера на двух размерах каждой оси), `npc-stress`, `nav-path`,
+ *   `ability-stress` и `extract` (величины ядра на двух размерах).
  *
  * ## Почему отдельный документ, а не секция в `*.cost.json`
  *
@@ -40,12 +40,14 @@ import {
   type RenderFootprint,
 } from '@fluxus/render';
 import {
+  ABILITY_STRESS,
   BENCH_PRESETS,
   BENCH_PRESET_NAMES,
   GOLDEN_DIR,
   NAV_PATH,
   NPC_STRESS,
   RECORDED_MATCHES,
+  abilityStressSizes,
   benchGrid,
   extractSizes,
   loadRecording,
@@ -330,6 +332,15 @@ function measureExtract(): unknown {
   return axisDocument('extractEntities', extractSizes(), measureExtractSize);
 }
 
+/**
+ * Величины памяти на оси платформы способностей (PERF-6, PERF-8): та же
+ * нагрузка и та же ось, на которой снимается её стоимость, — второй копии
+ * нагрузки рядом не заводится.
+ */
+function measureAbilityStress(): unknown {
+  return axisDocument('abilityCasters', abilityStressSizes(), measureTickSize);
+}
+
 // --------------------------------------------------------------- сверка эталона
 
 /** Канонический вид эталона — тот же, что у golden-пар ядра (SER-6, CLI-5). */
@@ -421,6 +432,10 @@ describe('PERF-6: оси масштабирования — величины п�
 
   it(`${NAV_PATH}.footprint.json: величины ядра совпадают с эталоном`, () => {
     checkGolden(`${NAV_PATH}.footprint.json`, measureNavPath());
+  });
+
+  it(`${ABILITY_STRESS}.footprint.json: величины ядра совпадают с эталоном`, () => {
+    checkGolden(`${ABILITY_STRESS}.footprint.json`, measureAbilityStress());
   });
 
   it('extract.footprint.json: величины ядра совпадают с эталоном', () => {

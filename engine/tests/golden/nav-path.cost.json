@@ -5,24 +5,38 @@
   "cost": {
     "small": {
       "tick": {
+        "abilityCandidates": 0,
         "broadPhasePairs": 231,
+        "buffCandidates": 0,
+        "buffSteps": 0,
         "commandsApplied": 283,
+        "eventsEmitted": 9,
         "expressions": 0,
         "navNodes": 531,
         "npcNeighbors": 609,
+        "projectileSteps": 0,
         "raycasts": 0,
-        "ticks": 24
+        "ticks": 24,
+        "tweenSteps": 0,
+        "visibilityPairs": 0
       }
     },
     "large": {
       "tick": {
+        "abilityCandidates": 0,
         "broadPhasePairs": 1205,
+        "buffCandidates": 0,
+        "buffSteps": 0,
         "commandsApplied": 703,
+        "eventsEmitted": 27,
         "expressions": 0,
         "navNodes": 899,
         "npcNeighbors": 913,
+        "projectileSteps": 0,
         "raycasts": 0,
-        "ticks": 24
+        "ticks": 24,
+        "tweenSteps": 0,
+        "visibilityPairs": 0
       }
     }
   }

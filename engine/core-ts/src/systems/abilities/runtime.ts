@@ -10,6 +10,7 @@
  * Мутаций мимо Command Buffer здесь нет (DET-7, CMD-4): всё, что пишется,
  * пишется командами.
  */
+import { countCostAbilityCandidates } from '../../debug.js';
 import { distSqCompare, distSqLe } from '../../math/fixed.js';
 import { indexOf as rawIndexOf } from '../../ecs/entityIndex.js';
 import { evaluate, typeError, type Expression, type ExprValue } from '../../dsl/expr.js';
@@ -527,7 +528,12 @@ export class CandidatePicker {
     let best = NO_ENTITY;
     let bestX = 0;
     let bestY = 0;
-    for (const candidate of ctx.query(spec)) {
+    // Кандидаты скана — работа тика (PERF-3): считается ОСМОТР, а не исход, и
+    // калитка зовётся один раз на проход с числом отобранных запросом — тело
+    // цикла проходит каждый из них, ранних выходов у скана нет.
+    const candidates = ctx.query(spec);
+    countCostAbilityCandidates(candidates.length);
+    for (const candidate of candidates) {
       const candidateX = positionOf(ctx, candidate, 'x');
       const candidateY = positionOf(ctx, candidate, 'y');
       // Фигура шага — гейт платформы (ABIL-5), и стоит он ДО предиката

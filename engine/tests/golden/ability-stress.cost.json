@@ -1,0 +1,43 @@
+{
+  "axis": "abilityCasters",
+  "small": 25,
+  "large": 81,
+  "cost": {
+    "small": {
+      "tick": {
+        "abilityCandidates": 8075,
+        "broadPhasePairs": 0,
+        "buffCandidates": 516,
+        "buffSteps": 476,
+        "commandsApplied": 6255,
+        "eventsEmitted": 125,
+        "expressions": 24661,
+        "navNodes": 0,
+        "npcNeighbors": 0,
+        "projectileSteps": 825,
+        "raycasts": 696,
+        "ticks": 24,
+        "tweenSteps": 696,
+        "visibilityPairs": 7800
+      }
+    },
+    "large": {
+      "tick": {
+        "abilityCandidates": 76059,
+        "broadPhasePairs": 0,
+        "buffCandidates": 2194,
+        "buffSteps": 1148,
+        "commandsApplied": 19415,
+        "eventsEmitted": 405,
+        "expressions": 167049,
+        "navNodes": 0,
+        "npcNeighbors": 0,
+        "projectileSteps": 2673,
+        "raycasts": 4056,
+        "ticks": 24,
+        "tweenSteps": 2040,
+        "visibilityPairs": 81144
+      }
+    }
+  }
+}

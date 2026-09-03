@@ -22,9 +22,10 @@
  *   потолок разбиения террейна), чтобы суперлинейный рост читался отношением L/S
  *   прямо в диффе эталона.
  * - На осях стороны симуляции (PERF-6) — `npc-stress.cost.json` (число агентов
- *   платформы поведения, NPC-9) и `nav-path.cost.json` (число агентов поиска
- *   пути, NAV-5): те же два размера и та же форма документа, только стадия одна
- *   — `tick`.
+ *   платформы поведения, NPC-9), `nav-path.cost.json` (число агентов поиска
+ *   пути, NAV-5) и `ability-stress.cost.json` (число кастующих агентов
+ *   платформы способностей, ABIL-5): те же два размера и та же форма документа,
+ *   только стадия одна — `tick`.
  * - На оси экстракции (PERF-6) — `extract.cost.json` (число сущностей
  *   доставки): та же форма, стадия `extract`. Записанные матчи стадию эту
  *   меряют, но осью не являются — их состав фиксирован, и линейность экстракции
@@ -45,7 +46,7 @@
 import { readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { runScenario, type DiagnosticsSink } from '@fluxus/core';
+import { runScenario, type DiagnosticsSink, type ScenarioDef, type ScenarioSpawn } from '@fluxus/core';
 import {
   COST_COUNTER_STAGES,
   createCostCounters,
@@ -60,10 +61,12 @@ import {
   type ScalingSize,
 } from './benchAxes.js';
 import {
+  ABILITY_STRESS,
   BENCH_PRESETS,
   BENCH_PRESET_NAMES,
   NAV_PATH,
   NPC_STRESS,
+  abilityStressSizes,
   loadNavPath,
   loadNpcStress,
   GOLDEN_DIR,
@@ -92,34 +95,18 @@ type StageCost = Record<string, number>;
  * Сводка стоимости тика (PERF-3) — сумма записей `TICK_COST` за прогон. `ticks`
  * считает сами записи: без него по эталону не прочесть, во сколько обошёлся
  * тик, а «сколько всего» и «сколько на тик» на ревью нужны оба.
+ *
+ * Именованное поле здесь ровно одно — то, которого в записи нет. Остальные
+ * приезжают из самой записи и потому не перечислены: перечень пришлось бы
+ * править на каждую платформу ядра, получившую свою строку сводки (PERF-3), а
+ * забытая строка выглядела бы зелёным гейтом вместо диффа.
  */
 interface TickCost extends StageCost {
-  broadPhasePairs: number;
-  commandsApplied: number;
-  expressions: number;
-  /**
-   * Работа поиска пути за тик (`pathfinding` NAV-5): раскрытые узлы A* плюс
-   * пробы клеток обхода видимости. Своя строка, а не сумма с соседями: величина
-   * растёт размером арены и числом перезапросов, и в общем счётчике её
-   * регрессия утонула бы.
-   */
-  navNodes: number;
-  /** Осмотренные соседи-агенты сетки платформы поведения NPC (NPC-6, NPC-9). */
-  npcNeighbors: number;
-  raycasts: number;
   ticks: number;
 }
 
 function tickCostCollector(): { readonly sink: DiagnosticsSink; readonly total: TickCost } {
-  const total: TickCost = {
-    broadPhasePairs: 0,
-    commandsApplied: 0,
-    expressions: 0,
-    navNodes: 0,
-    npcNeighbors: 0,
-    raycasts: 0,
-    ticks: 0,
-  };
+  const total: TickCost = { ticks: 0 };
   const sink: DiagnosticsSink = {
     // Границы систем достаточно: сводка стоимости — штатная телеметрия DIAG-3,
     // полного потока команд ей не нужно, а он стоил бы прогону на порядок.
@@ -127,14 +114,16 @@ function tickCostCollector(): { readonly sink: DiagnosticsSink; readonly total: 
     record: (entry) => {
       if (entry.code !== 'TICK_COST') return;
       total.ticks++;
-      // Данные записи объявлены как «число или строка» (DIAG-2); счётчики
-      // стоимости — всегда числа, и `Number` здесь только сужает тип.
-      total.broadPhasePairs += Number(entry.data?.broadPhasePairs ?? 0);
-      total.commandsApplied += Number(entry.data?.commandsApplied ?? 0);
-      total.expressions += Number(entry.data?.expressions ?? 0);
-      total.navNodes += Number(entry.data?.navNodes ?? 0);
-      total.npcNeighbors += Number(entry.data?.npcNeighbors ?? 0);
-      total.raycasts += Number(entry.data?.raycasts ?? 0);
+      // Секция `tick` собирается ПРОХОДОМ по числовым полям записи, а не
+      // перечнем: новый счётчик ядра попадает в эталон новой строкой диффа сам,
+      // без правки гейта, а забытая калитка видна отсутствием строки, а не
+      // молчанием. Данные записи объявлены как «число или строка» (DIAG-2);
+      // счётчики стоимости — всегда числа, нечисловое поле в сводке сложить не
+      // с чем, и такое поле пропускается.
+      for (const [name, value] of Object.entries(entry.data ?? {})) {
+        if (typeof value !== 'number') continue;
+        total[name] = (total[name] ?? 0) + value;
+      }
     },
   };
   return { sink, total };
@@ -822,7 +811,110 @@ describe('NAV-5: эталон стоимости поиска пути', () => {
     // Каждый агент ищет путь сам (NAV-5): вчетверо больше ищущих — заметно
     // больше раскрытых узлов. Порог мягкий намеренно: эталон держит точные
     // числа, а тест держит СМЫСЛ оси — что она вообще двигает работу поиска.
-    expect(large.navNodes).toBeGreaterThan(small.navNodes);
+    expect(large.navNodes).toBeGreaterThan(small.navNodes!);
+  });
+});
+
+/**
+ * Стоимость платформы способностей на двух размерах оси «число кастующих
+ * агентов» (`ability-system` ABIL-5, ABIL-9, `buff-system` BUFF-3, PERF-6):
+ * кастеры сеткой подтверждают шаг прицеливания по фигуре, кладут баффы на общие
+ * цели, выпускают снаряды и наблюдают друг друга сквозь туман.
+ *
+ * Ось заведена ради строк, которых иначе в эталонах нет вовсе: ни записанные
+ * матчи, ни нагрузки NPC и навигации платформ способностей, баффов, твинов и
+ * видимости не поднимают, и все их счётчики лежали бы нулями (PERF-3).
+ */
+function measureAbilityStress(): unknown {
+  return axisDocument('abilityCasters', 'tick', abilityStressSizes(), measureTickSize);
+}
+
+/** Счётчики платформ, ради которых ось и заведена: пусты они быть не вправе. */
+const ABILITY_AXIS_COUNTERS = [
+  'abilityCandidates',
+  'buffCandidates',
+  'buffSteps',
+  'projectileSteps',
+  'tweenSteps',
+  'visibilityPairs',
+  'eventsEmitted',
+] as const;
+
+/** Различимых пар «цель шага × сторона» у нагрузки: четыре цели, две стороны. */
+const ABILITY_AXIS_GROUPS = 4;
+
+describe('PERF-6: эталон стоимости платформы способностей', () => {
+  it('счётчики стадии тика совпадают с эталоном', () => {
+    checkGolden(`${ABILITY_STRESS}.cost.json`, measureAbilityStress());
+  });
+
+  it('нагрузка не мёртвая: каждая платформа оси сделала работу на ОБОИХ размерах', () => {
+    const document = measureAbilityStress() as SimAxisDocument;
+    // Ноль на любом из размеров означал бы, что нагрузка перестала поднимать
+    // платформу, а эталон при этом остался бы зелёным: ноль сходится с нулём.
+    for (const size of ['small', 'large'] as const) {
+      const cost = document.cost[size].tick;
+      for (const name of ABILITY_AXIS_COUNTERS) {
+        expect(cost[name], `${size}/${name}`).toBeGreaterThan(0);
+      }
+    }
+    expect(measureAbilityStress()).toEqual(document);
+  });
+
+  it('PERF-6: ось двигает ровно одну величину — различается только число кастеров', () => {
+    const { small, large } = abilityStressSizes();
+    const spawns = (def: ScenarioDef, caster: boolean): ScenarioSpawn[] =>
+      (def.scene.initial ?? []).filter((spawn) => (spawn.prefab === 'Caster') === caster);
+
+    // Всё, что не кастер, — цели шага и укрытия — совпадает записью в запись, а
+    // сцена без расстановки (компоненты, prefab'ы, системы, таблицы, террейн) —
+    // целиком: ось не вправе двигать ничего, кроме числа кастующих агентов.
+    expect(spawns(small.def, false)).toEqual(spawns(large.def, false));
+    expect({ ...small.def.scene, initial: [] }).toEqual({ ...large.def.scene, initial: [] });
+
+    const thin = spawns(small.def, true);
+    const full = spawns(large.def, true);
+    expect(thin).toHaveLength(small.magnitude);
+    expect(full).toHaveLength(large.magnitude);
+
+    // Охват сетки у размеров один и тот же: прореживание идёт по столбцам и
+    // строкам и оставляет её углы на местах. Иначе радиус обзора и радиус скана
+    // ловили бы разную геометрию, и отношение L/S мерило бы её, а не ось.
+    const extent = (list: readonly ScenarioSpawn[]): readonly number[] => {
+      const xs = list.map((spawn) => spawn.overrides!.Position!.x!);
+      const ys = list.map((spawn) => spawn.overrides!.Position!.y!);
+      return [Math.min(...xs), Math.max(...xs), Math.min(...ys), Math.max(...ys)];
+    };
+    expect(extent(thin)).toEqual(extent(full));
+
+    // Набор «точка прицела × сторона» тоже один и тот же: цели наложения и
+    // стороны тумана — свойства блока сетки, а не порядкового номера кастера.
+    const spread = (list: readonly ScenarioSpawn[]): string[] =>
+      [...new Set(list.map((spawn) => JSON.stringify([spawn.overrides!.Input, spawn.overrides!.Player])))].sort();
+    expect(spread(thin)).toEqual(spread(full));
+    expect(spread(thin)).toHaveLength(ABILITY_AXIS_GROUPS);
+  });
+
+  it('PERF-6: скан таргетинга и пары видимости растут БЫСТРЕЕ числа кастеров', () => {
+    const document = measureAbilityStress() as SimAxisDocument;
+    const small = document.cost.small.tick;
+    const large = document.cost.large.tick;
+    const casters = document.large / document.small;
+
+    // Размеры отличаются ровно величиной оси: тиков поровну, растёт только
+    // число кастующих агентов.
+    expect(large.ticks).toBe(small.ticks);
+    expect(casters).toBeGreaterThan(1);
+    // Скан кандидатов идёт запросом к миру на КАЖДОЕ подтверждение шага, а сам
+    // мир растёт кастерами: работа растёт произведением, и отношение L/S это
+    // показывает — по одному числу суперлинейность не видна (ABIL-5).
+    expect(large.abilityCandidates).toBeGreaterThan(casters * small.abilityCandidates!);
+    // Пары «наблюдатель × цель» — та же квадратичность по построению FoW:
+    // каждый добавленный кастер и сам наблюдает, и попадает в чужие выборки.
+    expect(large.visibilityPairs).toBeGreaterThan(casters * small.visibilityPairs!);
+    // Шаги снарядов, наоборот, линейны числу кастеров: один каст — один снаряд.
+    // Строка рядом с квадратичными и нужна затем, чтобы отличать одно от другого.
+    expect(large.projectileSteps).toBe(casters * small.projectileSteps!);
   });
 });
 
@@ -859,7 +951,7 @@ describe('NPC-9: эталон стоимости массы NPC', () => {
     // растут быстрее, чем сами агенты (каждый добавленный агент и сам ищет
     // соседей, и попадает в чужие выборки), и суперлинейность читается
     // отношением L/S прямо в диффе эталона — по одному числу её не видно.
-    expect(large.npcNeighbors).toBeGreaterThan(agents * small.npcNeighbors);
+    expect(large.npcNeighbors).toBeGreaterThan(agents * small.npcNeighbors!);
   });
 });
 
