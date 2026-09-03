@@ -99,7 +99,7 @@ import {
 import { DyingInstances } from './particleDying.js';
 import { EFFECT_ASSET_KIND, EffectDocuments, shieldBatches } from './particleAssets.js';
 import { CameraCull } from './cameraCull.js';
-import { dropSocketCache, type SocketSource } from '../particleSockets.js';
+import type { SocketSource } from '../particleSockets.js';
 import { createWarnOnce, type WarnOnce } from '../warnOnce.js';
 import { effectIdsOf, settleEffects } from './particlePrewarm.js';
 import {
@@ -461,10 +461,6 @@ export class ParticlesSubsystem implements RenderSubsystem {
     if (next === this.manifest) return;
     this.manifest = next;
     this.stateNames = null;
-    // Кэш сокетов сбрасывается ЗАРАНЕЕ: правленая запись меняет ярус и модель
-    // инстанса (REND-20, REND-3), а с ними и дерево узлов, — держаться за узел,
-    // найденный в прежнем дереве, после переподачи нельзя (REND-17).
-    this.dropSocketCaches();
     if (this.view !== null) this.syncShells(this.view, costSink());
     if (this.decorations !== null) this.syncDecorations(this.decorations);
   }
@@ -715,12 +711,6 @@ export class ParticlesSubsystem implements RenderSubsystem {
    */
   private restartShells(): void {
     for (const shell of this.shells.values()) restartInstance(shell.instance);
-  }
-
-  /** Кэш найденных узлов-сокетов обоих наборов — заново (REND-17). */
-  private dropSocketCaches(): void {
-    for (const shell of this.shells.values()) dropSocketCache(shell);
-    for (const shell of this.decorationShells.values()) dropSocketCache(shell);
   }
 
   // -------------------------------------------------------------- выстрелы

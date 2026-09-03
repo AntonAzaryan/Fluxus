@@ -271,6 +271,19 @@ const addEffectImageOperation: AuthoringOperation = {
 };
 
 /**
+ * Номер, которым операция адресует изображение источника. У источника-СПИСКА
+ * это позиция в нём (не названа — первая), у одиночной записи номер 0 означает
+ * саму запись: адресация одна на обе законные формы, и вызывающему незачем
+ * спрашивать документ о форме прежде, чем править поле (REND-23). Номер сверх
+ * одиночной записи не подменяется молча — такого изображения нет, и операция
+ * скажет об этом отказом.
+ */
+function imageIndex(source: JsonValue | undefined, raw: number | undefined): number | undefined {
+  if (isJsonArray(source)) return raw ?? 0;
+  return raw === undefined || raw === 0 ? undefined : raw;
+}
+
+/**
  * Одно поле изображения (ED-14, REND-23): цвет, радиус, длительность, окно
  * стата целиком. `null` СНИМАЕТ поле, а не пишет пустое значение: без снятия
  * автор чистил бы документ руками, чего ED-14 не допускает.
@@ -301,8 +314,8 @@ const setEffectFieldOperation: AuthoringOperation = {
         received: field,
       });
     }
-    const index = typeof params.index === 'number' ? params.index : undefined;
     const before = ctx.readAt(document, sourcePath(EFFECTS_SECTION, table, name));
+    const index = imageIndex(before, typeof params.index === 'number' ? params.index : undefined);
     if (!isJsonObject(ctx.readAt(document, imagePath(table, name, index)))) {
       throw new OperationError(
         id,

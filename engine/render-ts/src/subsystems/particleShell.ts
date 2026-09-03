@@ -20,7 +20,6 @@ import * as THREE from 'three';
 import type { RenderCostCounters } from '../cost.js';
 import { stepInstance, type EffectInstance } from '../particleEffects.js';
 import {
-  dropSocketCache,
   resolveSocketPose,
   type SocketPose,
   type SocketSource,
@@ -45,9 +44,6 @@ export interface EmitterRecord {
 export interface EmitterShell extends Shell<EmitterRecord, EffectInstance> {
   /** Имя узла из записи манифеста; по нему и видно, что имя правлено (REND-17). */
   socketName: string | undefined;
-  /** Кэш найденного узла-сокета и корня, из которого он взят (`particleSockets.ts`). */
-  socket: THREE.Object3D | null;
-  socketRoot: THREE.Object3D | null;
 }
 
 /**
@@ -92,8 +88,6 @@ export function createEmitterShellSet(
         record,
         view,
         socketName: record.socket,
-        socket: null,
-        socketRoot: null,
       };
     },
     release: (shell) => {
@@ -103,10 +97,9 @@ export function createEmitterShellSet(
       // Другой эффект в записи — другой ассет и другой экземпляр: играть его
       // прежним нечем, и это не «мигание» (REND-17).
       if (shell.record.effect !== record.effect) return false;
-      if (shell.socketName !== record.socket) {
-        shell.socketName = record.socket;
-        dropSocketCache(shell); // имя сокета правлено — ищем узел заново
-      }
+      // Имя сокета правлено — поза спрашивается по новому имени со следующего
+      // кадра; кэша, который пришлось бы ронять, у привязки больше нет.
+      if (shell.socketName !== record.socket) shell.socketName = record.socket;
       return true;
     },
     pose: (shell, alpha, heightStep, surface, pose) => {
