@@ -60,6 +60,25 @@ describe('композиция HUD демо резолвится против р
     );
   });
 
+  /**
+   * Полоса здоровья героя стоит НАД НИМ по мировому якорю (HUD-10): место ей
+   * даёт проекция, которую публикует рендер (`rendering` REND-41), а объявлено
+   * это ЗАПИСЬЮ композиции — кода виджета размещение не касается (HUD-4).
+   */
+  it('полоса здоровья размещена по мировому якорю героя (HUD-10)', () => {
+    const composition = demoHudComposition({ controls: true, matchPause: true, tickMs: 16 });
+    const hp = composition.entries.find((entry) => entry.widget === 'hp-bar')!;
+    expect(hp.anchor).toBeDefined();
+    // Сущность названа СЛОТОМ биндинга, а не идентификатором: композиция —
+    // значение со ссылками-именами (HUD-4).
+    expect(hp.anchor!.entity).toBe('entity');
+    expect(hp.bindings![hp.anchor!.entity]).toBe('hero.entity');
+    // И резолв это подтверждает: слот якоря обязан быть среди биндингов записи.
+    const resolved = resolveComposition(createDemoHudRegistry(stubOptions), composition);
+    const entry = resolved.entries.find((one) => one.kind.name === 'hp-bar')!;
+    expect(entry.anchor).toEqual(hp.anchor);
+  });
+
   it('панель кулдаунов забиндена на имена статов сборки, а не на компоненты мира', () => {
     const composition = demoHudComposition({ controls: true, matchPause: true, tickMs: 16 });
     const cooldowns = composition.entries.find((entry) => entry.widget === 'cooldowns')!;

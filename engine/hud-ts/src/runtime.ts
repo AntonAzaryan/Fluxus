@@ -22,7 +22,8 @@
  * сцене мёртвую подписку прежнего.
  */
 import type { HudActionsFacade } from './actions.js';
-import type { HudComposition } from './composition.js';
+import { anchorEntityOf, type HudAnchorSource } from './anchors.js';
+import type { HudComposition, HudWorldAnchor } from './composition.js';
 import type {
   HudDeliveredEvent,
   HudDeliveredState,
@@ -40,6 +41,12 @@ export interface HudRuntimeOptions {
   readonly registry: HudRegistry;
   readonly host: HudOverlayHost;
   readonly actions: HudActionsFacade;
+  /**
+   * Источник мировых якорей (HUD-10) — то, что публикует рендер (`rendering`
+   * REND-41). Нет источника — якорные виджеты монтируются скрытыми: HUD без
+   * рендера (тест, headless-прогон) обязан собираться, а не отказывать.
+   */
+  readonly anchors?: HudAnchorSource;
 }
 
 /** Смонтированная запись: экземпляр виджета, его элемент и план биндингов. */
@@ -47,6 +54,18 @@ interface MountedEntry {
   readonly widget: HudWidget;
   readonly element: Element;
   readonly bindings: readonly ResolvedHudBinding[];
+  /** Размещение по мировому якорю (HUD-10); null — виджет живёт в зоне. */
+  readonly anchor: HudWorldAnchor | null;
+  /**
+   * Состояние якорного размещения между кадрами: сущность из последней
+   * доставки и последняя записанная в DOM позиция. Пишется в DOM только
+   * изменившееся — размещение идёт каденсом КАДРА, и пере-запись стиля на
+   * каждом дёргала бы layout впустую (HUD-10, тот же довод, что у `setText`).
+   */
+  entity: number | null;
+  placedX: number;
+  placedY: number;
+  shown: boolean;
 }
 
 export class HudRuntime {
@@ -58,6 +77,12 @@ export class HudRuntime {
 
   private readonly options: HudRuntimeOptions;
   private mounted: MountedEntry[] = [];
+  /**
+   * Сколько среди смонтированных якорных (HUD-10). Композиция без них стоит
+   * кадру ровно одного сравнения — тот же смысл, в каком инертен выключенный
+   * отладочный слой рендера.
+   */
+  private anchored = 0;
   /**
    * Последнее доставленное состояние — им немедленно кормятся виджеты свежей
    * композиции в `apply()`, не дожидаясь следующей доставки (HUD-5). Это
@@ -95,6 +120,10 @@ export class HudRuntime {
         this.deliver(view);
       },
       updateFrame: (_dt, _alpha, realDt) => {
+        // Размещение по мировому якорю — каденсом КАДРА (HUD-10): якорь идёт
+        // вместе с камерой, а камера движется между доставками. Данные виджета
+        // этим не затронуты — они по-прежнему приезжают доставкой (HUD-5).
+        this.layoutAnchors();
         // Покадровых анимаций у исполнителя нет: HUD живёт каденсом доставки
         // (HUD-5). Кадр он лишь ПЕРЕДАЁТ тем виджетам, которые о нём просили
         // (`HudWidget.frame`), — величинам самого главного потока вроде счётчика
@@ -146,8 +175,22 @@ export class HudRuntime {
 
     this.clear();
     for (const item of staged) {
-      const element = this.options.host.place(item.entry.zone, item.node);
-      this.mounted.push({ widget: item.widget, element, bindings: item.entry.bindings });
+      const anchor = item.entry.anchor ?? null;
+      const element =
+        anchor === null
+          ? this.options.host.place(item.entry.zone, item.node)
+          : this.options.host.placeAnchored(item.node);
+      if (anchor !== null) this.anchored += 1;
+      this.mounted.push({
+        widget: item.widget,
+        element,
+        bindings: item.entry.bindings,
+        anchor,
+        entity: null,
+        placedX: Number.NaN,
+        placedY: Number.NaN,
+        shown: false,
+      });
     }
 
     const view = this.lastDelivered;
@@ -205,6 +248,57 @@ export class HudRuntime {
       this.options.host.remove(entry.element);
     }
     this.mounted = [];
+    this.anchored = 0;
+  }
+
+  /**
+   * Кадровое размещение якорных виджетов (HUD-10) по ОПУБЛИКОВАННОМУ якорю
+   * (`rendering` REND-41): проекции экранный слой не считает — он её читает
+   * (HUD-3). Композиция без якорных записей стоит ровно одного сравнения.
+   *
+   * Публичен, потому что кадр приезжает исполнителю подпиской на сцену
+   * (`subsystem.updateFrame`), а сборке иногда нужно разместить виджеты вне
+   * этой подписки — например сразу после `apply`, чтобы HUD не мигнул пустым
+   * до первого кадра.
+   */
+  layoutAnchors(): void {
+    if (this.anchored === 0) return;
+    const source = this.options.anchors;
+    for (const entry of this.mounted) {
+      const anchor = entry.anchor;
+      if (anchor === null) continue;
+      // Нет источника, нет сущности, инстанс не нарисован либо ушёл за кромку
+      // кадра — виджет скрыт, а не оставлен висеть в последней точке (HUD-10).
+      const published =
+        source === undefined || entry.entity === null ? null : source.anchorOf(entry.entity);
+      if (published === null || !published.drawn || !published.onScreen) {
+        this.showAnchored(entry, false);
+        continue;
+      }
+      this.placeAnchored(entry, published.x + (anchor.offsetX ?? 0), published.y + (anchor.offsetY ?? 0));
+      this.showAnchored(entry, true);
+    }
+  }
+
+  /** Точка держателя; пишется, только когда изменилась (HUD-10). */
+  private placeAnchored(entry: MountedEntry, x: number, y: number): void {
+    if (entry.placedX === x && entry.placedY === y) return;
+    entry.placedX = x;
+    entry.placedY = y;
+    // Перенос, а не `left`/`top`: смещение композитингом не трогает раскладку
+    // соседей, а `translate(-50%, -100%)` ставит виджет по центру НАД точкой.
+    setStyle(
+      entry.element,
+      'transform',
+      `translate(${String(x)}px, ${String(y)}px) translate(-50%, -100%)`,
+    );
+  }
+
+  /** Показ держателя; пишется, только когда изменился. */
+  private showAnchored(entry: MountedEntry, shown: boolean): void {
+    if (entry.shown === shown) return;
+    entry.shown = shown;
+    setStyle(entry.element, 'display', shown ? 'block' : 'none');
   }
 
   /**
@@ -253,6 +347,9 @@ export class HudRuntime {
   ): void {
     const values: Record<string, unknown> = {};
     for (const binding of entry.bindings) values[binding.slot] = binding.selector(view);
+    // Сущность якоря — из ТОГО ЖЕ значения биндинга, что уезжает виджету
+    // (HUD-10): второго чтения доставленного состояния для неё не заводится.
+    if (entry.anchor !== null) entry.entity = anchorEntityOf(values[entry.anchor.entity]);
     entry.widget.update({
       tick: view.tick,
       mode: view.mode,
@@ -261,4 +358,14 @@ export class HudRuntime {
       events,
     });
   }
+}
+
+/**
+ * Инлайн-стиль элемента точечно: `style` у DOM-элемента — объект, а описания
+ * узлов (`HudNode`) неизменяемы, и пере-рендер держателя на каждый кадр стоил
+ * бы дороже самого размещения. Пишется только изменившееся — решает вызывающий.
+ */
+function setStyle(element: Element, property: string, value: string): void {
+  const style = (element as { style?: { setProperty(name: string, value: string): void } }).style;
+  style?.setProperty(property, value);
 }

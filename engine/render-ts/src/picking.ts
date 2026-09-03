@@ -10,6 +10,12 @@
  * величины в валидный fixed-point делает редактор вызовом ядра (ED-1, ED-16).
  * Индекс клетки — целое число сетки, а не Q16.16-величина.
  *
+ * Луч и поверхностная ветвь у сервиса НЕ СВОИ: их даёт проекция курсора
+ * (`cursorSurface.ts`, REND-42) — тот же вопрос «где под курсором поверхность»
+ * задаёт и потребитель кадра, у которого ни ручек, ни документного слоя нет
+ * вовсе. Picking надстраивает над ней порядок разрешения и прокси; редакторным
+ * (REND-15) остаётся он, а не общая под ним проекция.
+ *
  * Согласованность с картинкой достигается тем, что второго источника данных не
  * заведено, а не аккуратностью настроек:
  *
@@ -31,19 +37,17 @@
  * запись прокси переиспользуются между вызовами.
  */
 import * as THREE from 'three';
-import { FIXED_ONE, type EntityId } from '@fluxus/core';
-import { applyCameraPose } from './camera/apply.js';
+import type { EntityId } from '@fluxus/core';
 import type { CameraPose } from './camera/rig.js';
 import type { VisualSurfaceSource } from './surfaceSource.js';
-import {
-  createPickRay,
-  type MutablePickHit,
-  type PickHit,
-  type PickKind,
-  type PickRay,
-  type ViewportPoint,
+import { CursorSurface } from './cursorSurface.js';
+import type {
+  MutablePickHit,
+  PickHit,
+  PickKind,
+  PickRay,
+  ViewportPoint,
 } from './pickContracts.js';
-import { SurfaceMarch, clampIndex, writeSurfaceHit } from './surfaceMarch.js';
 import { SLAB_RANGE, slabAxis } from './slab.js';
 
 // ------------------------------------------------------------------- прокси
@@ -146,36 +150,30 @@ export interface ViewportPickingOptions {
   /** Прокси ручек служебных наложений — подсистема наложений (REND-16). */
   readonly handles?: PickProxySource;
   /**
-   * Камера вьюпорта. По умолчанию сервис заводит свою — с МИРОВЫМ верхом сцены
-   * (0, 0, 1), тем же, который ставит своей камере всякая сборка движка: позу
-   * сажает `applyCameraPose` через `lookAt` (CAM-1), а `lookAt` строит крен из
-   * `camera.up`, и камера с верхом THREE по умолчанию (0, 1, 0) дала бы луч,
-   * повёрнутый вокруг оси взгляда, — в центре вьюпорта он совпал бы с
-   * нарисованным, а под курсором в углу разошёлся бы на десятки градусов.
-   *
-   * Передать свою полезно, чтобы объект был буквально один; тогда её верх —
-   * дело вызывающего: луч обязан совпадать с ТОЙ камерой, которой нарисован
-   * кадр (REND-15).
+   * Камера вьюпорта — уезжает проекции курсора (REND-42), которая луч и строит.
+   * По умолчанию она заводит свою, с МИРОВЫМ верхом сцены (0, 0, 1); передать
+   * свою полезно, чтобы объект был буквально один, и тогда её верх — дело
+   * вызывающего: луч обязан совпадать с ТОЙ камерой, которой нарисован кадр
+   * (REND-15).
    */
   readonly camera?: THREE.PerspectiveCamera;
   /** Подшагов на клетку при марше по полю высот; меньше — грубее на выпуклостях. */
   readonly cellSteps?: number;
 }
 
-// ------------------------------------------------------------------ числа
-
-/** Подшагов на клетку при марше по полю высот по умолчанию. */
-const DEFAULT_CELL_STEPS = 4;
-
 // ---------------------------------------------------------------- сервис
 
 export class ViewportPicking {
   private readonly options: ViewportPickingOptions;
-  private readonly camera: THREE.PerspectiveCamera;
-  private readonly march: SurfaceMarch;
+  /**
+   * Общая проекция курсора (REND-42): ею считаются и луч, и попадание в
+   * поверхность. Своих камеры и марша у сервиса нет — вторая их пара разошлась
+   * бы с первой ровно так же, как разошёлся бы с кадром луч по «почти той же»
+   * позе (REND-15).
+   */
+  private readonly cursor: CursorSurface;
 
-  /** Переиспользуемые: луч, попадание и скретчи преобразования прокси. */
-  private readonly rayScratch: PickRay = createPickRay();
+  /** Переиспользуемое попадание и скретчи преобразования прокси. */
   private readonly hit: MutablePickHit = {
     kind: 'surface',
     handle: null,
@@ -191,7 +189,6 @@ export class ViewportPicking {
     noFloor: false,
     wall: false,
   };
-  private readonly unprojected = new THREE.Vector3();
   private readonly inverse = new THREE.Matrix4();
   private readonly localOrigin = new THREE.Vector3();
   private readonly localTip = new THREE.Vector3();
@@ -200,25 +197,8 @@ export class ViewportPicking {
   private readonly proxyQuaternion = new THREE.Quaternion();
   private readonly proxyScale = new THREE.Vector3();
 
-  /**
-   * Состояние DDA-марша по клеткам поля высот — поле, а не локальные
-   * переменные: переход в следующую клетку вынесен в свой шаг, а луч в луч не
-   * вкладывается, поэтому одной записи на сервис хватает и марш не аллоцирует.
-   */
-  private readonly walk = {
-    cx: 0,
-    cy: 0,
-    t: 0,
-    stepX: 0,
-    stepY: 0,
-    deltaX: 0,
-    deltaY: 0,
-    nextX: 0,
-    nextY: 0,
-  };
-
   /** Состояние поиска ближайшего прокси — поля, а не замыкание: визит зовётся на каждый инстанс. */
-  private searchRay: PickRay = this.rayScratch;
+  private searchRay: PickRay | null = null;
   private bestT = Number.POSITIVE_INFINITY;
   private bestEntity: EntityId = 0;
   private bestDecoration = false;
@@ -226,7 +206,9 @@ export class ViewportPicking {
 
   /** Визитор источника прокси; создан один раз — аллокаций в пути наведения нет. */
   private readonly visitProxy: PickProxyVisitor = (proxy: PickProxy): void => {
-    const t = this.intersectProxy(this.searchRay, proxy);
+    const ray = this.searchRay;
+    if (ray === null) return;
+    const t = this.intersectProxy(ray, proxy);
     // Побеждает ближайший; при равной дистанции — первый в порядке набора
     // (REND-15). Порядок обхода задаёт источник, и он же ставит decoration-
     // инстансы после инстансов presentation-состояния (REND-18).
@@ -239,55 +221,21 @@ export class ViewportPicking {
 
   constructor(options: ViewportPickingOptions) {
     this.options = options;
-    if (options.camera === undefined) {
-      // Своя камера — сразу в осях сцены: мир движка Z-up, и верх камеры кадра
-      // всякая сборка ставит так же. Чужую камеру сервис не трогает: её оси —
-      // дело вызывающего (REND-15).
-      this.camera = new THREE.PerspectiveCamera();
-      this.camera.up.set(0, 0, 1);
-    } else {
-      this.camera = options.camera;
-    }
-    this.march = new SurfaceMarch(
-      options.surface,
-      Math.max(1, Math.floor(options.cellSteps ?? DEFAULT_CELL_STEPS)),
-    );
+    this.cursor = new CursorSurface({
+      surface: options.surface,
+      ...(options.camera !== undefined ? { camera: options.camera } : {}),
+      ...(options.cellSteps !== undefined ? { cellSteps: options.cellSteps } : {}),
+    });
   }
 
   /**
-   * Мировой луч из позы камеры и точки вьюпорта (CAM-1). Второго способа его
-   * посчитать нет: позу на камеру сажает `applyCameraPose` — та же функция, что
-   * рисует кадр (REND-15). Возвращаемый объект переиспользуется.
+   * Мировой луч из позы камеры и точки вьюпорта (CAM-1) — общей проекцией
+   * курсора (REND-42). Второго способа его посчитать нет: позу на камеру сажает
+   * `applyCameraPose`, та же функция, что рисует кадр. Возвращаемый объект
+   * переиспользуется.
    */
-  ray(pose: CameraPose, point: ViewportPoint, out: PickRay = this.rayScratch): PickRay {
-    const camera = this.camera;
-    const aspect = point.height === 0 ? 1 : point.width / point.height;
-    const aspectChanged = camera.aspect !== aspect;
-    if (aspectChanged) camera.aspect = aspect;
-    applyCameraPose(camera, pose);
-    // `applyCameraPose` пересчитывает проекцию только на смену FOV — соотношение
-    // сторон вьюпорта её собственный вход, и его смену закрывает вызывающий.
-    if (aspectChanged) camera.updateProjectionMatrix();
-    camera.updateMatrixWorld(true);
-
-    const ndcX = point.width === 0 ? 0 : (point.x / point.width) * 2 - 1;
-    const ndcY = point.height === 0 ? 0 : 1 - (point.y / point.height) * 2;
-    this.unprojected.set(ndcX, ndcY, 0.5).unproject(camera);
-
-    const ox = camera.position.x;
-    const oy = camera.position.y;
-    const oz = camera.position.z;
-    const dx = this.unprojected.x - ox;
-    const dy = this.unprojected.y - oy;
-    const dz = this.unprojected.z - oz;
-    const length = Math.hypot(dx, dy, dz) || 1;
-    out.originX = ox;
-    out.originY = oy;
-    out.originZ = oz;
-    out.dirX = dx / length;
-    out.dirY = dy / length;
-    out.dirZ = dz / length;
-    return out;
+  ray(pose: CameraPose, point: ViewportPoint, out?: PickRay): PickRay {
+    return out === undefined ? this.cursor.ray(pose, point) : this.cursor.ray(pose, point, out);
   }
 
   /**
@@ -316,30 +264,13 @@ export class ViewportPicking {
   }
 
   /**
-   * Попадание в поверхность — min-t двух ветвей (REND-15): марш по террейн-
-   * форме и рейкаст по walkable-мешам тем же преобразованием, каким они
-   * нарисованы (ASSET-11 — второй реализации пересечения с мешом нет).
-   * Walkable-`t` ограничивает марш сверху: террейн-попадание дальше него
-   * не ищется — побеждает walkable.
+   * Попадание в поверхность — общей проекцией курсора (REND-42): min-t марша по
+   * террейн-форме и рейкаста по walkable-мешам. Пишется в ЭТУ запись — ту же,
+   * которую заполняют ветви прокси, поэтому `pick` отдаёт один объект, каким бы
+   * ни оказалось попадание.
    */
   private pickSurfaceRay(ray: PickRay): boolean {
-    const tWalk = this.options.surface.walkableRaycast(
-      ray.originX, ray.originY, ray.originZ,
-      ray.dirX, ray.dirY, ray.dirZ,
-    );
-    const limit = tWalk < 0 ? Number.POSITIVE_INFINITY : tWalk;
-    if (this.march.pick(ray, this.hit, limit)) return true;
-    if (tWalk < 0) return false;
-    // Walkable-победа: surface-hit с клеткой сетки ПОД мировой точкой попадания
-    // (REND-15) — noFloor из неё же, стенкой обрыва попадание не является.
-    const grid = this.options.surface.terrain;
-    const tile = grid.tileSize / FIXED_ONE;
-    const wx = ray.originX + ray.dirX * tWalk;
-    const wy = ray.originY + ray.dirY * tWalk;
-    const cx = clampIndex(Math.floor(wx / tile), grid.width);
-    const cy = clampIndex(Math.floor(wy / tile), grid.height);
-    writeSurfaceHit(this.hit, grid, ray, tWalk, cx, cy, false);
-    return true;
+    return this.cursor.pickRay(ray, this.hit);
   }
 
   // ------------------------------------------------------------- прокси

@@ -23,6 +23,7 @@
  * (TERR-6) и переподачи нет ни разу, а в редакторе автор правит геометрию и
  * меняет размеры арены, не теряя ни режима, ни зума, ни вида.
  */
+import { framingDistance } from './framing.js';
 import type { CameraInput } from './input.js';
 
 // ---------------------------------------------------------------- контракты
@@ -302,46 +303,13 @@ export class CameraRig {
    * своим `zoomSmoothing`. Телепорт точки наблюдения при сглаженной дистанции
    * перелётом не является: половина кадра прыгала бы, половина приезжала.
    *
-   * Геометрия. Точка наземного прямоугольника, отстоящая от центра на `s` вдоль
-   * направления взгляда, лежит в кадровых координатах на глубине `s·cos p + d`
-   * и на высоте `s·sin p` (p — наклон, d — дистанция). Условие «попадает в
-   * вертикальный угол» упирается первым у ближнего края (s < 0), откуда
-   * `d ≥ h·(sin p / tan v + cos p)`. Поперёк взгляда высоты нет, а глубина у
-   * ближнего края наименьшая, откуда `d ≥ w / tan h + h·cos p`. Ограничивающим
-   * берётся больший из двух: тот габарит, который упирается первым.
+   * Геометрия дистанции — чистая функция чисел (`framing.ts`): состояния рига
+   * она не читает, а кламп по инжектированным границам и выбор «мгновенно или
+   * перелётом» остаются здесь.
    */
   frameBounds(request: CameraFraming): void {
-    const cfg = this.config;
     const rect = request.rect;
-    // Полуразмеры прямоугольника в осях кадра: прямоугольник задан в мировых
-    // осях, а упирается он в углы кадра, повёрнутого на `yaw`. Опорная функция
-    // прямоугольника вдоль оси и даёт полуразмер вдоль неё.
-    const halfX = Math.abs(rect.maxX - rect.minX) / 2;
-    const halfY = Math.abs(rect.maxY - rect.minY) / 2;
-    const cosYaw = Math.abs(Math.cos(cfg.yaw));
-    const sinYaw = Math.abs(Math.sin(cfg.yaw));
-    const along = cosYaw * halfX + sinYaw * halfY;
-    const across = sinYaw * halfX + cosYaw * halfY;
-
-    const tanV = Math.tan(((cfg.fovDeg / 2) * Math.PI) / 180);
-    const cosPitch = Math.cos(cfg.pitch);
-    const sinPitch = Math.sin(cfg.pitch);
-    const vertical = tanV > 0 ? along * (sinPitch / tanV + cosPitch) : along;
-    // Пропорции кадра — от потребителя, и негодные (кадр нулевого размера) не
-    // повод отдать NaN: горизонталь тогда не ограничивает, а вертикаль считается
-    // как считалась. Спрашивать размеры конвейеру всё равно негде (CAM-1).
-    const tanH = Number.isFinite(request.aspect) && request.aspect > 0 ? tanV * request.aspect : 0;
-    const horizontal = tanH > 0 ? across / tanH + along * cosPitch : 0;
-
-    // Кламп теми же пределами, что зум (CAM-4): прямоугольник, не влезающий на
-    // предельной дистанции, показывается настолько целиком, насколько пределы
-    // позволяют, и отказом это не является — нужен обзор шире, это настройка
-    // пределов в конфиге (CAM-1), а не обход клампа кадрированием.
-    const distance = clamp(
-      Math.max(vertical, horizontal),
-      cfg.minDistance,
-      cfg.maxDistance,
-    );
+    const distance = framingDistance(this.config, rect, request.aspect);
 
     // Центр клампится по ИНЖЕКТИРОВАННЫМ границам (CAM-3, CAM-7): кадрируют по
     // аргументу, а клампят по инжектированному — поданный прямоугольник границ
@@ -374,7 +342,12 @@ export class CameraRig {
     return this.modeState === 'fly';
   }
 
-  /** Высота поверхности под точкой наблюдения — плоскость прицельного луча сборки. */
+  /**
+   * Высота поверхности под точкой наблюдения (CAM-2) — наблюдаемая величина
+   * конвейера. Прицельным лучом сборки она больше не является: курсор
+   * разрешается проекцией на визуальную поверхность (`rendering` REND-42), а не
+   * плоскостью этой высоты.
+   */
   get groundZ(): number {
     return this.targetZ;
   }
@@ -419,13 +392,16 @@ export class CameraRig {
     const panActive = panX !== 0 || panY !== 0 || input.dragDX !== 0 || input.dragDY !== 0;
     this.applyModeTransitions(input, target, panActive);
     this.applyZoom(input, dt);
+    // Решение «точка наблюдения прыгнула» родит только follow (CAM-5); free и
+    // fly не порождают его никогда — там порог не действует вовсе.
+    let jumped = false;
     if (this.modeState === 'follow' && target !== null) {
-      this.advanceFollow(target, dt);
+      jumped = this.advanceFollow(target, dt);
     } else {
       this.advanceFree(input, panX, panY, dt, target);
     }
     this.clampToBounds();
-    this.advanceGroundHeight(target, dt);
+    this.advanceGroundHeight(jumped, dt);
     this.writeGroundedPose();
   }
 
@@ -442,6 +418,16 @@ export class CameraRig {
       this.modeState = 'free';
       this.recentering = false;
       this.framing = false;
+    }
+    // Явное открепление (CAM-8): follow → free-RTS, не двигая ни точки
+    // наблюдения, ни дистанции. Разовые перелёты оно НЕ гасит — открепление и
+    // заводится ради того, чтобы перелёт кадрирования стал возможен: в follow
+    // точку наблюдения каждый кадр переписывает цель, и кадрирование там
+    // инертно. Ввод панорамирования гасит их по-прежнему (CAM-3) — это
+    // отдельное правило, и открепление его не отменяет.
+    if (input.detach) {
+      this.modeState = 'free';
+      this.recentering = false;
     }
     if (input.followToggle && target !== null) {
       this.modeState = 'follow';
@@ -475,16 +461,23 @@ export class CameraRig {
    * признаку И смещению цели больше `snapDistance` (CAM-1): «подпороговый
    * телепорт инстанс снапит, а камера доводит сглаживанием — она следует за
    * целью, а не рисует её».
+   *
+   * Возвращает САМО РЕШЕНИЕ — прыгнула точка наблюдения или доехала. По нему, а
+   * не по сырому признаку, снапается и высота (CAM-5): признак приходит рендером
+   * и в free-RTS, и в fly, где порог не действует вовсе, а половина позы,
+   * приезжающая плавно, и половина, прыгающая, — это и есть тот «проезд», от
+   * которого требование избавляет.
    */
-  private advanceFollow(target: FollowTarget, dt: number): void {
+  private advanceFollow(target: FollowTarget, dt: number): boolean {
     if (target.snap && this.targetJumped(target)) {
       this.targetX = target.x;
       this.targetY = target.y;
-      return;
+      return true;
     }
     const s = ease(this.config.followSmoothing, dt);
     this.targetX += (target.x - this.targetX) * s;
     this.targetY += (target.y - this.targetY) * s;
+    return false;
   }
 
   /**
@@ -557,13 +550,21 @@ export class CameraRig {
   }
 
   /**
-   * Высота — уровень клифа под точкой наблюдения (CAM-2), не z цели; snap цели
-   * протаскивает и высоту без проезда.
+   * Высота — уровень клифа под точкой наблюдения (CAM-2), не z цели.
+   *
+   * Снапается она по РЕШЕНИЮ follow-режима (`jumped`), а не по сырому признаку
+   * разрыва: признак — род разрыва, поднятый рендером (REND-2), и он приезжает
+   * в любом режиме. Прыжок по нему означал бы, что `snapAll` доставки (перемотка,
+   * реплей) двигает Z во free-RTS, где CAM-5 велит камере не реагировать вовсе,
+   * а подпороговый телепорт в follow сглаживает XY и прыгает Z.
+   *
+   * Первый кадр (`hasGround === false`) исключением не является и решением не
+   * считается: сглаживать тогда не от чего.
    */
-  private advanceGroundHeight(target: FollowTarget | null, dt: number): void {
+  private advanceGroundHeight(jumped: boolean, dt: number): void {
     if (this.groundHeightAt === null) return;
     const ground = this.groundHeightAt(this.targetX, this.targetY);
-    if (!this.hasGround || (target?.snap ?? false)) {
+    if (!this.hasGround || jumped) {
       this.targetZ = ground;
       this.hasGround = true;
       return;

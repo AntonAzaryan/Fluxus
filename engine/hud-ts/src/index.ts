@@ -17,6 +17,7 @@ export type {
   HudCompositionEntry,
   HudJsonValue,
   HudParams,
+  HudWorldAnchor,
 } from './composition.js';
 
 // Доставленное состояние глазами HUD (HUD-1, HUD-5) и чтение статов (HUD-8).
@@ -61,8 +62,21 @@ export type {
   ResolvedHudEntry,
 } from './registry.js';
 
-// Оверлей-хост поверх canvas: зоны и прохождение указателя (HUD-3).
-export { HUD_ZONE_ATTR, HudOverlayHost, interactive, overlayNode } from './host.js';
+// Мировые якоря глазами HUD (HUD-10): узкий порт над публикацией рендера
+// (`rendering` REND-41) — проекцию экранный слой читает, а не считает (HUD-3).
+export { anchorEntityOf } from './anchors.js';
+export type { HudAnchorSource, HudScreenAnchor } from './anchors.js';
+
+// Оверлей-хост поверх canvas: зоны, якорный слой и прохождение указателя (HUD-3, HUD-10).
+export {
+  HUD_ANCHOR_ATTR,
+  HUD_ANCHOR_LAYER_ATTR,
+  HUD_ZONE_ATTR,
+  HudOverlayHost,
+  anchorHolderNode,
+  interactive,
+  overlayNode,
+} from './host.js';
 
 // Исполнитель композиции и подписка на доставку (HUD-4, HUD-5).
 export { HudRuntime } from './runtime.js';

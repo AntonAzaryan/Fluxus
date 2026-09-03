@@ -29,6 +29,7 @@ import {
   ParticlesSubsystem,
   PostprocessSubsystem,
   PresentationStage,
+  RenderDebugLayer,
   TerrainSubsystem,
   ViewBuffer,
   VisualSurfaceSource,
@@ -40,6 +41,7 @@ import {
   geometryFromMesh,
   withCostSink,
   withFootprintSink,
+  type DebugProbe,
   type RenderContext,
   type RenderFootprint,
   type RenderSubsystem,
@@ -697,6 +699,13 @@ function cycleWater(size: number): PresentationWater {
 interface CycleStand {
   readonly stage: PresentationStage;
   /**
+   * Отладочный слой (`render-debug` RDBG-1) — ВЛАДЕЛЕЦ `debug` в учёте (PERF-8).
+   * Он не подсистема (REND-27), и `stage.dispose` его не видит: снимает его та
+   * же сборка, что снимает вьюпорт (ED-15). В цикле он потому и стоит — без
+   * него владелец `debug` не проверялся бы инвариантом вовсе.
+   */
+  readonly debug: RenderDebugLayer;
+  /**
    * Приём доставки цикла (SHELL-2). Доставки идут ЧЕРЕЗ него, а не мимо:
    * величины состояния приёмника (`viewRecords`, `viewFacingMemory`) — часть
    * того, что цикл обязан вернуть, и стенд без него проверял бы только
@@ -737,11 +746,34 @@ function buildCycleStand(): CycleStand {
     .register(new ParticlesSubsystem(manifest, { warn }))
     .register(new EffectsSubsystem(manifest, { warn }))
     .register(new OverlaySubsystem());
+  // Отладочный слой рядом со списком подсистем (REND-27) с ВКЛЮЧЁННЫМ
+  // источником: выключенный не заводит ни одной плашки, и цикл проверял бы
+  // только носители, созданные конструктором.
+  const debug = new RenderDebugLayer(stage, { scene: ctx.scene, surface });
+  debug.register<DebugProbe>({
+    id: 'cycle.overlay',
+    probe: () => ({}),
+    draw: (_probe, out) => {
+      out.polygon([0, 0, 1, 0, 1, 1, 0, 1], 0xffffff);
+      out.raster(
+        {
+          raster: true,
+          texels: new Uint8Array(4),
+          widthTexels: 2,
+          heightTexels: 2,
+          worldX: 0, worldY: 0, worldZ: 0,
+          worldWidth: 2, worldHeight: 2,
+        },
+        0xffffff,
+      );
+    },
+  });
+  debug.setEnabled('cycle.overlay', true);
   // Ассеты приезжают ПОСЛЕ регистрации — тем же путём, что в игре (ASSET-4):
   // подсистемы успевают завести заглушки, а потом получают настоящие данные.
   assets.resolve('model', CYCLE_MODEL, makeModel());
   assets.resolve('particle-effect', CYCLE_EFFECT, subEffectDoc());
-  return { stage, buffer: new ViewBuffer({ tickSeconds: 1 / 60, clock: () => 0 }) };
+  return { stage, debug, buffer: new ViewBuffer({ tickSeconds: 1 / 60, clock: () => 0 }) };
 }
 
 /**
@@ -781,7 +813,19 @@ describe('PERF-9: цикл сборки и сноса тракта не оста
         // Учёт обязан был увидеть работу цикла: пустой сток прошёл бы проверку
         // ниже молча, и инвариант стерёг бы пустоту.
         expect(Object.keys(footprintLive(sink)).length, 'учёт пуст').toBeGreaterThan(0);
+        // Владелец `debug` в цикле ЖИВОЙ — иначе инвариант ниже проверял бы для
+        // него пустоту, а находка аудита ровно в том и была, что слоя в нём нет.
+        expect(footprintLive(sink).debug, 'владелец debug').toEqual(
+          expect.objectContaining({ geometry: expect.any(Number) as unknown as number }),
+        );
+        expect(
+          Object.values(footprintLive(sink).debug ?? {}).reduce((sum, count) => sum + count, 0),
+          'живых ресурсов отладочного слоя',
+        ).toBeGreaterThan(0);
 
+        // Слой снимается ВМЕСТЕ со вьюпортом, а не сценой подсистем: своей
+        // точки в `stage.dispose` у него нет и быть не должно (REND-27).
+        stand.debug.dispose();
         stand.stage.dispose();
 
         // Ноль — по КАЖДОМУ владельцу и виду: текст находки называет подсистему

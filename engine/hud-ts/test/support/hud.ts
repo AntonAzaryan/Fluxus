@@ -9,6 +9,7 @@ import {
   HudRuntime,
   el,
   type HudActionsPort,
+  type HudAnchorSource,
   type HudCameraContract,
   type HudDeliveredState,
   type HudNode,
@@ -91,12 +92,21 @@ export interface RuntimeBench {
   readonly dom: FakeDom;
 }
 
-/** Полный стенд исполнителя: реестр вызывающего, фейковый DOM, фасад со шпионом камеры. */
-export function makeRuntime(registry: HudRegistry): RuntimeBench {
+/**
+ * Полный стенд исполнителя: реестр вызывающего, фейковый DOM, фасад со шпионом
+ * камеры. `anchors` — источник мировых якорей (HUD-10), если тест его проверяет;
+ * без него сборка обязана собираться и монтировать якорные виджеты скрытыми.
+ */
+export function makeRuntime(registry: HudRegistry, anchors?: HudAnchorSource): RuntimeBench {
   const dom = fakeDom();
   const host = new HudOverlayHost(asElement(dom.container));
   const camera = new CameraSpy();
   const facade = new HudActionsFacade({ actions: registry, camera });
-  const runtime = new HudRuntime({ registry, host, actions: facade });
+  const runtime = new HudRuntime({
+    registry,
+    host,
+    actions: facade,
+    ...(anchors !== undefined ? { anchors } : {}),
+  });
   return { runtime, host, facade, camera, dom };
 }

@@ -12,6 +12,7 @@ import {
   TraumaShake,
   applyCameraPose,
   createCameraInput,
+  createEdgePanAxes,
   edgePanAxes,
   resetCameraInput,
   terrainGroundApi,
@@ -412,12 +413,30 @@ describe('CameraRig: переподача источников (CAM-7)', () => {
 describe('вспомогательные функции камеры', () => {
   it('edgePanAxes: оси у краёв, ноль в центре и вне канваса', () => {
     const rect = { left: 0, top: 0, width: 200, height: 100 };
-    expect(edgePanAxes(100, 50, rect, 20)).toEqual({ x: 0, y: 0 });
-    expect(edgePanAxes(0, 50, rect, 20).x).toBe(-1);
-    expect(edgePanAxes(200, 50, rect, 20).x).toBe(1);
-    expect(edgePanAxes(100, 0, rect, 20).y).toBe(1); // экранный верх — мировой север
-    expect(edgePanAxes(100, 100, rect, 20).y).toBe(-1);
-    expect(edgePanAxes(-5, 50, rect, 20)).toEqual({ x: 0, y: 0 });
+    const out = createEdgePanAxes();
+    expect(edgePanAxes(100, 50, rect, 20, out)).toEqual({ x: 0, y: 0 });
+    expect(edgePanAxes(0, 50, rect, 20, out).x).toBe(-1);
+    expect(edgePanAxes(200, 50, rect, 20, out).x).toBe(1);
+    expect(edgePanAxes(100, 0, rect, 20, out).y).toBe(1); // экранный верх — мировой север
+    expect(edgePanAxes(100, 100, rect, 20, out).y).toBe(-1);
+    expect(edgePanAxes(-5, 50, rect, 20, out)).toEqual({ x: 0, y: 0 });
+  });
+
+  /**
+   * Функция зовётся каждым кадром сборки, и свежий объектный литерал на кадр
+   * был бы аллокацией кадрового пути (REND-26). Пишет она в запись вызывающего;
+   * без аргумента — в общую, и результат тогда валиден до следующего вызова.
+   */
+  it('edgePanAxes: пишет в запись вызывающего и её же отдаёт (REND-26)', () => {
+    const rect = { left: 0, top: 0, width: 200, height: 100 };
+    const out = createEdgePanAxes();
+    expect(edgePanAxes(0, 50, rect, 20, out)).toBe(out);
+    expect(out.x).toBe(-1);
+    // Покой пишется тоже: запись вызывающего не должна помнить прошлый кадр.
+    edgePanAxes(100, 50, rect, 20, out);
+    expect(out).toEqual({ x: 0, y: 0 });
+    // Без аргумента — общая запись, одна и та же от вызова к вызову.
+    expect(edgePanAxes(0, 50, rect, 20)).toBe(edgePanAxes(200, 50, rect, 20));
   });
 
   it('terrainGroundApi: уровень клифа клетки × шаг высоты и границы сетки', () => {
@@ -707,5 +726,140 @@ describe('CameraRig: кадрирование по заданным границ
     rig.frameBounds({ rect: arena(14), aspect: 0, immediate: true });
     const pose = rig.update(input, 1 / 60, null);
     expect(Number.isFinite(pose.posX) && Number.isFinite(pose.posZ)).toBe(true);
+  });
+});
+
+// -------------------------------------------------- высота под флагами snap
+
+/**
+ * Высота точки наблюдения (CAM-2) снапается по РЕШЕНИЮ follow-режима, а не по
+ * сырому признаку разрыва (CAM-5): признак приходит рендером и в free-RTS, и в
+ * fly — там, где порог не действует вовсе.
+ *
+ * Поверхность здесь наклонная (`высота = x`), а не ступенчатая: на ровном полу
+ * прыжок высоты от её сглаживания не отличить, и тест был бы зелёным на любой
+ * реализации.
+ */
+describe('CameraRig: высота под флагами snap (CAM-5)', () => {
+  const slope = (x: number): number => x;
+
+  it('надпороговый разрыв в follow прыгает и высотой — вместе с точкой наблюдения', () => {
+    const { rig, input } = makeRig({ startX: 0, startY: 0, groundHeightAt: slope });
+    settle(rig, input, target(0, 0), 120);
+    expect(rig.groundZ).toBeCloseTo(0, 6);
+    rig.update(input, 1 / 60, target(20, 0, true));
+    expect(rig.focusX).toBe(20);
+    expect(rig.groundZ).toBe(20);
+  });
+
+  it('подпороговый разрыв в follow доводится сглаживанием И по высоте', () => {
+    const { rig, input } = makeRig({
+      startX: 0,
+      startY: 0,
+      groundHeightAt: slope,
+      config: { snapDistance: 2 },
+    });
+    settle(rig, input, target(0, 0), 120);
+    rig.update(input, 1 / 60, target(1, 0, true));
+    // Горизонталь доводится (это уже было верно) — и высота обязана доводиться
+    // вместе с ней: половина позы, приезжающая плавно, и половина, прыгающая,
+    // и есть тот «проезд», от которого CAM-5 избавляет.
+    expect(rig.focusX).toBeGreaterThan(0);
+    expect(rig.focusX).toBeLessThan(1);
+    expect(rig.groundZ).toBeLessThan(rig.focusX);
+  });
+
+  it('признак разрыва во free-RTS высоту не двигает: там порог не действует вовсе', () => {
+    const { rig, input } = makeRig({ startX: 0, startY: 0, groundHeightAt: slope });
+    settle(rig, input, target(0, 0), 120);
+    // Панорама открепляет камеру (CAM-2, CAM-3) — дальше это free-RTS.
+    input.panX = 1;
+    settle(rig, input, target(0, 0), 20);
+    expect(rig.mode).toBe('free');
+    const lagging = rig.focusX - rig.groundZ;
+    expect(lagging).toBeGreaterThan(0); // высота отстаёт от склона, как и должна
+
+    // `snapAll` доставки (перемотка, реплей): цель со snap-флагом, а камера
+    // свободна. Реакции быть не должно ни в одной координате.
+    rig.update(input, 1 / 60, target(0, 0, true));
+    expect(rig.groundZ).toBeLessThan(rig.focusX);
+  });
+
+  it('первый кадр ставит высоту сразу: сглаживать не от чего, и решением это не является', () => {
+    const { rig, input } = makeRig({ startX: 7, startY: 0, groundHeightAt: slope });
+    rig.update(input, 1 / 60, target(7, 0));
+    expect(rig.groundZ).toBe(rig.focusX);
+  });
+});
+
+// ------------------------------------------------------ явное открепление
+
+describe('CameraRig: явный вход открепления (CAM-8)', () => {
+  const RECT = { minX: 18, maxX: 22, minY: -2, maxY: 2 };
+
+  it('переводит follow в free-RTS, не двигая ни точки наблюдения, ни дистанции', () => {
+    const { rig, input } = makeRig({ startX: 0, startY: 0 });
+    settle(rig, input, target(5, 0), 240);
+    expect(rig.mode).toBe('follow');
+    const x = rig.focusX;
+    const y = rig.focusY;
+    input.detach = true;
+    rig.update(input, 1 / 60, target(5, 0));
+    resetCameraInput(input);
+    expect(rig.mode).toBe('free');
+    expect(rig.focusX).toBe(x);
+    expect(rig.focusY).toBe(y);
+    // И дальше камера за целью не идёт: слежения больше нет.
+    settle(rig, input, target(9, 0), 60);
+    expect(rig.focusX).toBe(x);
+  });
+
+  it('кадрирование в follow инертно — оттого вход открепления и заведён', () => {
+    const { rig, input } = makeRig({ startX: 0, startY: 0 });
+    settle(rig, input, target(0, 0), 60);
+    rig.frameBounds({ rect: RECT, aspect: 16 / 9 });
+    settle(rig, input, target(0, 0), 240);
+    // Точку наблюдения каждый кадр переписывает цель: перелёт не сдвинулся.
+    expect(rig.mode).toBe('follow');
+    expect(rig.focusX).toBeCloseTo(0, 3);
+  });
+
+  it('открепление и кадрирование одним сэмплом: камера летит тем же кадром', () => {
+    const { rig, input } = makeRig({ startX: 0, startY: 0 });
+    settle(rig, input, target(0, 0), 60);
+    input.detach = true;
+    rig.frameBounds({ rect: RECT, aspect: 16 / 9 });
+    rig.update(input, 1 / 60, target(0, 0));
+    resetCameraInput(input);
+    expect(rig.mode).toBe('free');
+    // Перелёт начался: открепление разовые просьбы не гасит (CAM-8).
+    expect(rig.focusX).toBeGreaterThan(0);
+    settle(rig, input, target(0, 0), 240);
+    expect(rig.focusX).toBeCloseTo(20, 3);
+  });
+
+  it('ввод панорамирования перелёт гасит по-прежнему — это правило CAM-3', () => {
+    const { rig, input } = makeRig({ startX: 0, startY: 0 });
+    settle(rig, input, target(0, 0), 60);
+    input.detach = true;
+    rig.frameBounds({ rect: RECT, aspect: 16 / 9 });
+    rig.update(input, 1 / 60, target(0, 0));
+    resetCameraInput(input);
+    input.panX = -1;
+    settle(rig, input, target(0, 0), 5);
+    input.panX = 0;
+    const stopped = rig.focusX;
+    settle(rig, input, target(0, 0), 240);
+    // Перелёт снят вводом: камера осталась там, где её оставил игрок.
+    expect(rig.focusX).toBe(stopped);
+  });
+
+  it('фронт: `resetCameraInput` его гасит, и второго открепления не случается', () => {
+    const { rig, input } = makeRig({ startX: 0, startY: 0 });
+    input.detach = true;
+    resetCameraInput(input);
+    expect(input.detach).toBe(false);
+    rig.update(input, 1 / 60, target(5, 0));
+    expect(rig.mode).toBe('follow');
   });
 });

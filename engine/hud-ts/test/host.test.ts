@@ -50,7 +50,9 @@ describe('прохождение указателя (HUD-3)', () => {
     const auto = styles.filter((style) => style.includes('pointer-events: auto'));
     const none = styles.filter((style) => style.includes('pointer-events: none'));
     expect(auto).toHaveLength(1); // только кнопка
-    expect(none).toHaveLength(1 + HUD_ZONES.length); // корень и все зоны
+    // Корень, все зоны и якорный слой (HUD-10): он лежит поверх сетки и,
+    // как она, для указателя прозрачен — перехват остаётся на интерактиве.
+    expect(none).toHaveLength(2 + HUD_ZONES.length);
   });
 });
 
