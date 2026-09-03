@@ -5,6 +5,7 @@
 import { describe, expect, it } from 'vitest';
 import { clientCodec, jsonSerializer, msgpackSerializer, serverCodec } from '../src/protocol/codec.js';
 import {
+  NO_SLOT,
   parseClientMessage,
   parseServerMessage,
   ProtocolError,
@@ -222,6 +223,24 @@ describe('разбор входящего', () => {
         pacing: { tickRate: 60, snapshotRate: 30, inputDelay: 2, inputWindow: 15 },
       }),
     ).toThrow(ProtocolError);
+  });
+
+  it('слот в Welcome — либо номер, либо сентинель наблюдателя (NTR-21)', () => {
+    const welcome = {
+      type: 'Welcome',
+      players: ['p1', 'p2'],
+      match: { sceneRef: 'duel', initial: [] },
+      worldInitHash: 'x',
+      pacing: { tickRate: 60, snapshotRate: 30, inputDelay: 2, inputWindow: 15, eventRepeat: 2 },
+    };
+    // Сентинель «слота нет» — законное значение шкалы слотов: им приветствие
+    // адресуется наблюдателю (NTR-21).
+    expect(parseServerMessage({ ...welcome, slot: NO_SLOT })).toMatchObject({ slot: NO_SLOT });
+    expect(parseServerMessage({ ...welcome, slot: 1 })).toMatchObject({ slot: 1 });
+    // Всё прочее слотом не является: нижняя граница включает РОВНО сентинель, а
+    // не «любое отрицательное».
+    expect(() => parseServerMessage({ ...welcome, slot: -2 })).toThrow(ProtocolError);
+    expect(() => parseServerMessage({ ...welcome, slot: 2 })).toThrow(ProtocolError);
   });
 
   it('незнакомая причина отказа отвергается разбором, а не доезжает своей (NTR-4)', () => {

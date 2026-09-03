@@ -74,7 +74,7 @@ import type {
   ServerMessage,
   WireInput,
 } from '../protocol/messages.js';
-import { toInputFrame, toWireSnapshot } from '../protocol/messages.js';
+import { NO_SLOT, toInputFrame, toWireSnapshot } from '../protocol/messages.js';
 
 export interface MatchConfig {
   /** Версия матча — версия серверной сборки (NET-16). */
@@ -317,8 +317,12 @@ export interface MatchPauseOptions {
  */
 type FreezeSource = 'none' | 'match-pause' | 'rewind';
 
-/** Слот-инициатор, которого нет: пауза от обвязки стенда или админа (NTR-20). */
-const SERVER_SLOT = -1;
+/**
+ * Слот-инициатор, которого нет: пауза от обвязки стенда или админа (NTR-20).
+ * Тот же сентинель шкалы слотов, каким приветствие называет наблюдателя
+ * (NTR-21): у отсутствия слота одно значение на весь протокол.
+ */
+const SERVER_SLOT = NO_SLOT;
 
 /**
  * Ведение точки перемотки (REW-7): что именно сервер сейчас скрабит. Живёт
@@ -456,7 +460,7 @@ type ConnectionPhase = 'greeting' | 'player' | 'observer';
 interface Connection {
   readonly id: ConnectionId;
   phase: ConnectionPhase;
-  /** Слот игрока; у наблюдателя — `-1`. */
+  /** Слот игрока; у наблюдателя — `NO_SLOT` (NTR-21): слота у него нет вовсе. */
   slot: number;
   /**
    * Роль соединения в слоте (NTR-18): арендатор слота — владелец или
@@ -1028,7 +1032,7 @@ export class MatchServer {
     this.connections.set(id, {
       id,
       phase: 'greeting',
-      slot: -1,
+      slot: NO_SLOT,
       role: 'owner',
       eventsFrom: 0,
       eventsEpoch: this.currentEpoch,
@@ -1263,12 +1267,27 @@ export class MatchServer {
         this.reject(connection.id, 'observer-not-allowed', 'сервер запущен без разрешения на наблюдателя');
         return;
       }
+      if (this.matchPhase === 'ended') {
+        // Смотреть нечего и не будет: рассылок в завершённом матче нет (NTR-21).
+        // Названный отказ — тот же, что получает опоздавший участник, — вместо
+        // соединения, которое молча ждало бы вечно.
+        this.reject(connection.id, 'match-ended', 'матч уже завершён');
+        return;
+      }
       connection.phase = 'observer';
-      // Наблюдателю слот не выдаётся, поэтому и `Welcome` со слотом ему не
-      // адресован: он не игрок, состава матча не занимает и `Start` дождётся
-      // вместе со всеми. Роль соединения (NTR-18) для него не значит ничего —
-      // она про право на слот, а слота у наблюдателя нет.
-      //
+      // Приветствие наблюдателю — то же `Welcome` с СЕНТИНЕЛЕМ вместо слота
+      // (NTR-21): слота он не занимает, но мир поднимает сам и сверяет хеш теми
+      // же двумя сверками (NTR-5), а для этого ему нужен весь остальной состав
+      // приветствия — ссылка на сцену, расстановка, ростер и темп. Роль
+      // соединения (NTR-18) для него не значит ничего: она про право на слот.
+      this.welcome(connection, NO_SLOT);
+      // Вошедшему в ИДУЩИЙ матч — `Start` с ИСХОДНЫМ тиком начала (NTR-21, тем
+      // же правилом, что вернувшемуся участнику, NTR-17): без него наблюдатель
+      // остался бы в ожидании старта до конца матча, а его собственный шаг
+      // времени не пошёл бы вовсе. До старта он дожидается общей рассылки
+      // `start()` наравне со всеми — она идёт каждому соединению после
+      // хендшейка.
+      if (this.matchPhase === 'running') this.send(connection.id, { type: 'Start', tick: this.startTick });
       // Единственное, чего он не дождётся сам, — это заморозка: рассылок в ней
       // нет, и наблюдатель, подключившийся в паузу, смотрел бы в пустой экран.
       // Состояние паузы он получает наравне с игроками (NTR-20, NTR-9) — тем же

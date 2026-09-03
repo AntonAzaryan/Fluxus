@@ -30,6 +30,14 @@ export interface DemoClientInit {
   readonly t: 'demo-client-init';
   readonly port?: RawPort;
   readonly url?: string;
+  /**
+   * Входить НАБЛЮДАТЕЛЕМ (`netcode-transport` NTR-9, NTR-21): слота воркер не
+   * просит и ввод не отправляет. Поля нет — обычный участник.
+   *
+   * Здесь, а не в воркере: род участия выбирает страница своим режимом
+   * (`mode.ts`, SHELL-8), и воркер о строке запроса ничего не знает.
+   */
+  readonly observer?: boolean;
 }
 
 /** Воркер → главному потоку: показать человеку, почему матча нет. */

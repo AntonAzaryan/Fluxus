@@ -80,7 +80,13 @@ if (invite !== undefined) {
   const url = option('url', 'ws://127.0.0.1:8080');
   client = new MatchClient(clientOptions);
   transport = await connectWebSocket(url);
-  host = new ClientHost(client, transport, { serializer, input: inputSource() });
+  // Наблюдателю (NTR-9, NTR-21) источник ввода не подаётся вовсе: ввода он не
+  // отправляет, и открывать под него терминал в raw-режиме (`--keys`) значило
+  // бы собирать нажатия, которым некуда ехать.
+  host = new ClientHost(client, transport, {
+    serializer,
+    ...(observer ? {} : { input: inputSource() }),
+  });
   host.start();
   describeEntry = `к ${url}`;
 }
@@ -95,7 +101,11 @@ process.stdout.write(
 
 const report = reportClient(
   client,
-  () => `[${client.phase}] слот ${client.slot ?? '—'}  тик ${client.serverTick}`,
+  // У наблюдателя слота нет вовсе (NTR-9), и прочерк на его месте — не «слот
+  // ещё не выдан», а «его не бывает»: величина у него другая, и называется она
+  // словом, а не пустым местом.
+  () =>
+    `[${client.phase}] ${observer ? 'наблюдение' : `слот ${client.slot ?? '—'}`}  тик ${client.serverTick}`,
   () => {
     clearInterval(report);
     process.stdout.write(`\nсоединение закрыто: ${client.closeReason} — ${client.closeDetail}\n`);

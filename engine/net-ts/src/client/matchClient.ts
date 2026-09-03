@@ -11,6 +11,13 @@
  * (сверка хешей, NTR-5). Включение предсказания добавит цикл симуляции, а
  * протокол не тронет: клиент с предсказанием и без для сервера неразличимы,
  * потому что оба шлют только ввод (NET-7).
+ *
+ * НАБЛЮДАТЕЛЬ (NTR-9, NTR-21) — тот же клиент без второй половины: мир он
+ * поднимает тем же приветствием и теми же двумя сверками, состояния и факты
+ * применяет тем же путём (без фильтрации, NET-15), а вверх не отправляет
+ * ничего — ни ввода, ни запаса разметки. Отдельного класса под него нет
+ * намеренно: отличие исчерпывается отсутствием слота, и второй клиент означал
+ * бы второе место, где применяется снапшот и сверяется хеш.
  */
 import {
   snapshotFromPlain,
@@ -32,6 +39,7 @@ import { buildMatchWorld, orderedSchemas } from '../match/world.js';
 import { createClientMetrics, recordInputToVisible, type ClientMetrics } from '../metrics.js';
 import { ownInputSeq } from './echo.js';
 import { InputRing, DEFAULT_RING_TICKS } from './inputRing.js';
+import { EventCursor, type DeliveredEvents } from './eventCursor.js';
 import { LeadController } from './lead.js';
 import {
   InterpolationBuffer,
@@ -42,7 +50,6 @@ import type {
   ClientCloseReason,
   ClientMessage,
   ConnectionRole,
-  EventBatch,
   EventsMessage,
   GameVersion,
   MatchDescriptor,
@@ -50,6 +57,7 @@ import type {
   ServerMessage,
   WireSnapshot,
 } from '../protocol/messages.js';
+import { NO_SLOT } from '../protocol/messages.js';
 import { applyPause, frozenByMatch, type DeliveredPause } from './pause.js';
 
 /** Контент-пак клиента: сцена резолвится по ссылке локально — сервер её не раздаёт (NET-16). */
@@ -70,6 +78,16 @@ export interface MatchClientOptions {
    * и разбор входящего умолчаний не знает.
    */
   readonly role?: ConnectionRole;
+  /**
+   * Вход НАБЛЮДАТЕЛЕМ (NTR-9, NTR-21): соединение не претендует на игровой слот
+   * и получает поток без фильтрации, если сервер запущен с разрешением на
+   * наблюдателя. Отсутствие поля — обычный участник.
+   *
+   * Признак предъявляется в `Hello` (NTR-4) и им же СВЕРЯЕТСЯ приветствие:
+   * участнику приезжает номер слота, наблюдателю — сентинель «слота нет», и
+   * расхождение рвёт соединение (см. `onWelcome`). Ввод наблюдатель не
+   * отправляет вовсе (`pushInput`).
+   */
   readonly observer?: boolean;
   /** Зависимости сборки (DI-3): приезжают со сборкой клиента, а не с провода. */
   readonly physics?: PhysicsOptions;
@@ -135,19 +153,12 @@ export interface MatchSample extends InterpolationSample {
 }
 
 /**
- * Факты одного тика, доставленные потребителю (NTR-15): пачка провода вместе с
- * эпохой своего диапазона. Номер тика едет с фактом, потому что картинка
- * отстаёт на буфер интерполяции (NET-3), и без него звук и VFX не с чем
- * совместить; эпоха — потому что один номер тика после перемотки называет два
- * разных момента матча (NTR-16).
- *
- * Порядок событий внутри пачки — порядок публикации (EVT-2) и сохранён как
- * приехал: сетевой слой его не пересортировывает, иначе представление получило
- * бы меньше, чем знает симуляция.
+ * Факты одного тика, доставленные потребителю (NTR-15), живут у курсора потока
+ * (`eventCursor.ts`) — там же, где правило их однократности. Отсюда тип
+ * ре-экспортируется потому, что поверхность пакета называет его через клиента
+ * (`src/index.ts`), и переезд сотрудника внутрь модуля её менять не должен.
  */
-export interface DeliveredEvents extends EventBatch {
-  readonly epoch: number;
-}
+export type { DeliveredEvents } from './eventCursor.js';
 
 export type ClientPhase = 'greeting' | 'lobby' | 'playing' | 'closed';
 
@@ -167,6 +178,12 @@ export class MatchClient {
   private detail = '';
 
   private assignedSlot: number | undefined;
+  /**
+   * Наблюдение подтверждено приветствием (NTR-21). Отдельно от `assignedSlot`,
+   * потому что «слота ещё нет» и «слота нет вовсе» — разные состояния: первое
+   * кончается `Welcome`, второе им начинается.
+   */
+  private observing = false;
   private matchPacing: Pacing | undefined;
   private descriptor: MatchDescriptor | undefined;
   /**
@@ -218,33 +235,17 @@ export class MatchClient {
   private pauseState: DeliveredPause | undefined;
 
   /**
-   * Курсор потока событий (NTR-15) — пара `(эпоха, тик)` последнего применённого
-   * тика, ОТДЕЛЬНАЯ от пары применённого снапшота выше.
+   * Курсор потока фактов вместе с очередью доставленного (NTR-15) —
+   * сотрудник со своим инвариантом (`eventCursor.ts`), ОТДЕЛЬНЫЙ от пары
+   * применённого снапшота выше.
    *
    * Раздельность — требование, а не удобство: снапшот отбрасывается по «не
    * больше применённого» (NTR-10), а события того же тика могут быть ещё не
    * применены — например, когда `Events` этой рассылки потерялся, а следующий
    * привёз его повтором уже после того, как снапшот более позднего тика
    * применён. Один курсор на двоих вернул бы потерю с другой стороны.
-   *
-   * Тик `-1` до первого применённого тика: тики матча неотрицательны, и события
-   * тика 0 обязаны пройти курсор.
    */
-  private eventEpoch = 0;
-  private eventTick = -1;
-  /**
-   * Было ли применено хоть одно сообщение потока. Разрыв — это «диапазон
-   * начался позже, чем кончился ПОСЛЕДНИЙ ПРИМЕНЁННЫЙ», и пока применённого нет,
-   * сравнивать не с чем: первое сообщение разрывом не считается, где бы ни
-   * начинался его диапазон.
-   */
-  private eventsSeen = false;
-  /**
-   * Доставленные факты, ждущие потребителя. Границы у очереди нет намеренно:
-   * молча выброшенный факт есть ровно та потеря, против которой NTR-15 написан,
-   * а слить очередь — контракт потребителя (`takeEvents`), а не забота слоя.
-   */
-  private readonly eventQueue: DeliveredEvents[] = [];
+  private readonly stream = new EventCursor();
   private nextSeq = 1;
   private lastMeasuredSeq = 0;
 
@@ -270,6 +271,18 @@ export class MatchClient {
 
   get slot(): number | undefined {
     return this.assignedSlot;
+  }
+
+  /**
+   * Клиент вошёл наблюдателем (NTR-21): слота у него нет, ввод он не
+   * отправляет, а поток приходит без фильтрации (NTR-9).
+   *
+   * Величина наблюдательная и приезжает ПРИВЕТСТВИЕМ, а не читается из опций:
+   * наблюдение начинается ровно тогда, когда сервер его подтвердил сентинелем.
+   * До `Welcome` клиент — ещё никто, что бы он о себе ни объявил в `Hello`.
+   */
+  get observer(): boolean {
+    return this.observing;
   }
 
   get pacing(): Pacing | undefined {
@@ -407,13 +420,12 @@ export class MatchClient {
    * него граница эпохи и так разрыв, рисуемый snap'ом (SHELL-7).
    */
   takeEvents(): DeliveredEvents[] {
-    if (this.eventQueue.length === 0) return [];
-    return this.eventQueue.splice(0, this.eventQueue.length);
+    return this.stream.take();
   }
 
   /** Та же очередь, но без слива — для диагностики и проверок. */
   get pendingEvents(): readonly DeliveredEvents[] {
-    return this.eventQueue;
+    return this.stream.pending;
   }
 
   /**
@@ -478,6 +490,12 @@ export class MatchClient {
 
   /** Ввод игрока: помечается тиком с адаптивным запасом (NTR-7) и уходит на сервер. */
   pushInput(sample: InputSample, nowMs: number): void {
+    // Наблюдатель ввода не отправляет (NTR-21): слота у него нет, применить
+    // кадр серверу не к чему, и сообщение от соединения без игрового слота —
+    // разрыв по NTR-4. Проверка своя, а не «запаса нет, значит наблюдатель»:
+    // отсутствие запаса означает ещё и «приветствие не пришло», а это другое
+    // состояние с другой причиной.
+    if (this.observing) return;
     const lead = this.leadControl;
     // Запас заводится вместе с темпом матча, поэтому его наличие и есть «темп
     // приехал»: второго условия на `matchPacing` рядом не нужно.
@@ -629,6 +647,19 @@ export class MatchClient {
     serverHash: string,
     pacing: Pacing,
   ): void {
+    // Приветствие сверяется с тем, чем клиент представился в `Hello` (NTR-21):
+    // участнику — номер слота, наблюдателю — сентинель «слота нет». Расхождение
+    // в любую сторону рвёт соединение НАЗВАННЫМ исходом, а не переводит клиента
+    // в другой род участия молча: принявший сентинель вместо слота перестал бы
+    // слать ввод, и снаружи это неотличимо от неисправного канала, а принявший
+    // слот вместо сентинеля начал бы слать ввод за чужого игрока.
+    const observing = slot === NO_SLOT;
+    if (observing !== (this.options.observer === true)) {
+      const wrong = observing ? 'без слота участнику матча' : `со слотом ${slot} наблюдателю`;
+      this.close('protocol-error', `приветствие ${wrong}`);
+      return;
+    }
+
     const scene = this.options.content.scene(match.sceneRef);
     if (scene === undefined) {
       // Сцены нет в контент-паке — тот же исход, что у разошедшихся ассетов
@@ -665,14 +696,23 @@ export class MatchClient {
       return;
     }
 
-    this.assignedSlot = slot;
+    this.observing = observing;
+    // Слота у наблюдателя нет вовсе (NTR-9), и сентинель провода в него не
+    // переезжает: `undefined` здесь читается «слота нет» всеми потребителями —
+    // метрикой отклика, обвязкой, HUD, — а число `-1` пришлось бы каждому из
+    // них отдельно опознавать как «не слот».
+    this.assignedSlot = observing ? undefined : slot;
     this.matchPacing = pacing;
     // Запас разметки заводится ровно здесь: его границы и стартовое значение —
     // параметры конфига матча, присланные в `Welcome` (NTR-7). Публикуется он
     // сразу же, а не с первым кадром: «сколько сейчас запас» — вопрос, на
     // который у вошедшего в матч уже есть ответ (NTR-11).
-    this.leadControl = new LeadController(pacing);
-    this.metrics.inputLead = this.leadControl.lead;
+    //
+    // У наблюдателя запаса нет и быть не может (NTR-21): величина описывает
+    // канал ВВЕРХ, а вверх он не отправляет ничего. Ноль вместо неё был бы
+    // замером канала, которого нет.
+    this.leadControl = observing ? undefined : new LeadController(pacing);
+    this.metrics.inputLead = this.leadControl?.lead;
     this.descriptor = match;
     this.localWorld = built.state.world;
     this.localHash = built.worldInitHash;
@@ -792,68 +832,20 @@ export class MatchClient {
   /**
    * Поток фактов тиков (NTR-15). Мира не касается вовсе: события — выход
    * симуляции (OBS-1), а не её вход, и применяются они к очереди потребителя, а
-   * не к состоянию.
+   * не к состоянию, — поэтому правило целиком живёт у курсора потока
+   * (`eventCursor.ts`), а клиенту остаётся передать ему сообщение.
    *
-   * Три исхода, и они разные по смыслу.
-   *
-   * 1. Сообщение целиком не новее курсора — повтор, которым избыточность и
-   *    работает: пачки отброшены, курсор на месте. Сюда же попадает диапазон
-   *    стёртой перемоткой эпохи, доехавший после смены эпохи: по паре он меньше
-   *    курсора, и другого решения у получателя нет (NTR-16).
-   * 2. Диапазон начинается позже, чем кончился последний применённый, в ТОЙ ЖЕ
-   *    эпохе — разрыв: сообщений потерялось больше, чем повторяет каждое
-   *    следующее. Разрыв считается отдельным счётчиком, курсор перескакивает, и
-   *    ничего не восстанавливается: догадка или запрос вернули бы reliable-канал
-   *    поверх намеренно ненадёжного (NTR-2), а молчание сделало бы дыру
-   *    невидимой.
-   * 3. Рост эпохи — НЕ разрыв (NTR-16): номера тиков после перемотки идут
-   *    заново, «позже» между эпохами не определено, а сама перемотка наблюдаема
-   *    с обеих сторон и дефектом канала не является. Курсор перескакивает на
-   *    начало диапазона новой эпохи, счётчик разрывов не растёт.
+   * Счётчики (NTR-11) зеркалятся ЗДЕСЬ, а не пишутся сотрудником: метрики
+   * принадлежат клиенту — ровно тем же приёмом, каким сюда приезжает запас
+   * разметки (`lead.ts`). Их три, и они раздельны по причине: доставлено —
+   * факты, отданные потребителю, отброшено — цена избыточности, разрывы —
+   * единственный из трёх, который означает безвозвратно потерянные факты.
    */
   private onEvents(message: EventsMessage): void {
-    const { epoch, from, to, batches } = message;
-
-    // Сравнение лексикографическое по паре (NTR-16), как у снапшота. По одному
-    // номеру тика курсор гасил бы события переисполненных после перемотки
-    // тиков — ровно те факты, ради доставки которых поток и заведён.
-    const fresh = epoch > this.eventEpoch || (epoch === this.eventEpoch && to > this.eventTick);
-    if (!fresh) {
-      this.metrics.eventBatchesDropped += batches.length;
-      return;
-    }
-
-    if (this.eventsSeen && epoch === this.eventEpoch && from > this.eventTick + 1) {
-      this.metrics.eventRangeGaps++;
-    }
-
-    // Порядок применения — по возрастанию тика (NTR-15), и он берётся из
-    // содержимого, а не из веры в порядок пачек на проводе: канал
-    // переупорядочивает сообщения (NTR-2), и полагаться на порядок внутри
-    // сообщения означало бы полагаться на отправителя там, где проверить
-    // дёшево. Внутри тика порядок публикации сохраняется как приехал (EVT-2).
-    const ordered = [...batches].sort((left, right) => left.tick - right.tick);
-    // Курсор двигается пачка за пачкой, чтобы повтор тика ВНУТРИ сообщения
-    // отбрасывался тем же правилом, что и повтор между сообщениями. В новой
-    // эпохе прежний тик курсора не сравним ни с чем: пара больше по эпохе.
-    let cursor = epoch === this.eventEpoch ? this.eventTick : -1;
-    for (const batch of ordered) {
-      if (batch.tick <= cursor) {
-        this.metrics.eventBatchesDropped++;
-        continue;
-      }
-      this.eventQueue.push({ epoch, tick: batch.tick, events: batch.events });
-      this.metrics.eventBatchesDelivered++;
-      cursor = batch.tick;
-    }
-
-    // Курсор встаёт на конец ОБЪЯВЛЕННОГО диапазона, а не на последнюю непустую
-    // пачку: диапазон покрыт полностью, и тик без пачки означает «событий не
-    // было», а не «пачка потерялась» (NTR-15). Остановка курсора на последней
-    // пачке превратила бы каждую тихую рассылку в разрыв следующей.
-    this.eventEpoch = epoch;
-    this.eventTick = to;
-    this.eventsSeen = true;
+    this.stream.apply(message);
+    this.metrics.eventBatchesDelivered = this.stream.delivered;
+    this.metrics.eventBatchesDropped = this.stream.dropped;
+    this.metrics.eventRangeGaps = this.stream.gaps;
   }
 
   /**

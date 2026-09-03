@@ -31,6 +31,13 @@ export interface DemoStandOptions {
   readonly script?: string;
   /** Сколько ждать человека, прежде чем слот займёт бот (BOT-7); undefined — дефолт стенда. */
   readonly botFillMs?: number | undefined;
+  /**
+   * Разрешить наблюдателя (`netcode-transport` NTR-9): без него режим страницы
+   * `?observer` получает названный отказ. Решением ЗАПУСКА оно и остаётся —
+   * сетевой аутентификации нет, а `npm run demo:lan` зовёт второго человека по
+   * сети, и полный поток по умолчанию отдал бы ему чужую половину тумана.
+   */
+  readonly observer?: boolean;
 }
 
 const STAND_SCRIPT = fileURLToPath(new URL('../bin/demo-serve.mjs', import.meta.url));
@@ -45,6 +52,7 @@ const TAG = '[стенд]';
 export function standArgs(options: DemoStandOptions): readonly string[] {
   const args = [options.script ?? STAND_SCRIPT, '--port', String(options.port)];
   if (options.botFillMs !== undefined) args.push('--bot-fill-ms', String(options.botFillMs));
+  if (options.observer === true) args.push('--observer');
   return args;
 }
 
