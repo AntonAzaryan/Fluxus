@@ -72,22 +72,21 @@ describe('композиция HUD демо резолвится против р
   });
 
   /**
-   * Полоса здоровья героя стоит НАД НИМ по мировому якорю (HUD-10): место ей
-   * даёт проекция, которую публикует рендер (`rendering` REND-41), а объявлено
-   * это ЗАПИСЬЮ композиции — кода виджета размещение не касается (HUD-4).
+   * Полоса здоровья героя стоит ПОД ПОРТРЕТОМ: та же зона, следующая запись.
+   * Размещение по мировому якорю (HUD-10) записи доступно, но демо его не
+   * берёт — и это решение композиции, а не кода виджета (HUD-4).
    */
-  it('полоса здоровья размещена по мировому якорю героя (HUD-10)', () => {
+  it('полоса здоровья стоит под портретом, а не по мировому якорю (HUD-4)', () => {
     const composition = demoHudComposition({ controls: true, matchPause: true, tickMs: 16 });
-    const hp = composition.entries.find((entry) => entry.widget === 'hp-bar')!;
-    expect(hp.anchor).toBeDefined();
-    // Сущность названа СЛОТОМ биндинга, а не идентификатором: композиция —
-    // значение со ссылками-именами (HUD-4).
-    expect(hp.anchor!.entity).toBe('entity');
-    expect(hp.bindings![hp.anchor!.entity]).toBe('hero.entity');
-    // И резолв это подтверждает: слот якоря обязан быть среди биндингов записи.
+    const portraitAt = composition.entries.findIndex((entry) => entry.widget === 'portrait');
+    const hp = composition.entries[portraitAt + 1]!;
+    expect(hp.widget).toBe('hp-bar');
+    expect(hp.zone).toBe(composition.entries[portraitAt]!.zone);
+    expect(hp.anchor).toBeUndefined();
+    expect(hp.bindings!.entity).toBe('hero.entity');
     const resolved = resolveComposition(createDemoHudRegistry(stubOptions), composition);
     const entry = resolved.entries.find((one) => one.kind.name === 'hp-bar')!;
-    expect(entry.anchor).toEqual(hp.anchor);
+    expect(entry.anchor).toBeUndefined();
   });
 
   it('панель кулдаунов забиндена на имена статов сборки, а не на компоненты мира', () => {

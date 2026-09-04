@@ -2527,13 +2527,11 @@ describe('числа и картинка босса: ретюн виден в д
     expect(MANIFEST.effects.byKind.BossWave!.radius).toBeGreaterThanOrEqual(
       WAVE_RADIUS / FIXED_ONE,
     );
-    // Поле замедления — купол по виду, как и купол героя: прозрачная сфера и
-    // кольцо у её подножия списком записей (REND-23), и радиус КАЖДОЙ равен
-    // зоне действия — иначе одна из них врала бы о границе.
-    const field = MANIFEST.effects.byKind.BossField as unknown as EffectEntry | readonly EffectEntry[];
-    const fieldEntries: readonly EffectEntry[] = Array.isArray(field) ? field : [field];
-    expect(fieldEntries.map((entry) => entry.primitive)).toEqual(['sphere', 'ring']);
-    for (const entry of fieldEntries) expect(entry.radius).toBe(FIELD_RADIUS / FIXED_ONE);
+    // Поле замедления — купол по виду, как и купол героя: прозрачная сфера без
+    // ободка, и радиус оболочки равен зоне действия.
+    const field = MANIFEST.effects.byKind.BossField!;
+    expect(field.primitive).toBe('sphere');
+    expect(field.radius).toBe(FIELD_RADIUS / FIXED_ONE);
     // Пятно огня несёт ОБЕ записи, и вторая из них — не украшение.
     //
     // Пламя рисует эмиттер (ASSET-14): примитив манифеста один, и горящую полосу
