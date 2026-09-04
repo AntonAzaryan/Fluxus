@@ -11,10 +11,14 @@
  */
 import { describe, expect, it } from 'vitest';
 import { CameraRig, createCameraInput, resetCameraInput } from '@fluxus/render';
+import { HeroFollowPoint } from '../app/cameraFollow.js';
 import { demoEdgePan, type EdgePanFrame } from '../app/cameraInput.js';
+import { DEAD_COMPONENT, FALLING_COMPONENT, stateBit } from '../app/sim.js';
 
 const RECT = { left: 0, top: 0, width: 800, height: 600 };
 const MARGIN = 24;
+/** Границы панорамирования размером с диск арены демо (CAM-3). */
+const ARENA_BOUNDS = { minX: 0, minY: 0, maxX: 48, maxY: 48 };
 
 /** Курсор в левой краевой полосе — то, что игрок видит как «веду камеру влево». */
 function frame(overrides: Partial<EdgePanFrame> = {}): EdgePanFrame {
@@ -71,5 +75,94 @@ describe('панорама краем экрана: политика сборк�
     // И в free край снова работает — иначе панорамировать было бы нечем.
     const edge = demoEdgePan(frame({ mode: rig.mode }));
     expect(edge.x).toBeLessThan(0);
+  });
+});
+
+/**
+ * Вторая политика той же сборки — за КАКОЙ точкой камера ведёт наблюдение,
+ * пока герой выбыл из боя (`app/cameraFollow.ts`, CAM-2/CAM-5). Проверяется, как
+ * и край, решение сборки: конвейер follow ведёт поданную точку и в этом не
+ * ошибается — ошибалась подача.
+ */
+describe('follow-точка выбывшего героя: камера остаётся на месте боя (CAM-2)', () => {
+  const DEAD = stateBit(DEAD_COMPONENT);
+  const FALLING = stateBit(FALLING_COMPONENT);
+
+  it('провалившийся с кромки герой камеру за арену не тянет', () => {
+    // РЕГРЕССИЯ: follow вёл позу инстанса, а провалившийся герой продолжает
+    // лететь ГОРИЗОНТАЛЬНО мимо арены сотни тиков до смерти по глубине —
+    // камера уезжала за кромку и упиралась в границы панорамирования.
+    const follow = new HeroFollowPoint();
+    expect(follow.point(3, { pose: { x: 4, y: 20 }, states: 0, snap: false })).toEqual({
+      x: 4,
+      y: 20,
+      snap: false,
+    });
+    // Тик провала: состояние приехало, точка ещё на кромке.
+    expect(follow.point(3, { pose: { x: 2, y: 19 }, states: FALLING, snap: false })).toEqual({
+      x: 4,
+      y: 20,
+      snap: false,
+    });
+    // Дальше герой улетает за пределы арены — точка держится.
+    for (let i = 0; i < 300; i++) {
+      const away = { x: -20 - i, y: 3 };
+      expect(follow.point(3, { pose: away, states: FALLING | DEAD, snap: false })).toEqual({
+        x: 4,
+        y: 20,
+        snap: false,
+      });
+    }
+  });
+
+  it('смерть на месте держит точку гибели, возрождение возвращает камеру герою', () => {
+    const follow = new HeroFollowPoint();
+    follow.point(3, { pose: { x: 28, y: 32 }, states: 0, snap: false });
+    expect(follow.point(3, { pose: { x: 28, y: 32 }, states: DEAD, snap: false })).toEqual({
+      x: 28,
+      y: 32,
+      snap: false,
+    });
+    // Возрождение: сущность снова в бою, точка — её, а признак разрыва доставки
+    // едет как есть; порог рывка дальше решает CAM-5, а не эта политика.
+    expect(follow.point(3, { pose: { x: 8, y: 24 }, states: 0, snap: true })).toEqual({
+      x: 8,
+      y: 24,
+      snap: true,
+    });
+  });
+
+  it('смена наблюдаемого (CAM-10) память места боя обнуляет', () => {
+    const follow = new HeroFollowPoint();
+    follow.point(3, { pose: { x: 28, y: 32 }, states: 0, snap: false });
+    // Другой субъект, уже мёртвый: точка чужого боя ему не наследуется.
+    expect(follow.point(4, { pose: { x: 40, y: 4 }, states: DEAD, snap: false })).toEqual({
+      x: 40,
+      y: 4,
+      snap: false,
+    });
+  });
+
+  it('инстанса нет — цели нет: конвейер остаётся там, где стоял', () => {
+    const follow = new HeroFollowPoint();
+    expect(follow.point(3, { pose: null, states: 0, snap: false })).toBeNull();
+    expect(follow.point(null, { pose: { x: 1, y: 1 }, states: undefined, snap: false })).toBeNull();
+  });
+
+  it('камера в follow не покидает арену, пока герой летит мимо неё (CAM-3)', () => {
+    // До конца, до самого rig'а: политика ценна ровно тем, что точка наблюдения
+    // остаётся там, где герой был в бою.
+    const rig = new CameraRig({ startX: 4, startY: 20, bounds: ARENA_BOUNDS });
+    const input = createCameraInput();
+    const follow = new HeroFollowPoint();
+    rig.update(input, 1 / 60, follow.point(3, { pose: { x: 4, y: 20 }, states: 0, snap: true }));
+    for (let i = 0; i < 600; i++) {
+      const away = { x: -1 - i * 0.3, y: 20 - i * 0.2 };
+      rig.update(input, 1 / 60, follow.point(3, { pose: away, states: FALLING, snap: false }));
+      resetCameraInput(input);
+    }
+    expect(rig.mode).toBe('follow');
+    expect(rig.focusX).toBeCloseTo(4, 3);
+    expect(rig.focusY).toBeCloseTo(20, 3);
   });
 });

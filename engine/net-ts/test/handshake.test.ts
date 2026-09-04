@@ -20,7 +20,7 @@ import {
 } from './fixtures.js';
 import { MatchClient } from '../src/client/matchClient.js';
 import { contentPack } from '../src/content/pack.js';
-import { parseServerMessage } from '../src/protocol/messages.js';
+import { NO_SLOT, parseServerMessage } from '../src/protocol/messages.js';
 import type { RejectMessage, WelcomeMessage, WireSnapshot } from '../src/protocol/messages.js';
 
 describe('сверка версии (NET-16)', () => {
@@ -241,13 +241,24 @@ describe('наблюдатель (NTR-9)', () => {
     expect(server.drain()[0]!.message).toMatchObject({ reason: 'observer-not-allowed' });
   });
 
-  it('с разрешением подключается и игрового слота не занимает', () => {
+  it('с разрешением получает приветствие с сентинелем и игрового слота не занимает (NTR-21)', () => {
     const config = duelConfig({ allowObserver: true });
     const { server } = harness(config);
     server.connect(1);
     server.receive(1, hello('spectator', config.version, true));
-    // Ни Welcome со слотом, ни Reject: наблюдатель ждёт Start вместе со всеми.
-    expect(server.drain()).toHaveLength(0);
+    // Приветствие то же и того же состава (NTR-5): без него наблюдателю не из
+    // чего поднять мир. Слота в нём нет — сентинель (NTR-21).
+    const outgoing = server.drain();
+    expect(outgoing).toHaveLength(1);
+    expect(outgoing[0]!.message).toMatchObject({
+      type: 'Welcome',
+      slot: NO_SLOT,
+      players: config.players,
+    });
+    // Матч по-прежнему в лобби: слоты наблюдатель не занимает, и `Start` он
+    // дождётся вместе со всеми.
     expect(server.phase).toBe('lobby');
+    expect(server.slotLease(0).claimed).toBe(false);
+    expect(server.slotLease(1).claimed).toBe(false);
   });
 });

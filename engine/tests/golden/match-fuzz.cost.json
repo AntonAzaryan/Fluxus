@@ -27,7 +27,7 @@
   },
   "performance": {
     "frame": {
-      "effectsShapeVertices": 0,
+      "effectsShapeVertices": 1260,
       "effectsShapesCulled": 0,
       "fogDissolveTexels": 19968,
       "fogMaskClearTexels": 13568,
@@ -45,8 +45,8 @@
       "fogShadowTexelTests": 56,
       "frameBudgetDeferrals": 0,
       "frameCalls": 60,
-      "frameInstances": 960,
-      "frameSubsystems": 480,
+      "frameInstances": 1080,
+      "frameSubsystems": 540,
       "lightingBlobDecals": 0,
       "lightingDynamicCasters": 60,
       "lightingLocalActive": 0,
@@ -84,14 +84,14 @@
       "particlesShellsSynced": 60,
       "syncTickDecorationInstances": 0,
       "syncTickDeliveries": 60,
-      "syncTickInstances": 960,
-      "syncTickSubsystems": 480,
+      "syncTickInstances": 1080,
+      "syncTickSubsystems": 540,
       "terrainChunksMarked": 120
     }
   },
   "ultra": {
     "frame": {
-      "effectsShapeVertices": 0,
+      "effectsShapeVertices": 10500,
       "effectsShapesCulled": 0,
       "fogDissolveTexels": 67328,
       "fogMaskClearTexels": 54272,
@@ -109,8 +109,8 @@
       "fogShadowTexelTests": 335,
       "frameBudgetDeferrals": 0,
       "frameCalls": 60,
-      "frameInstances": 960,
-      "frameSubsystems": 480,
+      "frameInstances": 1080,
+      "frameSubsystems": 540,
       "lightingBlobDecals": 0,
       "lightingDynamicCasters": 120,
       "lightingLocalActive": 0,
@@ -148,8 +148,8 @@
       "particlesShellsSynced": 60,
       "syncTickDecorationInstances": 0,
       "syncTickDeliveries": 60,
-      "syncTickInstances": 960,
-      "syncTickSubsystems": 480,
+      "syncTickInstances": 1080,
+      "syncTickSubsystems": 540,
       "terrainChunksMarked": 120
     }
   },

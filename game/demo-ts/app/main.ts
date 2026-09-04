@@ -118,12 +118,14 @@ import {
   navPathsDebugSource,
   staticCollidersDebugSource,
 } from './debugSources.js';
+import { HeroFollowPoint } from './cameraFollow.js';
 import { createEdgePanAxes, demoEdgePan } from './cameraInput.js';
 import { createDemoHud, createDemoMinimapSource, demoHudComposition } from './hud.js';
 import { prewarmPresentation } from './prewarm.js';
 import { PresentationScale } from './presentationScale.js';
 import { DEMO_STAND_SERVICE, demoStandHost } from './desktopStand.js';
 import { demoMode, demoServerUrl, localModeUrl, serverModeUrl, type DemoMode } from './mode.js';
+import { observerHudComposition } from './observerClient.js';
 import {
   QUALITY_PRESET_NAMES,
   DEMO_PIXEL_RATIO_CAP,
@@ -326,8 +328,18 @@ let fogSubsystem: FogSubsystem | null = null;
  * прямую отрисовку сцены.
  */
 let postprocess: PostprocessSubsystem | null = null;
-/** ID сущности героя из handshake воркера (helloExtra). */
+/** ID сущности героя из handshake воркера (helloExtra); `null` — своей сущности нет (наблюдатель). */
 let heroId: EntityId | null = null;
+/**
+ * Страница смотрит матч наблюдателем (`netcode-transport` NTR-9, NTR-21):
+ * своего героя нет, ввод наружу не уходит, камера ведёт субъект наблюдения
+ * (CAM-10), а HUD собирается без виджетов героя (HUD-4).
+ *
+ * Величина приезжает handshake'ом оболочки (SHELL-5, SHELL-8), а не выводится
+ * из отсутствия героя: «герой ещё не приехал» и «героя нет вовсе» — разные
+ * состояния, и различать их обязана сборка, а не догадка о доставке.
+ */
+let observing = false;
 
 const context: RenderContext = { scene: scene3, assets, config: { heightStep: HEIGHT_STEP } };
 let remote: RemoteHost | null = null;
@@ -650,6 +662,8 @@ let decorationSet: DecorationSet | null = null;
 const spectator = new SpectatorSubjects({ playerStat: STATS.slot, teamStat: STATS.team });
 /** Кем наблюдение заменило героя; null — смотрим своего (обычный матч). */
 let spectateEntity: EntityId | null = null;
+/** Память follow-точки: где ведомая сущность была последний раз в бою (CAM-2). */
+const heroFollow = new HeroFollowPoint();
 
 /**
  * Подача стелс-состояний (FOW-13): свой невидимка — полупрозрачность, чужой
@@ -1047,17 +1061,22 @@ function cameraFrame(dtSec: number): void {
   if (entities !== undefined) spectator.sync(entities.values());
   // Follow ведёт ЛЮБУЮ доставленную сущность (CAM-10): наблюдаемую, если зритель
   // её выбрал, иначе — своего героя.
-  const followed = spectateEntity ?? heroId;
+  //
+  // У наблюдателя (NTR-21) своего героя нет, и субъект берётся у ИСТОЧНИКА
+  // покадрово, а не из защёлкнутого клавишей выбора: исчезнувшего из доставки
+  // источник заменяет следующим по порядку сам (CAM-10), то есть зритель,
+  // у которого убили наблюдаемого, продолжает смотреть матч, а не в пустоту.
+  const followed = observing ? (spectator.current?.entity ?? null) : (spectateEntity ?? heroId);
   const instance = followed === null ? null : (models?.instanceFor(followed) ?? null);
   const heroView = followed === null ? undefined : remote?.view?.entities.get(followed);
-  const target =
-    instance === null
-      ? null
-      : {
-          x: instance.pose.x,
-          y: instance.pose.y,
-          snap: (heroView?.snap ?? false) || (remote?.view?.snapAll ?? false),
-        };
+  // Точку follow выбирает политика сборки (`cameraFollow.ts`): пока ведомая
+  // сущность выбыла из боя — провалилась с арены или мертва, — камера держит
+  // её последнюю точку в бою и с арены не уезжает (CAM-2, CAM-5).
+  const target = heroFollow.point(followed, {
+    pose: instance === null ? null : instance.pose,
+    states: heroView?.states,
+    snap: (heroView?.snap ?? false) || (remote?.view?.snapAll ?? false),
+  });
   const logical = rig.update(camInput, dtSec, target);
   resetCameraInput(camInput);
   // Эффекты камеры (тряска, покачивание) — часть картинки МИРА, а не главного
@@ -1161,8 +1180,14 @@ function spawnShellWorker(mode: DemoMode): Worker {
     if (isDemoNotice(event.data)) showNotice(event.data.message);
     if (isDemoInputLead(event.data)) showInputLead(event.data.lead);
   });
-  if (mode.kind === 'server') {
-    const init: DemoClientInit = { t: 'demo-client-init', url: mode.url };
+  if (mode.kind === 'server' || mode.kind === 'observer') {
+    // Наблюдатель ходит к тому же стенду и тем же воркером (NTR-21): другой у
+    // него не сервер, а род участия, и называется он полем конверта сборки.
+    const init: DemoClientInit = {
+      t: 'demo-client-init',
+      url: mode.url,
+      ...(mode.kind === 'observer' ? { observer: true } : {}),
+    };
     client.postMessage(init);
     return client;
   }
@@ -1231,7 +1256,7 @@ function showInputLead(lead: number | undefined): void {
 function wireConnectButton(mode: DemoMode): void {
   const button = document.getElementById('connect');
   if (!(button instanceof HTMLAnchorElement)) return;
-  if (mode.kind === 'server') {
+  if (mode.kind === 'server' || mode.kind === 'observer') {
     button.textContent = '← матч с ботом';
     button.title = `сейчас: ${mode.url}`;
     button.href = localModeUrl(window.location.href);
@@ -1502,7 +1527,13 @@ async function main(): Promise<void> {
     // способом — доставкой (HUD-9).
     onPause: (pause) => hudRuntime?.deliverPause(pause),
     onReady: (hello) => {
-      heroId = (hello.extra as { hero: EntityId }).hero;
+      // Полезная нагрузка handshake сборки (SHELL-5): у участника — своя
+      // сущность, у наблюдателя — признак наблюдения и ни одной сущности
+      // (NTR-21). Читается она здесь, а не выводится из доставки: режим главный
+      // поток обязан знать ДО первого кадра (SHELL-8).
+      const extra = hello.extra as { hero?: EntityId; observer?: boolean };
+      heroId = extra.hero ?? null;
+      observing = extra.observer === true;
       const grid = remote!.terrain;
       if (grid === null) throw new Error('демо: сцена обязана содержать террейн');
       // Общая визуальная поверхность (REND-9/10): кривизна из манифеста,
@@ -1610,8 +1641,10 @@ async function main(): Promise<void> {
       // позже всех и потому видит якоря уже свежими.
       screenAnchors = new ScreenAnchors({ instances: models });
       // Свой герой — единственная сегодня сущность набора: над ним стоит полоса
-      // здоровья HUD (HUD-10). Кому ещё положен якорь, решает эта же сборка.
-      screenAnchors.track(heroId);
+      // здоровья HUD (HUD-10). Кому ещё положен якорь, решает эта же сборка. У
+      // наблюдателя своей сущности нет, и якорь ставить не на кого (NTR-21) —
+      // виджеты героя ему и не монтируются (`observerHudComposition`).
+      if (heroId !== null) screenAnchors.track(heroId);
       remote!.register({
         name: 'screen-anchors',
         init: () => {},
@@ -1817,22 +1850,24 @@ async function main(): Promise<void> {
       // состояний есть только у локальной, пауза МАТЧА — только у сетевой
       // (NTR-20), и режим приезжает в handshake (SHELL-8), а не выводится
       // наблюдением за потоком доставок.
-      hud.runtime.apply(
-        demoHudComposition({
-          controls: hello.mode === 'local',
-          // Пауза МАТЧА живёт только в сетевой сборке (NTR-20): в локальном
-          // прогоне сервера нет вовсе, а «пауза» там — переход машины состояний
-          // собственного воркера (SHELL-6), у которого своё отображение.
-          matchPause: hello.mode === 'network',
-          // Имена слотов оверлею паузы: кто именно её поставил (HUD-9). Ростер
-          // приезжает полезной нагрузкой handshake (SHELL-5) — это данные матча
-          // сборки, а не знание оболочки и не знание HUD.
-          slotNames: (hello.extra as { players?: readonly string[] }).players ?? [],
-          // Длительность тика — из того же handshake: по ней кулдаун переводит
-          // доставленные тики в секунды (SHELL-5, HUD-8).
-          tickMs: hello.tickSeconds * 1000,
-        }),
-      );
+      // Композиция наблюдателя — та же минус виджеты героя (HUD-4, NTR-21):
+      // своей сущности у него нет, а кулдауны и портрет ПЕРВОГО попавшегося
+      // героя доставки были бы чужим намерением на экране.
+      const composition = demoHudComposition({
+        controls: hello.mode === 'local',
+        // Пауза МАТЧА живёт только в сетевой сборке (NTR-20): в локальном
+        // прогоне сервера нет вовсе, а «пауза» там — переход машины состояний
+        // собственного воркера (SHELL-6), у которого своё отображение.
+        matchPause: hello.mode === 'network',
+        // Имена слотов оверлею паузы: кто именно её поставил (HUD-9). Ростер
+        // приезжает полезной нагрузкой handshake (SHELL-5) — это данные матча
+        // сборки, а не знание оболочки и не знание HUD.
+        slotNames: (hello.extra as { players?: readonly string[] }).players ?? [],
+        // Длительность тика — из того же handshake: по ней кулдаун переводит
+        // доставленные тики в секунды (SHELL-5, HUD-8).
+        tickMs: hello.tickSeconds * 1000,
+      });
+      hud.runtime.apply(observing ? observerHudComposition(composition) : composition);
       hudRuntime = hud.runtime;
       // Объявление паузы могло приехать РАНЬШЕ сборки HUD — например, войди
       // игрок в уже замороженный матч (NTR-20, D8): тогда конверт доехал до

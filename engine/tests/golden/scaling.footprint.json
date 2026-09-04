@@ -7,6 +7,10 @@
       "footprint": {
         "small": {
           "resources": {
+            "effects": {
+              "geometry": 17,
+              "material": 16
+            },
             "fog": {
               "geometry": 1,
               "material": 1,
@@ -56,6 +60,10 @@
         },
         "large": {
           "resources": {
+            "effects": {
+              "geometry": 129,
+              "material": 128
+            },
             "fog": {
               "geometry": 1,
               "material": 1,
@@ -112,6 +120,10 @@
       "footprint": {
         "small": {
           "resources": {
+            "effects": {
+              "geometry": 33,
+              "material": 32
+            },
             "fog": {
               "geometry": 1,
               "material": 1,
@@ -161,6 +173,10 @@
         },
         "large": {
           "resources": {
+            "effects": {
+              "geometry": 33,
+              "material": 32
+            },
             "fog": {
               "geometry": 1,
               "material": 1,
@@ -217,6 +233,10 @@
       "footprint": {
         "small": {
           "resources": {
+            "effects": {
+              "geometry": 33,
+              "material": 32
+            },
             "fog": {
               "geometry": 1,
               "material": 1,
@@ -266,6 +286,10 @@
         },
         "large": {
           "resources": {
+            "effects": {
+              "geometry": 33,
+              "material": 32
+            },
             "fog": {
               "geometry": 1,
               "material": 1,
@@ -322,6 +346,10 @@
       "footprint": {
         "small": {
           "resources": {
+            "effects": {
+              "geometry": 33,
+              "material": 32
+            },
             "fog": {
               "geometry": 1,
               "material": 1,
@@ -371,6 +399,10 @@
         },
         "large": {
           "resources": {
+            "effects": {
+              "geometry": 33,
+              "material": 32
+            },
             "fog": {
               "geometry": 1,
               "material": 1,
@@ -427,6 +459,10 @@
       "footprint": {
         "small": {
           "resources": {
+            "effects": {
+              "geometry": 33,
+              "material": 32
+            },
             "fog": {
               "geometry": 1,
               "material": 1,
@@ -476,6 +512,10 @@
         },
         "large": {
           "resources": {
+            "effects": {
+              "geometry": 33,
+              "material": 32
+            },
             "fog": {
               "geometry": 1,
               "material": 1,
@@ -532,6 +572,10 @@
       "footprint": {
         "small": {
           "resources": {
+            "effects": {
+              "geometry": 33,
+              "material": 32
+            },
             "fog": {
               "geometry": 1,
               "material": 1,
@@ -581,6 +625,10 @@
         },
         "large": {
           "resources": {
+            "effects": {
+              "geometry": 33,
+              "material": 32
+            },
             "fog": {
               "geometry": 1,
               "material": 1,

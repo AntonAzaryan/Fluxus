@@ -76,7 +76,9 @@
     { "name": "HitMark", "fields": { "dash": "i32", "wave": "entity" } },
     { "name": "FieldState", "fields": { "radius": "fixed" } },
     { "name": "Minion", "fields": { "bornTick": "i32" } },
-    { "name": "Chilled", "fields": { "sinceTick": "i32" } }
+    { "name": "Chilled", "fields": { "sinceTick": "i32" } },
+    { "name": "Tether", "fields": { "nextTick": "i32", "target": "entity", "untilTick": "i32" } },
+    { "name": "SlowPower", "fields": { "value": "fixed" } }
   ],
   "prefabs": [
     {
@@ -240,7 +242,10 @@
         "AbilityCooldown": { "remaining": 0, "total": 0 }
       }
     },
-    { "name": "BuffSlow", "components": { "BuffInstance": { "buffId": 0 } } },
+    {
+      "name": "BuffSlow",
+      "components": { "BuffInstance": { "buffId": 0 }, "SlowPower": { "value": 65536 } }
+    },
     { "name": "BuffShielded", "components": { "BuffInstance": { "buffId": 1 } } },
     {
       "name": "Boss",
@@ -305,6 +310,13 @@
       "components": {
         "AbilitySlot": { "abilityId": 14, "slotIndex": 4 },
         "AbilityCooldown": { "remaining": 0, "total": 900 }
+      }
+    },
+    {
+      "name": "SlotBossTether",
+      "components": {
+        "AbilitySlot": { "abilityId": 16, "slotIndex": 5 },
+        "AbilityCooldown": { "remaining": 0, "total": 600 }
       }
     },
     {
@@ -1521,6 +1533,12 @@
           }
         },
         {
+          "spawnEntity": {
+            "prefab": "SlotBossTether",
+            "overrides": { "AbilitySlot": { "owner": { "var": "b" } } }
+          }
+        },
+        {
           "addComponent": {
             "entity": { "var": "b" },
             "component": "Granted",
@@ -1671,7 +1689,7 @@
                                           "slotIndex"
                                         ]
                                       },
-                                      4
+                                      5
                                     ]
                                   },
                                   {
@@ -2910,6 +2928,156 @@
           }
         }
       ]
+    },
+    {
+      "name": "TetherDrain",
+      "order": 318,
+      "query": { "all": ["Tether", "Position", "Health"] },
+      "as": "b",
+      "do": [
+        {
+          "let": {
+            "bindings": {
+              "prey": { "getComponent": [{ "var": "b" }, "Tether", "target"] },
+              "until": { "getComponent": [{ "var": "b" }, "Tether", "untilTick"] },
+              "next": { "getComponent": [{ "var": "b" }, "Tether", "nextTick"] },
+              "hold": false
+            },
+            "do": [
+              {
+                "if": {
+                  "cond": {
+                    "and": [
+                      { "!": [{ "hasComponent": [{ "var": "b" }, "Dead"] }] },
+                      { "<=": [{ "tick": [] }, { "var": "until" }] },
+                      { "isAlive": [{ "var": "prey" }] },
+                      { "hasComponent": [{ "var": "prey" }, "Position"] },
+                      { "hasComponent": [{ "var": "prey" }, "Health"] }
+                    ]
+                  },
+                  "then": [
+                    {
+                      "let": {
+                        "bindings": {
+                          "far": {
+                            "vec.length": [
+                              {
+                                "vec.sub": [
+                                  {
+                                    "vec": [
+                                      { "getComponent": [{ "var": "prey" }, "Position", "x"] },
+                                      { "getComponent": [{ "var": "prey" }, "Position", "y"] }
+                                    ]
+                                  },
+                                  {
+                                    "vec": [
+                                      { "getComponent": [{ "var": "b" }, "Position", "x"] },
+                                      { "getComponent": [{ "var": "b" }, "Position", "y"] }
+                                    ]
+                                  }
+                                ]
+                              }
+                            ]
+                          }
+                        },
+                        "do": [
+                          {
+                            "if": {
+                              "cond": {
+                                "and": [
+                                  { "!": [{ "hasComponent": [{ "var": "prey" }, "Dead"] }] },
+                                  { "<=": [{ "var": "far" }, 557056] }
+                                ]
+                              },
+                              "then": [{ "set": { "name": "hold", "value": true } }]
+                            }
+                          }
+                        ]
+                      }
+                    }
+                  ]
+                }
+              },
+              {
+                "if": {
+                  "cond": { "var": "hold" },
+                  "then": [
+                    {
+                      "if": {
+                        "cond": { ">=": [{ "tick": [] }, { "var": "next" }] },
+                        "then": [
+                          {
+                            "emitEvent": {
+                              "type": "Damage",
+                              "data": {
+                                "amount": 20,
+                                "entity": { "var": "prey" },
+                                "source": { "var": "b" }
+                              }
+                            }
+                          },
+                          {
+                            "emitEvent": {
+                              "type": "BossTetherPulse",
+                              "data": {
+                                "entity": { "var": "b" },
+                                "target": { "var": "prey" },
+                                "tick": { "tick": [] },
+                                "x": { "getComponent": [{ "var": "prey" }, "Position", "x"] },
+                                "y": { "getComponent": [{ "var": "prey" }, "Position", "y"] }
+                              }
+                            }
+                          },
+                          {
+                            "modifyComponent": {
+                              "entity": { "var": "b" },
+                              "component": "Tether",
+                              "values": { "nextTick": { "+": [{ "tick": [] }, 20] } }
+                            }
+                          },
+                          {
+                            "modifyComponent": {
+                              "entity": { "var": "b" },
+                              "component": "Health",
+                              "values": {
+                                "hp": {
+                                  "min": [
+                                    { "getComponent": [{ "var": "b" }, "Health", "hpMax"] },
+                                    {
+                                      "+": [
+                                        { "getComponent": [{ "var": "b" }, "Health", "hp"] },
+                                        10
+                                      ]
+                                    }
+                                  ]
+                                }
+                              }
+                            }
+                          }
+                        ]
+                      }
+                    }
+                  ],
+                  "else": [
+                    { "removeComponent": { "entity": { "var": "b" }, "component": "Tether" } },
+                    {
+                      "emitEvent": {
+                        "type": "BossTetherBroke",
+                        "data": {
+                          "entity": { "var": "b" },
+                          "tick": { "tick": [] },
+                          "x": { "getComponent": [{ "var": "b" }, "Position", "x"] },
+                          "y": { "getComponent": [{ "var": "b" }, "Position", "y"] }
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            ]
+          }
+        }
+      ]
     }
   ],
   "abilities": [
@@ -3167,7 +3335,9 @@
                                 "entity": { "var": "owner" },
                                 "scale": { "var": "scale" },
                                 "slot": { "getComponent": [{ "var": "owner" }, "Player", "slot"] },
-                                "tick": { "tick": [] }
+                                "tick": { "tick": [] },
+                                "x": { "getComponent": [{ "var": "owner" }, "Position", "x"] },
+                                "y": { "getComponent": [{ "var": "owner" }, "Position", "y"] }
                               }
                             }
                           }
@@ -3427,7 +3597,9 @@
                     "dirY": { "vec.y": [{ "var": "dir" }] },
                     "entity": { "var": "owner" },
                     "slot": { "getComponent": [{ "var": "owner" }, "Player", "slot"] },
-                    "tick": { "tick": [] }
+                    "tick": { "tick": [] },
+                    "x": { "getComponent": [{ "var": "owner" }, "Position", "x"] },
+                    "y": { "getComponent": [{ "var": "owner" }, "Position", "y"] }
                   }
                 }
               }
@@ -3531,6 +3703,11 @@
                                 "BuffInstance": {
                                   "source": { "var": "owner" },
                                   "target": { "var": "p" }
+                                },
+                                "SlowPower": {
+                                  "value": {
+                                    "getComponent": [{ "var": "owner" }, "DomeState", "slow"]
+                                  }
                                 }
                               }
                             }
@@ -3558,6 +3735,9 @@
                           "BuffInstance": {
                             "source": { "var": "owner" },
                             "target": { "var": "k" }
+                          },
+                          "SlowPower": {
+                            "value": { "getComponent": [{ "var": "owner" }, "DomeState", "slow"] }
                           }
                         }
                       }
@@ -4753,6 +4933,118 @@
           }
         }
       ]
+    },
+    {
+      "id": "bossTether",
+      "trigger": { "event": { "type": "BossTether", "as": "ask" } },
+      "condition": {
+        "and": [
+          { "!": [{ "hasComponent": [{ "var": "owner" }, "Dead"] }] },
+          { "==": [{ "eventField": [{ "var": "ask" }, "caster"] }, { "var": "owner" }] },
+          {
+            "if": [
+              {
+                "and": [
+                  { "isAlive": [{ "getComponent": [{ "var": "owner" }, "BossHunt", "hunted"] }] },
+                  {
+                    "hasComponent": [
+                      { "getComponent": [{ "var": "owner" }, "BossHunt", "hunted"] },
+                      "Position"
+                    ]
+                  },
+                  {
+                    "hasComponent": [
+                      { "getComponent": [{ "var": "owner" }, "BossHunt", "hunted"] },
+                      "Health"
+                    ]
+                  },
+                  {
+                    "!": [
+                      {
+                        "hasComponent": [
+                          { "getComponent": [{ "var": "owner" }, "BossHunt", "hunted"] },
+                          "Dead"
+                        ]
+                      }
+                    ]
+                  }
+                ]
+              },
+              {
+                "<=": [
+                  {
+                    "vec.length": [
+                      {
+                        "vec.sub": [
+                          {
+                            "vec": [
+                              {
+                                "getComponent": [
+                                  { "getComponent": [{ "var": "owner" }, "BossHunt", "hunted"] },
+                                  "Position",
+                                  "x"
+                                ]
+                              },
+                              {
+                                "getComponent": [
+                                  { "getComponent": [{ "var": "owner" }, "BossHunt", "hunted"] },
+                                  "Position",
+                                  "y"
+                                ]
+                              }
+                            ]
+                          },
+                          {
+                            "vec": [
+                              { "getComponent": [{ "var": "owner" }, "Position", "x"] },
+                              { "getComponent": [{ "var": "owner" }, "Position", "y"] }
+                            ]
+                          }
+                        ]
+                      }
+                    ]
+                  },
+                  393216
+                ]
+              },
+              false
+            ]
+          }
+        ]
+      },
+      "cooldownTicks": 600,
+      "effects": [
+        {
+          "let": {
+            "bindings": { "prey": { "getComponent": [{ "var": "owner" }, "BossHunt", "hunted"] } },
+            "do": [
+              {
+                "addComponent": {
+                  "entity": { "var": "owner" },
+                  "component": "Tether",
+                  "values": {
+                    "nextTick": { "+": [{ "tick": [] }, 20] },
+                    "target": { "var": "prey" },
+                    "untilTick": { "+": [{ "tick": [] }, 120] }
+                  }
+                }
+              },
+              {
+                "emitEvent": {
+                  "type": "BossTetherOpened",
+                  "data": {
+                    "entity": { "var": "owner" },
+                    "target": { "var": "prey" },
+                    "tick": { "tick": [] },
+                    "x": { "getComponent": [{ "var": "owner" }, "Position", "x"] },
+                    "y": { "getComponent": [{ "var": "owner" }, "Position", "y"] }
+                  }
+                }
+              }
+            ]
+          }
+        }
+      ]
     }
   ],
   "buffs": [
@@ -4764,7 +5056,7 @@
       "statMods": [
         {
           "component": "TimeScaleModifiers",
-          "value": { "getComponent": [{ "var": "source" }, "DomeState", "slow"] }
+          "value": { "getComponent": [{ "var": "self" }, "SlowPower", "value"] }
         }
       ]
     },
@@ -4896,6 +5188,23 @@
                 "curve": { "type": "linear", "slope": 1572864, "intercept": -131072 },
                 "weight": 65536
               }
+              ]
+            },
+            {
+              "executor": "cast",
+              "event": "BossTether",
+              "considerations": [
+                {
+                  "input": "abilityReady",
+                  "slot": 5,
+                  "curve": { "type": "linear", "slope": 65536, "intercept": 0 },
+                  "weight": 65536
+                },
+                {
+                  "input": "targetDistance",
+                  "curve": { "type": "linear", "slope": -20971520, "intercept": 2621440 },
+                  "weight": 55706
+                }
               ]
             }
             ]

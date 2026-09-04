@@ -117,7 +117,7 @@ if (flag('help')) {
     'usage: node game/demo-ts/bin/demo-serve.mjs [--port 8080] [--bot-fill-ms 120000]\n' +
       '       [--on-disconnect bot|hold|pause] [--substitute-delay-ms 2000] [--silence-seconds <сек>]\n' +
       '       [--match <match.json>] [--bot <profile.json>] [--brain evaluated|scripted] [--json] [--once]\n' +
-      '       [--control-adapter]\n' +
+      '       [--control-adapter] [--observer]\n' +
       `       [--debug] [--max-ticks 600] [--out-dir runs/latest] [--dict <словарь>]\n` +
       '       [--memory-every <тиков>] [--memory-out <path>]\n' +
       `       ${TRACE_USAGE}\n`,
@@ -403,6 +403,12 @@ function matchConfig() {
     // Проба памяти — наблюдатель тика отладочного прогона (CLI-11): вне тика
     // (OBS-2), ход матча не меняет (DIAG-8), в запись (`toScenario`) не входит.
     ...(debugRun ? { observers: [memoryObserver] } : {}),
+    // Разрешение на наблюдателя (`netcode-transport` NTR-9) — решение ЗАПУСКА,
+    // как и у `serve.mjs`: сетевой аутентификации нет вовсе, и поток без
+    // фильтрации открывается флагом, а не полем документа матча. Без флага
+    // страница `?observer` получает названный отказ `observer-not-allowed`
+    // (NTR-4) — то есть внятную причину, а не пустой экран.
+    allowObserver: flag('observer'),
   };
 }
 

@@ -26,15 +26,6 @@
  * давала половинную тень там, где ярус был один, и стоила каждому фрагменту
  * второго PCF-сэмплера и второго круга по источникам в каждом материале.
  *
- * Разделять кастеров между ярусами приходится флагом `castShadow`, а не слоями:
- * теневой проход three.js проверяет слои ГЛАВНОЙ камеры кадра
- * (`WebGLShadowMap.renderObject`), и слой на объекте различал бы его видимость в
- * кадре, а не в теневой карте. Механизм здесь такой: `shadow.autoUpdate`
- * выключен, флаги кастеров расставляются под ярус ЭТОГО кадра, а глубину этого
- * яруса рисует сам three — вызовом своего теневого прохода в подменённую цель.
- * Кадр перерисовки кэша поэтому пропускает обновление динамической глубины: она
- * остаётся кадром старше, и это единственное наблюдаемое следствие.
- *
  * ## Без порта рендерера `hybrid` исполняется как `full`
  *
  * Проходы сведения идут в кадре ПОДСИСТЕМЫ, до отрисовки сцены потребителем,
@@ -49,19 +40,21 @@
  * Сама подсистема ярусов не назначает (REND-30): их сообщают владельцы объектов
  * (`ShadowCasterSink`) — подсистема моделей по происхождению инстанса и
  * анимации записи вида, подсистема террейна статикой своих чанков. Здесь только
- * реестр корней, флаги и решение, чью карту рисовать в этом кадре.
+ * решение, чью карту рисовать в этом кадре; реестр корней и флаги —
+ * `lighting/shadowTiers.ts`.
  *
  * ## Что живёт рядом, а не здесь
  *
- * Подсистема держит РЕШЕНИЯ — режим, фазу теневого прохода, ход цикла, — а
+ * Подсистема держит РЕШЕНИЯ — режим, ход цикла, значения на источниках, — а
  * механика их исполнения разложена по соседним модулям тем же швом, каким там
  * же живут пул локальных источников (REND-33) и часы цикла (REND-32):
  * `lighting/optionalLights.ts` — полусферная подсветка и контровой источник
  * (REND-29), `lighting/blobShadows.ts` — контактные пятна режима `blob`
- * (REND-30), `lighting/shadowMaps.ts` — карты теней, их фрустумы и флаги
- * кастеров, `lighting/shadowComposite.ts` — цели ярусов и проход сведения
- * (REND-30), `lighting/arena.ts` — границы арены и наводка направленных
- * источников по ним.
+ * (REND-30), `lighting/shadowTiers.ts` — реестр кастеров, флаги фазы и
+ * чередование карт ярусов (REND-30), `lighting/shadowMaps.ts` — карты теней, их
+ * фрустумы и флаги кастеров, `lighting/shadowComposite.ts` — цели ярусов и
+ * проход сведения (REND-30), `lighting/arena.ts` — границы арены и наводка
+ * направленных источников по ним.
  *
  * ## Цикл времени суток
  *
@@ -91,9 +84,8 @@ import type {
   RenderSubsystem,
   ShadowCasterSink,
   ShadowCasterTier,
-  ShadowPhase,
 } from '../types.js';
-import { costSink, type RenderCostCounters } from '../cost.js';
+import { costSink } from '../cost.js';
 import { LIGHTING_MAX_LOCAL_LIGHTS, LocalLightPool, localLightsKnob } from '../lighting/localLights.js';
 import type { DebugSource } from '../debug/contract.js';
 import { lightingSceneDebugSource, type DebugLightingState } from '../debug/lightingSource.js';
@@ -109,7 +101,8 @@ import {
 } from '../lighting/config.js';
 import { LightingCycle, type LightingCycleSample } from '../lighting/cycle.js';
 import { fillLightingDebugState } from '../lighting/debugState.js';
-import { ShadowComposite, type ShadowRendererLike } from '../lighting/shadowComposite.js';
+import type { ShadowComposite, ShadowRendererLike } from '../lighting/shadowComposite.js';
+import { ShadowTiers } from '../lighting/shadowTiers.js';
 import { arenaExtent, type ArenaExtent } from '../lighting/arena.js';
 import { BlobShadowField } from '../lighting/blobShadows.js';
 import { SceneEnvironment } from '../lighting/environment.js';
@@ -117,9 +110,9 @@ import { applyCycleSampleTo } from '../lighting/applySample.js';
 import { OptionalLights } from '../lighting/optionalLights.js';
 import {
   aimShadowLight,
-  applyShadowFlags,
   isShadowMode,
   releaseShadowMap,
+  shadowFrustumOf,
   shadowMapSizeKnob,
   shadowModeKnob,
   LIGHTING_SHADOW_MAP_SIZE,
@@ -191,20 +184,16 @@ export class LightingSubsystem
    */
   private readonly sun = new THREE.DirectionalLight();
   /**
-   * Цели ярусов и проход сведения режима `hybrid` (REND-30) — механика в
-   * `lighting/shadowComposite.ts`. Заводятся лениво, первым кадром режима с
-   * портом рендерера: сцена другого режима не платит за них ни целью, ни
-   * материалом.
+   * Ярусы кастеров режимов с картами теней (REND-30) — реестр корней, флаги
+   * фазы, цели сведения и чередование карт живут в `lighting/shadowTiers.ts`;
+   * здесь остаётся решение, какой режим действует в этом кадре.
    */
-  private readonly composite = new ShadowComposite();
+  private readonly tiers: ShadowTiers;
   /** Порт рендерера для теневых проходов (REND-30); нет — `hybrid` идёт как `full`. */
   private readonly renderer: ShadowRendererLike | undefined;
   /** Сетка арены — вход коробки, по которой обтянут фрустум (design D6, L-9). */
   private grid: TerrainGrid | undefined;
 
-  /** Реестр корней нарисованного по ярусам — вход флагов и счётчиков. */
-  private readonly staticRoots = new Set<THREE.Object3D>();
-  private readonly dynamicRoots = new Set<THREE.Object3D>();
   /**
    * Контактные пятна режима `blob` (REND-30): реестр носителей, геометрия,
    * материал и инстанс-буфер — всё в `lighting/blobShadows.ts`.
@@ -217,19 +206,6 @@ export class LightingSubsystem
    */
   private readonly environment = new SceneEnvironment();
 
-  private phase: ShadowPhase = 'none';
-  /** Кэш статики устарел: ближайший кадр перерисует его (design D2). */
-  private staticStale = true;
-  /** Реестр кастеров изменился: флаги фазы надо расставить заново. */
-  private flagsStale = true;
-  /**
-   * Карта динамики пуста и уже очищена завершающим проходом: перерисовку можно
-   * пропускать, пока в реестре динамики никого. Сбрасывается событием
-   * конфигурации — та освобождает карты, и очистку надо провести заново.
-   */
-  private dynamicIdle = false;
-  /** Перерисовки кэша статики — пробник для тестов; картинка от него не зависит. */
-  private rebuilds = 0;
   /**
    * Цикл времени суток (REND-32): один экземпляр на всю жизнь подсистемы, фазы
    * в нём переставляет применение секции. Пустой цикл — сцена без подсекции:
@@ -265,6 +241,10 @@ export class LightingSubsystem
     this.extent = arenaExtent(options.grid);
     this.camera = options.camera;
     this.renderer = options.renderer;
+    this.tiers = new ShadowTiers(this.sun, {
+      ...(options.renderer !== undefined ? { renderer: options.renderer } : {}),
+      ...(options.camera !== undefined ? { camera: options.camera } : {}),
+    });
     this.ambient.name = 'lighting:ambient';
     this.sun.name = 'lighting:sun';
     // Кадром теневых карт правит подсистема, а не three: `needsUpdate` она
@@ -279,12 +259,12 @@ export class LightingSubsystem
 
   /** Перерисовки кэшированной карты статики с создания подсистемы (design D2). */
   get staticRebuilds(): number {
-    return this.rebuilds;
+    return this.tiers.rebuilds;
   }
 
   /** Сколько корней каждого яруса в реестре — пробник классификации кастеров. */
   casterCount(tier: ShadowCasterTier): number {
-    return tier === 'static' ? this.staticRoots.size : this.dynamicRoots.size;
+    return this.tiers.count(tier);
   }
 
   /** Пул локальных источников (REND-33) — вход тестов и диагностики. */
@@ -307,18 +287,18 @@ export class LightingSubsystem
     };
   }
 
-  /**
-   * Сведение ярусов режима `hybrid` (REND-30) — вход тестов и диагностики: цели
-   * ярусов, карта сведения и проход. Пусто, пока режим с портом рендерера не
-   * пришёл ни разу.
-   */
   /** Текстура градиента окружения (REND-29) — вход тестов и учёта (REND-31). */
   get environmentTexture(): THREE.DataTexture | null {
     return this.environment.gradient;
   }
 
+  /**
+   * Сведение ярусов режима `hybrid` (REND-30) — вход тестов и диагностики: цели
+   * ярусов, карта сведения и проход. Пусто, пока режим с портом рендерера не
+   * пришёл ни разу.
+   */
   get shadowComposite(): ShadowComposite {
-    return this.composite;
+    return this.tiers.composite;
   }
 
   init(ctx: RenderContext): void {
@@ -326,6 +306,7 @@ export class LightingSubsystem
     // Коробка арены знает мировую высоту только с шагом конфига рендера
     // (REND-7): по ней обтягивается фрустум теневой камеры (design D6, L-9).
     this.extent = arenaExtent(this.grid, ctx.config.heightStep);
+    this.tiers.init(ctx.scene);
     this.local.init(ctx.scene);
     // Инстанс-меш пятен встанет в сцену первым кадром режима `blob`, а не
     // сейчас: сцена другого режима не платит за него ни узлом, ни буфером.
@@ -360,8 +341,8 @@ export class LightingSubsystem
     this.blobs.dispose();
     // Цели сведения и проход — собственность подсистемы (REND-31); карту
     // источника они же и держали, поэтому отдаются до `releaseShadowMap`.
-    this.composite.dispose();
-    this.sun.shadow.map = null;
+    // Реестры кастеров чистит тот же вызов: ссылки на корни принадлежат ярусам.
+    this.tiers.dispose();
     releaseShadowMap(this.sun);
     this.sun.target.removeFromParent();
     this.sun.removeFromParent();
@@ -370,8 +351,6 @@ export class LightingSubsystem
     // Текстура градиента — собственность подсистемы (REND-31); фон и карта
     // окружения снимаются со сцены здесь же: их поставили мы.
     this.environment.dispose(this.ctx?.scene);
-    this.staticRoots.clear();
-    this.dynamicRoots.clear();
   }
 
   /** Свет от тика не зависит: доставка presentation-состояния ему не адресована. */
@@ -416,194 +395,40 @@ export class LightingSubsystem
       // Сами пятна пишутся не здесь, а в `blobCastersPosed`: позы кадра ставит
       // владелец инстансов, зарегистрированный ПОЗЖЕ этой подсистемы, и написать
       // пятна сейчас значило бы поставить их по позам прошлого кадра.
-      this.applyPhase('none');
+      this.tiers.applyPhase('none');
       return;
     }
-    if (mode === 'full') {
-      this.updateFullShadows(cost);
-      return;
-    }
-    this.updateHybridShadows(cost, cycleMoved);
-  }
-
-  /**
-   * Кадр режима `full`: карта одна и покадровая — оба яруса платят каждым
-   * кадром, и ровно эта разница с `hybrid` читается диффом эталона (PERF-2).
-   */
-  private updateFullShadows(cost: RenderCostCounters | undefined): void {
-    this.applyPhase('full');
-    this.sun.shadow.needsUpdate = true;
-    this.staticStale = false;
-    if (cost === undefined) return;
-    cost.lightingStaticCasters += this.staticRoots.size;
-    cost.lightingDynamicCasters += this.dynamicRoots.size;
-  }
-
-  /**
-   * Кадр режима `hybrid`: кэш статики и покадровая карта динамики чередуются.
-   *
-   * Перерисовка кэша MUST NOT голодить динамическую карту (REND-30): кадр
-   * статики допустим, только если предыдущий ею не был или динамики нет
-   * вовсе. Под непрерывным потоком событий инвалидации (мутация пола каждый
-   * тик, TERR-6, перетаскивание декорации в редакторе) фазы чередуются, и
-   * каждая карта отстаёт не более чем на один свой пропущенный кадр. Без этих
-   * ворот статика вытесняла бы динамику каждым кадром, и тени юнитов
-   * застывали бы на всё время мутаций (`lightingDynamicCasters = 0` в
-   * perf-секциях эталонов стоимости).
-   */
-  private updateHybridShadows(cost: RenderCostCounters | undefined, cycleMoved: boolean): void {
-    // Сведение исполняется рендерером подсистемы (REND-30); нет порта — нет и
-    // кэша статики: кадр идёт как `full` — оба яруса в одну карту теневым
-    // проходом самого three. Картинка та же, цена другая, и видна она теми же
-    // счётчиками (PERF-3).
-    if (this.renderer === undefined) {
-      this.updateFullShadows(cost);
-      return;
-    }
-    if (this.staticStale && (this.phase !== 'static' || this.dynamicRoots.size === 0)) {
-      this.rebuildStaticShadow(cost, cycleMoved);
-      return;
-    }
-    const reflagged = this.applyPhase('dynamic');
-    // Пустой реестр динамики — глубину рисовать не за чем: её цель уже пуста
-    // (последний ушедший кастер стёрт завершающим проходом), а сведение всё
-    // равно идёт — карта источника обязана нести кэш статики.
-    const hasDynamic = this.dynamicRoots.size > 0;
-    this.drawShadowTier('dynamic', hasDynamic || !this.dynamicIdle);
-    this.dynamicIdle = !hasDynamic;
-    if (cost === undefined) return;
-    cost.lightingDynamicCasters += this.dynamicRoots.size;
-    // Та же добавка с другой стороны: кадр, сдвинувший источник, обошёл и реестр
-    // статики. Перестановка флагов, вызванная не циклом (правка реестра, смена
-    // режима, поток инвалидаций пола), сюда не попадает — за неё платят те же
-    // счётчики яруса, чья карта в этом кадре и рисуется.
-    if (reflagged && cycleMoved) cost.lightingStaticCasters += this.staticRoots.size;
-  }
-
-  /**
-   * Кадр перерисовки кэша статики: покадровая глубина динамики его пропускает и
-   * остаётся кадром старше — «двигая декорацию, автор видит её тень» (ED-15).
-   */
-  private rebuildStaticShadow(cost: RenderCostCounters | undefined, cycleMoved: boolean): void {
-    const reflagged = this.applyPhase('static');
-    // Устаревание снимает не РЕШЕНИЕ перепечь, а состоявшийся проход: теневая
-    // машинерия потребителя бывает выключена, а контекст — потерян, и заказ, о
-    // котором нельзя сказать, что он исполнен, оставляет кэш устаревшим. Иначе
-    // статика молча оставалась бы старой до следующего события инвалидации,
-    // которого может не быть вовсе.
-    const drawn = this.drawShadowTier('static', true);
-    this.staticStale = !drawn;
-    if (!drawn) return;
-    this.rebuilds++;
-    if (cost === undefined) return;
-    cost.lightingStaticCasters += this.staticRoots.size;
-    cost.lightingStaticRebuilds++;
-    // Кадр, на котором цикл сдвинул источник, переставил флаги и ярусу, чью
-    // карту не рисовал: работа по числу его корней реальная, и эталон её
-    // видит (PERF-3, см. `quality`).
-    if (reflagged && cycleMoved) cost.lightingDynamicCasters += this.dynamicRoots.size;
-  }
-
-  /**
-   * Глубина яруса ЭТОГО кадра в его цель и сведение обоих в карту источника
-   * (REND-30). Флаги кастеров уже расставлены вызывающим — здесь только проходы.
-   *
-   * `draw` — рисовать ли глубину этого яруса вообще: пустой реестр динамики
-   * перерисовывать не за чем, а сведение идёт всё равно, иначе карта источника
-   * осталась бы от прошлого кадра.
-   *
-   * Первый кадр целей рисует ОБА яруса: во второй цели до её первого прохода
-   * лежит не «пустая глубина», а то, что оставил драйвер, и сводить её нельзя.
-   * Стоит это одного лишнего прохода на создание целей — то есть на смену
-   * стороны карты или режима, а не на кадр.
-   */
-  private drawShadowTier(tier: ShadowCasterTier, draw: boolean): boolean {
-    const renderer = this.renderer;
-    const ctx = this.ctx;
-    if (renderer === undefined || ctx === null) return false;
-    this.composite.resize(this.current.shadowMapSize);
-    // Камера кадра нужна теневому проходу three только для проверки слоёв
-    // объектов; её нет — годится камера самого источника (слои по умолчанию).
-    const camera = this.camera ?? this.sun.shadow.camera;
-    if (!this.composite.primed) {
-      const other: ShadowCasterTier = tier === 'static' ? 'dynamic' : 'static';
-      this.applyPhase(other === 'static' ? 'static' : 'dynamic');
-      this.composite.renderTier(renderer, ctx.scene, camera, this.sun, other);
-      this.applyPhase(tier === 'static' ? 'static' : 'dynamic');
-    }
-    const drawn = draw ? this.composite.renderTier(renderer, ctx.scene, camera, this.sun, tier) : true;
-    this.composite.composite(renderer, this.sun);
-    return drawn;
+    this.tiers.updateFrame(mode, this.current.shadowMapSize, cycleMoved, cost);
   }
 
   // ------------------------------------------------------- реестр кастеров
 
   setCaster(root: THREE.Object3D, tier: ShadowCasterTier): void {
-    const mine = tier === 'static' ? this.staticRoots : this.dynamicRoots;
-    const other = tier === 'static' ? this.dynamicRoots : this.staticRoots;
-    const moved = other.delete(root);
-    if (!moved && tier === 'dynamic') {
-      // Динамический корень — точечный путь и на повторном объявлении, и на
-      // ПЕРВОМ: повторное — обычный ход всплеска открытия обзора (FOW-8, у
-      // записи сменилось поддерево «заглушка → модель», а не ярус), первое —
-      // спавн юнита. В обоих случаях флаги ставятся адресно пришедшему корню по
-      // текущей фазе, а глобальный обход реестра (`applyPhase`) был бы работой
-      // по числу ВСЕХ кастеров вместо одного (design D7). Динамическую карту
-      // следующий кадр и так перерисует.
-      //
-      // Фаза `none` исключением НЕ является, хотя её значение двойное — и «фазы
-      // ещё не было» (умолчание, сброс на смене конфигурации), и установившийся
-      // режим `none` пресета (QUAL-1). Адресный путь верен для обоих: флаги
-      // снимаются (`applyFlagsTo` при `none` даёт cast = receive = false), а до
-      // первого кадра реестр всё равно обходит первый же `applyPhase` — он
-      // приходит с другой фазой и обход не пропускает.
-      mine.add(root);
-      this.applyFlagsTo(root, tier);
-      return;
-    }
-    // Статический корень повторной регистрации идёт общим путём намеренно:
-    // его сменившееся поддерево обязано попасть в перерисовку кэша статики.
-    // Тем же путём идёт и смена яруса: флаги обеих карт пересчитываются.
-    mine.add(root);
-    if (tier === 'static') this.staticStale = true;
-    this.flagsStale = true;
+    this.tiers.setCaster(root, tier);
   }
 
   dropCaster(root: THREE.Object3D): void {
-    if (this.staticRoots.delete(root)) this.staticStale = true;
-    this.dynamicRoots.delete(root);
+    this.tiers.dropCaster(root);
   }
 
   invalidateStatic(): void {
-    this.staticStale = true;
+    this.tiers.invalidate();
   }
 
   /**
    * Пирамида теневой камеры источника (REND-30, REND-21): по ней владелец
    * объектов решает судьбу инстанса, ушедшего за край кадра, — тень его обязана
-   * остаться, если он попадает в теневую пирамиду.
+   * остаться, если он попадает в теневую пирамиду. Считает её механика карт
+   * (`lighting/shadowMaps.ts`), а РЕШАЕТ о её наличии режим теней — то есть
+   * подсистема.
    *
    * `null` — карт теней в режиме нет (`none`, `blob`): отсекать по ним нечего, и
    * владелец объектов остаётся с одной камерой кадра.
-   *
-   * Пирамида считается ЗДЕСЬ, а не берётся у прошедшего теневого прохода: до
-   * первого прохода её у three ещё нет, а решение об отсечении принимается
-   * раньше — в кадре владельца инстансов. Матрицы источника при этом
-   * обновляются его же способом (`LightShadow.updateMatrices`), чтобы пирамида
-   * была ровно та, из которой рисуется карта.
    */
   shadowFrustum(): THREE.Frustum | null {
     const mode = this.current.shadowMode;
     if (mode === 'none' || mode === 'blob') return null;
-    // Мировые матрицы источника и его цели — вход `updateMatrices`: позиции им
-    // ставит наводка (`aimDirectional`), а матрицы обновляются здесь.
-    this.sun.updateMatrixWorld();
-    this.sun.target.updateMatrixWorld();
-    this.sun.shadow.updateMatrices(this.sun);
-    // Своя копия, а не внутренняя пирамида three: та переписывается его же
-    // теневым проходом на каждом кадре, и отданная наружу ссылка на неё
-    // менялась бы под читателем. Копия переиспользуется (REND-26).
-    return this.frustum.copy(this.sun.shadow.getFrustum());
+    return shadowFrustumOf(this.sun, this.frustum);
   }
 
   // ------------------------------------------ носители контактных пятен
@@ -762,13 +587,13 @@ export class LightingSubsystem
         extent: this.extent,
         modeCeiling: this.modeCeiling,
         sizeCeiling: this.sizeCeiling,
-        phase: this.phase,
-        staticRoots: this.staticRoots.size,
-        dynamicRoots: this.dynamicRoots.size,
-        staticRebuilds: this.rebuilds,
-        staticStale: this.staticStale,
+        phase: this.tiers.phase,
+        staticRoots: this.tiers.count('static'),
+        dynamicRoots: this.tiers.count('dynamic'),
+        staticRebuilds: this.tiers.rebuilds,
+        staticStale: this.tiers.stale,
         // Цели сведения: две ярусов плюс карта — либо ноль, если сведения нет.
-        compositeTargets: this.composite.map === null ? 0 : 3,
+        compositeTargets: this.tiers.composite.map === null ? 0 : 3,
       },
       out,
     );
@@ -840,20 +665,12 @@ export class LightingSubsystem
     //
     // Цели сведения уходят тем же правилом и по той же причине: режим, в
     // котором сведения нет (`full`, `blob`, `none` — и `hybrid` без порта
-    // рендерера), не вправе держать в памяти три карты глубины. Карта источника
-    // при этом снимается ВРУЧНУЮ: её отдал не three, а сведение, и оставить
-    // ссылку значило бы отдать материалам сцены снесённую текстуру.
-    if (!composited) {
-      if (this.composite.map !== null) this.sun.shadow.map = null;
-      this.composite.dispose();
-    }
+    // рендерера), не вправе держать в памяти три карты глубины (`dropComposite`).
+    if (!composited) this.tiers.dropComposite();
     if (!this.sun.castShadow) releaseShadowMap(this.sun);
     // Значения света сменились — кэш статики устарел вместе с ними, а фаза
     // пересчитывается заново: прежняя могла принадлежать другому режиму.
-    this.phase = 'none';
-    this.staticStale = true;
-    this.flagsStale = true;
-    this.dynamicIdle = false;
+    this.tiers.reset();
 
     // Применение секции — единственный событийный шов цикла (REND-32): круг
     // начинается с начала первой фазы, и её значения встают на источники сразу,
@@ -890,40 +707,6 @@ export class LightingSubsystem
     // ворота REND-30 в `updateFrame` — кадр статики допустим, только если
     // предыдущий ею не был либо динамики нет вовсе. Устаревание липкое, поэтому
     // отклонённый воротами запрос не теряется, а ждёт своего кадра.
-    if (moved) this.staticStale = true;
-  }
-
-  /**
-   * Флаги кастеров под фазу кадра; `true` — реестры обойдены этим вызовом.
-   * Обход идёт ТОЛЬКО при смене фазы или правке реестра: в `hybrid` без потока
-   * событий фаза меняется на перерисовке кэша и обратно, то есть на событии, а
-   * не на кадре. Там же, где устаревание приходит каждым кадром — переход цикла
-   * (REND-32) или непрерывная мутация пола (TERR-6), — ворота чередования
-   * REND-30 меняют ярусы местами покадрово, и этот обход становится покадровой
-   * работой. Долю, вызванную циклом, объявляет `quality` и показывают счётчики
-   * `lightingStaticCasters`/`lightingDynamicCasters` (`updateFrame`, ветви
-   * `hybrid`, под `reflagged && cycleMoved`).
-   */
-  private applyPhase(next: ShadowPhase): boolean {
-    if (next === this.phase && !this.flagsStale) return false;
-    this.phase = next;
-    this.flagsStale = false;
-    const receive = next !== 'none';
-    const staticCasts = next === 'static' || next === 'full';
-    const dynamicCasts = next === 'dynamic' || next === 'full';
-    for (const root of this.staticRoots) applyShadowFlags(root, staticCasts, receive);
-    for (const root of this.dynamicRoots) applyShadowFlags(root, dynamicCasts, receive);
-    return true;
-  }
-
-  /** Флаги одного корня по ТЕКУЩЕЙ фазе — точечный путь `setCaster` без обхода реестра. */
-  private applyFlagsTo(root: THREE.Object3D, tier: ShadowCasterTier): void {
-    const phase = this.phase;
-    const receive = phase !== 'none';
-    const casts =
-      tier === 'static'
-        ? phase === 'static' || phase === 'full'
-        : phase === 'dynamic' || phase === 'full';
-    applyShadowFlags(root, casts, receive);
+    if (moved) this.tiers.invalidate();
   }
 }

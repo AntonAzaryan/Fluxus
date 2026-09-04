@@ -29,6 +29,12 @@ export default defineConfig(({ mode }) => ({
         process.env.DEMO_BOT_FILL_MS !== undefined
           ? Number(process.env.DEMO_BOT_FILL_MS)
           : undefined,
+      // Наблюдатель (NTR-9) — по намерению, а не по умолчанию: `DEMO_OBSERVER=on
+      // npm run demo` поднимает стенд, который пускает страницу `?observer`.
+      // Симметрично `DEMO_STAND=off` и по той же причине, по которой флаг вообще
+      // существует: поток без фильтрации на машине, зовущей второго игрока по
+      // сети (`npm run demo:lan`), включается решением человека.
+      observer: process.env.DEMO_OBSERVER === 'on',
     }),
     ...(mode === 'tunnel' ? [demoTunnel()] : []),
   ],

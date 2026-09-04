@@ -123,6 +123,45 @@ describe('BLND-9, BLND-10: клеточные данные читаются из
   });
 });
 
+describe('BLND-13, BLND-14: раскраска скалпта читается из закоммиченных байтов', () => {
+  const cellsOf = (name: string): ReturnType<typeof generateCellLayer> => {
+    const document = parseGltf(committed(name));
+    return generateCellLayer(document, normalizeDocument(document), context({ terrain: TARGET_TERRAIN }));
+  };
+
+  const errorsOf = (layer: ReturnType<typeof generateCellLayer>): string =>
+    layer.findings
+      .filter((finding) => finding.severity === 'error')
+      .map((finding) => `${finding.object}: ${finding.message}`)
+      .join('\n');
+
+  it('раскрашенная арена даёт слоты верхнего пересечения, а дыра — слот соседей', () => {
+    const layer = cellsOf('sculpt-paint.glb');
+
+    expect(errorsOf(layer)).toBe('');
+    // Блок слота 2 стоит над правой верхней четвертью: под ним читается ЕГО слот.
+    expect(layer.paint?.rows).toEqual(['1122', '1122', '1111', '1111']);
+    // Рельеф едет тем же источником: клетка (0, 2) вырезана — пола нет.
+    expect(layer.terrain?.levels).toEqual(['0011', '0011', '0000', '0000']);
+    expect(layer.terrain?.flags).toEqual(['....', '....', '_...', '....']);
+  });
+
+  it('расхождение канала на грани пересечения отказывает с адресом клетки', () => {
+    const layer = cellsOf('sculpt-paint-split.glb');
+
+    expect(errorsOf(layer)).toContain('split: клетка (1, 1)');
+    expect(layer.paint).toBeUndefined();
+  });
+
+  it('скалпт без канала переписывает рельеф и не трогает карту раскраски', () => {
+    const layer = cellsOf('sculpt-unpainted.glb');
+
+    expect(errorsOf(layer)).toBe('');
+    expect(layer.paint).toBeUndefined();
+    expect(layer.terrain?.levels).toEqual(['0000', '0000', '0000', '0000']);
+  });
+});
+
 describe('BLND-7: фикстуры — файлы дерева, а не результат запуска Blender', () => {
   it('ни одна не содержит следа вызова инструмента', () => {
     // `generator` контейнера пишет тот, кто его собрал: перечень этого пакета.

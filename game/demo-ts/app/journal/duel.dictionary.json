@@ -34,6 +34,10 @@
     "BossSpawnRoar": { "kind": "boss-spawn-roar", "actor": "entity" },
     "BossSpawned": { "kind": "boss-spawns-minions", "actor": "entity" },
     "BossMinionBurst": { "kind": "boss-minion-explosion", "actor": "entity" },
+    "BossTether": { "kind": "boss-asks-tether", "actor": "caster", "target": "target" },
+    "BossTetherOpened": { "kind": "boss-tether", "actor": "entity", "target": "target" },
+    "BossTetherPulse": { "kind": "boss-tether-drain", "actor": "entity", "target": "target" },
+    "BossTetherBroke": { "kind": "boss-tether-broke", "actor": "entity" },
     "BossFacing": { "kind": "boss-facing", "actor": "entity" },
     "BossRespawned": { "kind": "boss-respawn", "target": "entity" },
 

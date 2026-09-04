@@ -16,14 +16,18 @@
   },
   "performance": {
     "resources": {
+      "effects": {
+        "geometry": 2,
+        "material": 1
+      },
       "fog": {
         "geometry": 1,
         "material": 1,
         "texture": 1
       },
       "lighting": {
-        "geometry": 2,
-        "material": 2,
+        "geometry": 3,
+        "material": 3,
         "texture": 4,
         "renderTarget": 3
       },
@@ -66,6 +70,10 @@
   },
   "ultra": {
     "resources": {
+      "effects": {
+        "geometry": 2,
+        "material": 1
+      },
       "fog": {
         "geometry": 1,
         "material": 1,

@@ -173,6 +173,11 @@ export type {
   TerrainTilesetSlot,
   TerrainVisualSection,
 } from './visualSections.js';
+// состав записи транзиентного эффекта машинным описанием (`rendering` REND-23):
+// им закрыт состав записи при валидации, из него же строит свои строки панель
+// VFX редактора (`editor` ED-14) — второго перечня полей в репозитории нет
+export { EFFECT_FIELDS } from './visualSections.js';
+export type { ManifestFieldKind, ManifestFieldSpec } from './manifestFields.js';
 
 // таблица цветокоррекции кадра (`rendering` REND-34) — вид ассета `lut`
 export type { ColorLut } from './colorLut.js';

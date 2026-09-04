@@ -30,6 +30,7 @@ import {
   ParticleEffectPool,
   instanceParticles,
   stepInstance,
+  textureUploadable,
 } from '../src/particleEffects.js';
 import { makeAssets, makeEntityView, makeModel, makeTickView } from './fixtures.js';
 
@@ -1431,5 +1432,33 @@ describe('Правленые эмиттерные ассеты доезжают 
     subsystem.refreshAssets();
     expect(subsystem.activeCount).toBe(0);
     expect(subsystem.pooledCount).toBe(0);
+  });
+});
+
+describe('textureUploadable: заливка на GPU и не доехавшая картинка (REND-24, ASSET-14)', () => {
+  it('текстура из данных заливается: поля `complete` у неё нет вовсе', () => {
+    // `DataTexture` и канвасная текстура готовы в тот момент, когда созданы, — и
+    // три их не отвергает: его проверка сравнивает `image.complete` с `false`, а
+    // не с истиной. Правило здесь то же самое и по той же причине.
+    const texture = new THREE.DataTexture(new Uint8Array([255, 0, 0, 255]), 1, 1);
+    expect(textureUploadable(texture)).toBe(true);
+    texture.dispose();
+  });
+
+  it('картинка доехала — текстура заливается', () => {
+    const texture = new THREE.Texture();
+    texture.image = { complete: true };
+    expect(textureUploadable(texture)).toBe(true);
+  });
+
+  it('картинка ещё не доехала — текстуры в списке заливки нет', () => {
+    // `images` документа эффекта загрузчик библиотеки тянет асинхронно, а
+    // `needsUpdate` ставит сразу. Заливка такой текстуры работы не откладывает,
+    // а печатает предупреждение three «Texture marked for update but image is
+    // incomplete» и пропускает загрузку: на GPU текстура всё равно не уедет. Её
+    // место — второй список прогрева (`texturesReady`), после `onLoad`.
+    const texture = new THREE.Texture();
+    texture.image = { complete: false };
+    expect(textureUploadable(texture)).toBe(false);
   });
 });

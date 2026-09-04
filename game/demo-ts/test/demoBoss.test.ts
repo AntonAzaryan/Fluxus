@@ -72,7 +72,7 @@ import * as THREE from 'three';
 import { mdxLoader, type NormalizedModel } from '@fluxus/assets';
 import { MixerAnimationBackend, ViewBuffer, resolveClip, type TickView } from '@fluxus/render';
 import { DEMO_AIM_EVENTS, createDemoExtractor } from '../app/extractor.js';
-import { ACTION_BITS } from '../app/sim.js';
+import { ACTION_BITS, STATS } from '../app/sim.js';
 import sceneJson from '../../../content/scenes/duel.scene.json';
 import matchJson from '../../../content/matches/duel.match.json';
 import manifestJson from '../../../content/visuals/manifest.json';
@@ -92,6 +92,9 @@ const MATCH = matchJson as unknown as {
 interface EffectEntry {
   readonly radius?: number;
   readonly radiusTo?: number;
+  /** Примитив записи и имя стата второго конца — их читает проверка луча (REND-23). */
+  readonly primitive?: string;
+  readonly targetFromStat?: string;
 }
 
 const MANIFEST = manifestJson as unknown as {
@@ -149,7 +152,14 @@ interface EmitterDoc {
   readonly materials?: readonly { readonly uuid: string; readonly map?: string }[];
   readonly object: {
     readonly children: readonly {
-      readonly ps: { readonly material: string; readonly shape: { readonly radius: number } };
+      readonly ps: {
+        readonly material: string;
+        readonly shape: { readonly radius: number };
+        /** Сетка атласа кадров (ASSET-14): по ней библиотека делит карту в шейдере. */
+        readonly uTileCount?: number;
+        readonly vTileCount?: number;
+        readonly behaviors?: readonly { readonly type: string }[];
+      };
     }[];
   };
 }
@@ -503,6 +513,7 @@ const BOSS_SLOTS = [
   'SlotBossCharge',
   'SlotBossField',
   'SlotBossSpawn',
+  'SlotBossTether',
 ] as const;
 
 function only(...keep: readonly string[]): SceneDef {
@@ -661,6 +672,7 @@ const SLOT_PREFAB: Record<string, string> = {
   BossCharge: 'SlotBossCharge',
   BossField: 'SlotBossField',
   BossSpawn: 'SlotBossSpawn',
+  BossTether: 'SlotBossTether',
 };
 
 /**
@@ -674,10 +686,11 @@ const ASK_SLOT: Record<string, number> = {
   BossCharge: 2,
   BossField: 3,
   BossSpawn: 4,
+  BossTether: 5,
 };
 
-/** Ротационных слотов пять; толчок и аура в ротацию не входят вовсе. */
-const BOSS_ROTATION_SLOTS = 5;
+/** Ротационных слотов шесть; толчок и аура в ротацию не входят вовсе. */
+const BOSS_ROTATION_SLOTS = 6;
 
 const slotPrefabField = (prefab: string, field: string): number =>
   (SCENE.prefabs!.find((entry) => entry.name === prefab)!.components.AbilitySlot as Record<
@@ -2371,6 +2384,7 @@ describe('числа и картинка босса: ретюн виден в д
       'cast',
       'cast',
       'cast',
+      'cast',
     ]);
     // Базовое действие — сближение: оно и выигрывает, пока не готова ни одна
     // способность, поэтому босс не замирает между кастами.
@@ -2627,5 +2641,153 @@ describe('числа и картинка босса: ретюн виден в д
       expect(fields, `событие ${type} сцена не публикует`).toBeDefined();
       expect([...fields!].sort(), type).toEqual(expect.arrayContaining(['dirX', 'dirY']));
     }
+  });
+});
+
+/**
+ * Вытягивание (`bossTether`) — способность на ДВЕ сущности: жгут от босса к
+ * жертве, который тикает уроном и возвращает боссу часть снятого. Здесь
+ * пиннится ровно та её часть, ради которой она заведена в контенте: жертва
+ * едет к рендеру ДОСТАВЛЕННЫМ статом (`match-hud` HUD-8), и по нему запись
+ * манифеста тянет ЛУЧ между двумя сущностями (`rendering` REND-23). Разъедься
+ * имя стата с записью — луч молча не нарисуется ни разу, и увидеть это можно
+ * было бы только глазами в браузере.
+ */
+describe('вытягивание: жгут к жертве и луч по доставленному стату (REND-23)', () => {
+  /** Числа жгута — зеркала документа сцены; ретюн виден в диффе. */
+  const TETHER_HOLD = 120;
+  const TETHER_PULSE = 20;
+  const TETHER_DRAIN = 20;
+  const TETHER_FEED = 10;
+  const TETHER_BREAK = 557056;
+
+  it('жгут держится на жертве, тикает уроном и кормит босса', () => {
+    const a = stand([[26, 24]], noRepel(only('SlotBossTether')), MATCH.seed, { extract: true });
+    const hero = a.heroes[0]!;
+    const opened = until(a, 'BossTetherOpened', 120);
+    expect(coreWorld.hasComponent(a.state.world, a.boss, 'Tether')).toBe(true);
+    expect(coreWorld.getField(a.state.world, a.boss, 'Tether', 'target')).toBe(hero);
+
+    const before = coreWorld.getField(a.state.world, hero, 'Health', 'hp');
+    const bossBefore = coreWorld.getField(a.state.world, a.boss, 'Health', 'hp');
+    // Босс здесь на потолке здоровья: кормление ничего не прибавляет — это и
+    // проверяет утверждение ниже; лечение раненого босса — отдельный стенд.
+    let pulses = 0;
+    while (a.at() < opened + TETHER_HOLD) {
+      for (const type of a.step()) if (type === 'BossTetherPulse') pulses += 1;
+    }
+    // Тик вытягивания — трижды в секунду всю длительность жгута.
+    expect(pulses).toBe(Math.floor(TETHER_HOLD / TETHER_PULSE));
+    expect(before - coreWorld.getField(a.state.world, hero, 'Health', 'hp')).toBe(
+      pulses * TETHER_DRAIN,
+    );
+    // Босс на полном здоровье: `min` с потолком не даёт ему перелиться.
+    expect(coreWorld.getField(a.state.world, a.boss, 'Health', 'hp')).toBe(bossBefore);
+    // Жгут снимается сам и говорит об этом событием.
+    expect(a.step()).toContain('BossTetherBroke');
+    expect(coreWorld.hasComponent(a.state.world, a.boss, 'Tether')).toBe(false);
+  });
+
+  it('раненого босса жгут лечит, но не выше потолка', () => {
+    const wounded = {
+      ...noRepel(only('SlotBossTether')),
+      prefabs: noRepel(only('SlotBossTether')).prefabs!.map((entry) =>
+        entry.name === 'Boss'
+          ? { ...entry, components: { ...entry.components, Health: { hp: 4000, hpMax: 8000 } } }
+          : entry,
+      ),
+    } as unknown as SceneDef;
+    const a = stand([[26, 24]], wounded);
+    until(a, 'BossTetherOpened', 120);
+    const before = coreWorld.getField(a.state.world, a.boss, 'Health', 'hp');
+    let pulses = 0;
+    for (let t = 0; t < TETHER_PULSE * 3; t++) {
+      for (const type of a.step()) if (type === 'BossTetherPulse') pulses += 1;
+    }
+    expect(pulses).toBeGreaterThan(0);
+    expect(coreWorld.getField(a.state.world, a.boss, 'Health', 'hp') - before).toBe(
+      pulses * TETHER_FEED,
+    );
+  });
+
+  it('жертва, ушедшая за предел, жгут рвёт досрочно', () => {
+    // Своим ходом герой от босса не уйдёт — босс не медленнее него по
+    // документу поведения. Поэтому предмет проверки здесь ОДИН, разрыв по
+    // расстоянию, и ради него герою правится ровно скорость.
+    const base = noRepel(only('SlotBossTether'));
+    const swift = {
+      ...base,
+      prefabs: base.prefabs!.map((entry) =>
+        entry.name === 'Hero'
+          ? {
+              ...entry,
+              components: {
+                ...entry.components,
+                Locomotion: {
+                  ...(entry.components.Locomotion as Record<string, number>),
+                  maxSpeed: 26214,
+                  accel: 6553,
+                },
+              },
+            }
+          : entry,
+      ),
+    } as unknown as SceneDef;
+    const a = stand([[26, 24]], swift);
+    const opened = until(a, 'BossTetherOpened', 120);
+    let broke = 0;
+    for (let t = 0; t < TETHER_HOLD && broke === 0; t++) {
+      if (a.step([{ moveX: FIXED_ONE, moveY: 0 }]).includes('BossTetherBroke')) broke = a.at();
+    }
+    // Разрыв случился ДО истечения длительности — то есть по расстоянию.
+    expect(broke).toBeGreaterThan(0);
+    expect(broke - opened).toBeLessThan(TETHER_HOLD);
+    const dx =
+      coreWorld.getField(a.state.world, a.heroes[0]!, 'Position', 'x') -
+      coreWorld.getField(a.state.world, a.boss, 'Position', 'x');
+    const dy =
+      coreWorld.getField(a.state.world, a.heroes[0]!, 'Position', 'y') -
+      coreWorld.getField(a.state.world, a.boss, 'Position', 'y');
+    expect(Math.hypot(dx, dy)).toBeGreaterThan(TETHER_BREAK);
+  });
+
+  it('угольки вытягивания — ФЛИПБУК: сетка атласа и кадр по жизни частицы (ASSET-14)', () => {
+    // Второе изображение жгута — эмиттер на СОБЫТИЕ тика вытягивания: он играет
+    // в точке жертвы, потому что событие несёт координаты (REND-24), а его
+    // частица идёт по атласу кадров, а не стоит одной картинкой.
+    const assetId = MANIFEST.particles.byEvent.BossTetherPulse!.effect;
+    expect(assetId).toMatch(/\.effect\.json$/);
+    const ps = emitterDoc(assetId).object.children[0]!.ps;
+    // Сетка — единственное, что модуль ассетов у документа проверяет числом
+    // (ASSET-14): дробная или нулевая даёт пустой кадр, и узнают об этом глазами.
+    expect(Number.isInteger(ps.uTileCount) && ps.uTileCount! >= 1).toBe(true);
+    expect(Number.isInteger(ps.vTileCount) && ps.vTileCount! >= 1).toBe(true);
+    expect(ps.uTileCount! * ps.vTileCount!).toBeGreaterThan(1);
+    // И кадр ВЕДЁТСЯ по жизни частицы: без этого поведения атлас — просто
+    // картинка, у которой видна одна клетка.
+    expect((ps.behaviors ?? []).map((entry) => entry.type)).toContain('FrameOverLife');
+    // Атлас лежит в дереве контента — иначе частица рисуется голым квадом.
+    const map = (emitterMapUrl(assetId) ?? '').replace(/^\//, '');
+    expect(map).toMatch(/\.png$/);
+    expect(
+      existsSync(join(CONTENT_ROOT, map)),
+      `документ эффекта ссылается на "${map}", а файла в дереве контента нет`,
+    ).toBe(true);
+  });
+
+  it('жертва едет статом, и запись луча манифеста названа тем же именем', () => {
+    const a = stand([[26, 24]], noRepel(only('SlotBossTether')), MATCH.seed, { extract: true });
+    const hero = a.heroes[0]!;
+    until(a, 'BossTetherOpened', 120);
+    a.step();
+    // Луч — оболочка визуального ТИПА босса: седьмого бита состояний у колонки
+    // `flags` нет, и вторым концом записи служит доставленный стат (REND-23).
+    const beam = MANIFEST.effects.byKind.Boss!;
+    expect(beam.primitive).toBe('beam');
+    expect(beam.targetFromStat).toBe(STATS.tetherTarget);
+    const delivered = a.view().entities.get(a.boss)!;
+    expect(delivered.stats?.get(beam.targetFromStat!)).toBe(hero);
+    // У жертвы своего стата нет — компонент несёт кастер (HUD-8).
+    expect(a.view().entities.get(hero)!.stats?.get(beam.targetFromStat!)).toBeUndefined();
   });
 });

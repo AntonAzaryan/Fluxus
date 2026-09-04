@@ -6,6 +6,20 @@
  * складывает их в строку «слот: смерти», сортируя по слоту, — порядок обхода
  * доставленных сущностей на картинку не влияет.
  *
+ * **Строка — на СЛОТ, а не на сущность.** Единица счёта здесь игрок, и слот —
+ * его имя; сколько сущностей доставки этот слот носят, виджету знать нечего.
+ * Носителей у одного слота бывает много и по совершенно законным причинам: в
+ * сцене демо `Player.slot` — ещё и поле команды платформы способностей
+ * (`abilityRuntime.teamField`), поэтому его несут и босс, и каждый его юнит, и
+ * строка на сущность давала бы «слот 2» столько раз, сколько живых юнитов в
+ * кадре. Схлопывание по слоту — не косметика: без него ОБЕЩАНИЕ выше («порядок
+ * обхода на картинку не влияет») перестаёт выполняться, потому что порядок
+ * одинаковых строк наблюдаем.
+ *
+ * Число смертей слота — МАКСИМУМ доставленных значений его носителей: счётчик
+ * смертей монотонен, максимум не зависит от порядка обхода, и носитель без
+ * стата (юнит, у которого компонента-источника нет) числа слота не гасит.
+ *
  * Пока геймплейная система счёт не ведёт, стата смертей у сущностей нет: виджет
  * показывает прочерк — «нет данных», а не ноль убийств.
  */
@@ -41,13 +55,23 @@ export function deathsRows(
   slotStat: string,
   deathsStat: string,
 ): readonly DeathsRow[] {
-  const rows: DeathsRow[] = [];
+  // Ключ — слот, а не сущность: строка счётчика принадлежит игроку, и второй
+  // носитель того же слота новой строки не заводит.
+  const bySlot = new Map<number, number | null>();
   for (const entity of (entities ?? new Map<number, HudEntityView>()).values()) {
     const slot = entityStat(entity, slotStat);
     if (slot === undefined) continue; // не игрок — счётчика у него нет
     const deaths = entityStat(entity, deathsStat);
-    rows.push({ slot, deaths: deaths ?? null });
+    const known = bySlot.get(slot);
+    if (known === undefined) {
+      bySlot.set(slot, deaths ?? null);
+      continue;
+    }
+    if (deaths === undefined) continue; // носитель без стата числа слота не гасит
+    bySlot.set(slot, known === null ? deaths : Math.max(known, deaths));
   }
+  const rows: DeathsRow[] = [];
+  for (const [slot, deaths] of bySlot) rows.push({ slot, deaths });
   rows.sort((left, right) => left.slot - right.slot);
   return rows;
 }

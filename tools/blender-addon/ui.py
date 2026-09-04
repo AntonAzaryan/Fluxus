@@ -138,6 +138,17 @@ class FLUXUS_PT_object(FluxusPanel, bpy.types.Panel):
                 layout.label(text="импорт откажет (BLND-13)")
             layout.label(text="объектов сколько угодно: рельеф — их объединение", icon="INFO")
             layout.label(text="дыра в меше — клетка без пола", icon="INFO")
+            # Раскраска скалпта — заливка ОБЪЕКТА: клеток у него нет, а вершины
+            # грани пересечения обязаны нести одно значение (BLND-14).
+            box = layout.box()
+            box.label(text="Раскраска: слот на объект целиком", icon="BRUSH_DATA")
+            # Слот кисти — настройка СЦЕНЫ (общая с клеточной кистью), а не
+            # свойство объекта: `settings` выше — настройки объекта.
+            box.prop(context.scene.fluxus, "brush_paint_slot")
+            row = box.row(align=True)
+            row.operator("fluxus.sculpt_paint_fill", text="Красить").action = "SET"
+            row.operator("fluxus.sculpt_paint_fill", text="Взять").action = "PICK"
+            box.label(text="несколько покрытий — несколько объектов", icon="INFO")
         else:
             layout.label(text="вспомогательный объект: импорт его игнорирует", icon="INFO")
 
@@ -186,6 +197,11 @@ class FLUXUS_PT_terrain(FluxusPanel, bpy.types.Panel):
         if any(SCULPT_KEY in obj.keys() for obj in scene.objects):
             layout.label(text="в сцене sculpt-объект: рельеф ведёт он, grid-", icon="ERROR")
             layout.label(text="сетки вместе с ним — ошибка импорта (BLND-13)")
+            # Раскраска у скалпта своя: клеточных кистей у него нет, слот
+            # заливается объекту целиком (BLND-14).
+            row = layout.row(align=True)
+            row.operator("fluxus.sculpt_paint_fill", text="Красить sculpt").action = "SET"
+            row.operator("fluxus.sculpt_paint_fill", text="Взять слот").action = "PICK"
 
         box = layout.box()
         box.label(text="Кисти — на панели инструментов (T)", icon="BRUSH_DATA")

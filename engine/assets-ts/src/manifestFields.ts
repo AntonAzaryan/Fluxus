@@ -7,6 +7,12 @@
  * пишет и запись вида, и сам манифест, а `verticalOffset` — и запись вида, и
  * запись эффекта-оболочки (REND-23). Второго написания этих правил быть не
  * должно: разошедшиеся тексты находок читаются автором как разные форматы.
+ *
+ * Здесь же — ФОРМА машинного описания поля документа ({@link ManifestFieldSpec}),
+ * которым владелец формата называет состав своей записи: имя, род значения,
+ * обязательность и границы. Форма живёт с общими полями по той же причине, по
+ * какой здесь живёт `verticalOffset`: описаний в модуле больше одного, а
+ * состав `verticalOffset` — уже одно из них.
  */
 import type { VisualTier } from './manifest.js';
 import { HEX_COLOR_RE, closedKeys, isFiniteNumber, isRecord, typeName } from './validation.js';
@@ -39,26 +45,69 @@ export function validateSurfaceAlign(v: unknown, path: string, errors: string[])
   }
 }
 
+/**
+ * Род значения поля документа манифеста: число, строка либо СОСТАВНОЙ объект со
+ * своим составом. Три рода, а не тип TypeScript: описание адресовано тому, кто
+ * поле ПРАВИТ, — валидации, закрывающей состав, и панели редактора, которая по
+ * роду выбирает контрол строки (`editor` ED-14).
+ */
+export type ManifestFieldKind = 'number' | 'string' | 'composite';
+
+/**
+ * Одно поле документа манифеста машинным описанием: имя, род значения,
+ * обязательность, границы числа и — у составного — его состав.
+ *
+ * Заведено по тому же основанию, что машинное описание типов эффектов камеры
+ * (`camera` CAM-9): перечень принадлежит владельцу формата, и второй его
+ * перечень, набранный потребителем, разошёлся бы с первым молча. Границы здесь
+ * ВКЛЮЧАЮЩИЕ, как у описания камеры; правило, связывающее два поля между собой
+ * (конец окна строго дальше начала), полем описания не выражается и остаётся у
+ * валидации — описание говорит о полях, а не обо всей записи.
+ */
+export interface ManifestFieldSpec {
+  readonly name: string;
+  readonly kind: ManifestFieldKind;
+  /** Обязательное поле: записи без него формат не принимает. */
+  readonly required?: boolean;
+  /** Целое ли число; без пометки дробное законно. */
+  readonly integer?: boolean;
+  /** Границы числа включительно; нет границы — требуется ровно конечность. */
+  readonly min?: number;
+  readonly max?: number;
+  /** Состав составного поля; у числа и строки его нет. */
+  readonly fields?: readonly ManifestFieldSpec[];
+}
+
+/**
+ * Имена полей описания — ими и закрывается состав (`closedKeys`). Одна функция
+ * на все описания: перечень ключей выводится ИЗ описания, а не пишется рядом с
+ * ним вторым списком.
+ */
+export function manifestFieldNames(fields: readonly ManifestFieldSpec[]): readonly string[] {
+  return fields.map((field) => field.name);
+}
+
 /** Поля `verticalOffset` — они же перечень допустимых ключей секции (REND-12). */
-const VERTICAL_OFFSET_FIELDS = [
-  'jumpArc',
-  'maneuverArc',
-  'flightArc',
-  'fallSpeed',
-  'fallDepth',
-] as const;
+export const VERTICAL_OFFSET_FIELDS: readonly ManifestFieldSpec[] = Object.freeze([
+  { name: 'jumpArc', kind: 'number', min: 0 },
+  { name: 'maneuverArc', kind: 'number', min: 0 },
+  { name: 'flightArc', kind: 'number', min: 0 },
+  { name: 'fallSpeed', kind: 'number', min: 0 },
+  { name: 'fallDepth', kind: 'number', min: 0 },
+]);
+
+const VERTICAL_OFFSET_KEYS = manifestFieldNames(VERTICAL_OFFSET_FIELDS);
 
 /** `verticalOffset` записи: все поля опциональны и неотрицательны (REND-12). */
 export function validateVerticalOffset(v: unknown, path: string, errors: string[]): void {
   if (!isRecord(v)) {
     errors.push(
-      `${path}: ожидался объект { ${VERTICAL_OFFSET_FIELDS.map((f) => `${f}?`).join(', ')} }, получено ${typeName(v)}`,
+      `${path}: ожидался объект { ${VERTICAL_OFFSET_KEYS.map((f) => `${f}?`).join(', ')} }, получено ${typeName(v)}`,
     );
     return;
   }
-  const fields = VERTICAL_OFFSET_FIELDS;
-  closedKeys(v, path, fields, errors);
-  for (const field of fields) {
+  closedKeys(v, path, VERTICAL_OFFSET_KEYS, errors);
+  for (const field of VERTICAL_OFFSET_KEYS) {
     const value = v[field];
     if (field in v && (!isFiniteNumber(value) || value < 0)) {
       errors.push(`${path}.${field}: ожидалось неотрицательное число мировых единиц`);

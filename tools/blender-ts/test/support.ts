@@ -447,3 +447,181 @@ export const CURVATURE_GRID: GridObjectSpec = {
   semantic: 'curvature',
   heights: curvatureHeights(CURVATURE_ROWS),
 };
+
+/* -------------------------------------------------- sculpt-фикстуры (BLND-13, BLND-14) */
+
+/** Треугольник в мировых величинах: [x, y, elevation] на вершину. */
+export type WorldTriangle = readonly (readonly [number, number, number])[];
+
+/** Значения канала раскраски у трёх вершин одной грани. */
+type FacePaint = readonly [number, number, number];
+
+export interface SculptNodeSpec {
+  /** Имя объекта Blender — адрес находок (BLND-6) и порядок сборки (BLND-4). */
+  readonly name: string;
+  readonly triangles: readonly WorldTriangle[];
+  /**
+   * Канал раскраски объекта (BLND-14). Число — один слот всем вершинам всех
+   * граней: это модель «объект — слот», которой красит кисть аддона. Список
+   * троек — значения ВЕРШИН каждой грани по порядку: ими пишется расхождение,
+   * которого мазком кисти не получить. Свойства нет — канала в экспорте нет
+   * вовсе, и раскраски объект не несёт.
+   */
+  readonly paint?: number | readonly FacePaint[];
+  readonly extras?: Record<string, unknown>;
+}
+
+/** Горизонтальная пластина [x0..x1]×[y0..y1] на высоте `h` — два треугольника. */
+export function plate(x0: number, y0: number, x1: number, y1: number, h: number): WorldTriangle[] {
+  return [
+    [
+      [x0, y0, h],
+      [x1, y0, h],
+      [x1, y1, h],
+    ],
+    [
+      [x0, y0, h],
+      [x1, y1, h],
+      [x0, y1, h],
+    ],
+  ];
+}
+
+/** Блок: крышка на `top`, дно на `bottom` и четыре вертикальные стенки. */
+export function box(x0: number, y0: number, x1: number, y1: number, bottom: number, top: number): WorldTriangle[] {
+  const wall = (ax: number, ay: number, bx: number, by: number): WorldTriangle[] => [
+    [
+      [ax, ay, bottom],
+      [bx, by, bottom],
+      [bx, by, top],
+    ],
+    [
+      [ax, ay, bottom],
+      [bx, by, top],
+      [ax, ay, top],
+    ],
+  ];
+  return [
+    ...plate(x0, y0, x1, y1, top),
+    ...plate(x0, y0, x1, y1, bottom),
+    ...wall(x0, y0, x1, y0),
+    ...wall(x1, y0, x1, y1),
+    ...wall(x1, y1, x0, y1),
+    ...wall(x0, y1, x0, y0),
+  ];
+}
+
+/** Наклонная пластина: высота — линейная функция `h(x, y) = base + gx·x + gy·y`. */
+export function slope(
+  x0: number,
+  y0: number,
+  x1: number,
+  y1: number,
+  base: number,
+  gx: number,
+  gy: number,
+): WorldTriangle[] {
+  const at = (x: number, y: number): readonly [number, number, number] => [x, y, base + gx * x + gy * y];
+  return [
+    [at(x0, y0), at(x1, y0), at(x1, y1)],
+    [at(x0, y0), at(x1, y1), at(x0, y1)],
+  ];
+}
+
+/** Плита `size × size` клеток с вырезанной клеткой — дыра как инструмент (BLND-13). */
+export function plateauWithHole(size: number, height: number, holeX: number, holeY: number): WorldTriangle[] {
+  const cells: WorldTriangle[] = [];
+  for (let y = 0; y < size; y++) {
+    for (let x = 0; x < size; x++) {
+      if (x === holeX && y === holeY) continue;
+      cells.push(...plate(x, y, x + 1, y + 1, height));
+    }
+  }
+  return cells;
+}
+
+/** Значения канала по вершинам объекта: по три на грань в порядке треугольников. */
+function paintValuesOf(spec: SculptNodeSpec): number[] | null {
+  const paint = spec.paint;
+  if (paint === undefined) return null;
+  const values: number[] = [];
+  for (let face = 0; face < spec.triangles.length; face++) {
+    const triple = typeof paint === 'number' ? ([paint, paint, paint] as FacePaint) : paint[face];
+    if (triple === undefined) throw new Error(`фикстура: у грани ${face} объекта "${spec.name}" нет значений канала`);
+    values.push(triple[0], triple[1], triple[2]);
+  }
+  return values;
+}
+
+/**
+ * `.glb` из sculpt-объектов: мировые `(x, y, elevation)` пакуются в glTF как
+ * `(x, elevation, −y)` — то же соответствие осей, что читает `worldPoint`.
+ *
+ * Вершины не сварены (по три на грань), поэтому значение канала раскраски
+ * принадлежит ГРАНИ — так же, как у клеточной сетки аддона оно принадлежит
+ * клетке; расхождение вершин задаётся тройкой явно.
+ */
+export function sculptGlb(nodes: readonly SculptNodeSpec[]): Uint8Array {
+  const buffers: Uint8Array[] = [];
+  const bufferViews: unknown[] = [];
+  const accessors: unknown[] = [];
+  const meshes: unknown[] = [];
+  const gltfNodes: unknown[] = [];
+  let byteOffset = 0;
+
+  const pushBuffer = (bytes: Uint8Array): number => {
+    bufferViews.push({ buffer: 0, byteOffset, byteLength: bytes.byteLength });
+    byteOffset += bytes.byteLength;
+    buffers.push(bytes);
+    return bufferViews.length - 1;
+  };
+
+  for (const node of nodes) {
+    if (node.triangles.length === 0) {
+      // Узел без геометрии — empty Blender с семантикой (цель проверки BLND-13).
+      gltfNodes.push({ name: node.name, extras: node.extras ?? { sculpt: 1 } });
+      continue;
+    }
+    const positions: number[] = [];
+    const indices: number[] = [];
+    for (const triangle of node.triangles) {
+      for (const [x, y, elevation] of triangle) {
+        indices.push(positions.length / 3);
+        positions.push(x, elevation, -y);
+      }
+    }
+    const positionView = pushBuffer(new Uint8Array(Float32Array.from(positions).buffer));
+    const indexView = pushBuffer(new Uint8Array(Uint32Array.from(indices).buffer));
+    const attributes: Record<string, number> = { POSITION: accessors.length };
+    accessors.push({ bufferView: positionView, componentType: 5126, count: positions.length / 3, type: 'VEC3' });
+    const indexAccessor = accessors.length;
+    accessors.push({ bufferView: indexView, componentType: 5125, count: indices.length, type: 'SCALAR' });
+    const paint = paintValuesOf(node);
+    if (paint !== null) {
+      const paintView = pushBuffer(new Uint8Array(Float32Array.from(paint).buffer));
+      attributes._PAINT = accessors.length;
+      accessors.push({ bufferView: paintView, componentType: 5126, count: paint.length, type: 'SCALAR' });
+    }
+    const mesh = meshes.length;
+    meshes.push({ primitives: [{ attributes, indices: indexAccessor, mode: 4 }] });
+    gltfNodes.push({ name: node.name, mesh, extras: node.extras ?? { sculpt: 1 } });
+  }
+
+  const binary = new Uint8Array(byteOffset);
+  let cursor = 0;
+  for (const bytes of buffers) {
+    binary.set(bytes, cursor);
+    cursor += bytes.byteLength;
+  }
+  const json = {
+    asset: { version: '2.0', generator: 'фикстура конвейера, собранная перечнем (BLND-7)' },
+    scene: 0,
+    scenes: [{ nodes: gltfNodes.map((_, index) => index) }],
+    nodes: gltfNodes,
+    meshes,
+    accessors,
+    bufferViews,
+    buffers: [{ byteLength: binary.byteLength }],
+  };
+  return packGlb(json, binary);
+}

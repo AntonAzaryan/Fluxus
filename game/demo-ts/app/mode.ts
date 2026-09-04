@@ -59,15 +59,31 @@ export type DemoMode =
   /** Матч против бота, поднятый прямо во вкладке (`net-session` SES-1, `local`). */
   | { readonly kind: 'local' }
   /** Выделенный стенд по выведенному адресу либо из `?server=` (SES-1, `dedicated`). */
-  | { readonly kind: 'server'; readonly url: string };
+  | { readonly kind: 'server'; readonly url: string }
+  /**
+   * Наблюдение за матчем стенда (`netcode-transport` NTR-9, NTR-21): то же
+   * соединение к тому же стенду, но без игрового слота — поток без фильтрации,
+   * камера ведёт участника перебором (`camera` CAM-10), ввод наружу не уходит.
+   *
+   * Своим видом, а не флагом рядом с `server`: адрес у них общий, а вот что
+   * поднимает страница — участника или наблюдателя — решается при старте и
+   * перезагрузкой (SHELL-8), как и всякий режим здесь.
+   */
+  | { readonly kind: 'observer'; readonly url: string };
 
-/** Режим из строки запроса страницы. Пустой `?server=` считается «адрес страницы». */
+/**
+ * Режим из строки запроса страницы. Пустой `?server=` считается «адрес
+ * страницы»; `?observer` берёт тот же адрес — наблюдать можно только матч,
+ * который кто-то держит.
+ */
 export function demoMode(search: string, page: PageOrigin): DemoMode {
   const params = new URLSearchParams(search);
   if (params.has('solo')) return { kind: 'solo' };
-  if (!params.has('server')) return { kind: 'local' };
+  const observer = params.has('observer');
+  if (!params.has('server') && !observer) return { kind: 'local' };
   const url = params.get('server');
-  return { kind: 'server', url: url === null || url === '' ? demoServerUrl(page) : url };
+  const target = url === null || url === '' ? demoServerUrl(page) : url;
+  return observer ? { kind: 'observer', url: target } : { kind: 'server', url: target };
 }
 
 /**
@@ -81,6 +97,9 @@ export function demoMode(search: string, page: PageOrigin): DemoMode {
  * величина живёт у рандеву (`rendezvous.ts`), а не у входа в матч.
  */
 export function slotCandidates(mode: DemoMode, players: readonly string[]): readonly string[] {
+  // Наблюдателю перебирать нечего: слота у него нет вовсе (NTR-9), и пустой
+  // список здесь — не «мест не нашлось», а «мест он и не просит».
+  if (mode.kind === 'observer') return [];
   return mode.kind === 'server' ? [...players] : players.slice(0, 1);
 }
 

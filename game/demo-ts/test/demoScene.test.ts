@@ -20,6 +20,7 @@ import {
   tick as simTick,
   world as coreWorld,
   type EntityId,
+  type GameEvent,
   type SceneDef,
   type WorldState,
 } from '@fluxus/core';
@@ -27,8 +28,18 @@ import { ABILITY_SLOTS, ACTION_BITS, PLAYER_ID, createDemoSimulation } from '../
 import { DEMO_NAVIGATION } from '../app/match.js';
 import sceneJson from '../../../content/scenes/duel.scene.json';
 import matchJson from '../../../content/matches/duel.match.json';
+import manifestJson from '../../../content/visuals/manifest.json';
 
 const SCENE = sceneJson as unknown as SceneDef;
+
+/**
+ * Манифест визуалов — только те две таблицы, которые ставят эффект НА СОБЫТИЕ
+ * (ASSET-6, ASSET-14): их записи и есть потребители точки события (REND-24).
+ */
+const VISUALS = manifestJson as unknown as {
+  readonly particles?: { readonly byEvent?: Readonly<Record<string, unknown>> };
+  readonly effects?: { readonly byEvent?: Readonly<Record<string, unknown>> };
+};
 
 /**
  * Пустая арена — та же сцена без её собственной расстановки (`initial`).
@@ -416,5 +427,88 @@ describe('демо-матч: симметричный спавн героев н
     // не в её углу, — иначе одна из двух позиций разрешалась бы в клетку-соседа.
     expect(CENTER - left).toBe(right - CENTER);
     expect(Math.floor(left) + Math.floor(right)).toBe(grid.width - 1);
+  });
+});
+
+/**
+ * Точка события для рендера (REND-24): эффект, поставленный манифестом НА
+ * СОБЫТИЕ, играется в мировой точке — координатах события, а нет их, позиции
+ * названной им сущности. Вторая дорога у сетевой сборки ненадёжна, и не по
+ * дефекту: события едут своим сообщением со своим курсором (`netcode-transport`
+ * NTR-15), отбираются по видимости НА ТИКЕ ПУБЛИКАЦИИ (`netcode` NET-13), а
+ * сущность приезжает персональным снапшотом ДРУГОГО тика — уже без неё, если
+ * между публикацией и рассылкой она умерла или ушла в туман. Такое событие
+ * доезжает законно, а играть его негде: рендер говорит «нет ни координат, ни
+ * доставленной сущности» и молчит.
+ *
+ * Поэтому координаты события — обязанность КОНТЕНТА, а не поблажка рендера, и
+ * держит её тест, а не память автора сцены.
+ */
+describe('события сцены, которые играет манифест, несут точку (REND-24)', () => {
+  /** Все `emitEvent` сцены: тип → объединение имён полей данных. */
+  const emitted = new Map<string, Set<string>>();
+  const walk = (node: unknown): void => {
+    if (Array.isArray(node)) {
+      for (const item of node) walk(item);
+      return;
+    }
+    if (node === null || typeof node !== 'object') return;
+    const record = node as Record<string, unknown>;
+    const emit = record.emitEvent as { type?: unknown; data?: unknown } | undefined;
+    if (emit !== undefined && typeof emit.type === 'string') {
+      const fields = emitted.get(emit.type) ?? new Set<string>();
+      if (emit.data !== null && typeof emit.data === 'object') {
+        for (const key of Object.keys(emit.data)) fields.add(key);
+      }
+      emitted.set(emit.type, fields);
+    }
+    for (const value of Object.values(record)) walk(value);
+  };
+  walk(SCENE);
+
+  const played = [
+    ...new Set([
+      ...Object.keys(VISUALS.particles?.byEvent ?? {}),
+      ...Object.keys(VISUALS.effects?.byEvent ?? {}),
+    ]),
+  ]
+    .filter((type) => emitted.has(type))
+    .sort();
+
+  it('манифест и сцена вообще пересекаются — иначе проверять нечего', () => {
+    expect(played).toContain('CastFireball');
+  });
+
+  for (const type of played) {
+    it(`"${type}" несёт x и y`, () => {
+      const fields = emitted.get(type)!;
+      expect(fields.has('x') && fields.has('y')).toBe(true);
+    });
+  }
+});
+
+describe('каст фаербола отдаёт рендеру точку, а не только сущность (REND-24)', () => {
+  it('CastFireball несёт координаты кастующего на тике публикации', () => {
+    // РЕГРЕССИЯ: событие несло только `entity`, и в сетевом матче раз за матч —
+    // в момент, когда владелец переставал быть доставленным, — всполох каста
+    // играть было негде.
+    const { sim, state, playerId } = createDemoSimulation(EMPTY_ARENA);
+    const CAST = 1 << ACTION_BITS.cast;
+    const step = (tick: number, buttons: number): GameEvent[] => [
+      ...simTick(sim, state, [
+        { tick, playerId: PLAYER_ID, seq: tick, move: { x: 0, y: 0 }, aimDir: 0, buttons },
+      ]).events,
+    ];
+
+    for (let tick = 1; tick <= 10; tick++) step(tick, CAST);
+    const x = coreWorld.getField(state.world, playerId, 'Position', 'x');
+    const y = coreWorld.getField(state.world, playerId, 'Position', 'y');
+    const cast = step(11, 0).find((event) => event.type === 'CastFireball');
+    expect(cast).toBeDefined();
+    // Ровно позиция владельца: пока сущность доставлена, картинка не меняется —
+    // ту же точку рендер брал бы сам; меняется случай, когда её нет.
+    expect(cast!.data.x).toBe(x);
+    expect(cast!.data.y).toBe(y);
+    expect(cast!.data.entity).toBe(playerId);
   });
 });

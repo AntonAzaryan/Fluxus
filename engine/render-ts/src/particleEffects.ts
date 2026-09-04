@@ -227,6 +227,10 @@ export class ParticleEffectPool {
    * Текстуры образцов, разобранных пулом (ASSET-14): вход
    * `WebGLRenderer.initTexture` у прогрева. Заливка на GPU — работа первого
    * draw'а, и в кадре боя она нам не нужна.
+   *
+   * Список — ровно то, что залить МОЖНО СЕЙЧАС (`textureUploadable`): картинки
+   * документа загрузчик библиотеки тянет асинхронно, и текстура с не доехавшей
+   * картинкой сюда не попадает. Её берёт второй список (`texturesReady`).
    */
   templateTextures(): readonly THREE.Texture[] {
     const textures: THREE.Texture[] = [];
@@ -543,13 +547,36 @@ function textureOf(node: THREE.Object3D): THREE.Texture | null {
   return null;
 }
 
-/** Текстура в список — по одной на uuid: материал системы и меша законно делят её. */
+/**
+ * Готова ли текстура к заливке НА GPU ПРЯМО СЕЙЧАС.
+ *
+ * `images` документа эффекта (ASSET-14) `ObjectLoader` библиотеки тянет
+ * асинхронно, а `needsUpdate` ставит сразу: между разбором и приходом картинки
+ * у текстуры есть `HTMLImageElement` с `complete === false`. Заливка такой
+ * текстуры — не отложенная работа, а предупреждение в консоли: three проверяет
+ * ровно это поле («Texture marked for update but image is incomplete») и
+ * пропускает загрузку. Условие здесь то же самое и по той же причине:
+ * недостающая картинка — не «нет данных», а «ещё не приехала».
+ *
+ * Проверка адресная: у текстуры из данных (`DataTexture`) и у канвасной
+ * `complete` нет вовсе, и `undefined !== false` оставляет их готовыми.
+ */
+export function textureUploadable(texture: THREE.Texture): boolean {
+  const image = texture.image as { complete?: boolean } | null | undefined;
+  return image?.complete !== false;
+}
+
+/**
+ * Текстура в список — по одной на uuid: материал системы и меша законно делят
+ * её. Текстура, чья картинка ещё не доехала, в список не идёт: она уедет на GPU
+ * вторым списком (`texturesReady`), когда картинка будет на месте.
+ */
 function collectTexture(
   out: THREE.Texture[],
   seen: Set<string>,
   texture: THREE.Texture | null,
 ): void {
-  if (texture === null || seen.has(texture.uuid)) return;
+  if (texture === null || seen.has(texture.uuid) || !textureUploadable(texture)) return;
   seen.add(texture.uuid);
   out.push(texture);
 }

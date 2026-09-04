@@ -23,139 +23,25 @@ import { normalizeDocument } from '../src/normalize.js';
 import {
   CURVATURE_ID,
   MANIFEST_ID,
+  PAINT_ID,
   PRESENTATION_ID,
   SCENE_ID,
   SOURCE_ID,
   TARGET_TERRAIN,
   TERRAIN_ASSET,
+  box,
   contentFiles,
   context,
   curvatureDocument,
-  packGlb,
+  plate,
+  plateauWithHole,
   presentationDocument,
   sceneDocument,
+  sculptGlb,
+  slope,
+  type SculptNodeSpec,
+  type WorldTriangle,
 } from './support.js';
-
-/** Треугольник в мировых величинах: [x, y, elevation] на вершину. */
-type WorldTriangle = readonly (readonly [number, number, number])[];
-
-interface SculptNodeSpec {
-  readonly name: string;
-  readonly triangles: readonly WorldTriangle[];
-  readonly extras?: Record<string, unknown>;
-}
-
-/** Горизонтальная пластина [x0..x1]×[y0..y1] на высоте `h` — два треугольника. */
-function plate(x0: number, y0: number, x1: number, y1: number, h: number): WorldTriangle[] {
-  return [
-    [
-      [x0, y0, h],
-      [x1, y0, h],
-      [x1, y1, h],
-    ],
-    [
-      [x0, y0, h],
-      [x1, y1, h],
-      [x0, y1, h],
-    ],
-  ];
-}
-
-/** Блок: крышка на `top`, дно на `bottom` и четыре вертикальные стенки. */
-function box(x0: number, y0: number, x1: number, y1: number, bottom: number, top: number): WorldTriangle[] {
-  const wall = (ax: number, ay: number, bx: number, by: number): WorldTriangle[] => [
-    [
-      [ax, ay, bottom],
-      [bx, by, bottom],
-      [bx, by, top],
-    ],
-    [
-      [ax, ay, bottom],
-      [bx, by, top],
-      [ax, ay, top],
-    ],
-  ];
-  return [
-    ...plate(x0, y0, x1, y1, top),
-    ...plate(x0, y0, x1, y1, bottom),
-    ...wall(x0, y0, x1, y0),
-    ...wall(x1, y0, x1, y1),
-    ...wall(x1, y1, x0, y1),
-    ...wall(x0, y1, x0, y0),
-  ];
-}
-
-/** Наклонная пластина: высота — линейная функция `h(x, y) = base + gx·x + gy·y`. */
-function slope(x0: number, y0: number, x1: number, y1: number, base: number, gx: number, gy: number): WorldTriangle[] {
-  const at = (x: number, y: number): readonly [number, number, number] => [x, y, base + gx * x + gy * y];
-  return [
-    [at(x0, y0), at(x1, y0), at(x1, y1)],
-    [at(x0, y0), at(x1, y1), at(x0, y1)],
-  ];
-}
-
-/**
- * `.glb` из sculpt-объектов: мировые `(x, y, elevation)` пакуются в glTF как
- * `(x, elevation, −y)` — то же соответствие осей, что читает `worldPoint`.
- */
-function sculptGlb(nodes: readonly SculptNodeSpec[]): Uint8Array {
-  const buffers: Uint8Array[] = [];
-  const bufferViews: unknown[] = [];
-  const accessors: unknown[] = [];
-  const meshes: unknown[] = [];
-  const gltfNodes: unknown[] = [];
-  let byteOffset = 0;
-
-  for (const node of nodes) {
-    if (node.triangles.length === 0) {
-      // Узел без геометрии — empty Blender с семантикой (цель проверки BLND-13).
-      gltfNodes.push({ name: node.name, extras: node.extras ?? { sculpt: 1 } });
-      continue;
-    }
-    const positions: number[] = [];
-    const indices: number[] = [];
-    for (const triangle of node.triangles) {
-      for (const [x, y, elevation] of triangle) {
-        indices.push(positions.length / 3);
-        positions.push(x, elevation, -y);
-      }
-    }
-    const positionBytes = new Uint8Array(Float32Array.from(positions).buffer);
-    const indexBytes = new Uint8Array(Uint32Array.from(indices).buffer);
-    const positionView = bufferViews.length;
-    bufferViews.push({ buffer: 0, byteOffset, byteLength: positionBytes.byteLength });
-    byteOffset += positionBytes.byteLength;
-    const indexView = bufferViews.length;
-    bufferViews.push({ buffer: 0, byteOffset, byteLength: indexBytes.byteLength });
-    byteOffset += indexBytes.byteLength;
-    buffers.push(positionBytes, indexBytes);
-    const positionAccessor = accessors.length;
-    accessors.push({ bufferView: positionView, componentType: 5126, count: positions.length / 3, type: 'VEC3' });
-    const indexAccessor = accessors.length;
-    accessors.push({ bufferView: indexView, componentType: 5125, count: indices.length, type: 'SCALAR' });
-    const mesh = meshes.length;
-    meshes.push({ primitives: [{ attributes: { POSITION: positionAccessor }, indices: indexAccessor, mode: 4 }] });
-    gltfNodes.push({ name: node.name, mesh, extras: node.extras ?? { sculpt: 1 } });
-  }
-
-  const binary = new Uint8Array(byteOffset);
-  let cursor = 0;
-  for (const bytes of buffers) {
-    binary.set(bytes, cursor);
-    cursor += bytes.byteLength;
-  }
-  const json = {
-    asset: { version: '2.0' },
-    scene: 0,
-    scenes: [{ nodes: gltfNodes.map((_, index) => index) }],
-    nodes: gltfNodes,
-    meshes,
-    accessors,
-    bufferViews,
-    buffers: [{ byteLength: binary.byteLength }],
-  };
-  return packGlb(json, binary);
-}
 
 function cellsOf(glb: Uint8Array, overrides: Parameters<typeof context>[0] = { terrain: TARGET_TERRAIN }): CellLayer {
   const document = parseGltf(glb);
@@ -242,14 +128,7 @@ describe('BLND-13: уровни, пол и рампы из скалпта', () =
   });
 
   it('дыра в меше — клетка без пола, а не находка', () => {
-    const cells: WorldTriangle[] = [];
-    for (let y = 0; y < ARENA; y++) {
-      for (let x = 0; x < ARENA; x++) {
-        if (x === 1 && y === 1) continue;
-        cells.push(...plate(x, y, x + 1, y + 1, 0));
-      }
-    }
-    const layer = cellsOf(sculptGlb([{ name: 'floor', triangles: cells }]));
+    const layer = cellsOf(sculptGlb([{ name: 'floor', triangles: plateauWithHole(ARENA, 0, 1, 1) }]));
 
     expect(errorsOf(layer)).toEqual([]);
     expect(layer.terrain?.flags).toEqual(['....', '._..', '....', '....']);
@@ -260,14 +139,7 @@ describe('BLND-13: уровни, пол и рампы из скалпта', () =
     // Уровень клетки-дыры — уровень ближайшей клетки с полом (BLND-13): из него
     // строятся клифы и высота восстановленного пола, и ноль дырявил бы плато
     // кольцом обрывов, блокирующим движение и обзор.
-    const cells: WorldTriangle[] = [];
-    for (let y = 0; y < ARENA; y++) {
-      for (let x = 0; x < ARENA; x++) {
-        if (x === 1 && y === 1) continue;
-        cells.push(...plate(x, y, x + 1, y + 1, 2));
-      }
-    }
-    const layer = cellsOf(sculptGlb([{ name: 'plateau', triangles: cells }]));
+    const layer = cellsOf(sculptGlb([{ name: 'plateau', triangles: plateauWithHole(ARENA, 2, 1, 1) }]));
 
     expect(errorsOf(layer)).toEqual([]);
     expect(layer.terrain?.levels).toEqual(['2222', '2222', '2222', '2222']);
@@ -497,5 +369,260 @@ describe('BLND-13: импорт целиком', () => {
     const again = await runImport({ host: memory.content, source: SOURCE_ID, manifest: MANIFEST_ID });
     expect(again.ok).toBe(true);
     expect(again.written).toEqual([]);
+  });
+});
+
+describe('BLND-14: раскраска скалпт-поверхности', () => {
+  /**
+   * Раскрашенная арена: плита слота 1 и приподнятый блок слота 2 над правой
+   * верхней четвертью. Слот клетки — у геометрии ВЕРХНЕГО пересечения, поэтому
+   * под блоком читается его слот, а не слот плиты под ним.
+   */
+  const PAINTED_ARENA: readonly SculptNodeSpec[] = [
+    { name: 'base', triangles: plate(0, 0, ARENA, ARENA, 0), paint: 1 },
+    { name: 'patch', triangles: box(2, 0, ARENA, 2, 0, 1), paint: 2 },
+  ];
+
+  const paintOf = (nodes: readonly SculptNodeSpec[]): CellLayer => cellsOf(sculptGlb(nodes));
+
+  it('слот клетки берётся у геометрии верхнего пересечения в её центре', () => {
+    const layer = paintOf(PAINTED_ARENA);
+
+    expect(errorsOf(layer)).toEqual([]);
+    expect(layer.paint).toEqual({ width: 4, height: 4, rows: ['1122', '1122', '1111', '1111'] });
+    // Рельеф тот же источник даёт по-прежнему: раскраска ездит РЯДОМ с ним.
+    expect(layer.terrain?.levels).toEqual(['0011', '0011', '0000', '0000']);
+  });
+
+  it('перестановка объектов местами не меняет в карте ни байта (BLND-13)', () => {
+    const forward = paintOf(PAINTED_ARENA);
+    const backward = paintOf([...PAINTED_ARENA].reverse());
+
+    expect(JSON.stringify(backward.paint)).toEqual(JSON.stringify(forward.paint));
+  });
+
+  it('на равной высоте выигрывает старший слот, а не первый встреченный', () => {
+    // Две пластины на одном уровне — обычное дело у наложенных примитивов:
+    // «первый встреченный» зависел бы от порядка объектов (BLND-13).
+    const lower: SculptNodeSpec = { name: 'a-lower', triangles: plate(0, 0, ARENA, ARENA, 0), paint: 1 };
+    const upper: SculptNodeSpec = { name: 'b-upper', triangles: plate(0, 0, 2, 2, 0), paint: 4 };
+
+    for (const nodes of [
+      [lower, upper],
+      [upper, lower],
+    ]) {
+      const layer = paintOf(nodes);
+      expect(errorsOf(layer)).toEqual([]);
+      expect(layer.paint?.rows).toEqual(['4411', '4411', '1111', '1111']);
+    }
+  });
+
+  it('геометрия без канала уступает несущей канал на равной высоте', () => {
+    const layer = paintOf([
+      { name: 'a-painted', triangles: plate(0, 0, ARENA, ARENA, 0), paint: 3 },
+      { name: 'b-plain', triangles: plate(0, 0, ARENA, ARENA, 0) },
+    ]);
+
+    expect(errorsOf(layer)).toEqual([]);
+    expect(layer.paint?.rows).toEqual(['3333', '3333', '3333', '3333']);
+  });
+
+  it('расхождение вершин грани пересечения — отказ с адресом клетки, а не голосование', () => {
+    const layer = paintOf([
+      { name: 'base', triangles: plate(0, 0, ARENA, ARENA, 0), paint: 1 },
+      {
+        name: 'split',
+        triangles: plate(1, 1, 2, 2, 1),
+        paint: [
+          [2, 5, 2],
+          [2, 5, 2],
+        ],
+      },
+    ]);
+
+    const errors = errorsOf(layer).join('\n');
+    expect(errors).toContain('split: клетка (1, 1)');
+    expect(errors).toContain('разные значения канала');
+    expect(layer.paint).toBeUndefined();
+  });
+
+  it('нераскрашенный объект под верхним пересечением — отказ с клеткой и именем объекта', () => {
+    const layer = paintOf([
+      { name: 'base', triangles: plate(0, 0, ARENA, ARENA, 0), paint: 1 },
+      { name: 'rock', triangles: box(1, 1, 2, 2, 0, 1) },
+    ]);
+
+    const errors = errorsOf(layer).join('\n');
+    expect(errors).toContain('rock: клетка (1, 1)');
+    expect(errors).toContain('_PAINT');
+    expect(layer.paint).toBeUndefined();
+  });
+
+  it('канала нет ни у одного объекта — карты нет вовсе и находки нет (BLND-2)', () => {
+    const layer = paintOf([{ name: 'arena', triangles: plate(0, 0, ARENA, ARENA, 0) }]);
+
+    expect(errorsOf(layer)).toEqual([]);
+    expect(layer.paint).toBeUndefined();
+    // Рельеф при этом переписывается: канала нет только у раскраски.
+    expect(layer.terrain).toBeDefined();
+  });
+
+  it('дыра берёт слот ближайшей клетки с полом: вернувшийся пол вернётся им же', () => {
+    const layer = paintOf([{ name: 'plateau', triangles: plateauWithHole(ARENA, 0, 1, 1), paint: 3 }]);
+
+    expect(errorsOf(layer)).toEqual([]);
+    expect(layer.terrain?.flags).toEqual(['....', '._..', '....', '....']);
+    expect(layer.paint?.rows).toEqual(['3333', '3333', '3333', '3333']);
+  });
+
+  it('слот вне алфавита карты — отказ с адресом клетки, а не кламп', () => {
+    const layer = paintOf([{ name: 'arena', triangles: plate(0, 0, ARENA, ARENA, 0), paint: 12 }]);
+
+    expect(errorsOf(layer).join('\n')).toContain('вне алфавита');
+    expect(layer.paint).toBeUndefined();
+  });
+
+  it('значение между слотами — отказ, а не округление', () => {
+    const layer = paintOf([
+      {
+        name: 'arena',
+        triangles: plate(0, 0, ARENA, ARENA, 0),
+        paint: [
+          [1.4, 1.4, 1.4],
+          [1.4, 1.4, 1.4],
+        ],
+      },
+    ]);
+
+    expect(errorsOf(layer).join('\n')).toContain('не разрешается в целый индекс слота');
+    expect(layer.paint).toBeUndefined();
+  });
+
+  it('манифест без карты раскраски — отказ с именем ключа (BLND-14)', () => {
+    const layer = cellsOf(sculptGlb(PAINTED_ARENA), { terrain: TARGET_TERRAIN, paintMap: null });
+
+    expect(errorsOf(layer).join('\n')).toContain('terrain.paintMap');
+    expect(layer.paint).toBeUndefined();
+  });
+
+  it('пола нет вовсе — слот дыры нулевой: брать его неоткуда', () => {
+    // Объект из одних вертикальных стенок: канал он несёт, но горизонтальной
+    // поверхности не даёт ни одной клетке — пересечений нет, волне не от чего
+    // идти, и слот `0` здесь не умолчание, а единственное определённое значение
+    // (BLND-14).
+    const wall: WorldTriangle[] = [
+      [
+        [0, 0, 0],
+        [ARENA, 0, 0],
+        [ARENA, 0, 2],
+      ],
+      [
+        [0, 0, 0],
+        [ARENA, 0, 2],
+        [0, 0, 2],
+      ],
+    ];
+    const layer = paintOf([{ name: 'wall', triangles: wall, paint: 5 }]);
+
+    expect(errorsOf(layer)).toEqual([]);
+    expect(layer.terrain?.flags).toEqual(['____', '____', '____', '____']);
+    expect(layer.paint?.rows).toEqual(['0000', '0000', '0000', '0000']);
+  });
+
+  it('повторная дискретизация того же источника даёт ту же карту (BLND-4)', () => {
+    const glb = sculptGlb(PAINTED_ARENA);
+
+    expect(JSON.stringify(cellsOf(glb).paint)).toEqual(JSON.stringify(cellsOf(glb).paint));
+  });
+});
+
+describe('BLND-14: импорт раскрашенного скалпта целиком', () => {
+  const PAINTED: readonly SculptNodeSpec[] = [
+    { name: 'base', triangles: plate(0, 0, ARENA, ARENA, 0), paint: 1 },
+    { name: 'patch', triangles: box(2, 0, ARENA, 2, 0, 1), paint: 2 },
+  ];
+
+  const ZERO_PAINT = JSON.stringify({ width: 4, height: 4, rows: ['0000', '0000', '0000', '0000'] }, null, 2);
+
+  const treeOf = (
+    nodes: readonly SculptNodeSpec[],
+    extra: Record<string, string | Uint8Array> = {},
+  ): ReturnType<typeof createMemoryHost> =>
+    createMemoryHost({
+      files: contentFiles(sculptGlb(nodes), sceneDocument([], TERRAIN_ASSET), presentationDocument(), {
+        [CURVATURE_ID]: JSON.stringify(curvatureDocument(), null, 2),
+        ...extra,
+      }),
+    });
+
+  const readJson = async (memory: ReturnType<typeof createMemoryHost>, id: string): Promise<unknown> =>
+    JSON.parse(new TextDecoder().decode(await memory.content.read(id)));
+
+  it('раскрашенный скалпт переписывает карту, и повторный импорт не пишет ничего', async () => {
+    const memory = treeOf(PAINTED, { [PAINT_ID]: ZERO_PAINT });
+
+    const result = await runImport({ host: memory.content, source: SOURCE_ID, manifest: MANIFEST_ID });
+
+    expect(result.ok).toBe(true);
+    expect(result.written).toContain(PAINT_ID);
+    expect(await readJson(memory, PAINT_ID)).toEqual({
+      width: 4,
+      height: 4,
+      rows: ['1122', '1122', '1111', '1111'],
+    });
+
+    const again = await runImport({ host: memory.content, source: SOURCE_ID, manifest: MANIFEST_ID });
+    expect(again.ok).toBe(true);
+    expect(again.written).toEqual([]);
+  });
+
+  it('скалпт без канала не создаёт документа карты вовсе (BLND-2)', async () => {
+    const memory = treeOf([{ name: 'arena', triangles: plate(0, 0, ARENA, ARENA, 0) }]);
+
+    const result = await runImport({ host: memory.content, source: SOURCE_ID, manifest: MANIFEST_ID });
+
+    expect(result.ok).toBe(true);
+    expect(result.layer.paint).toBeUndefined();
+    // Документ не открывался и не создавался: слоя у источника нет.
+    expect(await memory.content.stat(PAINT_ID)).toBeUndefined();
+  });
+
+  it('режим проверки называет карту раскраски и не пишет ничего (BLND-6)', async () => {
+    const memory = treeOf(PAINTED, { [PAINT_ID]: ZERO_PAINT });
+
+    const result = await runImport({
+      host: memory.content,
+      source: SOURCE_ID,
+      manifest: MANIFEST_ID,
+      dryRun: true,
+    });
+
+    expect(result.ok).toBe(true);
+    expect(result.layer.paint?.rows).toEqual(['1122', '1122', '1111', '1111']);
+    expect(result.written).toEqual([]);
+    expect(new TextDecoder().decode(await memory.content.read(PAINT_ID))).toBe(ZERO_PAINT);
+  });
+
+  it('отказ раскраски не оставляет на диске половины импорта (BLND-6)', async () => {
+    const memory = treeOf(
+      [
+        { name: 'base', triangles: plate(0, 0, ARENA, ARENA, 0), paint: 1 },
+        { name: 'rock', triangles: box(1, 1, 2, 2, 0, 1) },
+      ],
+      { [PAINT_ID]: ZERO_PAINT },
+    );
+    const before = {
+      scene: await readJson(memory, SCENE_ID),
+      curvature: await readJson(memory, CURVATURE_ID),
+      paint: await readJson(memory, PAINT_ID),
+    };
+
+    const result = await runImport({ host: memory.content, source: SOURCE_ID, manifest: MANIFEST_ID });
+
+    expect(result.ok).toBe(false);
+    expect(result.written).toEqual([]);
+    expect(await readJson(memory, SCENE_ID)).toEqual(before.scene);
+    expect(await readJson(memory, CURVATURE_ID)).toEqual(before.curvature);
+    expect(await readJson(memory, PAINT_ID)).toEqual(before.paint);
   });
 });

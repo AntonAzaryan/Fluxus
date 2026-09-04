@@ -29,25 +29,31 @@
  * ассетов (ASSET-6), и своих копий этих перечней панель не заводит: она правит
  * то, что в записи ЛЕЖИТ, а неизвестный ключ и негодное число называет владелец
  * — отказом операции (`assetVfx.ts` спрашивает `validateManifest` о разнице).
- * Список {@link FIELD_SUGGESTIONS} — ПОДСКАЗКА для дописывания поля, того же
- * рода, что подсказка имён событий у соседней секции: он вправе отстать от
- * формата, и отставание дефектом не является — набрать имя руками автор может
- * всегда, а проверит его владелец.
+ *
+ * Список полей, которые панель предлагает дописать, и род контрола у каждой
+ * строки приходят ОТТУДА ЖЕ — машинным описанием состава записи
+ * (`EFFECT_FIELDS` модуля ассетов): своего списка у панели нет ни в каком виде,
+ * и отстать от формата ей поэтому нечем. Основание то же, по которому набор
+ * типов эффектов камеры приезжает описанием (CAM-9), и ровно этого ED-14 требует
+ * прямым текстом.
  */
-import type { DocumentId, JsonValue, OperationParams } from '@fluxus/editor-core';
-import { validateManifest } from '@fluxus/assets';
-import { documentValue, resourceText, type UiText } from '../dom/node.js';
+import { isJsonObject, type DocumentId, type JsonValue, type OperationParams } from '@fluxus/editor-core';
+import { EFFECT_FIELDS, validateManifest, type ManifestFieldSpec } from '@fluxus/assets';
+import { documentValue, resourceText } from '../dom/node.js';
 import type { AreaContext } from '../frame/area.js';
 import { runOperation, type AreaChromeState } from '../frame/areaChrome.js';
 import { button } from '../widgets/button.js';
 import { numberField, select, textField } from '../widgets/field.js';
 import type { FieldRowSpec } from '../widgets/fieldTable.js';
+import type { ValidationState } from '../widgets/validation.js';
 import {
   VFX_OPERATIONS,
+  effectImageAddress,
   effectImages,
   emitterOf,
   vfxSourceNames,
 } from './assetVfx.js';
+import { vfxCompositeRows } from './assetVfxComposite.js';
 
 /** Снятие источника — общей операцией: своей у него нет (`assetVfx.ts`). */
 const REMOVE_VALUE_OPERATION = 'document.removeValue';
@@ -68,38 +74,17 @@ export const TABLE_LABEL_KEYS: Readonly<Record<string, string>> = Object.freeze(
 });
 
 /**
- * Поля записи изображения, которые панель ПРЕДЛАГАЕТ дописать. Подсказка, а не
- * правило (см. шапку): состав записи закрыт валидацией манифеста, и она же
- * назовёт ключ, которого в формате нет. Порядок смысловой — от того, что есть у
- * всякой записи, к числам формы отдельных примитивов (REND-43).
+ * Описание поля записи по его имени (ASSET-6) — им панель выбирает контрол
+ * строки. Карта строится один раз из описания владельца: своего перечня полей у
+ * панели нет, а искать по списку на каждой строке инспектора незачем.
+ *
+ * `undefined` в ответе — поле, которого описание НЕ называет. Такое в записи
+ * бывает (опечатка автора, документ новее кода), и панель его показывает: она
+ * правит то, что в записи лежит, а неизвестный ключ называет владелец.
  */
-const FIELD_SUGGESTIONS: readonly string[] = Object.freeze([
-  'color',
-  'radius',
-  'radiusTo',
-  'alpha',
-  'alphaTo',
-  'durationMs',
-  'curve',
-  'height',
-  'offset',
-  'innerRadius',
-  'halfAngleDeg',
-  'length',
-  'width',
-  'edgeSoftness',
-  'lift',
-  'trailSamples',
-  'targetFromStat',
-]);
-
-/** Поля записи, которые пишутся СТРОКОЙ; прочие — числами. */
-const TEXT_FIELDS: readonly string[] = Object.freeze([
-  'primitive',
-  'color',
-  'curve',
-  'targetFromStat',
-]);
+const FIELD_SPECS: ReadonlyMap<string, ManifestFieldSpec> = new Map(
+  EFFECT_FIELDS.map((spec) => [spec.name, spec]),
+);
 
 /**
  * Часть записи области, которую читает панель (ED-23). Объявлена здесь, а не
@@ -129,6 +114,12 @@ export interface VfxAreaState extends AreaChromeState {
   vfxAsset: string;
   /** Имя поля, которое автор дописывает выбранному изображению. */
   vfxField: string;
+  /**
+   * Черновик подполей составного поля (REND-23: окно стата, порог цвета,
+   * мигание): «поле.подполе» → набранный текст. Составное поле пишется целиком,
+   * и до нажатия «записать» набранное живёт здесь, а не в документе.
+   */
+  vfxComposite: Record<string, string>;
 }
 
 /** Начальный черновик секций: панель ничего не выбрала и ничего не набрала. */
@@ -144,6 +135,7 @@ export function vfxDraftState(): Omit<VfxAreaState, keyof AreaChromeState | 'vis
     vfxWidth: '',
     vfxAsset: '',
     vfxField: '',
+    vfxComposite: {},
   };
 }
 
@@ -208,9 +200,32 @@ function valueText(value: JsonValue | undefined): string {
   return '';
 }
 
-/** Находка источника состоянием контрола; `undefined` — находок нет. */
-function findingState(reason: string): { severity: 'error'; reason: UiText } | undefined {
+/** Находка состоянием контрола; `undefined` — находок нет. */
+function findingState(reason: string): ValidationState | undefined {
   return reason === '' ? undefined : { severity: 'error', reason: documentValue(reason) };
+}
+
+/**
+ * Находки документа, адресованные полям ВЫБРАННОГО изображения (ED-8): каждая
+ * встаёт у своей строки, а не одной кучей у источника. Документ проверяется
+ * один раз на всё изображение — спрашивать владельца построчно значило бы
+ * проверять манифест десятки раз за кадр.
+ *
+ * Адрес изображения знает модуль операций (`effectImageAddress`): у
+ * источника-списка находка адресована номером записи, и второго чтения формы
+ * источника здесь не заводится.
+ */
+function imageFindings(
+  context: Context,
+  name: string,
+): (field: string) => ValidationState | undefined {
+  const value = manifestValue(context);
+  if (value === undefined) return () => undefined;
+  const checked = validateManifest(value);
+  if (checked.ok) return () => undefined;
+  const prefix = `${effectImageAddress(value, context.state.vfxTable, name, context.state.vfxImage)}.`;
+  return (field) =>
+    findingState(checked.errors.filter((error) => error.startsWith(`${prefix}${field}: `)).join('; '));
 }
 
 // ------------------------------------------------ изображения эффектов (REND-23)
@@ -270,34 +285,38 @@ function imageRows(context: Context, name: string, count: number): readonly Fiel
   const image = effectImages(value, state.vfxTable, name)[state.vfxImage];
   if (image === undefined) return [];
   const off = context.mode === 'preview';
-  const rows: FieldRowSpec[] = Object.keys(image).map((field) => ({
-    label: documentValue(field),
-    control: fieldControl(context, name, field, image[field]),
-  }));
+  const finding = imageFindings(context, name);
+  const rows: FieldRowSpec[] = [];
+  for (const field of Object.keys(image)) {
+    rows.push(...fieldRows(context, name, field, image[field], finding));
+  }
   rows.push({
     label: resourceText(resources, 'ui.area.assets.vfxField'),
     control: select({
       label: resourceText(resources, 'ui.area.assets.vfxField'),
+      // Что предложить дописать, говорит описание состава записи (ASSET-6), а
+      // не список панели: порядок пунктов — его смысловой порядок, и новое поле
+      // формата появляется здесь само.
       value: state.vfxField,
       options: [
         { value: '', label: resourceText(resources, 'ui.area.assets.none') },
-        ...FIELD_SUGGESTIONS.filter((field) => !(field in image)).map((field) => ({
-          value: field,
-          label: documentValue(field),
+        ...EFFECT_FIELDS.filter((spec) => !(spec.name in image)).map((spec) => ({
+          value: spec.name,
+          label: documentValue(spec.name),
         })),
       ],
       disabled: off,
       onSelect: (next) => {
         state.vfxField = next;
+        // Черновик подполей принадлежит выбранному полю: оставь его от
+        // прежнего — и автор записал бы в новое поле чужие числа.
+        state.vfxComposite = {};
         context.refresh();
       },
     }),
   });
   if (state.vfxField !== '' && !(state.vfxField in image)) {
-    rows.push({
-      label: documentValue(state.vfxField),
-      control: fieldControl(context, name, state.vfxField, undefined),
-    });
+    rows.push(...fieldRows(context, name, state.vfxField, undefined, finding));
   }
   rows.push({
     label: resourceText(resources, 'ui.area.assets.vfxRemoveImage'),
@@ -323,7 +342,49 @@ function imageRows(context: Context, name: string, count: number): readonly Fiel
 }
 
 /**
+ * Строки одного поля записи. Составное поле формата (окно стата, порог цвета,
+ * мигание, вертикальное смещение) раскрывается строками своих подполей —
+ * вкладом `assetVfxComposite.ts`; прочие поля остаются одной строкой.
+ */
+function fieldRows(
+  context: Context,
+  name: string,
+  field: string,
+  current: JsonValue | undefined,
+  finding: (subField: string) => ValidationState | undefined,
+): readonly FieldRowSpec[] {
+  const { state } = context;
+  const spec = FIELD_SPECS.get(field);
+  if (spec?.kind === 'composite') {
+    return vfxCompositeRows({
+      spec,
+      value: isJsonObject(current) ? current : undefined,
+      draft: state.vfxComposite,
+      resources: context.resources,
+      readOnly: context.mode === 'preview',
+      finding: (subField) => finding(subField === '' ? field : `${field}.${subField}`),
+      write: (next) => {
+        writeField(context, name, field, next);
+      },
+      refresh: () => {
+        context.refresh();
+      },
+    });
+  }
+  return [
+    {
+      label: documentValue(field),
+      control: fieldControl(context, name, field, current, finding(field)),
+    },
+  ];
+}
+
+/**
  * Контрол одного поля записи: строковые поля пишутся текстом, прочие — числом.
+ * Род поля называет описание формата (ASSET-6); поля, которого описание не
+ * знает, панель показывает по тому, что в записи ЛЕЖИТ, — оно там законно быть
+ * не обязано, а показать его автору она обязана.
+ *
  * Пустая строка СНИМАЕТ поле (`null` операции): без снятия автор чистил бы
  * документ руками, чего ED-14 не допускает.
  */
@@ -332,13 +393,15 @@ function fieldControl(
   name: string,
   field: string,
   current: JsonValue | undefined,
+  validation: ValidationState | undefined,
 ): ReturnType<typeof textField> {
-  const { state } = context;
-  const text = TEXT_FIELDS.includes(field);
+  const spec = FIELD_SPECS.get(field);
+  const text = spec === undefined ? !composite(current) && typeof current !== 'number' : spec.kind === 'string';
   const shown = valueText(current);
-  // Составное значение видно, но не правится: подменить объект строкой из этого
-  // поля значило бы сломать запись жестом, который выглядит как правка числа.
-  const locked = context.mode === 'preview' || composite(current);
+  // Составное значение поля, которого описание не знает, видно, но не правится:
+  // формы его панель не знает, и подменить объект строкой из этого поля значило
+  // бы сломать запись жестом, который выглядит как правка числа.
+  const locked = context.mode === 'preview' || (spec === undefined && composite(current));
   const commit = (raw: string): void => {
     const trimmed = raw.trim();
     if (trimmed === shown) return;
@@ -353,21 +416,40 @@ function fieldControl(
         next = parsed;
       }
     }
-    vfxOperation(context, VFX_OPERATIONS.setField, {
-      table: state.vfxTable,
-      name,
-      index: state.vfxImage,
-      field,
-      value: next,
-    });
+    writeField(context, name, field, next);
   };
-  const spec = {
+  return (text ? textField : numberField)({
     label: documentValue(field),
     value: documentValue(shown),
     readOnly: locked,
+    ...(validation === undefined ? {} : { validation }),
     onCommit: commit,
-  };
-  return text ? textField(spec) : numberField(spec);
+  });
+}
+
+/**
+ * Записать поле выбранного изображения либо снять его (`null`) — операцией и
+ * только ей (ED-29). Удавшаяся запись закрывает черновик дописывания: поле уже
+ * в документе, и строка «дописать» ему больше не нужна.
+ */
+function writeField(
+  context: Context,
+  name: string,
+  field: string,
+  value: JsonValue | null,
+): void {
+  const { state } = context;
+  vfxOperation(context, VFX_OPERATIONS.setField, {
+    table: state.vfxTable,
+    name,
+    index: state.vfxImage,
+    field,
+    value,
+  });
+  if (state.failure !== null || state.vfxField !== field) return;
+  state.vfxField = '';
+  state.vfxComposite = {};
+  context.refresh();
 }
 
 // ------------------------------------------------- эмиттеры частиц (REND-24)

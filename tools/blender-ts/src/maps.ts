@@ -58,16 +58,15 @@ import {
 } from './cells.js';
 import type { GltfDocument } from './gltf.js';
 import { byObjectName } from './layer.js';
-import { error, gridPaintMap, type Sink } from './paint.js';
+import { error, gridPaintMap, sculptPaintMap, type Sink } from './paint.js';
 import {
-  buildSculptSampler,
   cliffJumpOf,
   deriveSculptCells,
   nodeBaseLevels,
   sampleNodeHeight,
   sculptObjectsOf,
-  type SculptSampler,
 } from './sculpt.js';
+import { buildSculptSampler, type SculptSampler } from './sculptSampler.js';
 import type {
   CellLayerContext,
   CurvatureMap,
@@ -364,8 +363,9 @@ function sculptTerrainMaps(
     height: spec.height,
     heights: cells.heights,
     channels: { [RAMP_CHANNEL]: cells.ramps, [NOFLOOR_CHANNEL]: cells.noFloor },
-    // Скалпт даёт уровни, рампы и пол, но не раскраску: её канал живёт на
-    // grid-объекте террейна (BLND-14).
+    // Уровни, рампы и пол — всё, что этот мост несёт в `terrainMapsOf`. Слот
+    // раскраски у скалпта не клеточный канал, а выборка поверхности в центре
+    // клетки, и едет он своим путём (`sculptPaintMap`, BLND-14).
     present: new Set([RAMP_CHANNEL, NOFLOOR_CHANNEL]),
   };
   return terrainMapsOf(sink, anchor, grid);
@@ -436,12 +436,17 @@ function sculptCellLayer(
   const terrainGrid = checkedTerrainGrid(sink, anchor, target, maps);
   if (terrainGrid === null) return { findings: sink.findings };
 
+  // Раскраска считается рядом с рельефом и от него не зависит: слот берётся у
+  // геометрии верхнего пересечения, а не у полученных уровней (BLND-14).
+  const paint = sculptPaintMap(sink, anchor, read.sampler, spec, context);
+  const painted = paint === undefined ? {} : { paint };
+
   const heights = sculptCurvatureHeights(read.sampler, spec, terrainGrid);
   const rows = curvatureRowsOf(sink, anchor, { width: spec.width, height: spec.height, heights });
-  if (rows === null) return { terrain: maps, findings: sink.findings };
+  if (rows === null) return { terrain: maps, ...painted, findings: sink.findings };
   const map = checkedCurvatureMap(sink, anchor, spec, rows);
-  if (map === null) return { terrain: maps, findings: sink.findings };
-  return { terrain: maps, curvature: map, findings: sink.findings };
+  if (map === null) return { terrain: maps, ...painted, findings: sink.findings };
+  return { terrain: maps, curvature: map, ...painted, findings: sink.findings };
 }
 
 /** Карты террейна из grid-объекта (BLND-9): чтение сетки, символы, проверка ядра. */

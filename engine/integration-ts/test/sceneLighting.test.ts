@@ -41,8 +41,9 @@ import {
   type PresentationProducer,
   type QualityPreset,
   type RenderContext,
-  type ShadowRendererLike,
 } from '@fluxus/render';
+
+import { shadowRendererFake } from './shadowRendererFake.js';
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), '../../..');
 
@@ -231,32 +232,12 @@ interface Stand {
 }
 
 /** Сцена в порядке регистрации сборок (REND-8): свет, террейн, модели. */
-/**
- * Рендерер глазами теневых проходов (REND-30): в `hybrid` подсистема ведёт их
- * сама — рисует глубину яруса и сводит ярусы в карту источника, — и без порта
- * исполняла бы режим как `full`. Живого WebGL стенду не нужно: под тестом
- * решения подсистемы, а двойник повторяет единственное наблюдаемое следствие
- * настоящего прохода — снятый флаг `needsUpdate` у нарисованного источника.
- */
-function shadowRenderer(): ShadowRendererLike {
-  return {
-    render: () => {},
-    setRenderTarget: () => {},
-    shadowMap: {
-      enabled: true,
-      render: (lights) => {
-        for (const light of lights) (light as THREE.DirectionalLight).shadow.needsUpdate = false;
-      },
-    },
-  };
-}
-
 function stand(config?: PresentationLighting, preset?: QualityPreset): Stand {
   const stage = new PresentationStage(contextOf(new THREE.Scene()));
   const grid = flatGrid();
   const lighting = new LightingSubsystem({
     grid,
-    renderer: shadowRenderer(),
+    renderer: shadowRendererFake(),
     ...(config === undefined ? {} : { config }),
   });
   stage.register(lighting);

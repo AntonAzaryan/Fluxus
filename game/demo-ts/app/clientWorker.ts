@@ -11,6 +11,8 @@
 import { shellPort } from '@fluxus/client';
 import { DEMO_PLAYERS } from './match.js';
 import { joinDemoMatch, type DemoJoined } from './netClient.js';
+import { observeDemoMatch, OBSERVER_PLAYER_ID } from './observerClient.js';
+import type { MatchClient } from '@fluxus/net';
 import { directRendezvous, tabRendezvous, type DemoRendezvous } from './rendezvous.js';
 import {
   isDemoClientInit,
@@ -72,9 +74,39 @@ function watchInputLead(joined: DemoJoined): void {
   }, LEAD_POLL_MS);
 }
 
+/**
+ * Конец наблюдения человеку (NTR-21): матч кончился либо канал оборвался.
+ *
+ * Опросом, а не подпиской на транспорт: обработчик закрытия у канала один и
+ * принадлежит оболочке (`ClientHost`), а возврата в матч у наблюдателя нет —
+ * сообщить остаётся ровно один раз. Молчание вместо этого выглядело бы
+ * замёрзшей картинкой без причины.
+ */
+function watchObserving(client: MatchClient): void {
+  const timer = setInterval(() => {
+    if (client.phase !== 'closed') return;
+    clearInterval(timer);
+    notice(`наблюдение окончено (${client.closeReason ?? '—'}): ${client.closeDetail}`);
+  }, LEAD_POLL_MS);
+}
+
 scope.addEventListener('message', (event) => {
   if (!isDemoClientInit(event.data)) return;
   const { connect, candidates } = rendezvousOf(event.data);
+  // Наблюдатель (NTR-9, NTR-21) — другой род участия, а не другой сервер:
+  // рандеву то же самое (SES-3), и отличается только то, что имени слота он не
+  // предъявляет и ввода не отправляет. Возврата в матч у него нет: слот за ним
+  // не числится, возвращаться некуда.
+  if (event.data.observer === true) {
+    void observeDemoMatch({ port, connect: () => connect(OBSERVER_PLAYER_ID) }).then((observing) => {
+      if (!observing.ok) {
+        notice(observing.reason);
+        return;
+      }
+      watchObserving(observing.client);
+    });
+    return;
+  }
   // `notify` — состояние возврата в матч (NTR-17, design D8): «возвращаюсь»,
   // «вернуться не удалось», пустая строка на успехе. Тем же конвертом, что и
   // причина, по которой матча нет: у человека это одно и то же место на экране.

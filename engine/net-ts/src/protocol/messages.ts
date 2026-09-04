@@ -27,6 +27,19 @@ import type {
 export { END_REASONS, REJECT_REASONS } from './reasons.js';
 export type { ClientCloseReason, EndReason, RejectReason } from './reasons.js';
 
+/**
+ * Сентинель «слота нет» на шкале СЛОТОВ протокола (NTR-21): им приветствие
+ * называет наблюдателя, у которого слота нет вовсе (NTR-9), и им же сообщение
+ * о паузе называет инициатора без слота — сервер, обвязку стенда, админа
+ * (NTR-20). Одно значение на одну шкалу: заводить второе «нет слота» рядом
+ * значило бы, что у отсутствия слота два имени.
+ *
+ * С `VIEWPOINT_ALL` ядра (`netcode` NET-19) не отождествляется, хотя число то
+ * же: тот — сентинель шкалы КОМАНД, и точку зрения наблюдателя выбирает сервер
+ * (NTR-9), а не приветствие. Ни одна из констант через другую не определяется.
+ */
+export const NO_SLOT = -1;
+
 /** Пара версии игры (NET-16): непрозрачный идентификатор сборки и хеш контент-пака (NET-17). */
 export interface GameVersion {
   readonly buildId: string;
@@ -219,6 +232,13 @@ export interface Pacing {
  */
 export interface WelcomeMessage {
   readonly type: 'Welcome';
+  /**
+   * Слот участника (TICK-5) либо `NO_SLOT` у наблюдателя (NTR-21): состав
+   * приветствия у них один и тот же, потому что мир наблюдатель поднимает так
+   * же и сверяет так же, — отличается ровно это поле. Отдельного типа
+   * приветствия поэтому и нет: два сообщения означали бы два места, где сверка
+   * данных матча (NTR-5) может быть забыта.
+   */
   readonly slot: number;
   readonly players: readonly string[];
   readonly match: MatchDescriptor;
@@ -677,7 +697,11 @@ export function parseServerMessage(value: unknown): ServerMessage {
       if (!Array.isArray(initial)) throw new ProtocolError('Welcome.match: поле "initial" — массив');
       return {
         type: 'Welcome',
-        slot: int(source, 'slot', 'Welcome', 0, players.length - 1),
+        // Нижняя граница — сентинель наблюдателя (NTR-21), и она включает ровно
+        // его: `-2` слотом не является так же, как `-2` в `Pause.slot`. Что
+        // сентинель значит для ЭТОГО клиента, решает не разбор, а сверка с
+        // собственным `Hello` (NTR-21): разбор знает форму, а не род участия.
+        slot: int(source, 'slot', 'Welcome', NO_SLOT, players.length - 1),
         players: players as readonly string[],
         match: {
           sceneRef: str(match, 'sceneRef', 'Welcome.match'),
@@ -736,9 +760,9 @@ export function parseServerMessage(value: unknown): ServerMessage {
       return {
         type: 'Pause',
         state: oneOf(source.state, PAUSE_STATES, 'Pause: поле "state"'),
-        // `-1` — сервер (обвязка стенда, админ): слота у него нет, и нижняя
-        // граница включает его намеренно.
-        slot: int(source, 'slot', 'Pause', -1, Number.MAX_SAFE_INTEGER),
+        // `NO_SLOT` — сервер (обвязка стенда, админ): слота у него нет, и нижняя
+        // граница включает сентинель намеренно.
+        slot: int(source, 'slot', 'Pause', NO_SLOT, Number.MAX_SAFE_INTEGER),
         countdownMs: int(source, 'countdownMs', 'Pause', 0, Number.MAX_SAFE_INTEGER),
         ...pauseDenied(source),
       };

@@ -32,15 +32,20 @@
  */
 import {
   CURVATURE_GRID,
+  TARGET_TERRAIN,
   TERRAIN_FLAGS,
   TERRAIN_GRID,
   TERRAIN_LEVELS,
+  box,
   fixtureBytes,
   flagCells,
   gridGlb,
   gridSource,
   levelHeights,
   packGlb,
+  plate,
+  plateauWithHole,
+  sculptGlb,
 } from './support.js';
 
 /** Закоммиченная фикстура: имя файла, зачем она и как её собрать. */
@@ -94,6 +99,46 @@ function narrowRampTerrain(): Uint8Array {
   ]);
 }
 
+/** Сторона арены в клетках — сетка ассета цели (TERR-2), с которой обязан совпасть источник. */
+const ARENA = TARGET_TERRAIN.width;
+
+/**
+ * Раскрашенная скалпт-арена (BLND-13, BLND-14): плита слота 1 с вырезанной
+ * клеткой и приподнятый блок слота 2 над правой верхней четвертью. Закрывает
+ * сразу три правила: слот берётся у геометрии ВЕРХНЕГО пересечения, дыра берёт
+ * слот ближайшей клетки с полом, а рельеф едет тем же источником.
+ */
+function paintedSculpt(): Uint8Array {
+  return sculptGlb([
+    { name: 'base', triangles: plateauWithHole(ARENA, 0, 0, 2), paint: 1 },
+    { name: 'patch', triangles: box(2, 0, ARENA, 2, 0, 1), paint: 2 },
+  ]);
+}
+
+/**
+ * Скалпт с расхождением канала на грани (BLND-14): обе грани накрывающей
+ * клетку `(1, 1)` пластины несут разные значения у вершин — отказ с адресом
+ * клетки, а не большинство голосов.
+ */
+function splitPaintSculpt(): Uint8Array {
+  return sculptGlb([
+    { name: 'base', triangles: plate(0, 0, ARENA, ARENA, 0), paint: 1 },
+    {
+      name: 'split',
+      triangles: plate(1, 1, 2, 2, 1),
+      paint: [
+        [2, 5, 2],
+        [2, 5, 2],
+      ],
+    },
+  ]);
+}
+
+/** Скалпт-арена без канала раскраски: карта не переписывается вовсе (BLND-2). */
+function unpaintedSculpt(): Uint8Array {
+  return sculptGlb([{ name: 'arena', triangles: plate(0, 0, ARENA, ARENA, 0) }]);
+}
+
 /** Полный источник: размещения, terrain-объект и curvature-объект одним файлом. */
 function fullSource(): Uint8Array {
   const grids = gridSource([TERRAIN_GRID, CURVATURE_GRID]);
@@ -139,5 +184,20 @@ export const GENERATED_FIXTURES: readonly GeneratedFixture[] = Object.freeze([
     name: 'terrain-narrow-ramp.glb',
     why: 'рампа шириной в одну клетку (TERR-7): отказ той же реализацией, что подсвечивает это у кисти ED-10',
     build: narrowRampTerrain,
+  },
+  {
+    name: 'sculpt-paint.glb',
+    why: 'раскрашенная скалпт-арена (BLND-14): слот у геометрии верхнего пересечения, дыра берёт слот соседей',
+    build: paintedSculpt,
+  },
+  {
+    name: 'sculpt-paint-split.glb',
+    why: 'расхождение канала на грани пересечения (BLND-14): отказ с адресом клетки, а не большинство голосов',
+    build: splitPaintSculpt,
+  },
+  {
+    name: 'sculpt-unpainted.glb',
+    why: 'скалпт без канала раскраски (BLND-2, BLND-14): рельеф переписывается, карта раскраски — нет',
+    build: unpaintedSculpt,
   },
 ]);
