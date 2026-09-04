@@ -2670,7 +2670,8 @@ describe('вытягивание: жгут к жертве и луч по дос
 
     const before = coreWorld.getField(a.state.world, hero, 'Health', 'hp');
     const bossBefore = coreWorld.getField(a.state.world, a.boss, 'Health', 'hp');
-    // Босса заранее ранят, иначе кормить его нечем: hp упёрт в потолок.
+    // Босс здесь на потолке здоровья: кормление ничего не прибавляет — это и
+    // проверяет утверждение ниже; лечение раненого босса — отдельный стенд.
     let pulses = 0;
     while (a.at() < opened + TETHER_HOLD) {
       for (const type of a.step()) if (type === 'BossTetherPulse') pulses += 1;
