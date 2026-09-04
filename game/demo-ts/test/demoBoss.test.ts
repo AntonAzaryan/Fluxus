@@ -69,7 +69,7 @@ import {
 } from '@fluxus/core';
 import { buildMatchWorld } from '@fluxus/net';
 import * as THREE from 'three';
-import { mdxLoader, type NormalizedModel } from '@fluxus/assets';
+import { isEffectList, mdxLoader, type NormalizedModel } from '@fluxus/assets';
 import { MixerAnimationBackend, ViewBuffer, resolveClip, type TickView } from '@fluxus/render';
 import { DEMO_AIM_EVENTS, createDemoExtractor } from '../app/extractor.js';
 import { ACTION_BITS, STATS } from '../app/sim.js';
@@ -2527,9 +2527,13 @@ describe('числа и картинка босса: ретюн виден в д
     expect(MANIFEST.effects.byKind.BossWave!.radius).toBeGreaterThanOrEqual(
       WAVE_RADIUS / FIXED_ONE,
     );
-    // Поле замедления — купол по виду, как и купол героя: радиус оболочки равен
-    // зоне действия.
-    expect(MANIFEST.effects.byKind.BossField!.radius).toBe(FIELD_RADIUS / FIXED_ONE);
+    // Поле замедления — купол по виду, как и купол героя: прозрачная сфера и
+    // кольцо у её подножия списком записей (REND-23), и радиус КАЖДОЙ равен
+    // зоне действия — иначе одна из них врала бы о границе.
+    const field = MANIFEST.effects.byKind.BossField!;
+    const fieldEntries = isEffectList(field) ? field : [field];
+    expect(fieldEntries.map((entry) => entry.primitive)).toEqual(['sphere', 'ring']);
+    for (const entry of fieldEntries) expect(entry.radius).toBe(FIELD_RADIUS / FIXED_ONE);
     // Пятно огня несёт ОБЕ записи, и вторая из них — не украшение.
     //
     // Пламя рисует эмиттер (ASSET-14): примитив манифеста один, и горящую полосу

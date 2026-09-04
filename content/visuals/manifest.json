@@ -241,15 +241,24 @@
           }
         }
       ],
-      "SlowDome": {
-        "primitive": "ring",
-        "color": "#6fd3ff",
-        "radius": 3,
-        "innerRadius": 2.55,
-        "alpha": 0.5,
-        "edgeSoftness": 0.4,
-        "height": 0
-      },
+      "SlowDome": [
+        {
+          "primitive": "sphere",
+          "color": "#6fd3ff",
+          "radius": 3,
+          "alpha": 0.07,
+          "height": 0
+        },
+        {
+          "primitive": "ring",
+          "color": "#6fd3ff",
+          "radius": 3,
+          "innerRadius": 2.7,
+          "alpha": 0.3,
+          "edgeSoftness": 0.4,
+          "height": 0
+        }
+      ],
       "BossWave": {
         "primitive": "disc",
         "color": "#ffae42",
@@ -266,15 +275,24 @@
         "edgeSoftness": 0.5,
         "height": 0
       },
-      "BossField": {
-        "primitive": "ring",
-        "color": "#ffe14a",
-        "radius": 6.7500762939453125,
-        "innerRadius": 6.15,
-        "alpha": 0.45,
-        "edgeSoftness": 0.35,
-        "height": 0
-      },
+      "BossField": [
+        {
+          "primitive": "sphere",
+          "color": "#ffe14a",
+          "radius": 6.7500762939453125,
+          "alpha": 0.05,
+          "height": 0
+        },
+        {
+          "primitive": "ring",
+          "color": "#ffe14a",
+          "radius": 6.7500762939453125,
+          "innerRadius": 6.3,
+          "alpha": 0.28,
+          "edgeSoftness": 0.35,
+          "height": 0
+        }
+      ],
       "Boss": {
         "primitive": "beam",
         "color": "#b45cff",

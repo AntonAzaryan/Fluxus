@@ -147,11 +147,14 @@ describe('REND-35: водоём демо лежит в лощине карты �
     expect(body.surfaceLevel).toBeLessThan(0);
     expect(body.surfaceLevel).toBeGreaterThan(-0.25);
 
-    // Дно лощины: глубина положительна — вода видна.
-    expect(depthAt(rig, 8.5, 9.5)).toBeGreaterThan(0);
-    // Кромка карты: поле выше уреза — берег, фрагмент отбрасывается. Линию воды
+    // Дно лощины — центр арены, где стоит босс: глубина положительна, вода видна.
+    expect(depthAt(rig, 24.5, 24.5)).toBeGreaterThan(0);
+    // Вне озера: поле выше уреза — берег, фрагмент отбрасывается. Линию воды
     // рисует пересечение уреза полем, а не граница клеток (REND-35).
-    expect(depthAt(rig, 22.5, 5.5)).toBeLessThanOrEqual(0);
+    expect(depthAt(rig, 24.5, 10.5)).toBeLessThanOrEqual(0);
+    // Точки спавна героев — на суше: матч начинается на берегу, а не в воде.
+    expect(depthAt(rig, 8.5, 24.5)).toBeLessThanOrEqual(0);
+    expect(depthAt(rig, 39.5, 24.5)).toBeLessThanOrEqual(0);
   });
 
   it('текстурная деталь демо: названные ассеты лежат в дереве контента', () => {
