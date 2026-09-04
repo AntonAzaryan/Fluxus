@@ -29,16 +29,13 @@ import {
   staticsFromTerrain,
   worldInitSpawn,
   type EntityId,
+  type NavigationOptions,
   type SceneDef,
   type Simulation,
   type SimulationState,
   type TerrainApi,
   type TerrainGrid,
 } from '@fluxus/core';
-// Числа поиска пути приезжают из документа матча (NTR-14): второй их записи в
-// коде сборки быть не должно — разойдись они, режимы демо развели бы NPC
-// разными дорогами.
-import { DEMO_NAVIGATION } from './match.js';
 
 // ----------------------------------------------------------------- константы
 
@@ -406,11 +403,26 @@ export interface DemoSimulation {
 }
 
 /**
- * Поднимает сцену демо: мир, системы, физика, игрок. Чистая функция без DOM;
- * `def` — содержимое `content/scenes/duel.scene.json` (браузер импортирует его через vite,
- * headless-скрипты читают файл сами — у Node и vite разные механики JSON).
+ * Зависимости сборки, которые приезжают ДОКУМЕНТОМ МАТЧА, а не сценой (NTR-14).
+ *
+ * Поле обязательное и допускает `undefined`: «навигации нет» — это решение
+ * документа, и оно обязано быть НАЗВАНО вызывающим. Необязательный параметр
+ * молча уронил бы поиск пути у того, кто про него забыл, — а забытая навигация
+ * наблюдаема только по разошедшимся дорогам NPC (NPC-6).
  */
-export function createDemoSimulation(def: SceneDef): DemoSimulation {
+export interface DemoSimulationOptions {
+  readonly navigation: NavigationOptions | undefined;
+}
+
+/**
+ * Поднимает сцену демо: мир, системы, физика, игрок. Чистая функция без DOM;
+ * `def` — содержимое конфига сцены контент-пака: страница читает его из раздачи
+ * оболочки (CONT-5, `match.ts`), headless-скрипты — с файловой системы.
+ */
+export function createDemoSimulation(
+  def: SceneDef,
+  options: DemoSimulationOptions,
+): DemoSimulation {
   const scene = loadScene(def);
   if (scene.terrain === undefined) throw new Error('демо: сцена обязана содержать террейн');
   const terrain = scene.terrain;
@@ -461,12 +473,13 @@ export function createDemoSimulation(def: SceneDef): DemoSimulation {
   }
 
   // Поиск пути (NAV-1): числа — те же, что объявляет документ матча (NTR-14),
-  // и берутся они ОТТУДА, а не переписываются здесь. Локальная сборка обязана
-  // тикать тот же состав, что сетевая (SHELL-8): собери матч навигацию, а
-  // одиночная симуляция нет — NPC в двух режимах одной игры ходили бы разными
-  // дорогами (NPC-6), и заметить это в локальном режиме было бы некому.
+  // и приезжают они ОТТУДА параметром, а не переписываются здесь. Локальная
+  // сборка обязана тикать тот же состав, что сетевая (SHELL-8): собери матч
+  // навигацию, а одиночная симуляция нет — NPC в двух режимах одной игры ходили
+  // бы разными дорогами (NPC-6), и заметить это в локальном режиме было бы
+  // некому.
   const navigation =
-    DEMO_NAVIGATION === undefined ? undefined : buildNavigation(grid, DEMO_NAVIGATION);
+    options.navigation === undefined ? undefined : buildNavigation(grid, options.navigation);
 
   const playerId = worldInitSpawn(scene.world, 'Hero');
   const state = initialState(scene.world, WORLD_SEED);

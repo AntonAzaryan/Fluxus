@@ -21,11 +21,11 @@ import { NetworkShell, type ShellPort } from '@fluxus/client';
 import type { HudComposition, HudCompositionEntry } from '@fluxus/hud';
 import { createDemoExtractor } from './extractor.js';
 import {
-  DEMO_MATCH,
-  DEMO_SNAPSHOT_RATE,
   demoClientBuildOptions,
   demoContentPack,
   demoMatchConfig,
+  demoSnapshotRateOf,
+  type DemoDocuments,
 } from './match.js';
 import type { DemoJoinFailed } from './netClient.js';
 
@@ -48,6 +48,12 @@ const HERO_SELECTOR = 'hero.entity';
 export interface DemoObserverOptions {
   /** Канал к главному потоку (SHELL-3). */
   readonly port: ShellPort;
+  /**
+   * Документы контент-пака из раздачи оболочки (CONT-5, design D4) — те же, по
+   * которым входит участник: версия наблюдателя считается тем же вычислением из
+   * тех же байтов (NET-16, NTR-5).
+   */
+  readonly documents: DemoDocuments;
   /** Как добраться до сервера матча (NTR-2): у наблюдателя имя не спрашивают. */
   readonly connect: () => Promise<Transport>;
   readonly serializer?: Serializer;
@@ -96,7 +102,8 @@ function bindsHero(entry: HudCompositionEntry): boolean {
  * сверки у наблюдателя нет ровно потому, что первая та же самая.
  */
 export async function observeDemoMatch(options: DemoObserverOptions): Promise<DemoObserveResult> {
-  const config = demoMatchConfig(demoContentPack());
+  const pack = demoContentPack(options.documents);
+  const config = demoMatchConfig(options.documents, pack);
   const clock = options.clock ?? ((): number => performance.now());
   const settle = options.settle ?? ((): Promise<void> => new Promise((done) => setTimeout(done, 16)));
 
@@ -118,7 +125,7 @@ export async function observeDemoMatch(options: DemoObserverOptions): Promise<De
   const client = new MatchClient({
     playerId: OBSERVER_PLAYER_ID,
     version: config.version,
-    content: demoContentPack(),
+    content: pack,
     observer: true,
     ...demoClientBuildOptions(config),
   });
@@ -128,7 +135,7 @@ export async function observeDemoMatch(options: DemoObserverOptions): Promise<De
     client,
     transport,
     state: world.state,
-    tickSeconds: 1 / (DEMO_MATCH.snapshotRate ?? DEMO_SNAPSHOT_RATE),
+    tickSeconds: 1 / demoSnapshotRateOf(options.documents.match),
     extractor: createDemoExtractor(world.sim.terrain?.grid),
     terrain: world.sim.terrain?.grid ?? null,
     // Ни паузы, ни перемотки: своей машины состояний у тонкого клиента нет
@@ -138,7 +145,7 @@ export async function observeDemoMatch(options: DemoObserverOptions): Promise<De
     // Полезная нагрузка handshake (SHELL-5) — то, чего у наблюдателя НЕТ:
     // своей сущности. Главный поток по этому и собирает HUD без виджетов героя
     // и камеру наблюдения, а не по догадке о потоке доставок (SHELL-8).
-    helloExtra: { observer: true, players: [...DEMO_MATCH.players] },
+    helloExtra: { observer: true, players: [...config.players] },
     clock,
     ...(options.serializer !== undefined ? { serializer: options.serializer } : {}),
   });

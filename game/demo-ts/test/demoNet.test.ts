@@ -15,7 +15,7 @@
  * копированием байтов (NTR-2).
  */
 import { MessageChannel } from 'node:worker_threads';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeAll, describe, expect, it } from 'vitest';
 import { fixed, type Serializer } from '@fluxus/core';
 import {
   isBotWorkerInit,
@@ -26,7 +26,7 @@ import {
 import type { RenderSubsystem, TickView } from '@fluxus/render';
 import { jsonSerializer, type Transport } from '@fluxus/net';
 import { RemoteHost, portTransport, shellPort, type ShellPort } from '@fluxus/client';
-import { DEMO_PLAYERS, demoMatchConfig } from '../app/match.js';
+import { demoMatchConfig, type DemoDocuments } from '../app/match.js';
 import { demoBotBehavior, demoBotProfile } from '../app/bots.js';
 import { openLocalSession, type DemoLocalSession } from '../app/localSession.js';
 import {
@@ -46,7 +46,7 @@ import {
 import { standArgs, shareLink } from '../app/demoStand.js';
 import { DEMO_STAND_SERVICE, demoStandHost } from '../app/desktopStand.js';
 import { ACTION_BITS, STATS } from '../app/sim.js';
-import { dummyContext, syncPortPair } from './fixtures.js';
+import { demoDocuments, dummyContext, syncPortPair } from './fixtures.js';
 
 /** Заметное движение в Q16.16: его видно и в каноническом логе, и в снапшоте. */
 const STEP = fixed.fromFloat(0.5);
@@ -54,6 +54,20 @@ const STEP = fixed.fromFloat(0.5);
 const channels: MessageChannel[] = [];
 const sessions: DemoLocalSession[] = [];
 let bots: BotHost | null = null;
+
+/**
+ * Документы контент-пака — из ДЕРЕВА, тем же загрузчиком, что у страницы
+ * (`game-content` CONT-5): вкладка читает их из раздачи оболочки, и тест обязан
+ * ходить той же дорогой, иначе он пинал бы матч, которого у игрока нет.
+ */
+let documents: DemoDocuments;
+/** Ростер матча из прочитанного документа: имена слотов — данные матча (TICK-5). */
+let players: readonly string[];
+
+beforeAll(async () => {
+  documents = await demoDocuments();
+  players = documents.match.players;
+});
 
 afterEach(async () => {
   bots?.dispose();
@@ -100,7 +114,7 @@ function session(
   // поведения (BOT-8) — тест игры читает дерево контента законно (CONT-1).
   const profile = demoBotProfile('профиль бота теста');
   const opened = openLocalSession({
-    config: demoMatchConfig(),
+    config: demoMatchConfig(documents),
     reserved,
     ...(serializer !== undefined ? { serializer } : {}),
     bots: {
@@ -172,6 +186,7 @@ async function join(
   }).connect(mainPort);
   const joined = await joinDemoMatch({
     port: workerPort,
+    documents,
     connect: () => Promise.resolve(portTransport(participantPort(opened))),
     candidates,
     clock: () => clock.ms,
@@ -201,12 +216,12 @@ function hellos(rig: Rig): { extra?: HelloExtra }[] {
 describe('демо по умолчанию: матч против бота на сетевом стеке (D1, SES-1)', () => {
   it('человек и бот входят в матч, ввод доезжает до сервера, снапшоты — в TickView', async () => {
     const clock = { ms: 0 };
-    const opened = session(DEMO_PLAYERS.slice(0, 1));
-    const rig = await join(opened, slotCandidates({ kind: 'local' }, DEMO_PLAYERS), clock);
+    const opened = session(players.slice(0, 1));
+    const rig = await join(opened, slotCandidates({ kind: 'local' }, players), clock);
 
     expect(rig.joined.ok).toBe(true);
     if (!rig.joined.ok) return;
-    expect(rig.joined.playerId).toBe(DEMO_PLAYERS[0]);
+    expect(rig.joined.playerId).toBe(players[0]);
     expect(rig.joined.client.slot).toBe(0);
     // Handshake доехал ровно один и с режимом (SHELL-5, SHELL-8), а id своей
     // сущности в нём — тот, что известен только после `Welcome` (NTR-5).
@@ -214,9 +229,9 @@ describe('демо по умолчанию: матч против бота на 
     expect(hellos(rig)).toHaveLength(1);
     expect(hellos(rig)[0]!.extra).toEqual({
       hero: rig.joined.hero,
-      playerId: DEMO_PLAYERS[0],
+      playerId: players[0],
       slot: 0,
-      players: [...DEMO_PLAYERS],
+      players: [...players],
     });
 
     // Таймер оболочки снимается: шаги делает тест (NTR-12).
@@ -228,7 +243,7 @@ describe('демо по умолчанию: матч против бота на 
     opened.filler.fill();
     await flush();
     expect(bots?.seats).toHaveLength(1);
-    expect(bots!.seats[0]!.playerId).toBe(DEMO_PLAYERS[1]);
+    expect(bots!.seats[0]!.playerId).toBe(players[1]);
     expect(bots!.seats[0]!.client.slot).toBe(1);
     // Оба слота заняты — ростер заморожен, матч пошёл (SES-4, NTR-6).
     expect(opened.server.phase).toBe('running');
@@ -249,7 +264,7 @@ describe('демо по умолчанию: матч против бота на 
     // Ввод главного потока уехал серверу и вошёл в канонический лог (SHELL-6,
     // NET-7): локально его не применял никто.
     const own = opened.server.canonicalInputs.filter(
-      (frame) => frame.playerId === DEMO_PLAYERS[0] && frame.move.x !== 0,
+      (frame) => frame.playerId === players[0] && frame.move.x !== 0,
     );
     expect(own.length).toBeGreaterThan(0);
     // Снапшоты доехали до подсистемы главного потока — тем же контрактом
@@ -269,8 +284,8 @@ describe('демо по умолчанию: матч против бота на 
 
   it('словарь статов едет handshake\'ом, статы и фаза полёта — кадром (HUD-8, REND-12)', async () => {
     const clock = { ms: 0 };
-    const opened = session(DEMO_PLAYERS.slice(0, 1));
-    const rig = await join(opened, slotCandidates({ kind: 'local' }, DEMO_PLAYERS), clock);
+    const opened = session(players.slice(0, 1));
+    const rig = await join(opened, slotCandidates({ kind: 'local' }, players), clock);
     expect(rig.joined.ok).toBe(true);
     if (!rig.joined.ok) return;
     rig.joined.shell.stop();
@@ -332,8 +347,8 @@ describe('демо по умолчанию: матч против бота на 
     // Сессия в дебаг-формате: сервер, человек и бот обязаны говорить одним —
     // полем протокола формат не согласовывается, и разошедшийся дал бы не
     // отказ, а вечное лобби.
-    const opened = session(DEMO_PLAYERS.slice(0, 1), jsonSerializer);
-    const rig = await join(opened, [DEMO_PLAYERS[0]!], clock, jsonSerializer);
+    const opened = session(players.slice(0, 1), jsonSerializer);
+    const rig = await join(opened, [players[0]!], clock, jsonSerializer);
     expect(rig.joined.ok).toBe(true);
 
     opened.filler.fill();
@@ -347,14 +362,14 @@ describe('демо по умолчанию: матч против бота на 
     const clock = { ms: 0 };
     // Резерва нет: оба слота открыты, и первым приходит «сосед по стенду».
     const opened = session([]);
-    const first = await join(opened, [DEMO_PLAYERS[0]!], clock);
+    const first = await join(opened, [players[0]!], clock);
     expect(first.joined.ok).toBe(true);
 
-    const second = await join(opened, DEMO_PLAYERS, clock);
+    const second = await join(opened, players, clock);
     expect(second.joined.ok).toBe(true);
     if (!second.joined.ok) return;
     // Первый слот отдан первому пришедшему, второй — откату (`slot-taken`).
-    expect(second.joined.playerId).toBe(DEMO_PLAYERS[1]);
+    expect(second.joined.playerId).toBe(players[1]);
     expect(second.joined.client.slot).toBe(1);
     expect(opened.server.phase).toBe('running');
     // Откат не оставил следа в главном потоке: handshake отвергнутой попытки
@@ -362,9 +377,9 @@ describe('демо по умолчанию: матч против бота на 
     expect(hellos(second)).toHaveLength(1);
     expect(hellos(second)[0]!.extra).toEqual({
       hero: second.joined.hero,
-      playerId: DEMO_PLAYERS[1],
+      playerId: players[1],
       slot: 1,
-      players: [...DEMO_PLAYERS],
+      players: [...players],
     });
     if (first.joined.ok) first.joined.shell.stop();
     second.joined.shell.stop();
@@ -373,11 +388,11 @@ describe('демо по умолчанию: матч против бота на 
   it('свободных слотов нет — внятная причина, а не молчание', async () => {
     const clock = { ms: 0 };
     const opened = session([]);
-    const first = await join(opened, [DEMO_PLAYERS[0]!], clock);
-    const second = await join(opened, [DEMO_PLAYERS[1]!], clock);
+    const first = await join(opened, [players[0]!], clock);
+    const second = await join(opened, [players[1]!], clock);
     expect(first.joined.ok && second.joined.ok).toBe(true);
 
-    const third = await join(opened, DEMO_PLAYERS, clock);
+    const third = await join(opened, players, clock);
     expect(third.joined.ok).toBe(false);
     if (third.joined.ok) return;
     // Оба слота заняты ЖИВЫМИ соединениями владельцев, и отказ об этом и
@@ -392,7 +407,7 @@ describe('демо по умолчанию: матч против бота на 
 describe('возврат в матч после разрыва (NTR-17, design D8)', () => {
   it('обрыв канала — клиент возвращается в свой слот и снова получает состояние', async () => {
     const clock = { ms: 0 };
-    const opened = session(DEMO_PLAYERS.slice(0, 1));
+    const opened = session(players.slice(0, 1));
     /** Каналы участника: первый — вход, второй — возврат; оба к тому же матчу. */
     const links: Transport[] = [];
     const notices: string[] = [];
@@ -429,12 +444,13 @@ describe('возврат в матч после разрыва (NTR-17, design D
     let releasePause: (() => void) | null = null;
     const joined = await joinDemoMatch({
       port: workerPort,
+      documents,
       connect: () => {
         const link = portTransport(shellPort(opened.connect(makeChannel())));
         links.push(link);
         return Promise.resolve(link);
       },
-      candidates: [DEMO_PLAYERS[0]!],
+      candidates: [players[0]!],
       clock: () => clock.ms,
       settle: () => flush(1),
       timeoutMs: 2000,
@@ -604,10 +620,10 @@ describe('режим страницы выбирается при старте (
   });
 
   it('у матча своей вкладки кандидат один, у стенда — весь ростер', () => {
-    expect(slotCandidates({ kind: 'local' }, DEMO_PLAYERS)).toEqual([DEMO_PLAYERS[0]]);
-    expect(slotCandidates({ kind: 'solo' }, DEMO_PLAYERS)).toEqual([DEMO_PLAYERS[0]]);
-    expect(slotCandidates({ kind: 'server', url: 'ws://x' }, DEMO_PLAYERS)).toEqual([
-      ...DEMO_PLAYERS,
+    expect(slotCandidates({ kind: 'local' }, players)).toEqual([players[0]]);
+    expect(slotCandidates({ kind: 'solo' }, players)).toEqual([players[0]]);
+    expect(slotCandidates({ kind: 'server', url: 'ws://x' }, players)).toEqual([
+      ...players,
     ]);
   });
 });

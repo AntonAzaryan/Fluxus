@@ -17,7 +17,7 @@
  * двумя последними доставленными тиками по часам этого потока (SHELL-7).
  */
 import * as THREE from 'three';
-import { ABILITY_STEPS, loadScene, type EntityId, type SceneDef, type WorldMode } from '@fluxus/core';
+import { ABILITY_STEPS, loadScene, type EntityId, type WorldMode } from '@fluxus/core';
 import {
   AssetService,
   createManifestLoader,
@@ -143,9 +143,10 @@ import {
   isDemoServerReady,
   type DemoClientInit,
   type DemoServerInit,
+  type DemoSoloInit,
 } from './wiring.js';
+import { loadDemoDocuments, type DemoDocuments } from './match.js';
 import bindingsJson from './bindings.json';
-import sceneJson from '../../../content/scenes/duel.scene.json';
 
 /** Высота уровня террейна в мировых единицах — параметр рендера (REND-7). */
 const HEIGHT_STEP = 0.6;
@@ -274,13 +275,14 @@ function loadManifest(): Promise<VisualManifest> {
 }
 
 /**
- * Парный документ сцены демо (PRES-1): путь — правилом имени от пути сцены.
- * Отказ (нет файла, битый JSON) — сцена без декораций и туман на умолчаниях
- * (FOW-10), с предупреждением: дыра в контенте не уносит страницу целиком.
+ * Парный документ сцены демо (PRES-1): путь — правилом имени от ID сцены, по
+ * которому её прочитали из раздачи (CONT-5). Отказ (нет файла, битый JSON) —
+ * сцена без декораций и туман на умолчаниях (FOW-10), с предупреждением: дыра в
+ * контенте не уносит страницу целиком.
  */
-async function loadPresentation(): Promise<PresentationScene | null> {
+async function loadPresentation(sceneId: string): Promise<PresentationScene | null> {
   try {
-    return await loadAsset<PresentationScene>('presentation', presentationPathOf('scenes/duel.scene.json'));
+    return await loadAsset<PresentationScene>('presentation', presentationPathOf(sceneId));
   } catch (error) {
     console.warn('демо: парный presentation-документ не загрузился', error);
     return null;
@@ -1170,10 +1172,17 @@ function frame(now: number): void {
  * Порт участника создаёт сервер вкладки и присылает сюда — главный поток лишь
  * передаёт его клиенту transfer'ом. Своего пути в матч у него нет: он не
  * участник, он рисует (SHELL-2).
+ *
+ * Документы контент-пака уезжают конвертом КАЖДОЙ стороне (CONT-5, design D4):
+ * прочитаны они здесь, один раз, и версия матча (NET-16) у всех сторон страницы
+ * поэтому одна — не по совпадению чтений, а по построению.
  */
-function spawnShellWorker(mode: DemoMode): Worker {
+function spawnShellWorker(mode: DemoMode, documents: DemoDocuments): Worker {
   if (mode.kind === 'solo') {
-    return new Worker(new URL('./worker.ts', import.meta.url), { type: 'module' });
+    const solo = new Worker(new URL('./worker.ts', import.meta.url), { type: 'module' });
+    const init: DemoSoloInit = { t: 'demo-solo-init', documents };
+    solo.postMessage(init);
+    return solo;
   }
   const client = new Worker(new URL('./clientWorker.ts', import.meta.url), { type: 'module' });
   client.addEventListener('message', (event: MessageEvent) => {
@@ -1185,6 +1194,7 @@ function spawnShellWorker(mode: DemoMode): Worker {
     // него не сервер, а род участия, и называется он полем конверта сборки.
     const init: DemoClientInit = {
       t: 'demo-client-init',
+      documents,
       url: mode.url,
       ...(mode.kind === 'observer' ? { observer: true } : {}),
     };
@@ -1194,10 +1204,10 @@ function spawnShellWorker(mode: DemoMode): Worker {
   const server = new Worker(new URL('./serverWorker.ts', import.meta.url), { type: 'module' });
   server.addEventListener('message', (event: MessageEvent) => {
     if (!isDemoServerReady(event.data)) return;
-    const init: DemoClientInit = { t: 'demo-client-init', port: event.data.port };
+    const init: DemoClientInit = { t: 'demo-client-init', documents, port: event.data.port };
     client.postMessage(init, [event.data.port]);
   });
-  const init: DemoServerInit = { t: 'demo-server-init' };
+  const init: DemoServerInit = { t: 'demo-server-init', documents };
   server.postMessage(init);
   return client;
 }
@@ -1486,12 +1496,39 @@ async function main(): Promise<void> {
   // выбором, а применяется выбор, когда сцена собрана (`onReady`), — и к тому
   // моменту он может быть уже другим.
   wireQualitySelect(qualitySelection.pending);
-  const manifest = await loadManifest();
+  // Документы контент-пака — из раздачи, тем же источником байтов, что и ассеты
+  // (`game-content` CONT-5, design D1): читаются ОДИН раз и параллельно с
+  // манифестом — оба висят на одном источнике, и последовательное ожидание
+  // растянуло бы старт вдвое ни за чем.
+  const manifestLoad = loadManifest();
+  // Отказ манифеста обязан быть обработан даже на дороге, где до его ожидания не
+  // дошли: без документов страница не стартует вовсе, и необработанный отказ
+  // промиса стал бы вторым сообщением о первой же беде.
+  void manifestLoad.catch(() => undefined);
+  let documents: DemoDocuments;
+  try {
+    documents = await loadDemoDocuments(assetSource);
+  } catch (error) {
+    // Без документов не поднимается НИ ОДИН режим (CONT-5): заглушка вместо
+    // сцены подняла бы матч, которого нет ни у сервера, ни у второго игрока.
+    // Причина называется человеку вместе с ID документа — она в тексте отказа
+    // загрузчика, — а воркеры не спавнятся вовсе.
+    showNotice(error instanceof Error ? error.message : String(error));
+    return;
+  }
+  const sceneRef = documents.match.sceneRef;
+  const scene = documents.scenes[sceneRef];
+  const sceneId = documents.sceneIds[sceneRef];
+  if (scene === undefined || sceneId === undefined) {
+    showNotice(`демо: сцена "${sceneRef}" не входит в контент-пак документа матча`);
+    return;
+  }
+  const manifest = await manifestLoad;
   // Парный presentation-документ (PRES-1) — декорации и секция `fog` (FOW-10).
   // Загружается в обеих воркер-сторонах оболочки одинаково (SHELL-8): документ
   // читает главный поток, и режим симуляции ему не виден.
-  const presentation = await loadPresentation();
-  const fogEnabled = (sceneJson as unknown as SceneDef).fog === true;
+  const presentation = await loadPresentation(sceneId);
+  const fogEnabled = scene.fog === true;
   const fogConfig = resolveFogConfig(presentation?.fog);
   // Подача стелса (FOW-13): доставка и инстансы ЭТОГО кадра; секция `stealth`
   // парного документа — числа картинки.
@@ -1511,8 +1548,8 @@ async function main(): Promise<void> {
   // клиент резолвит сцену локально, и таблица строится ТОЙ ЖЕ
   // `compileAbilityCatalog`, что у симуляции, — над тем же документом. Второго
   // описания способности на клиенте не появляется.
-  const abilityCatalog = loadScene(sceneJson as unknown as SceneDef).abilities ?? null;
-  const worker = spawnShellWorker(mode);
+  const abilityCatalog = loadScene(scene).abilities ?? null;
+  const worker = spawnShellWorker(mode, documents);
 
   remote = new RemoteHost(context, {
     // Бюджет кадра сцены (REND-44): пересборка чанков террейна и перезаполнение

@@ -21,7 +21,7 @@
  */
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { describe, expect, it } from 'vitest';
+import { beforeAll, describe, expect, it } from 'vitest';
 import { tick, world as coreWorld, type SceneDef } from '@fluxus/core';
 import {
   MatchServer,
@@ -39,12 +39,13 @@ import {
 import {
   DEMO_CLIENT_BUILD_FIELDS,
   DEMO_DOCUMENT_FIELDS,
-  DEMO_MATCH,
   demoClientBuildOptions,
   demoContentPack,
   demoMatchConfig,
   demoMatchConfigOf,
+  type DemoDocuments,
 } from '../app/match.js';
+import { demoDocuments } from './fixtures.js';
 import { ACTION_BITS } from '../app/sim.js';
 import sceneJson from '../../../content/scenes/duel.scene.json';
 import matchJson from '../../../content/matches/duel.match.json';
@@ -62,6 +63,17 @@ const DOCUMENT_NAVIGATION = (matchJson as { readonly navigation?: Record<string,
 const DOCUMENT_REWIND = (matchJson as { readonly rewind?: Record<string, unknown> }).rewind;
 
 const REWIND_BIT = 1 << ACTION_BITS.rewind;
+
+/**
+ * Документы контент-пака страницы — ПРОЧИТАННЫЕ из того же дерева, по которому
+ * стенд читает файл матча (`game-content` CONT-5). Именно в этом теперь состоит
+ * сверка двух дорог: одно дерево, два читателя, один `MatchConfig`.
+ */
+let documents: DemoDocuments;
+
+beforeAll(async () => {
+  documents = await demoDocuments();
+});
 
 /** Тиков до готовности ульты в сцене прогона — см. `sceneWithReadyUlt`. */
 const READY_TICKS = 20;
@@ -161,8 +173,8 @@ function castUlt(m: ReturnType<typeof standMatch>): boolean {
 
 describe('раскладка документа матча одна на обе сборки (NTR-14, NTR-5)', () => {
   it('конфиг вкладки совпадает с конфигом запускалок на том же документе', () => {
-    const pack = demoContentPack();
-    expect(demoMatchConfig(pack)).toEqual(matchConfigOf(DEMO_MATCH, pack));
+    const pack = demoContentPack(documents);
+    expect(demoMatchConfig(documents, pack)).toEqual(matchConfigOf(readMatchFile(MATCH_PATH), pack));
   });
 
   it('teams, inputWindow и eventRepeat доезжают до сервера и во вкладке (РЕГРЕССИЯ)', () => {
@@ -171,8 +183,8 @@ describe('раскладка документа матча одна на обе 
     // документ матча поднимал два разных матча в зависимости от режима:
     // команды и туман войны (NET-12), окно ввода (NTR-7), повтор событий
     // (NTR-15). Тот же фасад дефекта, что и потерянная секция `rewind` ниже.
-    const document = { ...DEMO_MATCH, teams: [0, 0], inputWindow: 8, eventRepeat: 1 };
-    const pack = demoContentPack();
+    const document = { ...documents.match, teams: [0, 0], inputWindow: 8, eventRepeat: 1 };
+    const pack = demoContentPack(documents);
     const config = demoMatchConfigOf(document, pack);
     expect(config.teams).toEqual([0, 0]);
     expect(config.inputWindow).toBe(8);
@@ -181,9 +193,9 @@ describe('раскладка документа матча одна на обе 
   });
 
   it('опечатанная секция роняет сборку вкладки тем же отказом, что у запускалок', () => {
-    const document = { ...DEMO_MATCH, rewnd: { interval: 30 } };
-    expect(() => demoMatchConfigOf(document, demoContentPack())).toThrow(/"rewnd"/);
-    expect(() => matchConfigOf(document, demoContentPack())).toThrow(/"rewnd"/);
+    const document = { ...documents.match, rewnd: { interval: 30 } };
+    expect(() => demoMatchConfigOf(document, demoContentPack(documents))).toThrow(/"rewnd"/);
+    expect(() => matchConfigOf(document, demoContentPack(documents))).toThrow(/"rewnd"/);
   });
 
   it('документ объявляет поиск пути, и мир матча его печёт (NTR-14, NAV-1)', () => {

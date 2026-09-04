@@ -102,37 +102,38 @@ function resolveBundle(arg) {
 const bundleDir = resolveBundle(bundleArg);
 
 /**
- * Версии дистрибутива (SRV-7). В собранном host bundle они приезжают
- * `distribution.json`, где сошлись ПО ПОСТРОЕНИЮ (решение D10); в репозитории
- * дистрибутива нет, и агент называет то, что видит сам: buildId документа матча
- * и хеш его контент-пака, посчитанный ТЕМ ЖЕ кодом, каким его считают стенд и
- * клиент (NET-16, NTR-5).
+ * Версии контента (SRV-7) — ВСЕГДА по дереву, которое агент РАЗДАЁТ, а не по
+ * записи, сделанной при сборке дистрибутива: buildId документа матча и хеш его
+ * контент-пака, посчитанный ТЕМ ЖЕ кодом, каким его считают стенд и клиент
+ * (NET-16, NET-17, NTR-5).
+ *
+ * Именно потому, что дерево в дистрибутиве одно и читают его оба — сервер матча
+ * и страница игрока (CONT-5, SRV-8): после правки дерева внутри дистрибутива они
+ * сойдутся на НОВОМ хеше, и агент, назвавший старый из `distribution.json`, дал
+ * бы менеджеру третью версию, которой нет ни у кого.
+ *
+ * Из `distribution.json` берётся только ИМЯ дистрибутива: «что собрали» — вопрос
+ * записи о сборке, «что раздаём» — вопрос дерева. Записи нет (репозиторий) —
+ * имя `repo`.
  */
 function versions() {
+  let distribution = 'repo';
   try {
-    const distribution = JSON.parse(
-      readFileOrEmpty(resolve(contentRoot, '..', 'distribution.json')) || '{}',
-    );
-    if (typeof distribution.buildId === 'string' && distribution.buildId !== '') {
-      return {
-        buildId: distribution.buildId,
-        contentPackHash: String(distribution.contentPackHash ?? ''),
-        distribution: String(distribution.name ?? 'host-bundle'),
-      };
-    }
+    const record = JSON.parse(readFileOrEmpty(resolve(contentRoot, '..', 'distribution.json')) || '{}');
+    if (typeof record.name === 'string' && record.name !== '') distribution = record.name;
   } catch {
-    // Испорченный `distribution.json` не должен мешать агенту подняться: версии
-    // назовутся ниже — по тому, что видно в дереве контента.
+    // Испорченная запись о сборке не должна мешать агенту подняться и не влияет
+    // на версии: их он считает по дереву ниже.
   }
   try {
     const match = readMatchFile(resolve(contentRoot, 'matches/duel.match.json'));
     return {
       buildId: match.buildId ?? '',
       contentPackHash: contentPack(match.scenes).hash,
-      distribution: 'repo',
+      distribution,
     };
   } catch {
-    return { buildId: '', contentPackHash: '', distribution: 'repo' };
+    return { buildId: '', contentPackHash: '', distribution };
   }
 }
 

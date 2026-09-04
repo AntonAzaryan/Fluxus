@@ -21,11 +21,11 @@ import {
   world as coreWorld,
   type EntityId,
   type GameEvent,
+  type NavigationOptions,
   type SceneDef,
   type WorldState,
 } from '@fluxus/core';
 import { ABILITY_SLOTS, ACTION_BITS, PLAYER_ID, createDemoSimulation } from '../app/sim.js';
-import { DEMO_NAVIGATION } from '../app/match.js';
 import sceneJson from '../../../content/scenes/duel.scene.json';
 import matchJson from '../../../content/matches/duel.match.json';
 import manifestJson from '../../../content/visuals/manifest.json';
@@ -56,7 +56,16 @@ const MATCH = matchJson as unknown as {
     readonly prefab: string;
     readonly overrides?: { readonly Position?: { readonly x: number; readonly y: number } };
   }[];
+  /** Числа поиска пути (NTR-14): сборка симуляции берёт их из документа матча. */
+  readonly navigation?: NavigationOptions;
 };
+
+/**
+ * Зависимости сборки из документа матча — те же, что у обеих сборок демо
+ * (`app/worker.ts`, стенд): страница читает документ из раздачи (CONT-5), тест
+ * игры — прямо из дерева (CONT-1), а числа обязаны быть одни.
+ */
+const BUILD = { navigation: MATCH.navigation } as const;
 
 /** Центр арены — те же числа, что в секции `arena` сцены. */
 const CENTER = 24;
@@ -110,7 +119,7 @@ function walkPath(
   limit: number,
   onTick?: (demo: ReturnType<typeof createDemoSimulation>) => void,
 ) {
-  const demo = createDemoSimulation(EMPTY_ARENA);
+  const demo = createDemoSimulation(EMPTY_ARENA, BUILD);
   const { sim, state, playerId } = demo;
   const TOLERANCE = 0.3;
   let leg = 0;
@@ -141,7 +150,7 @@ function walkPath(
 
 /** Уход по прямой до кромки диска: пола там нет, и герой проваливается. */
 function walkOffTheEdge(direction: -1 | 1, limit: number) {
-  const { sim, state, playerId } = createDemoSimulation(EMPTY_ARENA);
+  const { sim, state, playerId } = createDemoSimulation(EMPTY_ARENA, BUILD);
   let fellAt: number | null = null;
   let diedAt: number | null = null;
   let leftAt: number | null = null;
@@ -230,7 +239,7 @@ describe('демо-сцена: кромка диска и смерть в пус
     // (ABIL-4): тем же тиком записывается шаг прицеливания (ABIL-5) и летит
     // снаряд. Удержание не спамит снарядами, а копит заряд, и на одно нажатие
     // приходится ровно один снаряд.
-    const { sim, state, playerId } = createDemoSimulation(EMPTY_ARENA);
+    const { sim, state, playerId } = createDemoSimulation(EMPTY_ARENA, BUILD);
     const CAST = 1 << ACTION_BITS.cast;
     const fireballs = (): number => {
       let count = 0;
@@ -294,7 +303,7 @@ describe('демо-сцена: кромка диска и смерть в пус
   });
 
   it('на полу событий провала нет и герой жив', () => {
-    const { sim, state, playerId } = createDemoSimulation(EMPTY_ARENA);
+    const { sim, state, playerId } = createDemoSimulation(EMPTY_ARENA, BUILD);
     for (let tick = 1; tick <= 60; tick++) {
       const result = simTick(sim, state, [
         { tick, playerId: PLAYER_ID, seq: tick, move: { x: 0, y: 0 }, aimDir: 0, buttons: 0 },
@@ -393,8 +402,8 @@ describe('локальный режим собирает тот же соста�
     // навигация, собранная в одной и пропущенная в другой, водила бы NPC
     // разными дорогами в двух режимах одной игры (NPC-6), а в локальном
     // режиме заметить это некому — сервера у него нет.
-    expect(DEMO_NAVIGATION).toBeDefined();
-    const demo = createDemoSimulation(SCENE);
+    expect(MATCH.navigation).toBeDefined();
+    const demo = createDemoSimulation(SCENE, BUILD);
     expect(demo.sim.navigation).toBeDefined();
     const path = demo.sim.navigation!.findPath(
       { x: 557056, y: 1605632 },
@@ -406,7 +415,7 @@ describe('локальный режим собирает тот же соста�
 
 describe('демо-матч: симметричный спавн героев на полу диска', () => {
   it('обе записи расстановки стоят в центрах клеток, на земле и зеркально центру', () => {
-    const { terrain, grid } = createDemoSimulation(EMPTY_ARENA);
+    const { terrain, grid } = createDemoSimulation(EMPTY_ARENA, BUILD);
     const positions = MATCH.initial.map((entry) => entry.overrides?.Position);
     expect(positions.every((p) => p !== undefined)).toBe(true);
 
@@ -491,7 +500,7 @@ describe('каст фаербола отдаёт рендеру точку, а �
     // РЕГРЕССИЯ: событие несло только `entity`, и в сетевом матче раз за матч —
     // в момент, когда владелец переставал быть доставленным, — всполох каста
     // играть было негде.
-    const { sim, state, playerId } = createDemoSimulation(EMPTY_ARENA);
+    const { sim, state, playerId } = createDemoSimulation(EMPTY_ARENA, BUILD);
     const CAST = 1 << ACTION_BITS.cast;
     const step = (tick: number, buttons: number): GameEvent[] => [
       ...simTick(sim, state, [

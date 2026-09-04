@@ -12,7 +12,7 @@
  * тюнятся при игровой проверке (design D3, Open Questions change'а). Тест
  * обязан пережить их правку и упасть только на потерянном поведении.
  */
-import { describe, expect, it } from 'vitest';
+import { beforeAll, describe, expect, it } from 'vitest';
 import {
   MatchServer,
   type ClientMessage,
@@ -21,17 +21,31 @@ import {
   type Outgoing,
   type PauseMessage,
 } from '@fluxus/net';
-import { DEMO_MATCH, DEMO_TICK_RATE, demoMatchConfig } from '../app/match.js';
+import { demoMatchConfig, demoTickRateOf, type DemoDocuments } from '../app/match.js';
+import { demoDocuments } from './fixtures.js';
+
+/**
+ * Документы контент-пака — из ДЕРЕВА, тем же загрузчиком, что у страницы
+ * (`game-content` CONT-5): числа политики читаются оттуда же, откуда их читает
+ * матч.
+ */
+let documents: DemoDocuments;
+
+beforeAll(async () => {
+  documents = await demoDocuments();
+});
 
 /**
  * Политика паузы демо-арены — из документа матча. Её отсутствие и есть дефект:
  * без секции игроки паузы не получают вовсе (NTR-20, механизм против политики).
  */
-const POLICY = DEMO_MATCH.pause;
+function policy(): MatchConfig['pause'] {
+  return documents.match.pause;
+}
 
 /** Длительность документа → шаги расписания: живых тиков в заморозке нет (D2). */
 function steps(ms: number): number {
-  return Math.ceil((ms * DEMO_TICK_RATE) / 1000);
+  return Math.ceil((ms * demoTickRateOf(documents.match)) / 1000);
 }
 
 function hello(playerId: string, version: GameVersion): ClientMessage {
@@ -46,7 +60,7 @@ function pauseRequest(action: 'pause' | 'resume'): ClientMessage {
 function stand(): { server: MatchServer; config: MatchConfig } {
   // Порог молчания заведомо длиннее прогона: предмет здесь пауза, а слот, за
   // который никто не говорит, завершил бы матч сам (NTR-6).
-  const config: MatchConfig = { ...demoMatchConfig(), silenceTicks: 1_000_000 };
+  const config: MatchConfig = { ...demoMatchConfig(documents), silenceTicks: 1_000_000 };
   const server = new MatchServer(config);
   server.connect(1);
   server.receive(1, hello(config.players[0]!, config.version));
@@ -70,16 +84,16 @@ function pausesTo(outgoing: readonly Outgoing[], to: number): PauseMessage[] {
 /** Снятие своей паузы инициатором и доведение объявленного отсчёта до конца. */
 function unpause(server: MatchServer, connection: number): void {
   server.receive(connection, pauseRequest('resume'));
-  advance(server, steps(POLICY?.resumeCountdownMs ?? 0) + 1);
+  advance(server, steps(policy()?.resumeCountdownMs ?? 0) + 1);
 }
 
 describe('два игрока на стенде ставят и снимают паузу (NTR-20)', () => {
   it('документ демо-арены объявляет политику паузы: без неё паузы нет вовсе', () => {
     // Сама секция и есть предмет: сервер балансных констант паузы не содержит,
     // и «поле потерялось в раскладке» снаружи выглядит как «кнопка не работает».
-    expect(POLICY).toBeDefined();
-    expect(POLICY!.budgetPerPlayer).toBeGreaterThan(0);
-    expect(POLICY!.resumeCountdownMs).toBeGreaterThan(0);
+    expect(policy()).toBeDefined();
+    expect(policy()!.budgetPerPlayer).toBeGreaterThan(0);
+    expect(policy()!.resumeCountdownMs).toBeGreaterThan(0);
   });
 
   it('первый игрок замораживает матч, и объявление уезжает обоим', () => {
@@ -110,7 +124,7 @@ describe('два игрока на стенде ставят и снимают �
     s.server.receive(1, pauseRequest('pause'));
     s.server.drain();
 
-    const opponentWait = POLICY?.opponentUnpauseAfterMs ?? 0;
+    const opponentWait = policy()?.opponentUnpauseAfterMs ?? 0;
     if (opponentWait > 0) {
       s.server.receive(2, pauseRequest('resume'));
       // Отказ АДРЕСНЫЙ и с названной причиной: соединение живо, матч не тронут.
@@ -126,11 +140,11 @@ describe('два игрока на стенде ставят и снимают �
     expect(s.server.pauseState).toBe('resuming');
     expect(pausesTo(s.server.drain(), 2)[0]).toMatchObject({
       state: 'resuming',
-      countdownMs: POLICY!.resumeCountdownMs,
+      countdownMs: policy()!.resumeCountdownMs,
     });
 
     // По истечении объявленного отсчёта матч продолжается С ТОГО ЖЕ тика.
-    advance(s.server, steps(POLICY!.resumeCountdownMs!));
+    advance(s.server, steps(policy()!.resumeCountdownMs!));
     expect(s.server.mode).toBe('Running');
     expect(s.server.tick).toBe(frozenTick);
     advance(s.server, 5);
@@ -140,7 +154,7 @@ describe('два игрока на стенде ставят и снимают �
   it('бюджет документа конечен: сверх него — именованный отказ, а не разрыв', () => {
     const s = stand();
     advance(s.server, 5);
-    const budget = POLICY!.budgetPerPlayer!;
+    const budget = policy()!.budgetPerPlayer!;
     for (let i = 0; i < budget; i++) {
       s.server.receive(1, pauseRequest('pause'));
       expect(s.server.pauseState).toBe('frozen');

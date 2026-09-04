@@ -2,6 +2,16 @@
  * Матч демо-арены как данные: тот же `content/matches/duel.match.json` и та же
  * сцена, которыми играет выделенный стенд (`bin/demo-serve.mjs`).
  *
+ * Документы ЧИТАЮТСЯ ИЗ РАЗДАЧИ, а не запекаются в сборку (`game-content`
+ * CONT-5): их байты приезжают тем же адресным пространством и тем же источником,
+ * что ассеты (`assets` ASSET-2), — константой сборки остаётся только АДРЕС
+ * документа матча (`DEMO_MATCH_ID`). Версию игры (NET-16) страница выводит из
+ * прочитанного тем же вычислением, что и сервер (NET-17), поэтому правка дерева,
+ * которое раздаёт оболочка, доезжает до страницы сама, а рукопожатие (NTR-5)
+ * сходится по построению, а не по совпадению сборок. Запечённый `import`ом
+ * документ был бы второй копией документа дерева (CONT-3), и расхождение с ним
+ * наблюдалось бы отказом входа по хешу контент-пака, а не сообщением о причине.
+ *
  * Общий модуль на обе половины сборки — сервер во вкладке и клиента, — потому
  * что расхождение здесь не отлаживается: разошёлся конфиг сборки мира (NTR-14),
  * и клиента не пускают в матч по несовпавшему хешу `worldInit` (NTR-5). Один
@@ -11,6 +21,7 @@
  * `content/`, здесь только его чтение и раскладка в `MatchConfig`.
  */
 import type { NavigationOptions, SceneDef } from '@fluxus/core';
+import type { AssetSource } from '@fluxus/assets';
 import {
   contentPack,
   type LoadedContentPack,
@@ -27,8 +38,15 @@ import type {
   MATCH_DOCUMENT_FIELDS,
   MatchDocumentField,
 } from '@fluxus/net/bin/matchFile.mjs';
-import sceneJson from '../../../content/scenes/duel.scene.json';
-import matchJson from '../../../content/matches/duel.match.json';
+
+/**
+ * Адрес документа матча демо в дереве контента — ID-путь от корня (ASSET-2).
+ *
+ * Константа СБОРКИ, как прежде им был путь импорта: выбор матча страницей —
+ * отдельный вопрос (Non-Goals дизайна). Константа именно адреса, а не байтов:
+ * байты приезжают из раздачи оболочки (CONT-5).
+ */
+export const DEMO_MATCH_ID = 'matches/duel.match.json';
 
 /**
  * Поля `MatchConfig`, которые документ матча везёт КАК ЕСТЬ, — копия
@@ -64,8 +82,8 @@ export const DEMO_DOCUMENT_FIELDS: typeof MATCH_DOCUMENT_FIELDS = [
 /**
  * Поля документа, которые сборка потребляет САМА и в конфиг не передаёт
  * (`CONSUMED_BY_LAUNCHER` запускалок): `buildId` уезжает половиной версии
- * (NTR-5), контент-пак вкладка резолвит статическим импортом сцены, а порог
- * молчания документ считает в секундах, тогда как конфиг — в тиках.
+ * (NTR-5), контент-пак разворачивается чтением сцен из раздачи (CONT-5), а
+ * порог молчания документ считает в секундах, тогда как конфиг — в тиках.
  */
 const DEMO_CONSUMED_FIELDS = ['buildId', 'contentPack', 'scenes', 'silenceSeconds'] as const;
 
@@ -75,42 +93,105 @@ const DEMO_CONSUMED_FIELDS = ['buildId', 'contentPack', 'scenes', 'silenceSecond
  * рядом (вторая запись тех же имён и есть способ им разойтись), плюс поля,
  * которые сборка потребляет сама.
  */
-interface DemoMatchDoc extends Partial<Pick<MatchConfig, MatchDocumentField>> {
+export interface DemoMatchDoc extends Partial<Pick<MatchConfig, MatchDocumentField>> {
   readonly name: string;
   readonly buildId: string;
   readonly seed: number;
   readonly players: readonly string[];
   readonly sceneRef: string;
-  /** Ссылка сцены → путь к её файлу; вкладке не нужен — сцена импортирована статически. */
+  /** Ссылка сцены → путь к её файлу ОТНОСИТЕЛЬНО документа матча (CONT-5). */
   readonly contentPack?: Readonly<Record<string, string>>;
   /** Порог молчания слота в секундах; конфиг матча считает его в тиках. */
   readonly silenceSeconds?: number;
 }
 
-const doc = matchJson as unknown as DemoMatchDoc;
+/**
+ * Прочитанные документы контент-пака: документ матча и сцены, которые он
+ * называет. То самое значение, которое раньше было содержимым модуля, — и
+ * потому его теперь можно передать (конвертом сборки воркеру, D4) и прочитать
+ * заново, а не «иметь».
+ */
+export interface DemoDocuments {
+  readonly match: DemoMatchDoc;
+  /** Сцены контент-пака ПО ССЫЛКЕ документа (`sceneRef`), как их адресует матч. */
+  readonly scenes: Readonly<Record<string, SceneDef>>;
+  /** ID-путь каждой сцены в дереве контента (ASSET-2): им адресуются парные документы. */
+  readonly sceneIds: Readonly<Record<string, string>>;
+}
 
-export const DEMO_MATCH: DemoMatchDoc = doc;
-export const DEMO_PLAYERS: readonly string[] = doc.players;
-export const DEMO_SCENE_REF = doc.sceneRef;
-export const DEMO_TICK_RATE = doc.tickRate ?? 60;
-export const DEMO_SNAPSHOT_RATE = doc.snapshotRate ?? 30;
 /**
- * Настройки перемотки матча (NET-11): глубина буфера, cooldown вне отката и
- * орган ведения скраба. Читаются из документа матча обеими сборками демо —
- * сетевой и локальной (`worker.ts`): профиль истории и номер бита обязаны
- * совпасть, иначе ульта в одной сборке отматывает не туда, а в другой не
- * отматывает вовсе.
+ * Ссылка внутри документа → ID-путь от корня дерева (CONT-5): ссылки в
+ * документах относительные, потому что перемещение корня MUST NOT требовать
+ * правки ни одного документа внутри него.
+ *
+ * Чистая функция над ID-путями — зеркало `resolve(dirname(file), scenePath)` из
+ * `readMatchFile` запускалок: правило одно, предложение спеки одно, а совпадение
+ * результата пинает тест (`test/demoDocuments.test.ts`). Выход за корень дерева
+ * — НАЗВАННЫЙ отказ: у ID-пути корня нет родителя, и молча превратить такую
+ * ссылку в путь значило бы выдумать адрес, которого раздача не отдаёт.
  */
-export const DEMO_REWIND: MatchRewindOptions | undefined = doc.rewind;
+export function demoContentId(baseId: string, reference: string): string {
+  if (reference.startsWith('/')) {
+    throw new Error(
+      `демо: ссылка "${reference}" документа "${baseId}" не относительная; ` +
+        'ссылки внутри документов задаются относительно самого документа (CONT-5)',
+    );
+  }
+  const segments = baseId.split('/').slice(0, -1);
+  for (const part of reference.split('/')) {
+    if (part === '' || part === '.') continue;
+    if (part !== '..') {
+      segments.push(part);
+      continue;
+    }
+    if (segments.length === 0) {
+      throw new Error(
+        `демо: ссылка "${reference}" документа "${baseId}" ведёт за корень дерева контента (CONT-5)`,
+      );
+    }
+    segments.pop();
+  }
+  return segments.join('/');
+}
+
+/** Байты документа из раздачи → JSON. Отказ называет ID документа и причину. */
+async function readDocument<T>(source: AssetSource, id: string): Promise<T> {
+  let bytes: ArrayBuffer;
+  try {
+    bytes = await source.read(id);
+  } catch (error) {
+    throw new Error(`демо: документ "${id}" не прочитан: ${String(error)}`);
+  }
+  try {
+    return JSON.parse(new TextDecoder().decode(bytes)) as T;
+  } catch (error) {
+    throw new Error(`демо: документ "${id}" не разобран как JSON: ${String(error)}`);
+  }
+}
+
 /**
- * Поиск пути матча (NTR-14, `pathfinding` NAV-1): бюджет раскрытий и предел
- * радиуса агента. Читаются из документа обеими сборками демо — сетевой и
- * локальной (`sim.ts`), по той же причине, что настройки перемотки: собери одна
- * сборка навигацию, а другая нет — и NPC в них ходят разными дорогами при одной
- * сцене (NPC-6), причём в локальной сборке это некому заметить, сервера у неё
- * нет вовсе.
+ * Документы контент-пака из раздачи оболочки (CONT-5): документ матча по своему
+ * ID-пути и каждая сцена, которую называет его `contentPack`.
+ *
+ * Источник байтов — тот же `AssetSource`, которым страница читает манифест и
+ * парный presentation-документ (ASSET-2): второго способа добраться до дерева у
+ * приложения нет, и заводить его незачем — «путь до корня дерева контента есть
+ * свойство оболочки» сказано про один путь, а не про два.
  */
-export const DEMO_NAVIGATION: NavigationOptions | undefined = doc.navigation;
+export async function loadDemoDocuments(
+  source: AssetSource,
+  matchId: string = DEMO_MATCH_ID,
+): Promise<DemoDocuments> {
+  const match = await readDocument<DemoMatchDoc>(source, matchId);
+  const scenes: Record<string, SceneDef> = {};
+  const sceneIds: Record<string, string> = {};
+  for (const [ref, reference] of Object.entries(match.contentPack ?? {})) {
+    const id = demoContentId(matchId, reference);
+    sceneIds[ref] = id;
+    scenes[ref] = await readDocument<SceneDef>(source, id);
+  }
+  return { match, scenes, sceneIds };
+}
 
 /**
  * Зависимости сборки мира, которые сборка отдаёт КЛИЕНТУ (NTR-14) — копия
@@ -144,6 +225,43 @@ export function demoClientBuildOptions(
   };
 }
 
+/** Каденс тика матча из документа; умолчание — то же, что у раскладки конфига. */
+export function demoTickRateOf(document: DemoMatchDoc): number {
+  return document.tickRate ?? 60;
+}
+
+/**
+ * Каденс рассылки снапшотов из документа (NTR-11). Им же тонкий клиент задаёт
+ * знаменатель альфы главного потока: доставки идут в темпе рассылки (SHELL-3,
+ * REND-2), и умолчание здесь обязано быть тем же, что у раскладки конфига.
+ */
+export function demoSnapshotRateOf(document: DemoMatchDoc): number {
+  return document.snapshotRate ?? 30;
+}
+
+/**
+ * Настройки перемотки матча (NET-11): глубина буфера, cooldown вне отката и
+ * орган ведения скраба. Читаются из документа матча обеими сборками демо —
+ * сетевой и локальной (`worker.ts`): профиль истории и номер бита обязаны
+ * совпасть, иначе ульта в одной сборке отматывает не туда, а в другой не
+ * отматывает вовсе.
+ */
+export function demoRewindOf(document: DemoMatchDoc): MatchRewindOptions | undefined {
+  return document.rewind;
+}
+
+/**
+ * Поиск пути матча (NTR-14, `pathfinding` NAV-1): бюджет раскрытий и предел
+ * радиуса агента. Читаются из документа обеими сборками демо — сетевой и
+ * локальной (`sim.ts`), по той же причине, что настройки перемотки: собери одна
+ * сборка навигацию, а другая нет — и NPC в них ходят разными дорогами при одной
+ * сцене (NPC-6), причём в локальной сборке это некому заметить, сервера у неё
+ * нет вовсе.
+ */
+export function demoNavigationOf(document: DemoMatchDoc): NavigationOptions | undefined {
+  return document.navigation;
+}
+
 /**
  * Тиков между шагами ведения точки перемотки (REW-13). Сервер делает шаг раз в
  * ЦИКЛ РАССЫЛКИ, то есть каждые `tickRate / snapshotRate` тиков; локальная
@@ -153,18 +271,13 @@ export function demoClientBuildOptions(
  * не правило, и разойдись они, ульта отматывала бы на разную глубину за одно и
  * то же удержание в зависимости от того, кто произвёл тик (SHELL-8).
  */
-export const DEMO_SCRUB_EVERY: number = Math.max(
-  1,
-  Math.round(DEMO_TICK_RATE / DEMO_SNAPSHOT_RATE),
-);
-
-export function demoScene(): SceneDef {
-  return sceneJson as unknown as SceneDef;
+export function demoScrubEveryOf(document: DemoMatchDoc): number {
+  return Math.max(1, Math.round(demoTickRateOf(document) / demoSnapshotRateOf(document)));
 }
 
 /** Контент-пак клиента: сцену он резолвит локально, сервер её не раздаёт (NET-16). */
-export function demoContentPack(): LoadedContentPack {
-  return contentPack({ [DEMO_SCENE_REF]: demoScene() });
+export function demoContentPack(documents: DemoDocuments): LoadedContentPack {
+  return contentPack(documents.scenes);
 }
 
 /**
@@ -194,15 +307,16 @@ export function demoMatchConfigOf(document: DemoMatchDoc, pack: LoadedContentPac
   if (scene === undefined) {
     throw new Error(`документ матча: сцена "${document.sceneRef}" не входит в контент-пак`);
   }
-  const tickRate = document.tickRate ?? 60;
+  const tickRate = demoTickRateOf(document);
   return {
     ...(carried as Pick<MatchConfig, MatchDocumentField>),
-    // Версия матча (NET-16): сборка плюс хеш контент-пака, считаемый из своей сцены.
+    // Версия матча (NET-16): сборка плюс хеш контент-пака, посчитанный из
+    // ПРОЧИТАННОЙ сцены — тем же кодом, каким его считает сервер (NET-17).
     version: { buildId: document.buildId, contentPackHash: pack.hash },
     scene,
     initial: document.initial ?? [],
     tickRate,
-    snapshotRate: document.snapshotRate ?? 30,
+    snapshotRate: demoSnapshotRateOf(document),
     inputDelay: document.inputDelay ?? 2,
     silenceTicks: (document.silenceSeconds ?? 10) * tickRate,
   };
@@ -213,6 +327,9 @@ export function demoMatchConfigOf(document: DemoMatchDoc, pack: LoadedContentPac
  * матча, а не из умолчаний кода: сцена, рассчитанная на интегрирующую физику,
  * без них молча стояла бы на месте.
  */
-export function demoMatchConfig(pack: LoadedContentPack = demoContentPack()): MatchConfig {
-  return demoMatchConfigOf(doc, pack);
+export function demoMatchConfig(
+  documents: DemoDocuments,
+  pack: LoadedContentPack = demoContentPack(documents),
+): MatchConfig {
+  return demoMatchConfigOf(documents.match, pack);
 }

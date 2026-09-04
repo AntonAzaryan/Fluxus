@@ -9,7 +9,7 @@
  * матч двигает тест, а не таймеры.
  */
 import { MessageChannel } from 'node:worker_threads';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeAll, describe, expect, it } from 'vitest';
 import {
   isBotWorkerInit,
   startBotWorker,
@@ -18,18 +18,28 @@ import {
 } from '@fluxus/bot';
 import type { RenderSubsystem, TickView } from '@fluxus/render';
 import { RemoteHost, portTransport, shellPort, type ShellPort } from '@fluxus/client';
-import { DEMO_PLAYERS, demoMatchConfig } from '../app/match.js';
+import { demoMatchConfig, type DemoDocuments } from '../app/match.js';
 import { demoBotBehavior, demoBotProfile } from '../app/bots.js';
 import { openLocalSession, type DemoLocalSession } from '../app/localSession.js';
 import { demoHudComposition } from '../app/hud.js';
 import { observeDemoMatch, observerHudComposition } from '../app/observerClient.js';
 import { demoMode, slotCandidates } from '../app/mode.js';
 import { standArgs } from '../app/demoStand.js';
-import { dummyContext, syncPortPair } from './fixtures.js';
+import { demoDocuments, dummyContext, syncPortPair } from './fixtures.js';
 
 const channels: MessageChannel[] = [];
 const sessions: DemoLocalSession[] = [];
 let bots: BotHost | null = null;
+
+/** Документы контент-пака из дерева — тем же загрузчиком, что у страницы (CONT-5). */
+let documents: DemoDocuments;
+/** Ростер матча из прочитанного документа: имена слотов — данные матча (TICK-5). */
+let players: readonly string[];
+
+beforeAll(async () => {
+  documents = await demoDocuments();
+  players = documents.match.players;
+});
 
 afterEach(async () => {
   bots?.dispose();
@@ -69,7 +79,7 @@ function botThread(): WorkerLike {
 function watchedSession(): DemoLocalSession {
   const profile = demoBotProfile('профиль бота теста');
   const opened = openLocalSession({
-    config: { ...demoMatchConfig(), allowObserver: true },
+    config: { ...demoMatchConfig(documents), allowObserver: true },
     reserved: [],
     bots: {
       worker: botThread(),
@@ -121,6 +131,7 @@ async function watch(opened: DemoLocalSession, clock: { ms: number }) {
   }).connect(mainPort);
   const observing = await observeDemoMatch({
     port: workerPort,
+    documents,
     connect: () => Promise.resolve(portTransport(shellPort(opened.connect(makeChannel())))),
     clock: () => clock.ms,
     settle: () => flush(1),
@@ -157,9 +168,9 @@ describe('режим страницы: наблюдатель (SHELL-8, NTR-21)'
   });
 
   it('у наблюдателя нет кандидатов на слот: слота он не просит (NTR-9)', () => {
-    expect(slotCandidates({ kind: 'observer', url: 'ws://x' }, DEMO_PLAYERS)).toEqual([]);
+    expect(slotCandidates({ kind: 'observer', url: 'ws://x' }, players)).toEqual([]);
     // У прочих режимов перебор прежний.
-    expect(slotCandidates({ kind: 'server', url: 'ws://x' }, DEMO_PLAYERS)).toEqual([...DEMO_PLAYERS]);
+    expect(slotCandidates({ kind: 'server', url: 'ws://x' }, players)).toEqual([...players]);
   });
 
   it('стенд пускает наблюдателя только по флагу запуска (NTR-9)', () => {
@@ -221,7 +232,7 @@ describe('наблюдатель смотрит матч стенда наскв
     // именно по нему страница собирает HUD без виджетов героя (SHELL-8).
     expect(rig.remote.mode).toBe('network');
     expect(hellos(rig.posted)).toHaveLength(1);
-    expect(hellos(rig.posted)[0]!.extra).toEqual({ observer: true, players: [...DEMO_PLAYERS] });
+    expect(hellos(rig.posted)[0]!.extra).toEqual({ observer: true, players: [...players] });
 
     for (let i = 0; i < 20; i++) {
       clock.ms += 1000 / 60;
@@ -241,7 +252,7 @@ describe('наблюдатель смотрит матч стенда наскв
     // пределами обзора (FOW-7), и сервер вырезает его до провода (NET-12).
     const view = rig.probe.views.at(-1)!;
     const heroes = [...view.entities.values()].filter((entity) => entity.kind === 'Hero');
-    expect(heroes).toHaveLength(DEMO_PLAYERS.length);
+    expect(heroes).toHaveLength(players.length);
     // Вверх не уехало ничего: ни одного кадра ввода (NTR-21).
     expect(rig.observing.client.metrics.inputsSent).toBe(0);
     expect(opened.server.canonicalInputs.every((frame) => frame.playerId !== 'observer')).toBe(true);
@@ -254,7 +265,7 @@ describe('наблюдатель смотрит матч стенда наскв
     const profile = demoBotProfile('профиль бота теста');
     const opened = openLocalSession({
       // Разрешения нет — ровно то, чем стенд поднят без `--observer`.
-      config: demoMatchConfig(),
+      config: demoMatchConfig(documents),
       reserved: [],
       bots: {
         worker: botThread(),

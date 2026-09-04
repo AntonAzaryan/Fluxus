@@ -7,7 +7,7 @@
  * рисует их клиент, как и в матче на выделенном стенде (SES-2).
  */
 import { isBotWorkerInit, startBotWorker, type WorkerLike } from '@fluxus/bot';
-import { DEMO_PLAYERS, demoMatchConfig } from './match.js';
+import { demoMatchConfig } from './match.js';
 import { demoBotBehavior, demoBotProfile } from './bots.js';
 import { openLocalSession } from './localSession.js';
 import { isDemoServerInit, type DemoServerReady } from './wiring.js';
@@ -50,14 +50,18 @@ function botThread(): WorkerLike {
 scope.addEventListener('message', (event) => {
   if (!isDemoServerInit(event.data)) return;
 
+  // Документы контент-пака приезжают конвертом сборки (CONT-5, design D4):
+  // читает их главный поток из раздачи оболочки, и матч вкладки поднимается по
+  // тому же экземпляру, по которому клиент считает свою версию (NTR-5).
+  const { documents } = event.data;
   // Профиль — человечность (BOT-6), документ поведения — политика выбора
   // (BOT-8); связку называет профиль, а читает дерево контента игра (CONT-4).
   const profile = demoBotProfile();
   const session = openLocalSession({
-    config: demoMatchConfig(),
+    config: demoMatchConfig(documents),
     // Первый слот держит оболочка этой же вкладки: предлагать его боту незачем,
     // сервер всё равно отказал бы (BOT-7).
-    reserved: DEMO_PLAYERS.slice(0, 1),
+    reserved: documents.match.players.slice(0, 1),
     // Дедлайн нулевой: второго ЧЕЛОВЕКА эта сборка не ждёт (design D2).
     botFillMs: 0,
     bots: {
