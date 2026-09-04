@@ -1,0 +1,302 @@
+{
+  "metadata": {
+    "version": 4.7,
+    "type": "Object",
+    "generator": "Object3D.toJSON"
+  },
+  "geometries": [
+    {
+      "uuid": "0f2c7a11-4b3d-4a90-9c11-6d0e5a72b301",
+      "type": "PlaneGeometry",
+      "width": 1,
+      "height": 1,
+      "widthSegments": 1,
+      "heightSegments": 1
+    }
+  ],
+  "images": [
+    {
+      "uuid": "b7c1e3d4-2a55-4f68-9d02-3e41c8a7b6f0",
+      "url": "/visuals/textures/ember-flipbook.png"
+    }
+  ],
+  "textures": [
+    {
+      "uuid": "5a9d2c60-11e7-4b3a-8f45-7c2b0d9e4a18",
+      "name": "ember-flipbook",
+      "image": "b7c1e3d4-2a55-4f68-9d02-3e41c8a7b6f0",
+      "mapping": 300,
+      "channel": 0,
+      "repeat": [
+        1,
+        1
+      ],
+      "offset": [
+        0,
+        0
+      ],
+      "center": [
+        0,
+        0
+      ],
+      "rotation": 0,
+      "wrap": [
+        1001,
+        1001
+      ],
+      "format": 1023,
+      "type": 1009,
+      "colorSpace": "srgb",
+      "minFilter": 1006,
+      "magFilter": 1006,
+      "anisotropy": 1,
+      "flipY": true,
+      "generateMipmaps": false,
+      "premultiplyAlpha": false,
+      "unpackAlignment": 4
+    }
+  ],
+  "materials": [
+    {
+      "uuid": "8e40b5a2-6c19-4d77-b0aa-91f3d5e2c704",
+      "type": "MeshBasicMaterial",
+      "color": 16777215,
+      "map": "5a9d2c60-11e7-4b3a-8f45-7c2b0d9e4a18",
+      "envMapRotation": [
+        0,
+        0,
+        0,
+        "XYZ"
+      ],
+      "reflectivity": 1,
+      "refractionRatio": 0.98,
+      "blending": 2,
+      "transparent": true,
+      "blendColor": 0,
+      "depthWrite": false
+    }
+  ],
+  "object": {
+    "uuid": "3d1f9b76-58c4-4e2b-a913-0c6e2f8d45b9",
+    "type": "Group",
+    "name": "tether-embers",
+    "layers": 1,
+    "matrix": [
+      1,
+      0,
+      0,
+      0,
+      0,
+      1,
+      0,
+      0,
+      0,
+      0,
+      1,
+      0,
+      0,
+      0,
+      0,
+      1
+    ],
+    "up": [
+      0,
+      1,
+      0
+    ],
+    "children": [
+      {
+        "uuid": "c60a4e13-9f27-4b85-8d3c-52b1e07a6f4d",
+        "type": "ParticleEmitter",
+        "name": "tether-embers",
+        "layers": 1,
+        "matrix": [
+          1,
+          0,
+          0,
+          0,
+          0,
+          1,
+          0,
+          0,
+          0,
+          0,
+          1,
+          0,
+          0,
+          0,
+          0,
+          1
+        ],
+        "up": [
+          0,
+          1,
+          0
+        ],
+        "ps": {
+          "version": "3.0",
+          "autoDestroy": false,
+          "looping": false,
+          "prewarm": false,
+          "duration": 0.4,
+          "shape": {
+            "type": "sphere",
+            "radius": 0.45,
+            "arc": 6.283185307179586,
+            "thickness": 1,
+            "mode": 0,
+            "spread": 0,
+            "speed": {
+              "type": "ConstantValue",
+              "value": 1
+            }
+          },
+          "startLife": {
+            "type": "IntervalValue",
+            "a": 0.55,
+            "b": 0.95
+          },
+          "startSpeed": {
+            "type": "IntervalValue",
+            "a": 0.2,
+            "b": 0.7
+          },
+          "startRotation": {
+            "type": "ConstantValue",
+            "value": 0
+          },
+          "startSize": {
+            "type": "IntervalValue",
+            "a": 0.16,
+            "b": 0.3
+          },
+          "startColor": {
+            "type": "Gradient",
+            "color": {
+              "type": "CLinearFunction",
+              "subType": "Color",
+              "keys": [
+                {
+                  "value": {
+                    "r": 1,
+                    "g": 1,
+                    "b": 1
+                  },
+                  "pos": 0
+                },
+                {
+                  "value": {
+                    "r": 1,
+                    "g": 1,
+                    "b": 1
+                  },
+                  "pos": 1
+                }
+              ]
+            },
+            "alpha": {
+              "type": "CLinearFunction",
+              "subType": "Number",
+              "keys": [
+                {
+                  "value": 1,
+                  "pos": 0
+                },
+                {
+                  "value": 1,
+                  "pos": 1
+                }
+              ]
+            }
+          },
+          "emissionOverTime": {
+            "type": "ConstantValue",
+            "value": 0
+          },
+          "emissionOverDistance": {
+            "type": "ConstantValue",
+            "value": 0
+          },
+          "emissionBursts": [
+            {
+              "time": 0,
+              "count": {
+                "type": "ConstantValue",
+                "value": 14
+              },
+              "probability": 1,
+              "interval": 0.01,
+              "cycle": 1
+            }
+          ],
+          "onlyUsedByOther": false,
+          "instancingGeometry": "0f2c7a11-4b3d-4a90-9c11-6d0e5a72b301",
+          "renderOrder": 0,
+          "renderMode": 0,
+          "rendererEmitterSettings": {},
+          "material": "8e40b5a2-6c19-4d77-b0aa-91f3d5e2c704",
+          "layers": 1,
+          "startTileIndex": {
+            "type": "ConstantValue",
+            "value": 0
+          },
+          "uTileCount": 4,
+          "vTileCount": 4,
+          "blendTiles": true,
+          "softParticles": false,
+          "softFarFade": 0,
+          "softNearFade": 0,
+          "behaviors": [
+            {
+              "type": "FrameOverLife",
+              "frame": {
+                "type": "PiecewiseBezier",
+                "functions": [
+                  {
+                    "function": {
+                      "p0": 0,
+                      "p1": 5,
+                      "p2": 10,
+                      "p3": 15
+                    },
+                    "start": 0
+                  }
+                ]
+              }
+            },
+            {
+              "type": "SizeOverLife",
+              "size": {
+                "type": "PiecewiseBezier",
+                "functions": [
+                  {
+                    "function": {
+                      "p0": 0.6,
+                      "p1": 1,
+                      "p2": 0.9,
+                      "p3": 0.35
+                    },
+                    "start": 0
+                  }
+                ]
+              }
+            },
+            {
+              "type": "ApplyForce",
+              "direction": [
+                0,
+                0,
+                1
+              ],
+              "magnitude": {
+                "type": "ConstantValue",
+                "value": 0.8
+              }
+            }
+          ],
+          "worldSpace": true
+        }
+      }
+    ]
+  }
+}

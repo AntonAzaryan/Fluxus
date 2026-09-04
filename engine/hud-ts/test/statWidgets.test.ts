@@ -542,6 +542,61 @@ describe('счётчики смертей по слотам (HUD-8)', () => {
     deliver([entityWith(1, { slot: 0, deaths: 2 })], 2);
     expect(findByClass(host.zone('top'), 'hud-deaths__row').textContent).toBe('2');
   });
+
+  it('слот с несколькими носителями даёт ОДНУ строку (HUD-4)', () => {
+    // РЕГРЕССИЯ: строка шла на каждую доставленную сущность со статом слота, и
+    // на арене демо «слот 2» повторялся столько раз, сколько живых юнитов нёс
+    // слот босса (`Player.slot` там ещё и поле команды платформы способностей).
+    const rows = deathsRows(
+      new Map([
+        [2, entityWith(2, { slot: 2, deaths: 1 })],
+        [9, entityWith(9, { slot: 2 })],
+        [10, entityWith(10, { slot: 2 })],
+        [3, entityWith(3, { slot: 0, deaths: 4 })],
+      ]),
+      'slot',
+      'deaths',
+    );
+    expect(rows).toEqual([
+      { slot: 0, deaths: 4 },
+      { slot: 2, deaths: 1 },
+    ]);
+  });
+
+  it('число слота — максимум доставленных: порядок обхода его не меняет', () => {
+    const entities: [number, HudEntityView][] = [
+      [2, entityWith(2, { slot: 2, deaths: 1 })],
+      [9, entityWith(9, { slot: 2, deaths: 5 })],
+      [10, entityWith(10, { slot: 2 })],
+    ];
+    const forward = deathsRows(new Map(entities), 'slot', 'deaths');
+    const backward = deathsRows(new Map([...entities].reverse()), 'slot', 'deaths');
+    expect(forward).toEqual([{ slot: 2, deaths: 5 }]);
+    expect(backward).toEqual(forward);
+  });
+
+  it('носитель без стата смертей не гасит число слота, а один такой даёт прочерк', () => {
+    expect(
+      deathsRows(
+        new Map([
+          [9, entityWith(9, { slot: 1 })],
+          [4, entityWith(4, { slot: 1, deaths: 2 })],
+        ]),
+        'slot',
+        'deaths',
+      ),
+    ).toEqual([{ slot: 1, deaths: 2 }]);
+    expect(
+      deathsRows(
+        new Map([
+          [9, entityWith(9, { slot: 1 })],
+          [4, entityWith(4, { slot: 1 })],
+        ]),
+        'slot',
+        'deaths',
+      ),
+    ).toEqual([{ slot: 1, deaths: null }]);
+  });
 });
 
 // ------------------------------------------------------------ рантайм-панель

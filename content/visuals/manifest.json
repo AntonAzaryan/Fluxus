@@ -274,6 +274,19 @@
         "alpha": 0.45,
         "edgeSoftness": 0.35,
         "height": 0
+      },
+      "Boss": {
+        "primitive": "beam",
+        "color": "#b45cff",
+        "width": 0.16,
+        "alpha": 0.7,
+        "height": 1.05,
+        "edgeSoftness": 0.5,
+        "targetFromStat": "tether",
+        "blink": {
+          "periodMs": 260,
+          "alpha": 0.35
+        }
       }
     },
     "byState": {
@@ -433,6 +446,9 @@
       },
       "BossMinionBurst": {
         "effect": "visuals/effects/blood-burst.effect.json"
+      },
+      "BossTetherPulse": {
+        "effect": "visuals/effects/tether-embers.effect.json"
       }
     }
   },

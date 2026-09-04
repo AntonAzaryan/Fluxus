@@ -68,6 +68,11 @@ export const DEMO_STATS: readonly StatSource[] = Object.freeze([
   // них записи молча нет — ровно сценарий HUD-8.
   { name: STATS.stealthMask, component: 'StealthState', field: 'mask' },
   { name: STATS.detectionMask, component: 'DetectionState', field: 'mask' },
+  // Жертва жгута вытягивания — второй конец луча (REND-23): запись
+  // `effects.byKind.Boss` манифеста называет этот стат полем `targetFromStat`.
+  // Компонент есть только у кастующего босса, у остальных записи молча нет —
+  // ровно сценарий HUD-8.
+  { name: STATS.tetherTarget, component: 'Tether', field: 'target' },
   // Кулдаун лежит на сущности-слоте владельца (ABIL-1, ABIL-7), а едет на нём
   // самом: слот `Position` не несёт и в поток тиков не попадает (NET-12).
   // Слотовая форма источника — `slotIndex` записи (`statSources.ts`).

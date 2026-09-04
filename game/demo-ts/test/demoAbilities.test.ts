@@ -29,6 +29,8 @@ import {
   world as coreWorld,
   type EntityId,
   type InputFrame,
+  type DiagnosticRecord,
+  type DiagnosticsSink,
   type SceneDef,
   type SimulationState,
   type Simulation,
@@ -143,6 +145,12 @@ const AIM_WEST = 0x8000;
  */
 const SLOW = 13107;
 const DOME_TICKS = 180;
+/**
+ * Укороченная жизнь купола для стенда «истёк под живым замедлением»: снаряд
+ * живёт пятьдесят тиков (`FIREBALL_LIFETIME_TICKS`), и купол обязан истечь
+ * раньше него — иначе применять инстанс баффа уже некому.
+ */
+const SHORT_DOME = 6;
 const DOME_COOLDOWN = 300;
 const CAPTURE_COOLDOWN = 120;
 /**
@@ -341,14 +349,20 @@ interface Ffa {
  */
 function ffa(
   cells: readonly (number | readonly [number, number])[],
-  options: { readonly extract?: boolean } = {},
+  options: {
+    readonly extract?: boolean;
+    /** Сцена стенда; по умолчанию — дуэльная без своей расстановки. */
+    readonly scene?: SceneDef;
+    /** Сток диагностики ядра (DIAG-1): им читаются записи о нарушенных инвариантах (FP-4). */
+    readonly diagnostics?: DiagnosticsSink;
+  } = {},
 ): Ffa {
   const points: readonly (readonly [number, number])[] = cells.map((cell) =>
     typeof cell === 'number' ? ([cell, 24.5] as const) : cell,
   );
   const players = points.map((_, index) => `p${index + 1}`);
   const built = buildMatchWorld({
-    scene: DUEL,
+    scene: options.scene ?? DUEL,
     seed: MATCH.seed,
     players,
     initial: points.map(([cx, cy], index) => ({
@@ -362,6 +376,7 @@ function ffa(
     locomotion: MATCH.locomotion,
     // То же основание, что у `arena`: сцена с fog требует пересчёта видимости.
     ...(MATCH.visibility !== undefined ? { visibility: MATCH.visibility } : {}),
+    ...(options.diagnostics !== undefined ? { diagnostics: options.diagnostics } : {}),
   });
   const heroes: EntityId[] = [];
   for (const entity of coreWorld.listAlive(built.state.world)) {
@@ -398,6 +413,27 @@ function ffa(
     stateBits: (entity) => buffer.view.entities.get(entity)?.states ?? 0,
     view: () => buffer.view,
   };
+}
+
+/**
+ * Сцена, у которой купол живёт `ticks` тиков вместо ста восьмидесяти: правится
+ * ровно то число, которым определение `slowDome` заводит носителя длительности
+ * (ABIL-9). Число стенда, а не ретюн контента, — как и запаркованные кулдауны
+ * у стендов босса.
+ */
+function domeLife(ticks: number, scene: SceneDef = DUEL): SceneDef {
+  const patched = JSON.parse(JSON.stringify(scene)) as {
+    abilities: { id: string; effects: unknown[] }[];
+  };
+  const dome = patched.abilities.find((entry) => entry.id === 'slowDome');
+  if (dome === undefined) throw new Error('в сцене нет определения "slowDome"');
+  const spawn = dome.effects[0] as {
+    spawnEntity?: { overrides?: { AbilityDuration?: { remaining?: unknown } } };
+  };
+  const duration = spawn.spawnEntity?.overrides?.AbilityDuration;
+  if (duration === undefined) throw new Error('первый эффект "slowDome" больше не спавнит носителя');
+  duration.remaining = ticks;
+  return patched as unknown as SceneDef;
 }
 
 function tagged(state: SimulationState, tag: string): EntityId[] {
@@ -702,6 +738,26 @@ describe('купол замедления: чужой снаряд идёт вч
     expect(fullStep / 5).toBe(8192);
   });
 
+  it('сила замедления едет НА ИНСТАНСЕ баффа, а его умолчание — нейтраль (BUFF-4)', () => {
+    // Величина правки читается с самого инстанса (`self`), а не с источника:
+    // источник — купол, и он умирает раньше, чем платформа успевает применить
+    // выданный им последним тиком инстанс. Умолчание prefab'а при этом
+    // НЕЙТРАЛЬНОЕ (×1), а не авторские 0.2: инстанс, кем-то заведённый без
+    // переопределения, обязан ничего не делать, а не замедлять втихую и не
+    // замораживать нулём.
+    const buff = SCENE.buffs!.find((entry) => entry.id === 'domeSlow')!;
+    const mod = buff.statMods![0]! as { component: string; value: Record<string, unknown> };
+    expect(mod.component).toBe('TimeScaleModifiers');
+    expect(mod.value).toEqual({ getComponent: [{ var: 'self' }, 'SlowPower', 'value'] });
+    expect(
+      SCENE.prefabs!.find((prefab) => prefab.name === 'BuffSlow')!.components.SlowPower!.value,
+    ).toBe(FIXED_ONE);
+    // А авторская сила живёт там же, где и была, — в куполе.
+    expect(SCENE.prefabs!.find((prefab) => prefab.name === 'SlowDome')!.components.DomeState!.slow).toBe(
+      SLOW,
+    );
+  });
+
   it('радиус купола — ровно 10 радиусов коллайдера кастера', () => {
     const a = arena();
     pressB(a, DOME);
@@ -787,6 +843,52 @@ describe('купол замедления: чужой снаряд идёт вч
     expect(sawSlow).toBe(true);
     // Купол снят по истечении своего срока, а не остался висеть навсегда.
     expect(domes(a.state)).toHaveLength(0);
+  });
+
+  it('купол, истёкший под живым замедлением, мёртвого источника не читает (BUFF-4, ECS-7)', () => {
+    // РЕГРЕССИЯ: аура купола спавнит инстанс `BuffSlow` каждым тиком, включая
+    // ПОСЛЕДНИЙ тик самого купола, а применяет инстанс платформа уже следующим —
+    // когда купола в мире нет. Величина статовой правки читалась С ИСТОЧНИКА
+    // (`getComponent(source, "DomeState", "slow")`), а чтение мёртвой сущности
+    // тотально (ECS-7): в сток уходила запись о нарушенном инварианте, и на
+    // место множителя вставал НЕЙТРАЛЬ ПОЛЯ — ноль, то есть жертва не
+    // замедлялась вчетверо, а замирала насмерть на два тика.
+    //
+    // Случай узкий: пока жертва в куполе непрерывно, свежий инстанс сводится с
+    // действующим (`refresh`, BUFF-3) и правку не переставляет. Читается
+    // источник только на ПЕРВОМ применении — то есть у жертвы, вошедшей в
+    // купол ровно его последним тиком. Отсюда и числа стенда: купол живёт
+    // шесть тиков и ставится на четвёртом, а снаряд, выпущенный первым,
+    // доходит до его кромки как раз к смерти.
+    const entries: DiagnosticRecord[] = [];
+    const sink: DiagnosticsSink = { trace: 'systems', record: (entry) => void entries.push(entry) };
+    // Кастер купола стоит В СТОРОНЕ от линии огня — снаряд проходит купол
+    // насквозь, а не гибнет о героя (та же расстановка, что у «выхода из купола»).
+    const a = ffa([18, [24, 27]], { scene: domeLife(SHORT_DOME), diagnostics: sink });
+    a.step([{ buttons: CAST }]);
+    a.step();
+    a.step([{ buttons: CONFIRM }]);
+    const shot = fireballs(a.state)[0]!;
+    expect(shot).toBeDefined();
+
+    a.step([NEUTRAL, { buttons: DOME }]);
+    expect(domes(a.state)).toHaveLength(1);
+    for (let i = 0; i < SHORT_DOME && domes(a.state).length > 0; i++) a.step();
+    expect(domes(a.state), 'купол не истёк — стенд не воспроизводит случай').toHaveLength(0);
+    expect(fireballs(a.state), 'снаряд не пережил купол — применять бафф уже некому').toHaveLength(
+      1,
+    );
+
+    // Тики, на которых платформа применяет инстанс, выданный последним тиком
+    // купола, и доживает его двухтиковую длительность.
+    for (let i = 0; i < 4; i++) a.step();
+
+    // Записи о нарушенных инвариантах отбором трассы не выбрасываются (FP-4),
+    // поэтому их отсутствие в стоке и есть утверждение.
+    const broken = entries.filter((entry) => entry.kind === 'assert' || entry.kind === 'invariant');
+    expect(broken.map((entry) => entry.message ?? entry.code)).toEqual([]);
+    // И симуляция не заморозила жертву нейтралью поля: множитель снят целиком.
+    expect(timeScale(a.state, shot)).toBe(FIXED_ONE);
   });
 
   it('кулдаун купола гейтит повторный каст и тикает вниз', () => {

@@ -118,6 +118,7 @@ import {
   navPathsDebugSource,
   staticCollidersDebugSource,
 } from './debugSources.js';
+import { HeroFollowPoint } from './cameraFollow.js';
 import { createEdgePanAxes, demoEdgePan } from './cameraInput.js';
 import { createDemoHud, createDemoMinimapSource, demoHudComposition } from './hud.js';
 import { prewarmPresentation } from './prewarm.js';
@@ -661,6 +662,8 @@ let decorationSet: DecorationSet | null = null;
 const spectator = new SpectatorSubjects({ playerStat: STATS.slot, teamStat: STATS.team });
 /** Кем наблюдение заменило героя; null — смотрим своего (обычный матч). */
 let spectateEntity: EntityId | null = null;
+/** Память follow-точки: где ведомая сущность была последний раз в бою (CAM-2). */
+const heroFollow = new HeroFollowPoint();
 
 /**
  * Подача стелс-состояний (FOW-13): свой невидимка — полупрозрачность, чужой
@@ -1066,14 +1069,14 @@ function cameraFrame(dtSec: number): void {
   const followed = observing ? (spectator.current?.entity ?? null) : (spectateEntity ?? heroId);
   const instance = followed === null ? null : (models?.instanceFor(followed) ?? null);
   const heroView = followed === null ? undefined : remote?.view?.entities.get(followed);
-  const target =
-    instance === null
-      ? null
-      : {
-          x: instance.pose.x,
-          y: instance.pose.y,
-          snap: (heroView?.snap ?? false) || (remote?.view?.snapAll ?? false),
-        };
+  // Точку follow выбирает политика сборки (`cameraFollow.ts`): пока ведомая
+  // сущность выбыла из боя — провалилась с арены или мертва, — камера держит
+  // её последнюю точку в бою и с арены не уезжает (CAM-2, CAM-5).
+  const target = heroFollow.point(followed, {
+    pose: instance === null ? null : instance.pose,
+    states: heroView?.states,
+    snap: (heroView?.snap ?? false) || (remote?.view?.snapAll ?? false),
+  });
   const logical = rig.update(camInput, dtSec, target);
   resetCameraInput(camInput);
   // Эффекты камеры (тряска, покачивание) — часть картинки МИРА, а не главного
