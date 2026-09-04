@@ -1,7 +1,5 @@
 schema: spec-driven
 created: 2026-09-01
 
-# Стаб очереди: спеки этого change'а появятся при его разработке через
-# /opsx:update sec09-client-content-from-tree — тогда маркер снять.
-# Пока дельт нет намеренно: артефакты specs/design/tasks пусты, см. ## Notes в proposal.md.
-skip_specs: true
+# Заведён стабом очереди 2026-09-01 (валидация спек, группа 09); артефакты
+# specs/design/tasks написаны 2026-09-04, маркер skip_specs снят вместе с ними.
