@@ -133,9 +133,10 @@ export class WaterBodyView {
       limit: options.limits.rippleSources,
       minSpeed: config.ripples.minSpeed,
       amplitude: config.ripples.amplitude,
-      // Период кольца — он же время затухания: возраст источника ходит по этому
-      // кругу, поэтому число обязано быть тем же, что уехало в униформу волны
-      // (`applyWaterUniforms`), иначе кольцо гасло бы не там, где кончается.
+      // Время жизни кольца — оно же задаёт каденс излучения (`ripples.ts`),
+      // поэтому число обязано быть тем же, что уехало в униформу волны
+      // (`applyWaterUniforms`): иначе отбор снимал бы кольцо не тогда, когда
+      // шейдер довёл его затухание до нуля.
       decaySeconds: config.ripples.decaySeconds,
       tile,
       nearWater: (cellX, cellY) => this.nearWater(cellX, cellY),
@@ -240,9 +241,10 @@ export class WaterBodyView {
   }
 
   /**
-   * Кадр тела (REND-2, REND-25): часы презентации в униформу и пересчёт
-   * источников ряби от доставленного состояния. Возвращает число действующих
-   * источников — счётчик стоимости кадра (PERF-3).
+   * Кадр тела (REND-2, REND-25): часы презентации в униформу, живые кольца
+   * ряби стареют, а движущиеся в воде сущности роняют новые — каждое там, где
+   * сущность была в момент излучения (REND-36). Возвращает число живых колец —
+   * счётчик стоимости кадра (PERF-3).
    */
   updateFrame(clock: number, view: TickView | null, alpha: number, dt: number): number {
     uniformOf(this.material, 'uTime').value = clock;

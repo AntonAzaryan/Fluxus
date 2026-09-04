@@ -137,7 +137,7 @@
       "waterBodiesDrawn": 24,
       "waterDepthTexels": 22640,
       "waterQuads": 96,
-      "waterRippleSources": 22
+      "waterRippleSources": 28
     },
     "syncTick": {
       "fogEntitiesScanned": 48,

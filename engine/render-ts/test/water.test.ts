@@ -724,6 +724,18 @@ function rippleOptions(over: Partial<WaterRippleOptions> = {}): WaterRippleOptio
   };
 }
 
+/**
+ * Колец в следе одного источника за время жизни кольца (`RINGS_PER_SOURCE` в
+ * `water/ripples.ts`). Число выписано здесь СВОЁ: тест обязан краснеть от смены
+ * каденса, а не следовать за ней.
+ */
+const RINGS_PER_SOURCE = 4;
+
+/** Каденс излучения: раз в столько секунд источник роняет очередное кольцо. */
+function intervalOf(options: WaterRippleOptions): number {
+  return options.decaySeconds / RINGS_PER_SOURCE;
+}
+
 /** Множитель затухания кольца в шейдере: `1 − возраст/период` (material.ts). */
 function fadeOf(age: number, decaySeconds: number): number {
   return Math.max(0, 1 - age / decaySeconds);
@@ -734,39 +746,77 @@ function walker(id: number, x: number, y: number, speed: number) {
   return makeEntityView(id, { prevX: x, prevY: y, currX: x + speed, currY: y, moving: speed > 0 });
 }
 
-describe('REND-36: рябь — производная presentation-состояния', () => {
-  it('движущаяся в воде сущность становится источником, стоящая — нет', () => {
+describe('REND-36: рябь — кольца, рождённые presentation-состоянием', () => {
+  it('первый же подходящий кадр роняет кольцо в точке сущности, стоящая — нет', () => {
     const field = new WaterRippleField();
     const view = makeTickView([walker(1, 1, 1, 0.2), walker(2, 2, 2, 0)]);
-    const sources = field.update(view, 1, 0.016, rippleOptions());
-    expect(sources.map((source) => source.id)).toEqual([1]);
-    expect(sources[0]!.amplitude).toBeGreaterThan(0);
+    const rings = field.update(view, 1, 0.016, rippleOptions());
+    expect(rings.map((ring) => ring.id)).toEqual([1]);
+    // Кольцо рождается НЕМЕДЛЕННО и с нулевого возраста (REND-36), в
+    // интерполированной точке сущности — там, где случилось касание.
+    expect(rings[0]!.age).toBe(0);
+    expect(rings[0]!.x).toBeCloseTo(1.2, 6);
+    expect(rings[0]!.y).toBeCloseTo(1, 6);
+    expect(rings[0]!.amplitude).toBeGreaterThan(0);
   });
 
-  it('сущность в воздухе рябь не поднимает: прыжок и полёт идут над водой', () => {
+  it('сущность в воздухе колец не роняет: прыжок и полёт идут над водой', () => {
     // Прыжок — манёвр `airborne` (LOC-3), полёт отброса — полётная фаза
     // (REND-12): оба над поверхностью, и колец вдоль линии полёта нет (REND-36).
     const field = new WaterRippleField();
     const jumper = { ...walker(1, 1, 1, 0.2), motion: LOCOMOTION_AIRBORNE };
     const thrown = { ...walker(2, 2, 2, 0.2), flightPhase: 0.5 };
-    const sources = field.update(makeTickView([jumper, thrown, walker(3, 3, 3, 0.2)]), 1, 0.016, rippleOptions());
-    expect(sources.map((source) => source.id)).toEqual([3]);
+    const rings = field.update(makeTickView([jumper, thrown, walker(3, 3, 3, 0.2)]), 1, 0.016, rippleOptions());
+    expect(rings.map((ring) => ring.id)).toEqual([3]);
   });
 
-  it('приземление начинает кольцо заново: возраст не переживает полёт', () => {
+  it('приземление роняет НОВОЕ кольцо: каденс не переживает полёт', () => {
     const field = new WaterRippleField();
-    // Шла по воде — возраст накопился.
-    field.update(makeTickView([walker(1, 1, 1, 0.2)]), 1, 0.5, rippleOptions());
-    expect(field.sources[0]!.age).toBeCloseTo(0.5, 6);
-    // Прыгнула — источника нет, возраст снят prune'ом.
+    const options = rippleOptions({ limit: 4 });
+    const walking = makeTickView([walker(1, 1, 1, 0.2)]);
+    // Шла по воде — кольцо родилось и постарело.
+    field.update(walking, 1, 0.2, options);
+    field.update(walking, 1, 0.2, options);
+    expect(field.sources[0]!.age).toBeCloseTo(0.2, 6);
+    // Прыгнула — новых колец нет, а прежнее за время полёта отжило.
     const airborne = { ...walker(1, 1, 1, 0.2), motion: LOCOMOTION_AIRBORNE };
-    expect(field.update(makeTickView([airborne]), 1, 0.5, rippleOptions())).toHaveLength(0);
-    // Приземлилась и идёт дальше — кольцо новое, а не докрученное до 1.5.
-    field.update(makeTickView([walker(1, 1, 1, 0.2)]), 1, 0.5, rippleOptions());
-    expect(field.sources[0]!.age).toBeCloseTo(0.5, 6);
+    expect(field.update(makeTickView([airborne]), 1, 1.5, options)).toHaveLength(0);
+    // Приземлилась и идёт дальше — кольцо новое, с нулевого возраста, а не
+    // докрученное каденсом, накопленным до полёта (REND-36).
+    field.update(walking, 1, 0.1, options);
+    expect(field.sources).toHaveLength(1);
+    expect(field.sources[0]!.age).toBe(0);
   });
 
-  it('два прогона над одним состоянием дают один набор, переполнение не мигает', () => {
+  it('кольцо остаётся там, где родилось: источник уходит, кольцо — нет', () => {
+    // Ровно то, чем след отличается от нимба: у кольца, чей центр переписывался
+    // бы позицией сущности, расхождения от ТОЧКИ касания не было бы вовсе.
+    const field = new WaterRippleField();
+    const options = rippleOptions({ limit: 4 });
+    field.update(makeTickView([walker(1, 1, 1, 0.2)]), 1, 0.1, options);
+    const born = { x: field.sources[0]!.x, y: field.sources[0]!.y };
+    expect(born.x).toBeCloseTo(1.2, 6);
+
+    // Сущность ушла на два кадра вперёд: кольцо осталось на месте и постарело.
+    field.update(makeTickView([walker(1, 3, 1, 0.2)]), 1, 0.2, options);
+    field.update(makeTickView([walker(1, 5, 1, 0.2)]), 1, 0.1, options);
+    expect(field.sources).toHaveLength(1);
+    expect(field.sources[0]!.x).toBe(born.x);
+    expect(field.sources[0]!.y).toBe(born.y);
+    expect(field.sources[0]!.age).toBeCloseTo(0.3, 6);
+
+    // Настал каденс — новое кольцо родилось в НОВОЙ точке, старое живо в своей.
+    field.update(makeTickView([walker(1, 7, 1, 0.2)]), 1, 0.2, options);
+    const [first, second] = field.sources;
+    expect(first!.x).toBe(born.x);
+    expect(first!.age).toBeCloseTo(0.5, 6);
+    expect(second!.x).toBeCloseTo(7.2, 6);
+    // Возраст новорождённого — остаток кадра сверх каденса: кольцо рождается
+    // тогда, когда его срок настал, а не в начале кадра.
+    expect(second!.age).toBeCloseTo(0.5 - intervalOf(options), 6);
+  });
+
+  it('два прогона над одним состоянием дают один набор, кадры без хода не мигают', () => {
     const view = makeTickView([
       walker(7, 5, 0, 0.2),
       walker(3, 1, 0, 0.2),
@@ -782,7 +832,7 @@ describe('REND-36: рябь — производная presentation-состоя
 
     const field = new WaterRippleField();
     const frames = Array.from({ length: 4 }, () =>
-      field.update(view, 1, 0.016, rippleOptions()).map((s) => s.id).join(','),
+      field.update(view, 1, 0, rippleOptions()).map((s) => s.id).join(','),
     );
     expect(new Set(frames).size).toBe(1);
   });
@@ -791,7 +841,8 @@ describe('REND-36: рябь — производная presentation-состоя
     // Кандидатов вдвое больше потолка, два из них — на в точности равном
     // расстоянии от центра: порядок обязан быть функцией состояния, а не
     // порядка обхода карты сущностей (REND-36). Отбор идёт префиксом-вставкой
-    // (REND-26), и эталон здесь считается независимо — сортировкой.
+    // (REND-26), и эталон здесь считается независимо — сортировкой. Пул на
+    // первом кадре пуст, поэтому порядок колец — это и есть порядок отбора.
     const entities = [11, 4, 9, 2, 7, 5, 3, 8].map((id, index) =>
       walker(id, index % 2 === 0 ? index : index - 1, 0, 0.2),
     );
@@ -803,43 +854,87 @@ describe('REND-36: рябь — производная presentation-состоя
       .sort((a, b) => a.distance - b.distance || a.id - b.id)
       .slice(0, 4)
       .map((entry) => entry.id);
-    expect(chosen.map((source) => source.id)).toEqual(expected);
+    expect(chosen.map((ring) => ring.id)).toEqual(expected);
+  });
+
+  it('полный пул колец не вытесняет живущих: место достаётся ближайшему (REND-36)', () => {
+    const field = new WaterRippleField();
+    const options = rippleOptions({ limit: 2 });
+    // Дальний источник (id 1) и ближний (id 2): оба роняют по кольцу, пул полон.
+    const view = makeTickView([walker(1, 5, 0, 0.2), walker(2, 1, 0, 0.2)]);
+    expect(field.update(view, 1, 0.1, options).map((ring) => ring.id)).toEqual([2, 1]);
+    // Каденс настал у обоих, но мест нет: живые кольца не гасятся ради новых —
+    // вытеснение мигало бы рябью от одного шага соседа.
+    const after = field.update(view, 1, intervalOf(options), options);
+    expect(after.map((ring) => ring.id)).toEqual([2, 1]);
+    // Оба кольца — те же, что родились кадром раньше: постарели на кадр, и
+    // ни одно не подменено новорождённым.
+    for (const ring of after) expect(ring.age).toBeCloseTo(intervalOf(options), 6);
+
+    // Место одно — и достаётся оно всегда ближайшему: обход префикса идёт по
+    // рангу, поэтому дальний источник не перехватывает освободившийся слот.
+    const single = new WaterRippleField();
+    const ids = new Set<number>();
+    for (let frame = 0; frame < 60; frame++) {
+      for (const ring of single.update(view, 1, 0.05, rippleOptions({ limit: 1 }))) ids.add(ring.id);
+    }
+    expect([...ids]).toEqual([2]);
   });
 
   it('пауза замораживает возраст кольца, ход мира его двигает (REND-25)', () => {
     const field = new WaterRippleField();
+    const options = rippleOptions({ limit: 4 });
     const view = makeTickView([walker(1, 1, 1, 0.2)]);
-    field.update(view, 1, 0.5, rippleOptions());
-    expect(field.sources[0]!.age).toBeCloseTo(0.5, 6);
-    field.update(view, 1, 0, rippleOptions());
-    expect(field.sources[0]!.age).toBeCloseTo(0.5, 6);
-    field.update(view, 1, 0.25, rippleOptions());
-    expect(field.sources[0]!.age).toBeCloseTo(0.75, 6);
+    field.update(view, 1, 0.1, options);
+    field.update(view, 1, 0.3, options);
+    expect(field.sources).toHaveLength(1);
+    expect(field.sources[0]!.age).toBeCloseTo(0.3, 6);
+    field.update(view, 1, 0, options);
+    expect(field.sources).toHaveLength(1);
+    expect(field.sources[0]!.age).toBeCloseTo(0.3, 6);
+    field.update(view, 1, 0.05, options);
+    expect(field.sources[0]!.age).toBeCloseTo(0.35, 6);
   });
 
-  it('разрыв непрерывности сбрасывает накопленное: рябь не переезжает телепорт', () => {
+  it('кольцо отживает период и освобождает место в пуле', () => {
     const field = new WaterRippleField();
-    const moving = makeTickView([walker(1, 1, 1, 0.2)]);
-    field.update(moving, 1, 0.8, rippleOptions());
-    expect(field.sources[0]!.age).toBeCloseTo(0.8, 6);
+    const options = rippleOptions({ limit: 1, decaySeconds: 0.5 });
+    field.update(makeTickView([walker(1, 1, 1, 0.2)]), 1, 0.1, options);
+    expect(field.sources).toHaveLength(1);
+    // Ровно период: множитель затухания шейдера здесь уже ноль, и держать
+    // кольцо в униформе не за чем — место свободно.
+    expect(fadeOf(options.decaySeconds, options.decaySeconds)).toBe(0);
+    expect(field.update(makeTickView([]), 1, options.decaySeconds, options)).toHaveLength(0);
+  });
 
-    const teleported = makeTickView([
-      makeEntityView(1, { prevX: 6, prevY: 6, currX: 6.2, currY: 6, snap: true }),
-    ]);
-    field.update(teleported, 1, 0.1, rippleOptions());
-    expect(field.sources[0]!.age).toBeCloseTo(0.1, 6);
+  it('кольцо переживает ушедший источник, но не дольше периода (NET-12, QUAL-2)', () => {
+    const field = new WaterRippleField();
+    const options = rippleOptions({ limit: 4, decaySeconds: 0.8 });
+    field.update(makeTickView([walker(1, 1, 1, 0.2)]), 1, 0.1, options);
+    const born = field.sources[0]!.x;
+    // Сущность ушла из доставленного состояния (туман NET-12, смерть): новых
+    // колец нет, а рождённое доживает своё на прежнем месте — тем же правилом,
+    // каким доживают частицы погасшего эмиттера (REND-24). Информации сверх
+    // увиденной в нём нет: кольцо родилось в точке, которая БЫЛА доставлена.
+    const alive = field.update(makeTickView([]), 1, 0.4, options);
+    expect(alive).toHaveLength(1);
+    expect(alive[0]!.x).toBe(born);
+    expect(alive[0]!.age).toBeCloseTo(0.4, 6);
+    // И живёт оно не дольше периода: прошлое гаснет само.
+    expect(field.update(makeTickView([]), 1, 0.4, options)).toHaveLength(0);
   });
 
   it('сущности вне отфильтрованного снапшота источником не становится (QUAL-2)', () => {
+    // Врага в состоянии нет вовсе — фильтр видимости его не доставил (NET-12),
+    // и ряби от него не существует ПО ПОСТРОЕНИЮ: рождать кольцо не из чего.
     const field = new WaterRippleField();
-    // Врага в состоянии нет вовсе — фильтр видимости его не доставил (NET-12).
     const visible = makeTickView([walker(1, 1, 1, 0.2)]);
     expect(field.update(visible, 1, 0.016, rippleOptions()).map((s) => s.id)).toEqual([1]);
-    const alone = makeTickView([]);
-    expect(field.update(alone, 1, 0.016, rippleOptions())).toEqual([]);
+    const empty = new WaterRippleField();
+    expect(empty.update(makeTickView([]), 1, 0.016, rippleOptions())).toEqual([]);
   });
 
-  it('вне клеток тела источника нет: рябь не расходится по суше', () => {
+  it('вне клеток тела кольца не рождаются: рябь не расходится по суше', () => {
     const field = new WaterRippleField();
     const view = makeTickView([walker(1, 7, 7, 0.2)]);
     const options = rippleOptions({ nearWater: (cellX, cellY) => cellX < 4 && cellY < 4 });
@@ -849,92 +944,169 @@ describe('REND-36: рябь — производная presentation-состоя
   it('нулевой предел выключает рябь целиком', () => {
     const field = new WaterRippleField();
     const view = makeTickView([walker(1, 1, 1, 0.2)]);
+    expect(field.update(view, 1, 0.016, rippleOptions({ limit: 4 }))).toHaveLength(1);
+    // Предел 0 — не только «не рождать»: считать живые кольца тоже нечему.
     expect(field.update(view, 1, 0.016, rippleOptions({ limit: 0 }))).toEqual([]);
   });
 
-  it('источники уезжают в униформу материала четвёрками (x, y, возраст, амплитуда)', () => {
+  it('кольца уезжают в униформу материала четвёрками (x, y, возраст, амплитуда)', () => {
     const field = new WaterRippleField();
-    field.update(makeTickView([walker(1, 2, 3, 0.2)]), 0, 0.4, rippleOptions());
-    const target = new Float32Array(8);
-    expect(field.writeUniform(target, 2)).toBe(1);
+    const options = rippleOptions({ limit: 3 });
+    // Кадр в начале тика (alpha 0): точка кольца — та, из которой сущность шла.
+    field.update(makeTickView([walker(1, 2, 3, 0.2)]), 0, 0, options);
+    field.update(makeTickView([walker(1, 5, 6, 0.2)]), 0, intervalOf(options), options);
+    const target = new Float32Array(12);
+    expect(field.writeUniform(target, 3)).toBe(2);
     expect([target[0], target[1]]).toEqual([2, 3]);
-    expect(target[2]).toBeCloseTo(0.4, 6);
+    expect(target[2]).toBeCloseTo(intervalOf(options), 6);
     expect(target[3]).toBeGreaterThan(0);
-    // Хвост — нули: амплитуда 0 означает «источника нет» (шейдер его пропускает).
-    expect([...target.slice(4)]).toEqual([0, 0, 0, 0]);
+    expect([target[4], target[5]]).toEqual([5, 6]);
+    expect(target[6]).toBe(0);
+    expect(target[7]).toBeGreaterThan(0);
+    // Хвост — нули: амплитуда 0 означает «кольца нет» (шейдер его пропускает).
+    expect([...target.slice(8)]).toEqual([0, 0, 0, 0]);
   });
 
-  it('идущая в воде сущность рябит НЕПРЕРЫВНО: источник переизлучает, а не выгорает', () => {
-    // Кольцо живёт период `decaySeconds`; выгори источник за один период — юнит
-    // рябил бы полторы секунды и дальше шёл по стеклу, а REND-36 требует колец,
-    // пока сущность движется в воде.
+  it('идущая в воде сущность роняет кольца НЕПРЕРЫВНО: след, а не одна вспышка', () => {
+    // Выгори источник за один период — юнит рябил бы полторы секунды и дальше
+    // шёл бы по стеклу, а REND-36 требует колец, пока сущность движется в воде.
     const field = new WaterRippleField();
-    const options = rippleOptions({ limit: 1, decaySeconds: 0.5 });
-    const view = makeTickView([walker(1, 1, 1, 0.2)]);
-    let wraps = 0;
-    let previous = 0;
-    for (let frame = 0; frame < 200; frame++) {
-      const [source] = field.update(view, 1, 0.05, options);
-      expect(source, `кадр ${frame}`).toBeDefined();
-      // Множитель затухания шейдера — `1 − возраст/период`: он обязан остаться
-      // положительным на любом кадре, иначе кольца попросту нет.
-      expect(fadeOf(source!.age, options.decaySeconds), `кадр ${frame}`).toBeGreaterThan(0);
-      if (source!.age < previous) wraps++;
-      previous = source!.age;
+    const options = rippleOptions({ limit: 4, decaySeconds: 0.5 });
+    const points = new Set<number>();
+    for (let frame = 0; frame < 100; frame++) {
+      // Сущность идёт: каждый кадр она в новой точке, поэтому родившееся кольцо
+      // отличимо от прежних своим МЕСТОМ, а не порядковым номером.
+      const view = makeTickView([walker(1, frame * 0.2, 0, 0.2)]);
+      const rings = field.update(view, 1, 0.05, options);
+      expect(rings.length, `кадр ${frame}`).toBeGreaterThan(0);
+      expect(rings.length, `кадр ${frame}`).toBeLessThanOrEqual(options.limit);
+      for (const ring of rings) {
+        expect(fadeOf(ring.age, options.decaySeconds), `кадр ${frame}`).toBeGreaterThan(0);
+        points.add(Math.round(ring.x * 1000));
+      }
     }
-    // Кольцо действительно переизлучилось много раз, а не застряло у нуля.
-    expect(wraps).toBeGreaterThan(10);
+    // Кольца рождались всё время прогона, а не однажды.
+    expect(points.size).toBeGreaterThan(10);
   });
 
-  it('перемотка ведёт кольца назад, но не усиливает их (REND-25)', () => {
+  it('перемотка ведёт кольца назад: затухание в (0, 1], а неизлучённые исчезают (REND-25)', () => {
+    const field = new WaterRippleField();
+    const options = rippleOptions({ limit: 4, decaySeconds: 0.5 });
+    const view = makeTickView([walker(1, 1, 1, 0.2)]);
+    for (let frame = 0; frame < 20; frame++) field.update(view, 1, 0.05, options);
+    expect(field.sources.length).toBeGreaterThan(1);
+
     // Отрицательный `dt` — ход мира назад: возраст обязан остаться в периоде,
     // иначе множитель `1 − возраст/период` уходит ВЫШЕ единицы и кольцо в
-    // скрабе растёт вместо того, чтобы гаснуть.
-    const field = new WaterRippleField();
-    const options = rippleOptions({ limit: 1, decaySeconds: 0.5 });
-    const view = makeTickView([walker(1, 1, 1, 0.2)]);
+    // скрабе растёт вместо того, чтобы гаснуть. Ушедшее в минус кольцо в этой
+    // ветке истории ещё не излучено — оно исчезает, а не рисуется.
     for (let frame = 0; frame < 40; frame++) {
-      const [source] = field.update(view, 1, -0.05, options);
-      expect(source!.age, `кадр ${frame}`).toBeGreaterThanOrEqual(0);
-      expect(source!.age, `кадр ${frame}`).toBeLessThan(options.decaySeconds);
-      const fade = fadeOf(source!.age, options.decaySeconds);
-      expect(fade, `кадр ${frame}`).toBeGreaterThan(0);
-      expect(fade, `кадр ${frame}`).toBeLessThanOrEqual(1);
+      for (const ring of field.update(view, 1, -0.05, options)) {
+        expect(ring.age, `кадр ${frame}`).toBeGreaterThanOrEqual(0);
+        const fade = fadeOf(ring.age, options.decaySeconds);
+        expect(fade, `кадр ${frame}`).toBeGreaterThan(0);
+        expect(fade, `кадр ${frame}`).toBeLessThanOrEqual(1);
+      }
     }
+    // Назад не излучается ничего: след рассосался целиком.
+    expect(field.sources).toHaveLength(0);
   });
 
-  it('snap-тик рисуется без интерполяции: кольцо не идёт по линии телепорта', () => {
+  it('разрыв непрерывности сущности снимает её кольца, соседские — нет (REND-2)', () => {
+    const field = new WaterRippleField();
+    const options = rippleOptions({ limit: 4 });
+    const together = makeTickView([walker(1, 1, 1, 0.2), walker(2, 3, 3, 0.2)]);
+    field.update(together, 1, 0.2, options);
+    field.update(together, 1, 0.2, options);
+    expect(field.sources.map((ring) => ring.id)).toEqual([1, 2]);
+
+    const teleported = makeTickView([
+      makeEntityView(1, { prevX: 6, prevY: 6, currX: 6.2, currY: 6, snap: true }),
+      walker(2, 3, 3, 0.2),
+    ]);
+    const after = field.update(teleported, 1, 0.1, options);
+    expect(after).toHaveLength(2);
+    // Кольцо с того берега не «проехало» озеро: оно снято вместе с часами, а
+    // новое родилось в точке появления с нулевого возраста.
+    const moved = after.find((ring) => ring.id === 1)!;
+    expect(moved.x).toBeCloseTo(6.2, 6);
+    expect(moved.age).toBe(0);
+    // Разрыв непрерывности ОДНОЙ сущности соседских колец не касается.
+    const neighbour = after.find((ring) => ring.id === 2)!;
+    expect(neighbour.age).toBeCloseTo(0.3, 6);
+  });
+
+  it('snap-тик рисуется без интерполяции: кольцо рождается в точке появления', () => {
     const field = new WaterRippleField();
     const teleported = makeTickView([
       makeEntityView(1, { prevX: 1, prevY: 1, currX: 7, currY: 7, snap: true }),
     ]);
-    // Кадр в НАЧАЛЕ тика (alpha 0): без правила REND-2 источник стоял бы в
+    // Кадр в НАЧАЛЕ тика (alpha 0): без правила REND-2 кольцо родилось бы в
     // точке отправления, пока модель уже на том берегу.
-    const [source] = field.update(teleported, 0, 0.016, rippleOptions({ limit: 1 }));
-    expect([source!.x, source!.y]).toEqual([7, 7]);
+    const [ring] = field.update(teleported, 0, 0.016, rippleOptions({ limit: 1 }));
+    expect([ring!.x, ring!.y]).toEqual([7, 7]);
     // Обычный тик той же длины интерполируется как прежде.
     const moving = makeTickView([makeEntityView(2, { prevX: 1, prevY: 1, currX: 3, currY: 1 })]);
     const [smooth] = new WaterRippleField().update(moving, 0.5, 0.016, rippleOptions({ limit: 1 }));
     expect(smooth!.x).toBeCloseTo(2, 6);
   });
 
+  it('кольцо — один расходящийся гребень, и бюджет фрагмента прежний', () => {
+    const block = /vec2 waterRippleSlope\(vec2 world\) \{[\s\S]*?\n\}/u.exec(
+      waterFragmentShader(false, 8),
+    )![0];
+    // Гребень прижат окном к ФРОНТУ (`radius − front`), а не гаснет с
+    // расстоянием от центра: иначе вокруг точки рождения стоял бы набор
+    // концентрических гребней, а не одно расходящееся кольцо.
+    expect(block).toContain('radius - front');
+    expect(block).toContain('uRippleWave.w');
+    // Бюджет фрагмента прежний: РОВНО один exp и один cos на источник, то есть
+    // переход к следу не прибавил фрагменту ни одной трансцендентной операции
+    // (QUAL-3, PERF-3).
+    expect([...block.matchAll(/\bexp\(/gu)]).toHaveLength(1);
+    expect([...block.matchAll(/\bcos\(/gu)]).toHaveLength(1);
+  });
+
+  it('коэффициент окна гребня уезжает в униформу волны: σ — половина длины волны', () => {
+    const material = createWaterMaterial({
+      body: resolveWaterConfig(basin())!.bodies[0]!,
+      heightStep: STEP,
+      layers: 2,
+      rippleSources: 4,
+      depth: new THREE.DataTexture(new Uint16Array(4), 2, 2),
+      depthRect: new THREE.Vector4(0, 0, 1, 1),
+    });
+    const wave = material.uniforms.uRippleWave!.value as THREE.Vector4;
+    const { wavelength, speed, decaySeconds } = DEFAULT_WATER_RIPPLES;
+    expect(wave.x).toBeCloseTo((2 * Math.PI) / wavelength, 6);
+    expect(wave.y).toBeCloseTo(speed, 6);
+    expect(wave.z).toBeCloseTo(1 / decaySeconds, 6);
+    // `1/(2σ²)` при σ = λ/2 — это `2/λ²`: гребень шириной примерно в волну.
+    expect(wave.w).toBeCloseTo(2 / (wavelength * wavelength), 6);
+  });
+
   it('разрыв непрерывности мира сбрасывает кольца всех тел (REND-2)', () => {
     const { water } = makeRig({ config: basin() });
     const ripples = (): Float32Array =>
       water.drawnBodies[0]!.material.uniforms.uRipples!.value as Float32Array;
-    water.syncTick(makeTickView([walker(1, 3.5, 3.5, 0.2)]));
+    const walking = (): void => {
+      water.syncTick(makeTickView([walker(1, 3.5, 3.5, 0.2)]));
+    };
+    walking();
     water.updateFrame(0.5, 1);
-    // Возраст кольца — третья компонента четвёрки источника.
-    expect(ripples()[2]).toBeCloseTo(0.5, 5);
+    walking();
+    water.updateFrame(0.2, 1);
+    // Возраст кольца — третья компонента четвёрки.
+    expect(ripples()[2]).toBeCloseTo(0.2, 5);
 
     const counters = createCostCounters();
     withCostSink(counters, () => {
       water.syncTick(makeTickView([walker(1, 3.5, 3.5, 0.2)], { snapAll: true }));
       water.updateFrame(0.016, 1);
     });
+    // Живые кольца сняты, а новое родилось с нуля — рябь не переехала разрыв.
     expect(counters.waterRippleSources).toBe(1);
-    // Возраст после сброса начинается заново — кольцо не «проехало» разрыв.
-    expect(ripples()[2]).toBeCloseTo(0.016, 5);
+    expect(ripples()[2]).toBe(0);
   });
 });
 

@@ -186,10 +186,24 @@ float sampleWaterCaustic(vec2 world, float t) {
 }
 `;
 
-/** Кольца ряби от uniform-источников (REND-36): вершины не двигаются. */
+/**
+ * Кольца ряби от uniform-источников (REND-36): вершины не двигаются.
+ *
+ * Одно кольцо — ОДИН расходящийся гребень, а не набор концентрических: косинус
+ * окном прижат к фронту `front = скорость × возраст`, и вне окна кольца нет.
+ * Окно — гауссиана по расстоянию до фронта с σ в половину длины волны
+ * (`uRippleWave.w` = `1/(2σ²)`), то есть гребень шириной примерно в волну:
+ * рябь от шага читается расходящимся кругом, а не рисунком на воде вокруг
+ * юнита. Амплитуда падает С ФРОНТОМ (`/(1 + front)`), а не с расстоянием от
+ * центра: гаснет само кольцо по мере расхождения, и точка его рождения ничем
+ * не выделена — это и есть кольцо, оставленное позади, а не нимб источника.
+ *
+ * Бюджет фрагмента прежний: РОВНО один `exp` и один `cos` на источник, и
+ * дороже перехода к следу картинка не стала (QUAL-3, PERF-3).
+ */
 const RIPPLES = /* glsl */ `
 uniform vec4 uRipples[WATER_RIPPLES];
-uniform vec3 uRippleWave;
+uniform vec4 uRippleWave;
 
 vec2 waterRippleSlope(vec2 world) {
   vec2 slope = vec2(0.0);
@@ -203,9 +217,11 @@ vec2 waterRippleSlope(vec2 world) {
     float radius = length(delta);
     if (radius < 1e-4) continue;
     float front = uRippleWave.y * source.z;
-    float phase = uRippleWave.x * (radius - front);
-    float age = max(0.0, 1.0 - source.z * uRippleWave.z);
-    slope += (delta / radius) * (cos(phase) * source.w * age * exp(-radius * 0.6));
+    float offset = radius - front;
+    float phase = uRippleWave.x * offset;
+    float fade = max(0.0, 1.0 - source.z * uRippleWave.z);
+    float window = exp(-offset * offset * uRippleWave.w);
+    slope += (delta / radius) * (cos(phase) * source.w * fade * window / (1.0 + front));
   }
   return slope;
 }
@@ -450,7 +466,7 @@ export function createWaterMaterial(input: WaterMaterialInput): THREE.ShaderMate
       uSpecular: { value: WATER_SPECULAR },
       uShininess: { value: WATER_SHININESS },
       uRipples: { value: new Float32Array(4 * Math.max(1, input.rippleSources)) },
-      uRippleWave: { value: new THREE.Vector3() },
+      uRippleWave: { value: new THREE.Vector4() },
       tDetailNormal: { value: null },
       tDetailFoam: { value: null },
       tDetailFlow: { value: null },
@@ -503,11 +519,16 @@ function applyWaterUniforms(
   uniformOf(material, 'tDetailNormal').value = textured ? (input.detailNormal ?? null) : null;
   uniformOf(material, 'tDetailFoam').value = textured ? (input.detailFoam ?? null) : null;
   uniformOf(material, 'tDetailFlow').value = textured ? (input.detailFlow ?? null) : null;
-  const wave = uniformOf(material, 'uRippleWave').value as THREE.Vector3;
+  const wave = uniformOf(material, 'uRippleWave').value as THREE.Vector4;
+  const wavelength = Math.max(body.ripples.wavelength, 1e-4);
   wave.set(
-    (2 * Math.PI) / Math.max(body.ripples.wavelength, 1e-4),
+    (2 * Math.PI) / wavelength,
     body.ripples.speed,
     1 / Math.max(body.ripples.decaySeconds, 1e-4),
+    // Коэффициент окна гребня: σ в половину длины волны, то есть `1/(2σ²)` —
+    // это `2/λ²`. Считается здесь, а не во фрагменте: число постоянно на всё
+    // тело, и делить его на каждом фрагменте не за чем.
+    2 / (wavelength * wavelength),
   );
 }
 
