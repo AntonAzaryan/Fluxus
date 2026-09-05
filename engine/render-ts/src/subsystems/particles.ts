@@ -83,7 +83,17 @@ import {
   type AssetService,
   type VisualManifest,
 } from '@fluxus/assets';
-import type { EntityView, QualityDeclaration, QualityValues, RenderContext, RenderEvent, RenderSubsystem, TickView } from '../types.js';
+import { prewarmBatch } from '../types.js';
+import type {
+  EntityView,
+  QualityDeclaration,
+  QualityValues,
+  RenderContext,
+  RenderEvent,
+  RenderSubsystem,
+  SubsystemPrewarm,
+  TickView,
+} from '../types.js';
 import { costSink, type RenderCostCounters } from '../cost.js';
 import type { VisualSurfaceSource } from '../surfaceSource.js';
 import {
@@ -199,21 +209,6 @@ export interface ParticlesOptions {
   readonly camera?: THREE.Camera;
   /** Куда писать предупреждения; по умолчанию console.warn. */
   readonly warn?: (message: string) => void;
-}
-
-/**
- * Результат прогрева подсистемы (REND-24): текстуры образцов для заливки на GPU
- * до первого кадра. Корней прогрев не отдаёт — образцы и батчи уже стоят в
- * сцене подсистемы и компилируются вместе с ней.
- */
-export interface ParticlesPrewarm {
-  /** Текстуры уже разобранных образцов — вход `WebGLRenderer.initTexture`. */
-  readonly textures: readonly THREE.Texture[];
-  /**
-   * Те же текстуры после загрузки картинок документов (ASSET-4). Ждать этого
-   * собирающий не обязан: прогрев тогда сделает меньше, но сделает.
-   */
-  texturesReady(): Promise<readonly THREE.Texture[]>;
 }
 
 export class ParticlesSubsystem implements RenderSubsystem {
@@ -478,7 +473,7 @@ export class ParticlesSubsystem implements RenderSubsystem {
    * Не доехавший документ прогрев не держит (ASSET-4): его запись сыграет
    * прежним ленивым путём.
    */
-  prewarm(): Promise<ParticlesPrewarm> {
+  prewarm(): Promise<SubsystemPrewarm> {
     const ctx = this.ctx;
     if (ctx === null) throw new Error('ParticlesSubsystem: init() не вызван (REND-8)');
     // Сбор ссылок и ожидание исхода загрузки — `particlePrewarm.ts`; здесь
@@ -490,10 +485,18 @@ export class ParticlesSubsystem implements RenderSubsystem {
       (id) => this.documents.get(ctx.assets, id) !== null,
       (id) => { this.warmEffect(id); },
     ).then(() => ({
-      // Текстуры образцов — вход `initTexture` прогрева: заливка на GPU у
-      // документа с картинкой (`fire-soft.png`) иначе ложится на первый draw.
-      textures: this.pool.templateTextures(),
-      texturesReady: () => this.pool.texturesReady(),
+      // Первая ступень (REND-45) — текстуры уже разобранных образцов: вход
+      // `initTexture`, заливка на GPU у документа с картинкой (`fire-soft.png`)
+      // иначе ложится на первый draw. Корней прогрев не отдаёт: образцы и батчи
+      // уже стоят в сцене подсистемы и компилируются вместе с ней.
+      first: prewarmBatch({ textures: this.pool.templateTextures() }),
+      // Вторая — те же текстуры по доезду картинок документов (ASSET-4). Ждать
+      // её собирающий не обязан: прогрев тогда сделает меньше, но сделает.
+      settled: this.pool.texturesReady().then((textures) => prewarmBatch({ textures })),
+      // Возвращать нечего: прогретый экземпляр погашен в пул тем же вызовом,
+      // которым заведён (`warmEffect`), — тёплых объектов на руках у прогрева
+      // не остаётся, и `finish` здесь no-op по построению (REND-45).
+      finish: (): void => undefined,
     }));
   }
 

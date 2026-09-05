@@ -1,53 +1,109 @@
 /**
- * Прогрев презентации до первого появления видов в кадре. Всплеск открытия
- * обзора (FOW-8) — прыжок на клиф — раньше платил внутри одного кадра за всё
- * сразу: загрузку и запекание модели (VAT — десятки миллисекунд), создание
- * батча с его материалами, развёртку документов частиц и компиляцию всех
- * шейдерных программ первым draw'ом. Здесь та же работа выполняется во время
- * загрузки: подсистемы строят батчи и образцы заранее (`prewarm`), а их
- * программы компилируются тёплой сценой — с освещением НАСТОЯЩЕЙ сцены,
- * потому что состав света входит в ключ программы three.
+ * Исполнитель прогрева презентации (`game-boot` BOOT-3 поверх `rendering`
+ * REND-45): подсистема отдаёт, ЧТО прогревать, а КОГДА и ПОД КАКУЮ ЦЕЛЬ КАДРА
+ * это компилировать, решает сборка.
  *
- * Ступеней у моделей две, и вторая — не украшение: угасание (FOW-8) рисует
- * инстанс копией материала с `transparent`, а прозрачность — бит ключа
- * программы three, то есть программа у копии ДРУГАЯ; и она, и непрозрачная
- * нужны с текстурами скина, которых у первой ступени ещё нет. Порядок здесь
- * тот же, что у их входов: сперва компилируется всё, чему хватает моделей, и
- * только потом — образцы под якорями. Застрявшая текстура (ASSET-4) тогда
- * стоит нам прогрева угасания, а не прогрева батчей и VAT-текстур.
+ * Всплеск открытия обзора (FOW-8) — прыжок на клиф — раньше платил внутри одного
+ * кадра за всё сразу: загрузку и запекание модели (VAT — десятки миллисекунд),
+ * создание батча с его материалами, развёртку документов частиц и компиляцию
+ * всех шейдерных программ первым draw'ом. Здесь та же работа выполняется во
+ * время загрузки, под сплешем: подсистемы строят батчи и образцы заранее
+ * (`prewarm`), а их программы компилируются тёплой сценой — с освещением
+ * НАСТОЯЩЕЙ сцены, потому что состав света входит в ключ программы three.
+ *
+ * ## Имён подсистем здесь нет
+ *
+ * Стадия старта называется именем подсистемы (BOOT-3, REND-45), и список этих
+ * имён живёт в документе игры, а не в коде: исполнителю приходит `{ name,
+ * prewarm }` и цели кадра. Пятая подсистема с точкой прогрева не добавляет сюда
+ * ни строки — только запись в `boot.json`.
+ *
+ * ## Ступеней две, и порядок между ними несущий
+ *
+ * Угасание (FOW-8) рисует инстанс копией материала с `transparent`, а
+ * прозрачность — бит ключа программы three, то есть программа у копии ДРУГАЯ; и
+ * она, и непрозрачная нужны с текстурами скина, которых у первой ступени ещё
+ * нет. Порядок здесь тот же, что у их входов: сперва компилируется всё, чему
+ * хватает уже приехавшего, и только потом — то, что дождалось своих входов.
+ * Застрявшая текстура (ASSET-4) тогда стоит нам прогрева угасания, а не прогрева
+ * батчей и VAT-текстур.
+ *
+ * Тёплая сцена — ОДНА на стадию: повторные корни во второй ступени дают
+ * попадание в кэш программ three, а не работу.
  *
  * Материалы, которыми нарисована вторая ступень, подсистема моделей держит
  * живыми до сноса (её якоря прогрева), и это страховка: пока такой материал
  * жив, `usedTimes` его программы не падает до нуля — программа переживает
  * освобождение любой копии эпизода и в кадре не пересобирается.
  *
- * Прогрев ничего не меняет в наблюдаемом состоянии: тёплые корни в сцену
- * кадра не входят и возвращаются `finish()`; сорвавшийся прогрев кадр не
- * держит — ленивый путь монтажа с заглушкой (ASSET-4) остаётся как был.
+ * Прогрев ничего не меняет в наблюдаемом состоянии (REND-45): тёплые корни в
+ * сцену кадра не входят и возвращаются `finish()` — в том числе при отказе и
+ * таймауте стадии, поэтому `finish` стоит в `finally`.
  */
 import * as THREE from 'three';
-import type {
-  EffectsSubsystem,
-  FogSubsystem,
-  ModelsSubsystem,
-  ParticlesSubsystem,
-} from '@fluxus/render';
+import type { PrewarmBatch, SubsystemPrewarm } from '@fluxus/render';
 
-export interface PrewarmOptions {
-  readonly renderer: THREE.WebGLRenderer;
+/** Подсистема глазами стадии прогрева: имя и точка прогрева, больше ничего. */
+export interface PrewarmSubsystem {
+  readonly name: string;
+  prewarm(): Promise<SubsystemPrewarm>;
+}
+
+/**
+ * Рендерер глазами прогрева — ровно та поверхность, которой он пользуется.
+ * Структурный минимум, а не `WebGLRenderer`: живого GL в прогоне тестов нет, а
+ * подставлять три четверти библиотеки ради трёх методов незачем.
+ */
+export interface PrewarmRenderer {
+  initTexture(texture: THREE.Texture): void;
+  setRenderTarget(target: THREE.WebGLRenderTarget | null): void;
+  compileAsync(scene: THREE.Object3D, camera: THREE.Camera, lights?: THREE.Scene | null): Promise<unknown>;
+}
+
+/**
+ * Очередь работы с рендерером. Стадии старта идут ПАРАЛЛЕЛЬНО (каждая — своё
+ * обещание, BOOT-3), а связанная цель кадра — состояние ОДНОГО рендерера на
+ * всех: стадия, уснувшая на `await` со связанной целью, отдала бы соседке свою
+ * цель, и та скомпилировала бы «канвасный» вариант под чужой целью — то есть
+ * дубликат, которого кадр не рисует ни разу, а настоящая программа осталась бы
+ * первому кадру. Поэтому в связанную секцию стадии входят по одной; логически
+ * параллельными они от этого быть не перестают.
+ */
+export interface PrewarmQueue {
+  run(body: () => Promise<void>): Promise<void>;
+}
+
+/**
+ * Очередь: хвост-обещание, к которому пристраивается следующая работа. Отказ
+ * одной стадии очередь не рвёт — соседке он не принадлежит (BOOT-4).
+ */
+export function createPrewarmQueue(): PrewarmQueue {
+  let tail: Promise<void> = Promise.resolve();
+  return {
+    run(body: () => Promise<void>): Promise<void> {
+      const next = tail.then(body, body);
+      tail = next.then(
+        () => undefined,
+        () => undefined,
+      );
+      return next;
+    },
+  };
+}
+
+/** Цели кадра, под которые компилируются тёплые корни (REND-45). */
+export interface PrewarmTargets {
+  readonly renderer: PrewarmRenderer;
   /** Настоящая сцена кадра — источник света для компиляции тёплых корней. */
   readonly scene: THREE.Scene;
   readonly camera: THREE.Camera;
-  readonly models: ModelsSubsystem;
   /**
-   * Транзиентные эффекты (REND-23): их пул пуст до первой вспышки, и первый
-   * `FireballExploded` компилировал программу `MeshBasicMaterial{transparent}`
-   * прямо в кадре боя. Прогрев берёт по узлу на примитив манифеста и
-   * возвращает их в пул.
+   * Промежуточная цель кадра (FOW-7) размером 1×1; `null` — тумана в сцене нет,
+   * мир рисуется прямо на канвас, и второй цели у кадра не существует.
    */
-  readonly effects: EffectsSubsystem;
-  readonly particles: ParticlesSubsystem;
-  readonly fog: FogSubsystem | null;
+  readonly worldTarget: THREE.WebGLRenderTarget | null;
+  /** Очередь связанных секций: одна на все стадии одного рендерера. */
+  readonly queue: PrewarmQueue;
 }
 
 /**
@@ -76,67 +132,137 @@ export interface PrewarmOptions {
  * ветки `getParameters` смотрят на `renderer.getRenderTarget() === null`, а не
  * на саму цель. Размер тоже безразличен, поэтому цель здесь 1×1.
  */
-async function compileForFrameTargets(
-  renderer: THREE.WebGLRenderer,
-  target: THREE.WebGLRenderTarget | null,
-  scene: THREE.Scene,
-  camera: THREE.Camera,
-  lights: THREE.Scene,
+export function compileForFrameTargets(
+  scene: THREE.Object3D,
+  targets: PrewarmTargets,
 ): Promise<void> {
-  if (target !== null) {
-    const previous = renderer.getRenderTarget();
-    try {
-      renderer.setRenderTarget(target);
-      await renderer.compileAsync(scene, camera, lights);
-    } finally {
-      renderer.setRenderTarget(previous);
+  const { renderer, worldTarget, camera } = targets;
+  // Обе цели — ОДНИМ входом в очередь: между ними цель кадра остаётся связанной,
+  // и соседняя стадия в этом окне компилировала бы под неё свой канвасный
+  // вариант. Снимается цель тем же `null`, а не запомненной прежней: прогрев
+  // оставляет за собой канвас — состояние, в котором кадр начинает свою работу.
+  return targets.queue.run(async () => {
+    if (worldTarget !== null) {
+      renderer.setRenderTarget(worldTarget);
+      try {
+        await renderer.compileAsync(scene, camera, targets.scene);
+      } finally {
+        renderer.setRenderTarget(null);
+      }
     }
-  }
-  await renderer.compileAsync(scene, camera, lights);
+    await renderer.compileAsync(scene, camera, targets.scene);
+  });
 }
 
-export async function prewarmPresentation(options: PrewarmOptions): Promise<void> {
-  const { renderer, scene, camera, models, effects, particles, fog } = options;
-  // Оба прогрева ждут исхода загрузки своих ассетов; не доехавшие виды
-  // остаются ленивому пути и прогрев не держат.
-  const [warm, warmParticles] = await Promise.all([models.prewarm(), particles.prewarm()]);
-  // Эффекты ассетов не ждут вовсе — их прогрев синхронен (REND-23).
-  const warmEffects = effects.prewarm();
-  const warmScene = new THREE.Scene();
-  for (const root of warm.roots) warmScene.add(root);
-  for (const root of warmEffects.roots) warmScene.add(root);
-  // Без тумана мир рисуется прямо на канвас, и второй цели у кадра нет.
-  const worldTarget = fog === null ? null : new THREE.WebGLRenderTarget(1, 1);
-  try {
-    // Заливка тяжёлых текстур (VAT — мегабайты float) на GPU до первого кадра.
-    for (const texture of warm.textures) renderer.initTexture(texture);
-    // Текстуры образцов частиц — тем же приёмом: `QuarksLoader` грузит картинки
-    // документа асинхронно, и заливка `fire-soft.png` иначе ложится на первый
-    // draw эмиттера.
-    for (const texture of warmParticles.textures) renderer.initTexture(texture);
-    // Тёплые корни — с освещением настоящей сцены (третий аргумент).
-    await compileForFrameTargets(renderer, worldTarget, warmScene, camera, scene);
-    // Программы того, что уже в сцене: террейн, свет, батчи частиц прогрева.
-    await compileForFrameTargets(renderer, worldTarget, scene, camera, scene);
-    // Пост-проход тумана — материал его полноэкранного квада (FOW-7). Он и есть
-    // тот, кто рисует НА КАНВАС, поэтому цель кадра ему подставлять нельзя.
-    if (fog !== null) await renderer.compileAsync(fog.postPass.scene, camera);
-    // Вторая ступень моделей — образцы под якорями (FOW-8). Ждёт своих текстур
-    // скина и потому идёт ПОСЛЕ всего, чему хватило моделей: уже прогретое
-    // застрявшая текстура у нас не отнимет. Компилируется той же тёплой сценой
-    // — прежние корни в ней дают попадания в кэш программ, а не работу.
-    for (const root of await warm.anchoredRoots()) warmScene.add(root);
-    await compileForFrameTargets(renderer, worldTarget, warmScene, camera, scene);
-    // Текстуры частиц, доехавшие уже во время прогрева, — той же второй
-    // ступенью: ждать их вместе с первой значило бы отдать застрявшей картинке
-    // прогрев батчей и VAT-текстур, которым она не нужна вовсе (ASSET-4).
-    for (const texture of await warmParticles.texturesReady()) renderer.initTexture(texture);
-  } finally {
-    // Цель прогрева больше не нужна: программы держат материалы, а не она —
-    // у three ключ материала помнит ВСЕ его программы (`materialProperties.
-    // programs`), и обе доживут до сноса материала, а не до сноса этой цели.
-    worldTarget?.dispose();
-    warm.finish();
-    warmEffects.finish();
+/**
+ * Одна ступень: заливка текстур, мировые корни под обе цели кадра, экранные —
+ * на канвас. Тёплая сцена приходит снаружи и та же, что у соседней ступени.
+ *
+ * Пустая ступень не стоит ничего: компилировать нечего, и лишний `compileAsync`
+ * по неизменившейся тёплой сцене был бы работой ради формы.
+ */
+async function warmBatch(
+  batch: PrewarmBatch,
+  warmScene: THREE.Scene,
+  targets: PrewarmTargets,
+): Promise<void> {
+  // Заливка тяжёлых текстур (VAT — мегабайты float, картинки эмиттеров) на GPU
+  // до первого кадра: иначе она ложится на первый draw.
+  for (const texture of batch.textures) targets.renderer.initTexture(texture);
+  if (batch.roots.length > 0) {
+    for (const root of batch.roots) warmScene.add(root);
+    await compileForFrameTargets(warmScene, targets);
   }
+  // Экранный проход рисует НА КАНВАС сам (FOW-7): подставлять ему цель кадра
+  // нельзя, и света он не читает. Канвас здесь связывается ЯВНО — соседняя
+  // стадия могла оставить свою цель кадра связанной на время своей компиляции.
+  for (const root of batch.screenRoots) {
+    await targets.queue.run(async () => {
+      targets.renderer.setRenderTarget(null);
+      await targets.renderer.compileAsync(root, targets.camera);
+    });
+  }
+}
+
+/**
+ * Идущая стадия прогрева: её конец и её СВОРАЧИВАНИЕ. Второе — не роскошь:
+ * вторая ступень ждёт входов, которые вправе не приехать никогда (ASSET-4), а
+ * таймаут стадии (BOOT-4) только ставит исход — сам по себе он ничего не
+ * возвращает владельцу. Без этой ручки тёплые объекты остались бы на руках у
+ * свёрнутого прогрева, а батч-группа, к которой за время прогрева привязалась
+ * живая запись, — вне сцены кадра: её сущности не нарисовались бы за всю
+ * сессию, то есть «стадия остаётся ленивому пути» (BOOT-4) было бы неправдой.
+ */
+export interface PrewarmRun {
+  /** Конец стадии; отказ ступени доезжает сюда отказом. */
+  readonly done: Promise<void>;
+  /**
+   * Свернуть прогрев немедленно: тёплое возвращается владельцу, а идущая
+   * вторая ступень становится no-op (REND-45 требует этого от `finish`).
+   * Идемпотентно — звать его вправе и таймаут, и обычный конец стадии.
+   */
+  abandon(): void;
+}
+
+/**
+ * Стадия прогрева одной подсистемы (BOOT-3): обе ступени и возврат тёплого
+ * владельцу. `finish` — в `finally`: стадию сворачивают и отказом, и таймаутом
+ * (`abandon`), а тёплые объекты обязаны вернуться в пул при любом исходе
+ * (REND-45).
+ */
+export function prewarmSubsystem(
+  subsystem: PrewarmSubsystem,
+  targets: PrewarmTargets,
+): PrewarmRun {
+  let warm: SubsystemPrewarm | null = null;
+  // Признак сворачивания ставит замыкание `abandon` ниже, а анализ потока
+  // такого присваивания не видит: читай мы поле напрямую, каждая проверка после
+  // первой считалась бы лишней (тот же случай, что у подписки на ассет в
+  // `main.ts`). Поэтому запись плюс чтение вызовом.
+  const wind = { abandoned: false };
+  const abandoned = (): boolean => wind.abandoned;
+  const done = (async () => {
+    const stage = await subsystem.prewarm();
+    warm = stage;
+    // Отказ второй ступени вправе случиться раньше, чем до неё дойдёт очередь
+    // (первая ступень ещё компилируется) — и даже когда очередь до неё не
+    // дойдёт вовсе (стадия свёрнута): без немедленной подписки среда сочла бы
+    // его НЕОБРАБОТАННЫМ — Node печатает такое ошибкой процесса, — хотя ждёт
+    // его ровно эта стадия. Поэтому подписка стоит ДО проверки сворачивания.
+    const settled = stage.settled.then(
+      (batch) => ({ batch, error: null as unknown }),
+      (error: unknown) => ({ batch: null, error }),
+    );
+    // Свернули, пока подсистема ещё строила первую ступень: компилировать её
+    // теперь незачем — стадия уже получила свой исход.
+    if (abandoned()) {
+      stage.finish();
+      return;
+    }
+    const warmScene = new THREE.Scene();
+    try {
+      await warmBatch(stage.first, warmScene, targets);
+      const second = await settled;
+      // Отказ второй ступени — отказ стадии: `finish` его переживёт (`finally`),
+      // а исход `failed` поставит раннер (BOOT-3).
+      if (second.batch === null) throw second.error;
+      // Стадию свернули, пока ждали вторую ступень (таймаут BOOT-4): её тёплые
+      // объекты уже возвращены владельцу, и компилировать теперь нечего — это и
+      // значит «идущая `settled` после `finish` — no-op» (REND-45).
+      if (!abandoned()) await warmBatch(second.batch, warmScene, targets);
+    } finally {
+      // Свёрнутая стадия своё уже вернула (`abandon`), и второй раз звать
+      // `finish` незачем: контракт REND-45 такой вызов переживёт, но «ровно
+      // один раз» — свойство, которое стоит держать здесь, а не проверять там.
+      if (!abandoned()) stage.finish();
+    }
+  })();
+  return {
+    done,
+    abandon: () => {
+      if (abandoned()) return;
+      wind.abandoned = true;
+      warm?.finish();
+    },
+  };
 }

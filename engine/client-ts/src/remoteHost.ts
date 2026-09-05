@@ -90,6 +90,21 @@ export interface RemoteHostConfig {
    * HUD-9).
    */
   readonly onPause?: (pause: PauseEnvelope) => void;
+  /**
+   * Первая доставка состояния применена после handshake (SHELL-10): сетка
+   * террейна есть, словарь видов первой доставки прочитан, presentation-состояние
+   * существует. Событие наступает РОВНО ОДИН раз за подключение и ДО возврата из
+   * обработчика сообщения, то есть до любого кадра, который это состояние рисует.
+   *
+   * Потребитель (`game-boot` BOOT-4) гейтится им и MUST NOT выводить готовность
+   * опросом кадра: «состояние появилось» и «кадр его нарисовал» — разные моменты,
+   * и второй наступает по часам главного потока, а не по факту доставки.
+   *
+   * Разрыв истории (`snapAll`, REND-2) события не отменяет и не повторяет: оно о
+   * ПЕРВОЙ доставке, а не о непрерывности потока. Флаг «уже сообщено» гасит
+   * только новое подключение, которого у хоста нет вовсе — порт один.
+   */
+  readonly onFirstDelivery?: () => void;
 }
 
 export class RemoteHost implements PresentationProducer {
@@ -131,6 +146,12 @@ export class RemoteHost implements PresentationProducer {
    * матч по нему хост не ведёт (см. `onPause`).
    */
   lastPause: PauseEnvelope | undefined;
+  /**
+   * Сообщено ли о первой применённой доставке (SHELL-10). Поле хоста, а не
+   * буфера: буфер переживает разрыв истории и переезд ветви, а событие — о
+   * подключении, и повториться внутри него оно не вправе.
+   */
+  private firstDeliveryTold = false;
 
   constructor(context: RenderContext, config: RemoteHostConfig = {}) {
     this.presentation =
@@ -278,6 +299,13 @@ export class RemoteHost implements PresentationProducer {
       envelope.expiredEvents,
     );
     this.presentation.publish(this, buffer.view);
+    // Готовность оболочки (SHELL-10) — ЗДЕСЬ, после применения конверта и до
+    // возврата: состояние уже существует, а кадра с ним ещё не было. Ровно один
+    // раз за подключение: разрыв истории (`snapAll`) события не повторяет.
+    if (!this.firstDeliveryTold) {
+      this.firstDeliveryTold = true;
+      this.config.onFirstDelivery?.();
+    }
 
     this.requirePort().post({ t: 'ret', buffer: envelope.buffer }, [envelope.buffer]);
   }

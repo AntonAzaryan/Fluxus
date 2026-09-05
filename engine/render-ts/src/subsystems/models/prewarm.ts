@@ -21,7 +21,14 @@ import {
   type VisualManifest,
   type VisualTier,
 } from '@fluxus/assets';
-import type { RenderContext, ShadowCasterTier } from '../../types.js';
+import {
+  EMPTY_PREWARM_BATCH,
+  prewarmBatch,
+  type PrewarmBatch,
+  type RenderContext,
+  type ShadowCasterTier,
+  type SubsystemPrewarm,
+} from '../../types.js';
 import { createModelInstance, type ModelInstance, type SharedModelData, type TextureTarget } from '../../model/build.js';
 import { applySkin, skinTextureSources, type SkinTextureSource } from '../../model/skins.js';
 import { own } from '../../footprint.js';
@@ -35,42 +42,6 @@ import {
   type WarmAnchors,
   type WarmVariant,
 } from './instanceRecord.js';
-
-/**
- * Результат прогрева подсистемы моделей (`prewarm`): паркуемые корни для
- * компиляции программ тёплой сценой и текстуры для заливки на GPU до первого
- * кадра. `finish()` возвращает прогретое: образцы сносятся, батч-группы
- * отпускаются из тёплой сцены (и, если за время прогрева к батчу успела
- * привязаться живая запись, встают в настоящую); якоря программ остаются жить
- * с ассетом.
- *
- * Ступени ДВЕ, и разделены они по входу, а не по вкусу: `roots` строятся из
- * одних моделей, `anchoredRoots()` — ещё и из текстур скина (REND-6). Ассет
- * вправе стоять в `loading` неограниченно (ASSET-4), и одна застрявшая текстура
- * не должна отменять прогрев батчей, VAT-текстур и образцов, которым она не
- * нужна вовсе.
- */
-export interface ModelsPrewarm {
-  /**
-   * Первая ступень: корни вне сцены — батч-группы и образцы детальных видов.
-   * Ждут только своих МОДЕЛЕЙ. Рисовать их нельзя.
-   */
-  readonly roots: readonly THREE.Object3D[];
-  /** Текстуры прогретых батчей (VAT) — вход `WebGLRenderer.initTexture`. */
-  readonly textures: readonly THREE.Texture[];
-  /**
-   * Вторая ступень: образцы детальных видов под ЯКОРЯМИ программ (FOW-8) —
-   * материалами с текстурами записи, теми же, какими рисует матч. Обещание
-   * разрешается, когда доедут текстуры скина, и собирающий вправе не дожидаться
-   * его вовсе: прогрев тогда сделает меньше, но сделает.
-   *
-   * Каждый вид даёт непрозрачный образец, а вид СУЩНОСТИ — ещё и прозрачный:
-   * угасание (FOW-8) есть только у неё, decoration не угасает никогда (REND-18).
-   * Корни первой ступени сюда не попадают — они уже отданы `roots`.
-   */
-  anchoredRoots(): Promise<readonly THREE.Object3D[]>;
-  finish(): void;
-}
 
 /** Хозяйство подсистемы, без которого прогрев не построит ни батча, ни образца. */
 export interface PrewarmDeps {
@@ -154,7 +125,7 @@ export class Prewarmer {
     this.deps = deps;
   }
 
-  prewarm(): Promise<ModelsPrewarm> {
+  prewarm(): Promise<SubsystemPrewarm> {
     const ctx = this.deps.ctx();
     const waits: Promise<void>[] = [];
     for (const kind of visualKinds(this.deps.manifest())) {
@@ -348,8 +319,20 @@ export class Prewarmer {
     });
   }
 
-  /** Тёплые корни по доехавшим моделям — низ `prewarm`, после ожидания моделей. */
-  private collectWarm(): ModelsPrewarm {
+  /**
+   * Тёплые корни по доехавшим моделям — низ `prewarm`, после ожидания моделей.
+   *
+   * Ступени ДВЕ, и разделены они по входу, а не по вкусу (REND-45): первая
+   * строится из одних моделей, вторая — ещё и из текстур скина (REND-6). Ассет
+   * вправе стоять в `loading` неограниченно (ASSET-4), и одна застрявшая
+   * текстура не должна отменять прогрев батчей, VAT-текстур и образцов, которым
+   * она не нужна вовсе.
+   *
+   * `finish()` возвращает прогретое: образцы сносятся, батч-группы отпускаются
+   * из тёплой сцены (и, если за время прогрева к батчу успела привязаться живая
+   * запись, встают в настоящую); якоря программ остаются жить с ассетом.
+   */
+  private collectWarm(): SubsystemPrewarm {
     const roots: THREE.Object3D[] = [];
     const textures: THREE.Texture[] = [];
     const warmBatches: BatchEntry[] = [];
@@ -361,29 +344,24 @@ export class Prewarmer {
     }
     let finished = false;
     return {
-      roots,
-      textures,
-      anchoredRoots: async () => {
-        await Promise.all(this.warmSkinWaits(plan));
-        // Пока ждали текстуры, прогрев мог быть уже свёрнут: строить образцы
-        // теперь некому и незачем — сносить их было бы уже нечем.
-        if (finished) return [];
-        const anchored: THREE.Object3D[] = [];
-        for (const item of plan) {
-          const anchors = this.ensureWarmAnchors(item, !item.decoration);
-          if (anchors === null) continue;
-          anchored.push(this.warmAnchoredSample(item, anchors.opaque, warmDetailed));
-          // Прозрачный образец — только виду СУЩНОСТИ (FOW-8): угасание есть у
-          // неё, а decoration не угасает никогда (REND-18) — ни `syncPool`, ни
-          // `poseAll` не дают его записи долю меньше единицы. Прогревать
-          // вариант, которого не нарисует ни один кадр, значит платить за него
-          // компиляцией во время загрузки и держать его материалы всю сессию.
-          if (anchors.faded === null) continue;
-          anchored.push(this.warmAnchoredSample(item, anchors.faded, warmDetailed));
-        }
-        return anchored;
-      },
+      // Первая ступень: корни вне сцены — батч-группы и образцы детальных
+      // видов, плюс VAT-текстуры батчей. Ждут только своих МОДЕЛЕЙ.
+      first: prewarmBatch({ roots, textures }),
+      // Вторая ступень: образцы детальных видов под ЯКОРЯМИ программ (FOW-8) —
+      // материалами с текстурами записи, теми же, какими рисует матч. Обещание
+      // разрешается, когда доедут текстуры скина, и собирающий вправе не
+      // дожидаться его вовсе: прогрев тогда сделает меньше, но сделает.
+      //
+      // Каждый вид даёт непрозрачный образец, а вид СУЩНОСТИ — ещё и прозрачный:
+      // угасание (FOW-8) есть только у неё, decoration не угасает никогда
+      // (REND-18). Корни первой ступени сюда не попадают — они уже отданы.
+      settled: this.anchoredBatch(plan, warmDetailed, () => finished),
       finish: () => {
+        // Идемпотентно (REND-45): звать его вправе и обычный конец стадии, и её
+        // сворачивание по таймауту (`game-boot` BOOT-4), и оба сразу. Второй
+        // проход по батчам без этой проверки снял бы со сцены кадра группу,
+        // которую первый в неё вернул.
+        if (finished) return;
         finished = true;
         // Образцы сносятся, ЯКОРЯ остаются (FOW-8): своих материалов у образца
         // нет — скин ставился в якоря, а не через copy-on-write инстанса, — и
@@ -405,6 +383,38 @@ export class Prewarmer {
         }
       },
     };
+  }
+
+  /**
+   * Вторая ступень (REND-45): ждёт текстур скина и строит образцы под якорями.
+   * Обещание заводится сразу вместе с первой ступенью — запрос текстур не ждёт
+   * того, кто спросит результат, — а свернувшийся прогрев делает его no-op:
+   * образцы, которые некому сносить, строить незачем.
+   */
+  private anchoredBatch(
+    plan: readonly AnchorPlan[],
+    warmDetailed: ModelInstance[],
+    finished: () => boolean,
+  ): Promise<PrewarmBatch> {
+    return Promise.all(this.warmSkinWaits(plan)).then(() => {
+      // Пока ждали текстуры, прогрев мог быть уже свёрнут: строить образцы
+      // теперь некому и незачем — сносить их было бы уже нечем.
+      if (finished()) return EMPTY_PREWARM_BATCH;
+      const anchored: THREE.Object3D[] = [];
+      for (const item of plan) {
+        const anchors = this.ensureWarmAnchors(item, !item.decoration);
+        if (anchors === null) continue;
+        anchored.push(this.warmAnchoredSample(item, anchors.opaque, warmDetailed));
+        // Прозрачный образец — только виду СУЩНОСТИ (FOW-8): угасание есть у
+        // неё, а decoration не угасает никогда (REND-18) — ни `syncPool`, ни
+        // `poseAll` не дают его записи долю меньше единицы. Прогревать вариант,
+        // которого не нарисует ни один кадр, значит платить за него компиляцией
+        // во время загрузки и держать его материалы всю сессию.
+        if (anchors.faded === null) continue;
+        anchored.push(this.warmAnchoredSample(item, anchors.faded, warmDetailed));
+      }
+      return prewarmBatch({ roots: anchored });
+    });
   }
 
   /** Образец второй ступени под якорями варианта; сносится общим `finish`. */

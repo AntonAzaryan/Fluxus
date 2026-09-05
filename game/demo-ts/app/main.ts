@@ -121,13 +121,27 @@ import {
 import { HeroFollowPoint } from './cameraFollow.js';
 import { createEdgePanAxes, demoEdgePan } from './cameraInput.js';
 import { createDemoHud, createDemoMinimapSource, demoHudComposition } from './hud.js';
-import { prewarmPresentation } from './prewarm.js';
+import { createPrewarmQueue, type PrewarmSubsystem, type PrewarmTargets } from './prewarm.js';
+import {
+  DEFAULT_DESTINATION,
+  resolveBootDocument,
+  resolveSplash,
+} from './boot/bootDocument.js';
+import {
+  createBootSequence,
+  formatBootReport,
+  type BootSequence,
+} from './boot/bootSequence.js';
+import { createStageRunners, startBootStages } from './boot/bootStages.js';
+import { bindSplash, type Splash, type SplashElement } from './boot/splash.js';
+import bootJson from './boot/boot.json';
 import { PresentationScale } from './presentationScale.js';
 import { DEMO_STAND_SERVICE, demoStandHost } from './desktopStand.js';
 import { demoMode, demoServerUrl, localModeUrl, serverModeUrl, type DemoMode } from './mode.js';
 import { observerHudComposition } from './observerClient.js';
 import {
   QUALITY_PRESET_NAMES,
+  DEMO_DECLARABLE_SUBSYSTEMS,
   DEMO_PIXEL_RATIO_CAP,
   createDemoQuality,
   createQualitySelection,
@@ -343,6 +357,49 @@ let observing = false;
 
 const context: RenderContext = { scene: scene3, assets, config: { heightStep: HEIGHT_STEP } };
 let remote: RemoteHost | null = null;
+
+// ------------------------------------------------- старт приложения (BOOT-1)
+
+/**
+ * Последовательность старта (`game-boot` BOOT-1): появляется в `onReady` — до
+ * неё нет ни реестра стадий, ни того, чем их исполнять. Кадровый цикл и хост
+ * зовут её через `?.` и о состояниях не спрашивают: ветвление по состояниям
+ * живёт в самой машине.
+ */
+let boot: BootSequence | null = null;
+/**
+ * Адаптер сплеша (BOOT-2): берётся ДО загрузки манифеста — слой уже нарисован
+ * разметкой, и скрипту остаётся его вести. `null` — разметки сплеша на странице
+ * нет (чужой хост, урезанный шаблон): старт от этого не меняется ничем, кроме
+ * того, что показывать нечего.
+ */
+let splash: Splash | null = null;
+/** Момент показа сплеша по часам страницы — от него считается `minMs` (BOOT-2). */
+let splashShownAt = 0;
+
+/**
+ * Назначения (BOOT-1): куда передаётся управление после раскрытия. Сегодня одно
+ * — сцена матча, и делать ей сверх раскрытия нечего: она уже идёт под сплешем.
+ * Имя `menu` словарём документа зарезервировано, но здесь его нет — и валидация
+ * скажет об этом словом «зарезервировано», а не «незнакомое назначение».
+ */
+const BOOT_DESTINATIONS: Readonly<Record<string, () => void>> = {
+  scene: () => {
+    // Пусто намеренно: сцена и так под сплешем, и назначение `scene` не значит
+    // ничего сверх самого раскрытия.
+  },
+};
+
+/** Часы и отложенный вызов машины старта — страничные (BOOT-1, design D3). */
+const BOOT_CLOCK = {
+  now: () => performance.now(),
+  schedule: (ms: number, run: () => void): (() => void) => {
+    const id = setTimeout(run, ms);
+    return () => {
+      clearTimeout(id);
+    };
+  },
+};
 
 /**
  * Точка пола под курсором — сервисом проекции рендера (REND-42), по ВИЗУАЛЬНОЙ
@@ -1133,6 +1190,16 @@ function drawScene(): void {
 
 function frame(now: number): void {
   requestAnimationFrame(frame);
+  drawFrame(now);
+  // Тёплый кадр под сплешем (`game-boot` BOOT-4) — ПОСЛЕ отрисовки: раскрытие
+  // считает нарисованные кадры, а не начатые, и монтаж отложенного (REND-44)
+  // случается в них, а не в первом видимом. Ветвления по состояниям здесь нет:
+  // машина сама знает, считает она кадры или уже нет.
+  boot?.frame();
+}
+
+/** Сам кадр: ввод, камера, подсистемы, отрисовка — четыре стадии замера (PERF-2). */
+function drawFrame(now: number): void {
   const dt = lastFrameAt === null ? 0 : Math.min(now - lastFrameAt, 250);
   lastFrameAt = now;
   const dtSec = dt / 1000;
@@ -1473,10 +1540,126 @@ function wireDebugPanel(surface: VisualSurfaceSource, bounds: CameraBounds): voi
   attachDebugGlobal(window as DebugGlobalHost, layer);
 }
 
+/**
+ * Адаптер сплеша над разметкой страницы (BOOT-2). Медиа создаётся через тот же
+ * `document`, что и остальной DOM демо, а адрес байтов выводится тем же
+ * правилом, что у ассетов страницы (`assetSource`): asset id — путь от корня
+ * дерева контента (ASSET-2, CONT-5).
+ */
+function wireSplash(): void {
+  const root = document.getElementById('boot');
+  if (root === null) return;
+  splashShownAt = BOOT_CLOCK.now();
+  splash = bindSplash({
+    root: root as unknown as SplashElement,
+    splash: resolveSplash(bootJson),
+    dom: { createElement: (tag) => document.createElement(tag) as unknown as SplashElement },
+    assetUrl: (id) => `/${id}`,
+    onFadeEnded: () => boot?.fadeEnded(),
+  });
+}
+
+/**
+ * Последовательность старта над собранной сценой (BOOT-1, BOOT-3, BOOT-4).
+ *
+ * Зовётся в `onReady` ПОСЛЕ регистрации всех подсистем и пресета качества — по
+ * той же причине, по которой там же строится контроллер качества и панель
+ * отладки: реестр стадий складывается из объявленных подсистемами точек
+ * прогрева (REND-45), и раньше проверять состав документа было бы не по чему.
+ */
+function startBoot(): void {
+  // Реестр стадий — обходом регистраций сцены (REND-45): подсистема, точки
+  // прогрева не объявившая, стадией не является, и второго списка имён нет.
+  const warmable: PrewarmSubsystem[] = [];
+  remote!.stage.watchRegistrations((subsystem) => {
+    const point = subsystem.prewarm?.bind(subsystem);
+    if (point === undefined) return;
+    warmable.push({ name: subsystem.name, prewarm: point });
+  });
+  const plan = resolveBootDocument(bootJson, {
+    declared: new Set(warmable.map((subsystem) => subsystem.name)),
+    // Тот же перечень ОБЪЯВЛЯЕМЫХ владельцев, что у пресетов качества (QUAL-1):
+    // туман строится не на всякой сцене, и его стадия на сцене без тумана — не
+    // отказ документа, а `skipped`.
+    declarable: DEMO_DECLARABLE_SUBSYSTEMS,
+    destinations: new Set(Object.keys(BOOT_DESTINATIONS)),
+  });
+  if (plan.rejected.length > 0) {
+    console.error(`демо: документ старта отвергнут (BOOT-3) — ${plan.rejected.join('; ')}`);
+  }
+  // Промежуточная цель кадра прогрева (FOW-7) — 1×1: под неё компилируются те
+  // же программы, что рисуют мир под настоящей целью тумана. Сносится по
+  // окончании старта: программы держат материалы, а не её.
+  const worldTarget = fogSubsystem === null ? null : new THREE.WebGLRenderTarget(1, 1);
+  const targets: PrewarmTargets = {
+    renderer: renderer3,
+    scene: scene3,
+    camera,
+    worldTarget,
+    // Очередь связанных секций — ОДНА на все стадии: рендерер один, и его
+    // связанная цель кадра — общее состояние (см. `prewarm.ts`).
+    queue: createPrewarmQueue(),
+  };
+  // Раннеры строятся ДО машины: сворачивать по таймауту она обязана уметь с
+  // первого своего тика (BOOT-4), а сам прогрев заводится первым `run`.
+  const runners = createStageRunners(plan.document, { targets, subsystems: warmable });
+  const byName = new Map(runners.map((runner) => [runner.name, runner]));
+  const sequence = createBootSequence({
+    document: plan.document,
+    clock: BOOT_CLOCK,
+    shownAt: splashShownAt,
+    rejected: plan.rejected,
+    notWarmed: plan.notWarmed,
+    media: () => splash?.media ?? 'none',
+    // Раскрытие — синхронная точка бюджета кадра (REND-44): отложенное
+    // доделывается ЦЕЛИКОМ под непрозрачным сплешем, а не в первом видимом
+    // кадре (BOOT-4).
+    onReveal: () => {
+      remote!.stage.flushBudget();
+    },
+    // Разметки сплеша на странице может не быть вовсе (чужой хост, урезанный
+    // шаблон): угасать тогда нечему, и угасание закрывается тут же — иначе
+    // машина осталась бы в `revealing` навсегда, а с ней не было бы ни отчёта
+    // (BOOT-5), ни передачи управления назначению (BOOT-1).
+    onFade: () => {
+      if (splash === null) sequence.fadeEnded();
+      else splash.fade();
+    },
+    onState: (state) => splash?.show(state),
+    // Стадия свёрнута таймаутом (BOOT-4): её тёплые объекты возвращаются
+    // владельцу немедленно — ждать входов, которые вправе не приехать никогда
+    // (ASSET-4), больше некому.
+    onStageTimeout: (name) => byName.get(name)?.abandon(),
+    onDone: (report) => {
+      worldTarget?.dispose();
+      // Сторож старта (BOOT-5), по образцу `[bench]` (PERF-5): ни одно его
+      // число не входит в эталоны — это время стены и данные среды.
+      console.info(formatBootReport(report));
+      (BOOT_DESTINATIONS[plan.document.after] ?? BOOT_DESTINATIONS[DEFAULT_DESTINATION]!)();
+    },
+  });
+  boot = sequence;
+  // Handshake уже случился: этот код исполняется внутри `onReady` (SHELL-5).
+  sequence.handshake();
+  sequence.start();
+  startBootStages(plan.document, runners, (name, outcome) => {
+    sequence.stageSettled(name, outcome);
+    const progress = sequence.report().stages;
+    splash?.progress(progress.filter((stage) => stage.outcome !== null).length, progress.length);
+  });
+  // Точка наблюдения старта (BOOT-5): read-only, по образцу `demoCameraFocus`.
+  (window as { demoBoot?: () => unknown }).demoBoot = () => sequence.report();
+}
+
 async function main(): Promise<void> {
   // Режим выбирается ОДИН раз, до создания воркеров: переключение режима — это
   // перезагрузка страницы с другим параметром (SHELL-8).
   const mode = demoMode(window.location.search, window.location);
+  // Сплеш — ДО загрузки манифеста и по той же причине, по какой до неё идёт
+  // кнопка режима (BOOT-2): слой уже нарисован разметкой, и адаптер лишь берёт
+  // его в руки. Секция сплеша спрашивается у документа отдельно: реестра стадий
+  // до сборки сцены не существует, а заголовок и тайминги от него не зависят.
+  wireSplash();
   // Кнопка режима — ДО загрузки манифеста: она и есть дорога со сломанной
   // страницы. Упади манифест (нет ассета, нет сети) — переключиться было бы
   // нечем, а это единственный орган управления, которому матч не нужен вовсе.
@@ -1526,6 +1709,10 @@ async function main(): Promise<void> {
     // стоит по воле сервера, а картинка о паузе узнаёт единственным законным
     // способом — доставкой (HUD-9).
     onPause: (pause) => hudRuntime?.deliverPause(pause),
+    // Первая применённая доставка (SHELL-10) — гейт раскрытия (BOOT-4): именно
+    // ею последовательность старта отличает «идёт загрузка» от «ждём соперника»,
+    // и опросом кадра этого не вывести.
+    onFirstDelivery: () => boot?.firstDelivery(),
     onReady: (hello) => {
       // Полезная нагрузка handshake сборки (SHELL-5): у участника — своя
       // сущность, у наблюдателя — признак наблюдения и ни одной сущности
@@ -1913,22 +2100,12 @@ async function main(): Promise<void> {
       // (PERF-3) от его подключения не двигаются ни на единицу (RDBG-8).
       wireDebugPanel(surface, ground.bounds);
 
-      // Прогрев презентации (см. `prewarm.ts`): модели, батчи и эффекты частиц
-      // строятся и компилируются во время загрузки, а не в кадре первого
-      // появления вида — всплеск открытия обзора (FOW-8) монтирует прогретое.
-      // Кадровый цикл прогрева не ждёт: не доехавшее монтируется прежним
-      // ленивым путём (ASSET-4), а сорвавшийся прогрев — не отказ кадра.
-      void prewarmPresentation({
-        renderer: renderer3,
-        scene: scene3,
-        camera,
-        models,
-        effects,
-        particles,
-        fog: fogSubsystem,
-      }).catch((e: unknown) => {
-        console.warn('демо: прогрев рендера не удался — монтаж останется ленивым', e);
-      });
+      // Последовательность старта (`game-boot` BOOT-1) — ПОСЛЕДНЕЙ в `onReady`:
+      // реестр стадий складывается из точек прогрева зарегистрированных
+      // подсистем (REND-45), а сплеш держит кадр, пока они исполняются.
+      // Кадровый цикл при этом идёт: тёплые кадры монтируют отложенное (REND-44)
+      // и первые ленивые пути (ASSET-4) там, где их не видно (BOOT-4).
+      startBoot();
 
       requestAnimationFrame(frame);
     },

@@ -12,17 +12,7 @@
  */
 import { isEffectList, type VisualEffect, type VisualManifest } from '@fluxus/assets';
 import type * as THREE from 'three';
-
-/**
- * Результат прогрева подсистемы (REND-23): паркуемые корни для компиляции
- * программ тёплой сценой. `finish()` возвращает прогретое в пул — в кадр тёплые
- * узлы не входят и наблюдаемого состояния не меняют.
- */
-export interface EffectsPrewarm {
-  /** Корни вне сцены — по одному на примитив манифеста. Рисовать их нельзя. */
-  readonly roots: readonly THREE.Object3D[];
-  finish(): void;
-}
+import { EMPTY_PREWARM_BATCH, prewarmBatch, type SubsystemPrewarm } from '../types.js';
 
 /**
  * По одной записи на КАЖДЫЙ примитив манифеста, в документном порядке таблиц.
@@ -57,14 +47,20 @@ export function warmEffectNodes<N extends { readonly mesh: THREE.Object3D }>(
   records: readonly VisualEffect[],
   acquire: (record: VisualEffect) => N | null,
   release: (node: N) => void,
-): EffectsPrewarm {
+): SubsystemPrewarm {
   const warmed: N[] = [];
   for (const record of records) {
     const node = acquire(record);
     if (node !== null) warmed.push(node);
   }
   return {
-    roots: warmed.map((node) => node.mesh),
+    // Первая ступень (REND-45): корни вне сцены — по одному на примитив
+    // манифеста. Рисовать их нельзя.
+    first: prewarmBatch({ roots: warmed.map((node) => node.mesh) }),
+    // Второй ступени у эффектов нет: ассетов у них нет и ждать нечего.
+    settled: Promise.resolve(EMPTY_PREWARM_BATCH),
+    // Идемпотентно (REND-45): повторный `finish` возвращать уже нечего —
+    // список опустошён первым.
     finish: () => {
       for (const node of warmed) release(node);
       warmed.length = 0;

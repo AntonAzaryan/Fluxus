@@ -59,12 +59,14 @@
 import * as THREE from 'three';
 import type { EntityId, TerrainGrid } from '@fluxus/core';
 import type { PresentationFog } from '@fluxus/assets';
+import { prewarmBatch, singlePrewarm } from '../types.js';
 import type {
   QualityDeclaration,
   QualityValues,
   RenderContext,
   RenderSubsystem,
   ScenePostSource,
+  SubsystemPrewarm,
   TickView,
 } from '../types.js';
 import { costSink, type RenderCostCounters } from '../cost.js';
@@ -288,6 +290,21 @@ export class FogSubsystem implements RenderSubsystem {
 
   init(ctx: RenderContext): void {
     this.ctx = ctx;
+  }
+
+  /**
+   * Точка прогрева подсистемы (REND-45): полноэкранный квад финального прохода
+   * (FOW-7). Корень у него ЭКРАННЫЙ — рисует он на канвас и сам, без света и
+   * без цели кадра, — и компилировать его под цель кадра значило бы собрать
+   * программу, которой не нарисован ни один кадр.
+   *
+   * Ступень одна: квад с материалом существует с конструктора, ждать ему
+   * нечего — маска подъезжает готовой текстурой, ключа программы не меняя.
+   * Возвращать тоже нечего: своей сцены (`postScene`) квад не покидал, в сцену
+   * кадра не входил, и `finish` здесь no-op по построению.
+   */
+  prewarm(): Promise<SubsystemPrewarm> {
+    return Promise.resolve(singlePrewarm(prewarmBatch({ screenRoots: [this.postScene] })));
   }
 
   /**

@@ -106,6 +106,7 @@ import type {
   QualityValues,
   RenderContext,
   RenderSubsystem,
+  SubsystemPrewarm,
   TickView,
 } from '../types.js';
 import { costSink, type RenderCostCounters } from '../cost.js';
@@ -148,7 +149,7 @@ import {
 import { attachDetailed, rescaleCull } from './models/carrier/detailed.js';
 import { attachBatched } from './models/carrier/batched.js';
 import { releaseHolder, type ControllerOptions } from './models/carrier/support.js';
-import { Prewarmer, type ModelsPrewarm } from './models/prewarm.js';
+import { Prewarmer } from './models/prewarm.js';
 import { SpawnQueue } from './models/spawnQueue.js';
 import { nodePoseOf, type NodePose } from './models/nodePose.js';
 import {
@@ -1052,11 +1053,11 @@ export class ModelsSubsystem implements RenderSubsystem, InstanceProxySource {
   }
 
   /**
-   * Прогрев по манифесту до первого кадра (FOW-8, REND-31): что именно
-   * строится и почему — в `models/prewarm.ts`. Подсистема отдаёт прогреву своё
-   * хозяйство и больше в него не вмешивается.
+   * Точка прогрева подсистемы (REND-45, FOW-8, REND-31): что именно строится и
+   * почему — в `models/prewarm.ts`. Подсистема отдаёт прогреву своё хозяйство и
+   * больше в него не вмешивается.
    */
-  prewarm(): Promise<ModelsPrewarm> {
+  prewarm(): Promise<SubsystemPrewarm> {
     return this.prewarmer.prewarm();
   }
 

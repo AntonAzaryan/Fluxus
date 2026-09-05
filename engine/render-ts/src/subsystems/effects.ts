@@ -72,6 +72,7 @@ import type {
   QualityValues,
   RenderContext,
   RenderSubsystem,
+  SubsystemPrewarm,
   TickView,
 } from '../types.js';
 import type { VisualSurface } from '../visualSurface.js';
@@ -90,7 +91,7 @@ import {
   type ShellPose,
   type StateReader,
 } from './shellSupport.js';
-import { effectPrimitives, warmEffectNodes, type EffectsPrewarm } from './effectsPrewarm.js';
+import { effectPrimitives, warmEffectNodes } from './effectsPrewarm.js';
 import { EffectNodePool, type EffectNode, type ShapeContext } from './effectNodes.js';
 import { CameraCull } from './cameraCull.js';
 import { MAX_GROUND_STEPS } from './effectShapes.js';
@@ -399,16 +400,23 @@ export class EffectsSubsystem implements RenderSubsystem {
   }
 
   /**
-   * Прогрев до первого кадра (REND-23): по одному узлу пула на КАЖДЫЙ примитив
-   * манифеста — программа `MeshBasicMaterial{transparent}` компилируется тёплой
-   * сценой, а не в кадре первой вспышки. Тёплые узлы возвращаются в пул
-   * `finish()`; наблюдаемого состояния прогрев не меняет и счётчиков не двигает.
+   * Точка прогрева подсистемы (REND-45, REND-23): по одному узлу пула на КАЖДЫЙ
+   * примитив манифеста — программа `MeshBasicMaterial{transparent}`
+   * компилируется тёплой сценой, а не в кадре первой вспышки. Тёплые узлы
+   * возвращаются в пул `finish()`; наблюдаемого состояния прогрев не меняет и
+   * счётчиков не двигает.
+   *
+   * Форма асинхронная, как у соседей (REND-45), хотя ждать здесь нечего: ассетов
+   * у эффектов нет, и обе ступени готовы сразу. Своя, синхронная форма стоила бы
+   * сборке ветки в общей процедуре стадии — ровно того, ради чего форма и единая.
    */
-  prewarm(): EffectsPrewarm {
-    return warmEffectNodes(
-      effectPrimitives(this.manifest),
-      (record) => this.acquire(record),
-      (node) => { this.release(node); },
+  prewarm(): Promise<SubsystemPrewarm> {
+    return Promise.resolve(
+      warmEffectNodes(
+        effectPrimitives(this.manifest),
+        (record) => this.acquire(record),
+        (node) => { this.release(node); },
+      ),
     );
   }
 

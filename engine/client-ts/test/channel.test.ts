@@ -733,3 +733,105 @@ describe('обратный канал: ввод и управление (SHELL-6
     expect(remote.view!.tick).toBe(pausedTick + 1);
   });
 });
+
+describe('наблюдаемая готовность оболочки: первая применённая доставка (SHELL-10)', () => {
+  /**
+   * Зонд готовности: считает кадры и запоминает признак разрыва каждой
+   * доставки. Оба вопроса теста — «был ли кадр с этим состоянием» и «повторилось
+   * ли событие на разрыве истории» — видны только отсюда: у хоста их нет.
+   */
+  function readiness(): {
+    subsystem: RenderSubsystem;
+    readonly frames: number;
+    readonly snaps: boolean[];
+  } {
+    const state = { frames: 0, snaps: [] as boolean[] };
+    return {
+      subsystem: {
+        name: 'readiness',
+        init: () => {},
+        syncTick: (view: TickView) => state.snaps.push(view.snapAll),
+        updateFrame: () => {
+          state.frames += 1;
+        },
+      },
+      get frames() {
+        return state.frames;
+      },
+      get snaps() {
+        return state.snaps;
+      },
+    };
+  }
+
+  it('одно событие за подключение: после handshake, до кадра с состоянием, и разрыв истории его не повторяет', () => {
+    const rig = makeRig();
+    const ports = queuedPortPair();
+    const rewind = createRewindController(rig.sim, rig.state, {
+      history: new RingHistory({ interval: 1, capacity: 16 }),
+      inputs: createInputLog(),
+    });
+    const shell = new WorkerShell({
+      mode: 'local',
+      port: ports.worker,
+      sim: rig.sim,
+      state: rig.state,
+      tickSeconds: TICK_SECONDS,
+      extractor: makeExtractor(rig),
+      playerId: PLAYER_ID,
+      rewind,
+      sender: { poolSize: 1 },
+      clock: () => 0,
+    });
+    const probeReadiness = readiness();
+    const log: string[] = [];
+    const atEvent: { view: number | null; frames: number }[] = [];
+    const remote = new RemoteHost(dummyContext(), {
+      clock: () => 0,
+      onReady: () => {
+        log.push('handshake');
+        remote.register(probeReadiness.subsystem);
+      },
+      onFirstDelivery: () => {
+        log.push('firstDelivery');
+        atEvent.push({ view: remote.view?.tick ?? null, frames: probeReadiness.frames });
+      },
+    }).connect(ports.main);
+
+    shell.start();
+    shell.stop();
+    ports.drain();
+    // Handshake прошёл, доставок нет — ростер ещё не собран: готовности нет, и
+    // это ожидание, а не готовность (SHELL-10, сценарий «Ожидание матча»).
+    expect(log).toEqual(['handshake']);
+
+    shell.stepTick();
+    ports.drain();
+    // Событие наступило один раз и ДО кадра: состояние уже применено (номер
+    // тика читается), а кадров с ним ещё не было ни одного.
+    expect(log).toEqual(['handshake', 'firstDelivery']);
+    expect(atEvent).toEqual([{ view: 1, frames: 0 }]);
+
+    remote.frame(0);
+    expect(probeReadiness.frames).toBe(1);
+
+    // Разрыв истории (`snapAll`, REND-2): смена режима мира взводит его у
+    // экстрактора. Готовности он не отменяет и не повторяет — событие о ПЕРВОЙ
+    // доставке, а не о непрерывности потока.
+    remote.control('pause');
+    shell.stepTick();
+    ports.drain();
+    expect(probeReadiness.snaps).toEqual([false, true]);
+    expect(log).toEqual(['handshake', 'firstDelivery']);
+
+    // И обычная доставка следом его тоже не повторяет: первый тик после
+    // возобновления несёт разрыв сменой режима, второй — уже обычный.
+    remote.control('resume');
+    for (let step = 0; step < 2; step++) {
+      shell.stepTick();
+      ports.drain();
+    }
+    expect(probeReadiness.snaps).toEqual([false, true, true, false]);
+    expect(log).toEqual(['handshake', 'firstDelivery']);
+  });
+});

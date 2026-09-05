@@ -1,0 +1,20 @@
+{
+  "splash": {
+    "kind": "none",
+    "title": "Fluxus — демо-арена",
+    "minMs": 400,
+    "fadeMs": 400
+  },
+  "warmFrames": 2,
+  "after": "scene",
+  "stages": [
+    { "stage": "handshake", "required": true },
+    { "stage": "prewarm.models", "required": true, "timeoutMs": 8000 },
+    { "stage": "prewarm.particles", "required": true, "timeoutMs": 8000 },
+    { "stage": "prewarm.effects", "required": true, "timeoutMs": 4000 },
+    { "stage": "prewarm.fog", "required": true, "timeoutMs": 4000 },
+    { "stage": "scene", "required": true, "timeoutMs": 8000 },
+    { "stage": "firstDelivery", "required": true },
+    { "stage": "warmFrames", "required": true }
+  ]
+}

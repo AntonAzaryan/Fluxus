@@ -22,6 +22,9 @@ export type {
   // пост-обработка кадра (REND-34): рендерер глазами полноэкранного прохода и
   // порт, которым её выход видит маскирующий проход тумана (FOW-7)
   PostRendererLike,
+  // точка прогрева подсистемы (REND-45): единая форма результата — ступени и
+  // их возврат владельцу
+  PrewarmBatch,
   RenderConfig,
   RenderContext,
   RenderEvent,
@@ -32,6 +35,7 @@ export type {
   ShadowCasterSink,
   ShadowCasterTier,
   ShadowPhase,
+  SubsystemPrewarm,
   TickView,
 } from './types.js';
 
@@ -41,6 +45,10 @@ export type {
 // знает — их приносит приложение игры.
 export { FRAME_RENDER_SCALE, QualityController, frameKnobs, resolveRenderScale, validateQualityPreset } from './quality.js';
 export { UNLIMITED_FRAME_BUDGET } from './types.js';
+// Ступень прогрева (REND-45): пустая и собранная из того, что у подсистемы есть.
+// Форма ступени одна на всех, и строят её не только подсистемы пакета — сборка
+// вправе объявить точку прогрева у своей (REND-8).
+export { EMPTY_PREWARM_BATCH, prewarmBatch } from './types.js';
 
 export type {
   QualityDeclaration,
@@ -180,7 +188,6 @@ export type { TerrainPaintSource } from './subsystems/terrainPaintWeights.js';
 // Подсистема моделей (REND-3..6) и переподача манифеста визуалов (REND-17).
 // Наружу инстанс виден преобразованием и границами, а не узлом сцены (REND-3).
 export { ModelsSubsystem, type ModelsOptions } from './subsystems/models.js';
-export type { ModelsPrewarm } from './subsystems/models/prewarm.js';
 export type { NodePose } from './subsystems/models/nodePose.js';
 export { ANIMATION_STATES, type InstancePose, type ModelInstanceView } from './subsystems/models/instanceRecord.js';
 // Канал тинта инстанса (REND-40): вход порта «цвет на сущность».
@@ -303,7 +310,6 @@ export type { ShadowComposite, ShadowRendererLike } from './lighting/shadowCompo
 // манифеста — оболочки от доставленного состояния и вспышки от событий.
 export { EffectsSubsystem } from './subsystems/effects.js';
 export type { EffectsOptions } from './subsystems/effects.js';
-export type { EffectsPrewarm } from './subsystems/effectsPrewarm.js';
 
 // Подсистема превью каста (REND-28): что заденет способность, если подтвердить
 // её сейчас. Два входа и только два — скомпилированный каталог определений при
@@ -321,7 +327,6 @@ export type { AbilitySlotStatNames, AbilityStepStatNames } from './subsystems/ab
 export { ParticlesSubsystem } from './subsystems/particles.js';
 export type {
   ParticlesOptions,
-  ParticlesPrewarm,
   SocketNodePose,
   SocketPose,
   SocketSource,

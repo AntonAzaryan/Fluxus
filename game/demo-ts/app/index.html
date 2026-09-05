@@ -391,6 +391,72 @@
         border-radius: 8px;
         z-index: 20;
       }
+      /* Сплеш старта (`game-boot` BOOT-2): непрозрачный слой поверх вьюпорта,
+         присутствующий в разметке ДО исполнения скриптов приложения — первый
+         кадр, который видит игрок, несёт его, а не фон страницы и не пустой
+         канвас. Скрипт его ВЕДЁТ (`app/boot/splash.ts`), а не создаёт.
+
+         z-index 15 — ниже органов страницы (20) и сообщений сборки (30), выше
+         `#app` и HUD внутри него: сцена под сплешем не видна, а дорога со
+         сломанной страницы — кнопка режима и `#notice` — видна (BOOT-2).
+
+         Состояние ведёт атрибут `data-state`: `done` убирает слой из потока
+         событий и отрисовки целиком, а не оставляет прозрачным поверх кадра. */
+      #boot {
+        position: fixed;
+        inset: 0;
+        z-index: 15;
+        display: grid;
+        align-content: center;
+        justify-items: center;
+        gap: 14px;
+        padding: 24px;
+        color: #e8e8f0;
+        font: 14px/1.6 ui-monospace, Menlo, monospace;
+        text-align: center;
+        background: #12121f;
+        opacity: 1;
+        transition: opacity var(--boot-fade, 400ms) ease-out;
+      }
+      #boot[data-state='revealing'] {
+        opacity: 0;
+      }
+      #boot[data-state='done'] {
+        display: none;
+      }
+      .boot__title {
+        font-size: 22px;
+        letter-spacing: 0.12em;
+      }
+      .boot__status {
+        min-height: 1.6em;
+        opacity: 0.75;
+      }
+      /* Полоса прогресса стадий: долю ставит адаптер переменной, а не шириной
+         в пикселях — раскладку держит разметка. */
+      .boot__progress {
+        width: min(320px, 60vw);
+        height: 3px;
+        background: rgba(255, 255, 255, 0.14);
+        border-radius: 2px;
+        overflow: hidden;
+      }
+      .boot__bar {
+        width: calc(var(--boot-progress, 0) * 100%);
+        height: 100%;
+        background: #ffd479;
+        transition: width 120ms linear;
+      }
+      /* Слот медиа (BOOT-2): пуст при `kind: none`, и тогда сплеш — оформление
+         разметки с заголовком. Своей графики у демо пока нет. */
+      .boot__media:empty {
+        display: none;
+      }
+      .boot__media img,
+      .boot__media video {
+        max-width: min(720px, 80vw);
+        max-height: 50vh;
+      }
       /* Сообщение сборки: матч занят, стенд не отвечает. Скрыто, пока нечего
          сказать; текст ставит main.ts. */
       #notice {
@@ -413,6 +479,12 @@
   </head>
   <body>
     <div id="app"></div>
+    <div id="boot" data-state="splash">
+      <div class="boot__media"></div>
+      <div class="boot__title">Fluxus — демо-арена</div>
+      <div class="boot__status">загрузка…</div>
+      <div class="boot__progress"><div class="boot__bar"></div></div>
+    </div>
     <div id="notice"></div>
     <details id="debug" title="отладочные источники рендера (render-debug)">
       <summary>отладка</summary>
