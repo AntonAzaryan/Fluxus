@@ -47,7 +47,8 @@
     "render-debug": "client",
     "server-control": "net",
     "server-manager": "editor-content",
-    "npc-behavior": "editor-content"
+    "npc-behavior": "editor-content",
+    "game-boot": "editor-content"
   },
   "exceptions": [
     {
