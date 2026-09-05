@@ -18,10 +18,11 @@ import { RingHistory, createInputLog, createRewindController } from '@fluxus/cor
 import { ACTION_BITS, PLAYER_ID, TICK_SECONDS, createDemoSimulation } from './sim.js';
 import { demoNavigationOf, demoRewindOf, demoScrubEveryOf, type DemoDocuments } from './match.js';
 import { createDemoExtractor } from './extractor.js';
-import { isDemoSoloInit } from './wiring.js';
+import { isDemoSoloInit, type DemoNotice } from './wiring.js';
 
 const scope = self as unknown as {
   addEventListener(type: 'message', listener: (event: { data: unknown }) => void): void;
+  postMessage(message: unknown): void;
 };
 
 /** Поднять соло-сборку по прочитанным документам: мир, история, оболочка. */
@@ -104,5 +105,16 @@ function start(documents: DemoDocuments): void {
 
 scope.addEventListener('message', (event) => {
   if (!isDemoSoloInit(event.data)) return;
-  start(event.data.documents);
+  try {
+    start(event.data.documents);
+  } catch (error) {
+    // Отказ сборки — человеку (CONT-5, Risks дизайна): документы приезжают из
+    // раздачи, и негодный документ дерева не должен превращаться в пустой экран
+    // с текстом в консоли воркера, которой у игрока нет.
+    const notice: DemoNotice = {
+      t: 'demo-notice',
+      message: `демо: соло-режим не поднялся — ${error instanceof Error ? error.message : String(error)}`,
+    };
+    scope.postMessage(notice);
+  }
 });

@@ -145,7 +145,7 @@ import {
   type DemoServerInit,
   type DemoSoloInit,
 } from './wiring.js';
-import { loadDemoDocuments, type DemoDocuments } from './match.js';
+import { demoMatchConfig, loadDemoDocuments, type DemoDocuments } from './match.js';
 import bindingsJson from './bindings.json';
 
 /** Высота уровня террейна в мировых единицах — параметр рендера (REND-7). */
@@ -1180,6 +1180,11 @@ function frame(now: number): void {
 function spawnShellWorker(mode: DemoMode, documents: DemoDocuments): Worker {
   if (mode.kind === 'solo') {
     const solo = new Worker(new URL('./worker.ts', import.meta.url), { type: 'module' });
+    // Отказ сборки — на экран, как и у сетевых сторон (CONT-5, Risks дизайна):
+    // консоли воркера у игрока нет, и молчание выглядело бы зависшей страницей.
+    solo.addEventListener('message', (event: MessageEvent) => {
+      if (isDemoNotice(event.data)) showNotice(event.data.message);
+    });
     const init: DemoSoloInit = { t: 'demo-solo-init', documents };
     solo.postMessage(init);
     return solo;
@@ -1203,6 +1208,9 @@ function spawnShellWorker(mode: DemoMode, documents: DemoDocuments): Worker {
   }
   const server = new Worker(new URL('./serverWorker.ts', import.meta.url), { type: 'module' });
   server.addEventListener('message', (event: MessageEvent) => {
+    // Сервер вкладки тоже говорит человеку, почему матча нет (CONT-5): его
+    // отказ — не «клиент не подключился», а несобравшийся матч.
+    if (isDemoNotice(event.data)) showNotice(event.data.message);
     if (!isDemoServerReady(event.data)) return;
     const init: DemoClientInit = { t: 'demo-client-init', documents, port: event.data.port };
     client.postMessage(init, [event.data.port]);
@@ -1508,6 +1516,15 @@ async function main(): Promise<void> {
   let documents: DemoDocuments;
   try {
     documents = await loadDemoDocuments(assetSource);
+    // Раскладка прочитанного — ЗДЕСЬ и ДО спавна воркеров (CONT-5). Документ из
+    // раздачи правит дизайнер, а не сборка, поэтому опечатка в секции, ключ,
+    // которого сервер матча не читает, или контент-пак не из одной сцены —
+    // обычное состояние дерева, а не невозможное. Отказы у раскладки названные
+    // (`match.ts`, `contentPack`), и подняться им надо человеку на экран: в
+    // воркере тот же отказ умер бы необработанным промисом, а у игрока остался
+    // бы пустой экран. Результат отбрасывается — раскладка чистая, и ровно её
+    // же зовут у себя все три стороны страницы.
+    demoMatchConfig(documents);
   } catch (error) {
     // Без документов не поднимается НИ ОДИН режим (CONT-5): заглушка вместо
     // сцены подняла бы матч, которого нет ни у сервера, ни у второго игрока.

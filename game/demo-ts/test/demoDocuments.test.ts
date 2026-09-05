@@ -13,7 +13,7 @@
  */
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { dirname, join } from 'node:path';
+import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { contentPack, type MatchConfig } from '@fluxus/net';
@@ -109,7 +109,27 @@ describe('загрузчик документов демо читает дере
     const broken = memorySource({ [DEMO_MATCH_ID]: '{ "name": ' });
     await expect(loadDemoDocuments(broken)).rejects.toThrow(/не разобран как JSON/);
   });
+
+  it('опечатка в раздаваемом документе — названный отказ раскладки, а не молчание', async () => {
+    // Документ из раздачи правит дизайнер, а не сборка: опечатка в секции —
+    // обычное состояние правленого дерева. Читается он при этом успешно, и
+    // отказ приходит от РАСКЛАДКИ (`demoMatchConfigOf`) — той самой, которую
+    // страница зовёт на главном потоке до спавна воркеров, чтобы причина
+    // доехала человеку, а не умерла в воркере (CONT-5, NTR-14).
+    const typo = memorySource({
+      [DEMO_MATCH_ID]: JSON.stringify({
+        ...(JSON.parse(readFileSync(MATCH_PATH, 'utf8')) as Record<string, unknown>),
+        rewnd: { interval: 30 },
+      }),
+      'scenes/duel.scene.json': readFileSync(join(CONTENT_ROOT, 'scenes/duel.scene.json'), 'utf8'),
+    });
+    const served = await loadDemoDocuments(typo);
+    expect(() => demoMatchConfig(served)).toThrow(/"rewnd"/);
+  });
 });
+
+/** Число, которым «дизайнер» правит сцену в копии дерева: подпись правки. */
+const EDITED_COOLDOWN = 123;
 
 describe('правка сцены в раздаваемом дереве доезжает до страницы (CONT-5)', () => {
   let work: string;
@@ -130,7 +150,7 @@ describe('правка сцены в раздаваемом дереве дое�
     ) as { abilities: { cooldownTicks?: number }[] };
     // Правка дизайнера — перетюнили cooldown способности: правило, а не
     // оформление, поэтому хеш контент-пака обязан от неё сдвинуться (NET-17).
-    scene.abilities[0]!.cooldownTicks = 123;
+    scene.abilities[0]!.cooldownTicks = EDITED_COOLDOWN;
     writeFileSync(scenePath, `${JSON.stringify(scene, null, 2)}\n`);
   });
 
@@ -153,9 +173,15 @@ describe('правка сцены в раздаваемом дереве дое�
   it('дерево-копия читается тем же загрузчиком: корень — свойство оболочки', async () => {
     // «Путь до корня дерева контента задаётся оболочкой» (CONT-5): загрузчик
     // получает источник байтов, а не путь, и второй раскладки ID в путь у
-    // приложения не появляется.
+    // приложения не появляется. Проверяется это ПО СОДЕРЖИМОМУ: сцена пришла
+    // именно из копии — с правленым числом, — а не из дерева репозитория, где
+    // прежнее. Иначе тест прошёл бы и у загрузчика, который источник
+    // проигнорировал.
     const edited = await loadDemoDocuments(contentSource(root));
-    expect(dirname(join(root, DEMO_MATCH_ID))).toBe(join(root, 'matches'));
+    const scene = edited.scenes[edited.match.sceneRef] as unknown as {
+      abilities: { cooldownTicks?: number }[];
+    };
+    expect(scene.abilities[0]!.cooldownTicks).toBe(EDITED_COOLDOWN);
     expect(Object.keys(edited.scenes)).toEqual([edited.match.sceneRef]);
   });
 });

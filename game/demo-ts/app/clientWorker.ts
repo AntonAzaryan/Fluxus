@@ -45,6 +45,17 @@ function notice(message: string): void {
   port.post(envelope);
 }
 
+/**
+ * Сорвавшаяся сборка матча — человеку (CONT-5, Risks дизайна). Документы
+ * приезжают из раздачи, и негодный документ — обычное состояние правленого
+ * дерева: главный поток раскладку уже проверил, но отказ здесь всё равно обязан
+ * доехать до экрана, а не осесть необработанным промисом в консоли воркера,
+ * которой у игрока нет.
+ */
+function failed(what: string, error: unknown): void {
+  notice(`демо: ${what} — ${error instanceof Error ? error.message : String(error)}`);
+}
+
 /** Как часто воркер сверяет запас разметки: человек читает его глазами. */
 const LEAD_POLL_MS = 500;
 
@@ -98,33 +109,48 @@ function watchObserving(client: MatchClient): void {
 scope.addEventListener('message', (event) => {
   if (!isDemoClientInit(event.data)) return;
   const { documents } = event.data;
-  const { connect, candidates } = rendezvousOf(event.data, documents);
-  // Наблюдатель (NTR-9, NTR-21) — другой род участия, а не другой сервер:
-  // рандеву то же самое (SES-3), и отличается только то, что имени слота он не
-  // предъявляет и ввода не отправляет. Возврата в матч у него нет: слот за ним
-  // не числится, возвращаться некуда.
-  if (event.data.observer === true) {
-    void observeDemoMatch({
-      port,
-      documents,
-      connect: () => connect(OBSERVER_PLAYER_ID),
-    }).then((observing) => {
-      if (!observing.ok) {
-        notice(observing.reason);
-        return;
-      }
-      watchObserving(observing.client);
-    });
-    return;
-  }
-  // `notify` — состояние возврата в матч (NTR-17, design D8): «возвращаюсь»,
-  // «вернуться не удалось», пустая строка на успехе. Тем же конвертом, что и
-  // причина, по которой матча нет: у человека это одно и то же место на экране.
-  void joinDemoMatch({ port, documents, connect, candidates, notify: notice }).then((joined) => {
-    if (!joined.ok) {
-      notice(joined.reason);
+  // Сборка мира матча идёт из документа конверта и может отказать названной
+  // причиной (CONT-5): каждый её исход — и синхронный, и промисом — кончается
+  // сообщением человеку, а не тишиной.
+  try {
+    const { connect, candidates } = rendezvousOf(event.data, documents);
+    // Наблюдатель (NTR-9, NTR-21) — другой род участия, а не другой сервер:
+    // рандеву то же самое (SES-3), и отличается только то, что имени слота он не
+    // предъявляет и ввода не отправляет. Возврата в матч у него нет: слот за ним
+    // не числится, возвращаться некуда.
+    if (event.data.observer === true) {
+      void observeDemoMatch({
+        port,
+        documents,
+        connect: () => connect(OBSERVER_PLAYER_ID),
+      })
+        .then((observing) => {
+          if (!observing.ok) {
+            notice(observing.reason);
+            return;
+          }
+          watchObserving(observing.client);
+        })
+        .catch((error: unknown) => {
+          failed('наблюдение не поднялось', error);
+        });
       return;
     }
-    watchInputLead(joined);
-  });
+    // `notify` — состояние возврата в матч (NTR-17, design D8): «возвращаюсь»,
+    // «вернуться не удалось», пустая строка на успехе. Тем же конвертом, что и
+    // причина, по которой матча нет: у человека это одно и то же место на экране.
+    void joinDemoMatch({ port, documents, connect, candidates, notify: notice })
+      .then((joined) => {
+        if (!joined.ok) {
+          notice(joined.reason);
+          return;
+        }
+        watchInputLead(joined);
+      })
+      .catch((error: unknown) => {
+        failed('матч не поднялся', error);
+      });
+  } catch (error) {
+    failed('матч не поднялся', error);
+  }
 });

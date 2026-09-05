@@ -10,7 +10,7 @@ import { isBotWorkerInit, startBotWorker, type WorkerLike } from '@fluxus/bot';
 import { demoMatchConfig } from './match.js';
 import { demoBotBehavior, demoBotProfile } from './bots.js';
 import { openLocalSession } from './localSession.js';
-import { isDemoServerInit, type DemoServerReady } from './wiring.js';
+import { isDemoServerInit, type DemoNotice, type DemoServerReady } from './wiring.js';
 
 const scope = self as unknown as {
   addEventListener(type: 'message', listener: (event: { data: unknown }) => void): void;
@@ -54,29 +54,41 @@ scope.addEventListener('message', (event) => {
   // читает их главный поток из раздачи оболочки, и матч вкладки поднимается по
   // тому же экземпляру, по которому клиент считает свою версию (NTR-5).
   const { documents } = event.data;
-  // Профиль — человечность (BOT-6), документ поведения — политика выбора
-  // (BOT-8); связку называет профиль, а читает дерево контента игра (CONT-4).
-  const profile = demoBotProfile();
-  const session = openLocalSession({
-    config: demoMatchConfig(documents),
-    // Первый слот держит оболочка этой же вкладки: предлагать его боту незачем,
-    // сервер всё равно отказал бы (BOT-7).
-    reserved: documents.match.players.slice(0, 1),
-    // Дедлайн нулевой: второго ЧЕЛОВЕКА эта сборка не ждёт (design D2).
-    botFillMs: 0,
-    bots: {
-      worker: botThread(),
-      channel: () => new MessageChannel(),
-      brain: 'evaluated',
-      profile,
-      behavior: demoBotBehavior(profile),
-    },
-  });
+  try {
+    // Профиль — человечность (BOT-6), документ поведения — политика выбора
+    // (BOT-8); связку называет профиль, а читает дерево контента игра (CONT-4).
+    const profile = demoBotProfile();
+    const session = openLocalSession({
+      config: demoMatchConfig(documents),
+      // Первый слот держит оболочка этой же вкладки: предлагать его боту незачем,
+      // сервер всё равно отказал бы (BOT-7).
+      reserved: documents.match.players.slice(0, 1),
+      // Дедлайн нулевой: второго ЧЕЛОВЕКА эта сборка не ждёт (design D2).
+      botFillMs: 0,
+      bots: {
+        worker: botThread(),
+        channel: () => new MessageChannel(),
+        brain: 'evaluated',
+        profile,
+        behavior: demoBotBehavior(profile),
+      },
+    });
 
-  // Канал человека открывается ДО старта расписания: слот основателя занят его
-  // собственным `Hello`, а не удержан особым правилом (SES-6).
-  const port = session.connect(new MessageChannel());
-  const ready: DemoServerReady = { t: 'demo-server-ready', port };
-  scope.postMessage(ready, [port]);
-  session.start();
+    // Канал человека открывается ДО старта расписания: слот основателя занят его
+    // собственным `Hello`, а не удержан особым правилом (SES-6).
+    const port = session.connect(new MessageChannel());
+    const ready: DemoServerReady = { t: 'demo-server-ready', port };
+    scope.postMessage(ready, [port]);
+    session.start();
+  } catch (error) {
+    // Названный отказ раскладки документа (CONT-5, Risks дизайна) — человеку, а
+    // не в консоль воркера: главный поток раскладку уже проверил, но сервер
+    // вкладки может не собраться и по другой причине, и молчание выглядело бы
+    // страницей, которая просто не поднялась.
+    const notice: DemoNotice = {
+      t: 'demo-notice',
+      message: `демо: сервер вкладки не поднялся — ${error instanceof Error ? error.message : String(error)}`,
+    };
+    scope.postMessage(notice);
+  }
 });
