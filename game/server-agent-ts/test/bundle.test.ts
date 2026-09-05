@@ -18,6 +18,8 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { contentPack } from '@fluxus/net';
+import { readMatchFile } from '@fluxus/net/bin/matchFile.mjs';
 import { createControlClient, type ControlClient } from '../src/client/index.js';
 import { nodeSocket } from '../src/client/node.js';
 
@@ -38,6 +40,45 @@ describe('дистрибутив хоста собирается одной ко
   let distribution: Distribution;
   let agent: ChildProcess | undefined;
   let client: ControlClient | undefined;
+  /** Второй агент — прогон по ПРАВЛЕНОМУ дереву того же дистрибутива. */
+  let edited: ChildProcess | undefined;
+  let editedClient: ControlClient | undefined;
+
+  /**
+   * Агент ИЗ дистрибутива: своё состояние, свой адресный файл, порты — нулевые.
+   * Возвращает адрес, которым он представился (MGR-5): в нём же материал
+   * автопейринга.
+   */
+  async function startFromBundle(name: string): Promise<{ process: ChildProcess; address: URL }> {
+    const stateDir = join(work, name);
+    const addressFile = join(stateDir, 'address');
+    const process_ = spawn(
+      process.execPath,
+      [
+        'game/server-agent-ts/bin/agent.mjs',
+        '--control-port', '0',
+        '--http-port', '0',
+        '--host', '127.0.0.1',
+        '--state', stateDir,
+        '--content', 'content',
+        '--stand', 'game/demo-ts/bin/demo-serve.mjs',
+        '--address-file', addressFile,
+      ],
+      { cwd: out, stdio: ['ignore', 'pipe', 'pipe'], env: { ...process.env, NODE_OPTIONS: '' } },
+    );
+    let output = '';
+    process_.stdout.setEncoding('utf8');
+    process_.stdout.on('data', (chunk: string) => { output += chunk; });
+    process_.stderr.setEncoding('utf8');
+    process_.stderr.on('data', (chunk: string) => { output += chunk; });
+
+    const deadline = Date.now() + 30_000;
+    while (!existsSync(addressFile) && Date.now() < deadline) {
+      await new Promise((done) => setTimeout(done, 100));
+    }
+    expect(existsSync(addressFile), output).toBe(true);
+    return { process: process_, address: new URL(readFileSync(addressFile, 'utf8')) };
+  }
 
   beforeAll(() => {
     work = mkdtempSync(join(tmpdir(), 'fluxus-bundle-'));
@@ -65,7 +106,9 @@ describe('дистрибутив хоста собирается одной ко
 
   afterAll(() => {
     client?.close();
+    editedClient?.close();
     agent?.kill('SIGKILL');
+    edited?.kill('SIGKILL');
     rmSync(work, { recursive: true, force: true });
   });
 
@@ -92,12 +135,13 @@ describe('дистрибутив хоста собирается одной ко
     expect(existsSync(join(out, 'client'))).toBe(false);
   });
 
-  it('страницу со стороны взять нечем: дистрибутив из разных версий не собирается (SRV-7)', () => {
-    // Клиентский бандл несёт документы контента в себе (сцена и документ матча
-    // вкомпилированы в него), и версию — `buildId` плюс хеш контент-пака —
-    // клиент считает из НИХ, а предъявляет её в рукопожатии (NTR-5). Готовая
-    // страница со стороны поэтому и есть вторая версия внутри дистрибутива, а
-    // «собрать дистрибутив из разных версий MUST NOT быть возможно».
+  it('страницу со стороны взять нечем: происхождение её кода не удостоверено (SRV-7)', () => {
+    // Документы контента страница читает из раздачи дистрибутива (CONT-5), и
+    // второй их копии в бандле нет — основание отказа поэтому не контент, а КОД:
+    // `buildId` есть поле документа матча, который страница прочтёт вместе с
+    // остальным, поэтому чужая сборка предъявила бы версию хозяина и прошла бы
+    // сверку (NTR-5), исполняя другие правила. Удостоверяет происхождение кода
+    // страницы только сборка вместе с дистрибутивом.
     const prebuilt = join(work, 'prebuilt-client');
     mkdirSync(prebuilt, { recursive: true });
     writeFileSync(join(prebuilt, 'index.html'), 'страница со стороны\n');
@@ -125,50 +169,26 @@ describe('дистрибутив хоста собирается одной ко
   }, 120_000);
 
   it('агент из дистрибутива поднимает сервер и раздаёт дерево, не заглядывая в репозиторий', async () => {
-    const stateDir = join(work, 'state');
-    const addressFile = join(stateDir, 'address');
-    agent = spawn(
-      process.execPath,
-      [
-        'game/server-agent-ts/bin/agent.mjs',
-        '--control-port', '0',
-        '--http-port', '0',
-        '--host', '127.0.0.1',
-        '--state', stateDir,
-        '--content', 'content',
-        '--stand', 'game/demo-ts/bin/demo-serve.mjs',
-        '--address-file', addressFile,
-      ],
-      { cwd: out, stdio: ['ignore', 'pipe', 'pipe'], env: { ...process.env, NODE_OPTIONS: '' } },
-    );
-    let output = '';
-    agent.stdout?.setEncoding('utf8');
-    agent.stdout?.on('data', (chunk: string) => { output += chunk; });
-    agent.stderr?.setEncoding('utf8');
-    agent.stderr?.on('data', (chunk: string) => { output += chunk; });
-
-    const deadline = Date.now() + 30_000;
-    while (!existsSync(addressFile) && Date.now() < deadline) {
-      await new Promise((done) => setTimeout(done, 100));
-    }
-    expect(existsSync(addressFile), output).toBe(true);
-
+    const started = await startFromBundle('state');
+    agent = started.process;
     // Адрес и материал автопейринга приезжают ОДНОЙ строкой (MGR-5, решение D6):
     // ни адрес, ни код в приложении не зашиты.
-    const address = new URL(readFileSync(addressFile, 'utf8'));
+    const address = started.address;
     client = createControlClient(nodeSocket);
     const welcome = await client.connect({
       url: address.origin,
       pairingCode: address.searchParams.get('code') ?? '',
       label: 'проверка дистрибутива',
     });
-    // Версии дистрибутива видны ДО запуска серверов (SRV-7).
+    // Версии дистрибутива видны ДО запуска серверов (SRV-7). На нетронутом
+    // дистрибутиве они совпадают с записью о сборке — и это свойство нетронутого
+    // дистрибутива, а не инвариант: считает их агент по дереву, которое раздаёт.
     expect(welcome.versions.buildId).toBe(distribution.buildId);
     expect(welcome.versions.contentPackHash).toBe(distribution.contentPackHash);
     expect(welcome.fingerprint).toBe(address.searchParams.get('fingerprint'));
 
     // Настоящий сервер матча — по документу из дистрибутива.
-    const started = await client.start({
+    const running = await client.start({
       match: 'matches/duel.match.json',
       port: 0,
       bot: '',
@@ -176,15 +196,57 @@ describe('дистрибутив хоста собирается одной ко
       onDisconnect: '',
       autoRestart: false,
     });
-    const entry = started.servers[0]!;
+    const entry = running.servers[0]!;
     expect(entry.state).toBe('listening');
     expect(entry.joinUrl).toContain('?server=');
 
-    // Раздача дистрибутива отдаёт дерево контента: тестеру хватит браузера.
+    // Раздача дистрибутива отдаёт дерево контента: тестеру хватит браузера. По
+    // этому же адресному пространству страница игрока читает документ матча и
+    // конфиг сцены (CONT-5, SRV-8) — не из своего бандла.
     const asset = await fetch(new URL(entry.joinUrl).origin + '/matches/duel.match.json');
     expect(asset.status).toBe(200);
     expect(await asset.text()).toContain('"players"');
 
     await client.stop(entry.id);
+  }, 120_000);
+
+  it('правка контента внутри дистрибутива меняет версию, которую называет агент (SRV-7)', async () => {
+    // Сценарий «Правка контента внутри дистрибутива»: конфиг сцены в дереве
+    // правят, а страницу игрока не пересобирают. Сервер матча и заново открытая
+    // страница читают ОДНО дерево (CONT-5) и сойдутся на новом хеше — значит,
+    // агент обязан назвать менеджеру версию по правленому ДЕРЕВУ, а не по
+    // записи о сборке: иначе он показал бы третью версию, которой нет ни у кого.
+    const scenePath = join(out, 'content/scenes/duel.scene.json');
+    const scene = JSON.parse(readFileSync(scenePath, 'utf8')) as {
+      abilities: { cooldownTicks?: number }[];
+    };
+    scene.abilities[0]!.cooldownTicks = 123;
+    writeFileSync(scenePath, `${JSON.stringify(scene, null, 2)}\n`);
+
+    // Хеш считается ТЕМ ЖЕ кодом, каким его считают сервер, клиент и сам агент
+    // (NET-17): вторая реализация хеширования проверяла бы саму себя.
+    const document = readMatchFile(join(out, 'content/matches/duel.match.json'));
+    const expected = contentPack(document.scenes!).hash;
+    expect(expected).not.toBe(distribution.contentPackHash);
+
+    // Агент версии считает НА СТАРТЕ: правка дерева видна следующему запуску,
+    // как правка документа — следующему открытию страницы (Non-Goals дизайна).
+    const started = await startFromBundle('state-edited');
+    edited = started.process;
+    editedClient = createControlClient(nodeSocket);
+    const welcome = await editedClient.connect({
+      url: started.address.origin,
+      pairingCode: started.address.searchParams.get('code') ?? '',
+      label: 'проверка правленого дерева',
+    });
+    expect(welcome.versions.contentPackHash).toBe(expected);
+    // `buildId` документа матча правка сцены не трогает — половины версии
+    // независимы (NET-16).
+    expect(welcome.versions.buildId).toBe(distribution.buildId);
+    // А запись о сборке осталась прежней, и это НЕ противоречие: она отвечает на
+    // вопрос «что собрали», агент — на вопрос «что раздаём» (design D7).
+    const record = JSON.parse(readFileSync(join(out, 'distribution.json'), 'utf8')) as Distribution;
+    expect(record.contentPackHash).toBe(distribution.contentPackHash);
+    expect(welcome.versions.distribution).toBe(record.name);
   }, 120_000);
 });

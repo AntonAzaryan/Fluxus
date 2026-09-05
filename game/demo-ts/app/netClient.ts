@@ -38,16 +38,18 @@ import {
   MatchClient,
   buildMatchWorld,
   type ClientCloseReason,
+  type LoadedContentPack,
+  type MatchConfig,
   type Transport,
 } from '@fluxus/net';
 import { NetworkShell, type ShellPort } from '@fluxus/client';
 import { createDemoExtractor } from './extractor.js';
 import {
-  DEMO_MATCH,
-  DEMO_SNAPSHOT_RATE,
   demoClientBuildOptions,
   demoContentPack,
   demoMatchConfig,
+  demoSnapshotRateOf,
+  type DemoDocuments,
 } from './match.js';
 
 /** Сколько ждать исхода одной попытки входа, мс. */
@@ -72,6 +74,12 @@ const NOTICE_CLEARED = '';
 export interface DemoClientOptions {
   /** Канал к главному потоку (SHELL-3). */
   readonly port: ShellPort;
+  /**
+   * Документы контент-пака, прочитанные из раздачи оболочки (CONT-5, design
+   * D4): по ним считается версия, которой клиент представляется в рукопожатии
+   * (NET-16, NTR-5), и по ним же поднимается локальный мир матча.
+   */
+  readonly documents: DemoDocuments;
   /** Как добраться до сервера матча: пара портов или сокет (NTR-2). */
   readonly connect: (playerId: string) => Promise<Transport>;
   /** Имена ростера по порядку попыток (D4). */
@@ -249,13 +257,28 @@ interface Attempt {
   readonly outcome: Outcome;
 }
 
+/**
+ * Матч, по которому поднимается сессия: конфиг сборки и её контент-пак, оба —
+ * из ПРОЧИТАННЫХ документов (CONT-5). Считаются один раз на сессию: хеш пака
+ * (NET-17) — функция тех же байтов, и пересчитывать его каждой попыткой значило
+ * бы делать одну и ту же работу ради одного и того же числа.
+ */
+interface DemoMatchSetup {
+  readonly config: MatchConfig;
+  readonly pack: LoadedContentPack;
+}
+
+function matchSetupOf(documents: DemoDocuments): DemoMatchSetup {
+  const pack = demoContentPack(documents);
+  return { config: demoMatchConfig(documents, pack), pack };
+}
+
 /** Клиент матча одной попытки — одноразовый по построению (design D5, NTR-17). */
-function attemptClient(playerId: string): MatchClient {
-  const config = demoMatchConfig(demoContentPack());
+function attemptClient(playerId: string, { config, pack }: DemoMatchSetup): MatchClient {
   return new MatchClient({
     playerId,
     version: config.version,
-    content: demoContentPack(),
+    content: pack,
     // Тот же номер бита, которым настроен сервер (`rewind.holdButton` из
     // документа матча): пока мир не в `Running`, наружу уезжает только он —
     // ведение скраба, — а движение и остальные действия маскируются (NET-11).
@@ -293,7 +316,8 @@ function retryable(client: MatchClient): boolean {
  * первый же снапшот вернёт его в «сейчас» матча.
  */
 export async function joinDemoMatch(options: DemoClientOptions): Promise<DemoJoinResult> {
-  const config = demoMatchConfig(demoContentPack());
+  const setup = matchSetupOf(options.documents);
+  const config = setup.config;
   let lastReason = 'матч занят: свободных слотов нет';
   // Обёртка одна на все попытки: подписка к настоящему порту единственная, и
   // живым потребителем остаётся ровно одна оболочка (см. `bufferedShellPort`).
@@ -308,7 +332,7 @@ export async function joinDemoMatch(options: DemoClientOptions): Promise<DemoJoi
       ...demoClientBuildOptions(config),
     });
     const grid = world.sim.terrain?.grid;
-    const session = demoSession(options, playerId, world.state, grid, buffered);
+    const session = demoSession(options, playerId, world.state, grid, buffered, setup);
     const attempt = await session.begin();
     if ('failure' in attempt) return { ok: false, reason: attempt.failure };
     if (attempt.outcome === 'accepted') return session.joined(attempt);
@@ -335,6 +359,7 @@ function demoSession(
   state: SimulationState,
   grid: Parameters<typeof createDemoExtractor>[0],
   buffered: ReturnType<typeof bufferedShellPort>,
+  setup: DemoMatchSetup,
 ) {
   const notify = options.notify ?? ((): void => {});
   const clock = options.clock ?? (() => performance.now());
@@ -374,7 +399,7 @@ function demoSession(
     } catch (error) {
       return { failure: `не удалось соединиться: ${String(error)}` };
     }
-    const client = attemptClient(playerId);
+    const client = attemptClient(playerId, setup);
     const watched = watchedTransport(transport, onClosed);
     if (shell === undefined) {
       shell = new NetworkShell({
@@ -384,8 +409,9 @@ function demoSession(
         transport: watched,
         state,
         // Доставки идут в темпе рассылки снапшотов — знаменатель альфы главного
-        // потока берётся оттуда же (SHELL-3, REND-2).
-        tickSeconds: 1 / (DEMO_MATCH.snapshotRate ?? DEMO_SNAPSHOT_RATE),
+        // потока берётся оттуда же (SHELL-3, REND-2), из ПРОЧИТАННОГО документа
+        // матча.
+        tickSeconds: 1 / demoSnapshotRateOf(options.documents.match),
         extractor: createDemoExtractor(grid),
         terrain: grid ?? null,
         // Пауза и перемотка тонкому клиенту не даются: своей машины состояний у
@@ -468,7 +494,7 @@ function demoSession(
         hero,
         playerId,
         slot: accepted.client.slot,
-        players: [...DEMO_MATCH.players],
+        players: [...setup.config.players],
       });
       return {
         ok: true,

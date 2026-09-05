@@ -7,7 +7,7 @@
  * экстрактора → канал → доставленное состояние главного потока; проверяется,
  * что статы и фаза полёта доезжают до `TickView`, из которого HUD и читает.
  */
-import { describe, expect, it } from 'vitest';
+import { beforeAll, describe, expect, it } from 'vitest';
 import {
   FIXED_ONE,
   tick as simTick,
@@ -35,11 +35,31 @@ import {
   createDemoSimulation,
   stateBit,
 } from '../app/sim.js';
-import { DEMO_REWIND } from '../app/match.js';
-import { dummyContext, syncPortPair } from './fixtures.js';
+import { demoNavigationOf, demoRewindOf, type DemoDocuments } from '../app/match.js';
+import { demoDocuments, dummyContext, syncPortPair } from './fixtures.js';
 import sceneJson from '../../../content/scenes/duel.scene.json';
 
 const SCENE = sceneJson as unknown as SceneDef;
+
+/**
+ * Документы контент-пака — из ДЕРЕВА, тем же загрузчиком, что у страницы
+ * (`game-content` CONT-5): зависимости сборки (навигация, NTR-14) и номер бита
+ * ведения скраба приезжают из документа матча, а не из умолчаний теста.
+ */
+let documents: DemoDocuments;
+
+beforeAll(async () => {
+  documents = await demoDocuments();
+});
+
+/**
+ * Сцена демо с зависимостями сборки из документа матча — ровно так её собирает
+ * соло-воркер страницы (`app/worker.ts`, SHELL-8).
+ */
+function demoSim(): ReturnType<typeof createDemoSimulation> {
+  return createDemoSimulation(SCENE, { navigation: demoNavigationOf(documents.match) });
+}
+
 const CAST = 1 << ACTION_BITS.cast;
 
 /**
@@ -126,7 +146,7 @@ describe('композиция HUD демо резолвится против р
 
 describe('headless-прогон демо: статы и фаза полёта доезжают (HUD-8, REND-12)', () => {
   it('слот игрока приезжает статом, снаряд — фазой полёта', () => {
-    const { sim, state, playerId, grid } = createDemoSimulation(SCENE);
+    const { sim, state, playerId, grid } = demoSim();
     const [workerPort, mainPort] = syncPortPair();
     const shell = new WorkerShell({
       mode: 'local',
@@ -202,7 +222,7 @@ describe('headless-прогон демо: статы и фаза полёта д
    * расхождение с симуляцией в большую сторону FOW-9 запрещает прямо.
    */
   it('радиус обзора доезжает из VisionState — величины симуляции, а не авторской', () => {
-    const { sim, state, playerId, grid } = createDemoSimulation(SCENE);
+    const { sim, state, playerId, grid } = demoSim();
     const [workerPort, mainPort] = syncPortPair();
     const shell = new WorkerShell({
       mode: 'local',
@@ -242,7 +262,7 @@ describe('headless-прогон демо: статы и фаза полёта д
    * же, как честное «каста нет» (HUD-8).
    */
   it('фаза каста доезжает статом слота и ПРОПАДАЕТ на выстреле', () => {
-    const { sim, state, playerId, grid } = createDemoSimulation(SCENE);
+    const { sim, state, playerId, grid } = demoSim();
     const [workerPort, mainPort] = syncPortPair();
     const shell = new WorkerShell({
       mode: 'local',
@@ -343,7 +363,7 @@ describe('панель способностей не обещает нажати
     // Орган ВЕДЕНИЯ скраба — тот же бит, и его номер называет документ матча
     // (`rewind.holdButton`): разошлись бы — удержание кнопки кастовало ульту, а
     // точку остановки не вело (NET-11, REW-13).
-    expect(ACTION_BITS.rewind).toBe(DEMO_REWIND?.holdButton);
+    expect(ACTION_BITS.rewind).toBe(demoRewindOf(documents.match)?.holdButton);
   });
 });
 

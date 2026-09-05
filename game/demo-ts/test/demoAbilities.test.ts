@@ -16,7 +16,7 @@
  * спавн-точки арены разнесены на треть карты, и снаряд летел бы до соперника
  * дольше, чем длится любая из способностей.
  */
-import { describe, expect, it } from 'vitest';
+import { beforeAll, describe, expect, it } from 'vitest';
 import {
   FIXED_ONE,
   LOCOMOTION_DODGE,
@@ -57,7 +57,8 @@ import {
   type VisualEffectsSection,
 } from '@fluxus/assets';
 import { createDemoExtractor } from '../app/extractor.js';
-import { DEMO_SCRUB_EVERY } from '../app/match.js';
+import { demoScrubEveryOf, type DemoDocuments } from '../app/match.js';
+import { demoDocuments } from './fixtures.js';
 import sceneJson from '../../../content/scenes/duel.scene.json';
 import matchJson from '../../../content/matches/duel.match.json';
 import manifestJson from '../../../content/visuals/manifest.json';
@@ -122,6 +123,17 @@ const MATCH = matchJson as unknown as {
     readonly step?: number;
   };
 };
+
+/**
+ * Документы контент-пака — из ДЕРЕВА, тем же загрузчиком, что у страницы
+ * (`game-content` CONT-5): каденс скраба выводится из прочитанного документа
+ * матча, как его выводит соло-сборка (`app/worker.ts`).
+ */
+let documents: DemoDocuments;
+
+beforeAll(async () => {
+  documents = await demoDocuments();
+});
 
 const CAST = 1 << ACTION_BITS.cast;
 const KILL = 1 << ACTION_BITS.kill;
@@ -4222,7 +4234,7 @@ describe('ульта отката: политика в сцене (опреде�
       1,
       Math.round((MATCH.tickRate ?? 60) / (MATCH.snapshotRate ?? 30)),
     );
-    expect(DEMO_SCRUB_EVERY).toBe(cycleTicks);
+    expect(demoScrubEveryOf(documents.match)).toBe(cycleTicks);
     // И шаг в тиках — тот же, что у сервера: он приезжает из того же документа.
     expect(MATCH.rewind?.step).toBeGreaterThan(0);
   });

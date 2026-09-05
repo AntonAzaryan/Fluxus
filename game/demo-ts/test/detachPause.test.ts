@@ -8,7 +8,7 @@
  * как во всей сетевой суите (NTR-3, NTR-12). Предмет проверки — политика
  * сборки, а не доставка.
  */
-import { describe, expect, it } from 'vitest';
+import { beforeAll, describe, expect, it } from 'vitest';
 import {
   MatchServer,
   type GameVersion,
@@ -16,10 +16,22 @@ import {
   type ClientMessage,
 } from '@fluxus/net';
 import { DetachPause } from '../app/detachPause.js';
-import { DEMO_MATCH, DEMO_TICK_RATE, demoMatchConfig } from '../app/match.js';
+import { demoMatchConfig, demoTickRateOf, type DemoDocuments } from '../app/match.js';
+import { demoDocuments } from './fixtures.js';
 
 /** Отсчёт возобновления демо в шагах расписания: 3 с при 60 Гц. */
 const RESUME_STEPS = 180;
+
+/**
+ * Документы контент-пака — из ДЕРЕВА, тем же загрузчиком, что у страницы
+ * (`game-content` CONT-5): числа политики читаются оттуда же, откуда их читает
+ * матч.
+ */
+let documents: DemoDocuments;
+
+beforeAll(async () => {
+  documents = await demoDocuments();
+});
 
 function hello(playerId: string, version: GameVersion): ClientMessage {
   return { type: 'Hello', playerId, version, role: 'owner', observer: false };
@@ -31,7 +43,7 @@ function hello(playerId: string, version: GameVersion): ClientMessage {
  * политика, по которой матч возобновится (NTR-20).
  */
 function stand(overrides: Partial<MatchConfig> = {}) {
-  const config: MatchConfig = { ...demoMatchConfig(), silenceTicks: 100_000, ...overrides };
+  const config: MatchConfig = { ...demoMatchConfig(documents), silenceTicks: 100_000, ...overrides };
   const server = new MatchServer(config);
   server.connect(1);
   server.receive(1, hello(config.players[0]!, config.version));
@@ -195,7 +207,7 @@ describe('разрыв замораживает матч, возврат вла�
     // кругу не во что, и матч, из которого владелец ушёл навсегда, не кончился
     // бы никогда — порог молчания (NTR-6) считается ЖИВЫМИ тиками, а их в
     // заморозке нет.
-    const maxPauseMs = DEMO_MATCH.pause!.maxPauseMs!;
+    const maxPauseMs = documents.match.pause!.maxPauseMs!;
     const s = stand();
     advance(s.server, 5);
     s.server.disconnect(1);
@@ -203,7 +215,7 @@ describe('разрыв замораживает матч, возврат вла�
     expect(s.detach.holding).toBe(true);
 
     // Ждём предел длительности одной заморозки и объявленный отсчёт за ним.
-    advance(s.server, Math.ceil((maxPauseMs * DEMO_TICK_RATE) / 1000) + RESUME_STEPS + 1);
+    advance(s.server, Math.ceil((maxPauseMs * demoTickRateOf(documents.match)) / 1000) + RESUME_STEPS + 1);
     expect(s.server.pauseState).toBe('running');
     expect(s.server.pauseInitiator).toBe(-1);
 
