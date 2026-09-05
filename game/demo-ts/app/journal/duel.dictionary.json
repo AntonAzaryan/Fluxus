@@ -13,6 +13,8 @@
     "SlowDomeExpired": { "kind": "slow-dome-expired" },
     "ChargeExploded": { "kind": "charge-explosion", "actor": "entity" },
     "$rewind/request": { "kind": "rewind-request", "actor": "initiator" },
+    "HeroCloak": { "kind": "cast-cloak", "actor": "entity" },
+    "CloakBreak": { "kind": "cloak-broken", "target": "entity" },
 
     "BossHunting": { "kind": "boss-picks-target", "actor": "entity", "target": "target" },
     "BossEnraged": { "kind": "boss-switches-to-attacker", "actor": "entity", "target": "target" },
@@ -40,6 +42,8 @@
     "BossTetherBroke": { "kind": "boss-tether-broke", "actor": "entity" },
     "BossFacing": { "kind": "boss-facing", "actor": "entity" },
     "BossRespawned": { "kind": "boss-respawn", "target": "entity" },
+    "BossCloak": { "kind": "boss-asks-cloak", "actor": "caster", "target": "target" },
+    "BossCloakStart": { "kind": "boss-cloak", "actor": "entity" },
 
     "Collision": { "kind": "collision", "actor": "entity", "target": "other" },
     "Overlap": { "kind": "overlap", "actor": "entity", "target": "other" },

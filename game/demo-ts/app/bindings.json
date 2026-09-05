@@ -9,6 +9,7 @@
       "KeyF": "slowDome",
       "KeyR": "capture",
       "KeyX": "rewind",
+      "KeyC": "cloak",
       "KeyQ": "cancel"
     },
     "pointerButtons": {
@@ -32,7 +33,8 @@
       { "zone": { "left": 0.86, "top": 0.29, "width": 0.12, "height": 0.1 }, "action": "shield" },
       { "zone": { "left": 0.72, "top": 0.29, "width": 0.12, "height": 0.1 }, "action": "rewind" },
       { "zone": { "left": 0.86, "top": 0.41, "width": 0.12, "height": 0.1 }, "action": "confirm" },
-      { "zone": { "left": 0.72, "top": 0.41, "width": 0.12, "height": 0.1 }, "action": "cancel" }
+      { "zone": { "left": 0.72, "top": 0.41, "width": 0.12, "height": 0.1 }, "action": "cancel" },
+      { "zone": { "left": 0.58, "top": 0.05, "width": 0.12, "height": 0.1 }, "action": "cloak" }
     ]
   },
   "gamepad": {
@@ -49,7 +51,8 @@
       "6": "rewind",
       "7": "confirm",
       "8": "kill",
-      "9": "cancel"
+      "9": "cancel",
+      "10": "cloak"
     }
   }
 }

@@ -112,6 +112,7 @@ const ABILITY_ICONS: Readonly<Record<string, string>> = {
   capture: 'visuals/icons/capture.svg',
   shield: 'visuals/icons/shield.svg',
   rewind: 'visuals/icons/rewind.svg',
+  cloak: 'visuals/icons/cloak.svg',
 };
 
 /**
@@ -212,6 +213,7 @@ export function demoHudComposition(capabilities: DemoShellCapabilities): HudComp
           capture: 'hero.capture',
           shield: 'hero.shield',
           rewind: 'hero.rewind',
+          cloak: 'hero.cloak',
         },
       },
       {
@@ -527,6 +529,9 @@ export function createDemoHudRegistry(
   // presentation-действия в никуда и пометки кнопки нерабочей — здесь больше
   // нет: живая на вид кнопка, которая ничего не делает, HUD-2 запрещена.
   registry.registerAction('hero.rewind', { target: 'world', action: 'rewind' });
+  // Инвиз ловит фронт, как щит: каст-и-забыл, затухание и фазы ведёт сцена
+  // цепочкой баффов (FOW-12), удержание кнопке ничего не даёт.
+  registry.registerAction('hero.cloak', { target: 'world', action: 'cloak' });
   // Команды машины состояний мира — обратным каналом (SHELL-6, WSM-1); паузу
   // на экране поставит только доставленный режим, не клик (HUD-2).
   registry.registerAction('match.pause', { target: 'control', action: 'pause' });

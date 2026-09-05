@@ -22,6 +22,7 @@
         },
         "events": {
           "CastFireball": "Spell Slam",
+          "HeroCloak": "Spell",
           "EntityDied": "Death"
         }
       },
@@ -85,6 +86,7 @@
           "BossChargeAim": "Stand Channel",
           "BossChargeStarted": "Attack Defend",
           "BossRepelLanded": "Attack - 2",
+          "BossCloakStart": "Spell Defend",
           "EntityDied": "Death"
         }
       },

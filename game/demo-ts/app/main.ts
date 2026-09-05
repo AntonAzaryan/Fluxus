@@ -1553,6 +1553,9 @@ async function main(): Promise<void> {
     entities: () => remote?.view?.entities,
     instanceFor: (entity) => models?.instanceFor(entity) ?? null,
     heroId: () => heroId,
+    // Доставленный тик — вход доли затухания (FOW-13): она считается от него,
+    // а не от часов кадра.
+    tick: () => remote?.view?.tick,
     ...(presentation?.stealth === undefined ? {} : { stealth: presentation.stealth }),
   });
   // Цвет команды (REND-40): тот же кадровый вход, что у стелса, и та же

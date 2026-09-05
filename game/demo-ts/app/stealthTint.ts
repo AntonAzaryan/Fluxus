@@ -15,6 +15,15 @@
  * сущность с невскрытой маской доставлена — значит, канал мягкий по построению
  * (жёсткую фильтр бы вырезал).
  *
+ * Затухание ведёт ДОСТАВКА (FOW-13): сущность, входящая в невидимость, несёт
+ * тик начала и длительность фазы (`Cloaking`, статы `cloakStart`/`cloakTicks`),
+ * и доля перехода считается от доставленного тика — второго таймера у
+ * презентации нет, а перемотка на тик до каста возвращает обычную подачу сама.
+ * Пока маски ещё нет, непрозрачность идёт от единицы к значению того вида,
+ * который встанет по взведении канала: своему — `allyOpacity`, чужому —
+ * `enemyOpacity`, если у команды зрителя нет детекции вовсе (какой канал
+ * взведётся, зритель знать не может).
+ *
  * Непрозрачность ставится на СВОИ материалы инстанса: разделяемые с ассетом
  * материалы сперва переводятся в собственные (`ownTextureTargets`, REND-6) —
  * иначе полупрозрачность одного невидимки красила бы всех соседей по ассету.
@@ -40,6 +49,11 @@ export interface StealthTintOptions {
   readonly instanceFor: (entity: EntityId) => ModelInstanceView | null;
   /** Сущность своего героя (handshake воркера); null — handshake ещё не пришёл. */
   readonly heroId: () => EntityId | null;
+  /**
+   * Доставленный тик кадра — по нему считается доля затухания (FOW-13);
+   * undefined — доставки ещё нет, и затухание не ведётся.
+   */
+  readonly tick?: () => number | undefined;
   /** Секция `stealth` парного документа; нет секции — умолчания. */
   readonly stealth?: PresentationStealth;
 }
@@ -54,6 +68,19 @@ interface TintRecord {
   readonly model: NonNullable<ModelInstanceView['model']>;
   readonly originals: readonly { readonly opacity: number; readonly transparent: boolean }[];
   value: number;
+}
+
+/**
+ * Доля затухания сущности по доставленным тику начала и длительности фазы
+ * (FOW-13 «затухание ведёт доставка»): ноль без компонента затухания и до его
+ * начала, единица по концу фазы. Ведётся от доставленного тика, поэтому на
+ * перемотке следует миру, а не часам кадра.
+ */
+function fadeShare(view: EntityView, now: number | undefined): number {
+  const start = view.stats?.get(STATS.cloakStart);
+  const ticks = view.stats?.get(STATS.cloakTicks);
+  if (start === undefined || ticks === undefined || ticks <= 0 || now === undefined) return 0;
+  return Math.min(Math.max((now - start) / ticks, 0), 1);
 }
 
 export function createStealthTint(options: StealthTintOptions): StealthTint {
@@ -129,13 +156,20 @@ export function createStealthTint(options: StealthTintOptions): StealthTint {
       for (const entity of [...tinted.keys()]) {
         if (!views.has(entity)) restore(entity);
       }
+      const now = options.tick?.();
       for (const [entity, view] of views) {
         const mask = (view.stats?.get(STATS.stealthMask) ?? 0) | 0;
+        const ally = myTeam !== undefined && view.stats?.get(STATS.team) === myTeam;
         if (mask === 0) {
-          restore(entity);
+          // Канала ещё нет, но затухание уже идёт: доля — от доставленного
+          // тика, цель — вид, который встанет по взведении канала (FOW-13).
+          const share = fadeShare(view, now);
+          const goal = ally ? allyOpacity : teamDetection === 0 ? enemyOpacity : 1;
+          const value = 1 + (goal - 1) * share;
+          if (value >= 1) restore(entity);
+          else apply(entity, value);
           continue;
         }
-        const ally = myTeam !== undefined && view.stats?.get(STATS.team) === myTeam;
         if (ally) {
           apply(entity, allyOpacity);
         } else if ((mask & ~teamDetection) !== 0) {

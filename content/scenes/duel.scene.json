@@ -78,7 +78,9 @@
     { "name": "Minion", "fields": { "bornTick": "i32" } },
     { "name": "Chilled", "fields": { "sinceTick": "i32" } },
     { "name": "Tether", "fields": { "nextTick": "i32", "target": "entity", "untilTick": "i32" } },
-    { "name": "SlowPower", "fields": { "value": "fixed" } }
+    { "name": "SlowPower", "fields": { "value": "fixed" } },
+    { "name": "Cloaking", "fields": { "startTick": "i32", "ticks": "i32" } },
+    { "name": "Cloaked", "fields": { "atTick": "i32" } }
   ],
   "prefabs": [
     {
@@ -128,7 +130,8 @@
         "Team": { "id": 0 },
         "Visibility": { "visibleTo": 0 },
         "TimeScaleModifiers": {},
-        "HitMark": { "dash": -1, "wave": -1 }
+        "HitMark": { "dash": -1, "wave": -1 },
+        "StealthSources": {}
       },
       "tags": ["Hero"]
     },
@@ -273,7 +276,8 @@
         "NpcThreat": {},
         "BossHunt": { "hunted": -1, "repelUntil": 0, "untilTick": 0 },
         "BossAim": { "dirX": 65536, "dirY": 0 },
-        "BossDash": { "dirX": 0, "dirY": 0, "startTick": -1, "ticksLeft": 0 }
+        "BossDash": { "dirX": 0, "dirY": 0, "startTick": -1, "ticksLeft": 0 },
+        "StealthSources": {}
       },
       "tags": ["Boss"]
     },
@@ -400,10 +404,30 @@
         "TimeScaleModifiers": {},
         "NpcAgent": { "behavior": 1 },
         "NpcThreat": {},
-        "Minion": { "bornTick": 0 }
+        "Minion": { "bornTick": 0 },
+        "StealthSources": {}
       },
       "tags": ["BossMinion"]
-    }
+    },
+    {
+      "name": "SlotCloak",
+      "components": {
+        "AbilitySlot": { "abilityId": 17, "slotIndex": 7 },
+        "AbilityCooldown": { "remaining": 0, "total": 1200 }
+      }
+    },
+    {
+      "name": "SlotBossCloak",
+      "components": {
+        "AbilitySlot": { "abilityId": 18, "slotIndex": 6 },
+        "AbilityCooldown": { "remaining": 0, "total": 1200 }
+      }
+    },
+    { "name": "BuffCloakFade", "components": { "BuffInstance": { "buffId": 2 } } },
+    { "name": "BuffCloakSoft", "components": { "BuffInstance": { "buffId": 3 } } },
+    { "name": "BuffCloakHard", "components": { "BuffInstance": { "buffId": 4 } } },
+    { "name": "BuffBossCloakFade", "components": { "BuffInstance": { "buffId": 5 } } },
+    { "name": "BuffBossCloak", "components": { "BuffInstance": { "buffId": 6 } } }
   ],
   "systems": [
     {
@@ -451,6 +475,12 @@
         {
           "spawnEntity": {
             "prefab": "SlotDodge",
+            "overrides": { "AbilitySlot": { "owner": { "var": "e" } } }
+          }
+        },
+        {
+          "spawnEntity": {
+            "prefab": "SlotCloak",
             "overrides": { "AbilitySlot": { "owner": { "var": "e" } } }
           }
         },
@@ -1539,6 +1569,12 @@
           }
         },
         {
+          "spawnEntity": {
+            "prefab": "SlotBossCloak",
+            "overrides": { "AbilitySlot": { "owner": { "var": "b" } } }
+          }
+        },
+        {
           "addComponent": {
             "entity": { "var": "b" },
             "component": "Granted",
@@ -1689,7 +1725,7 @@
                                           "slotIndex"
                                         ]
                                       },
-                                      5
+                                      6
                                     ]
                                   },
                                   {
@@ -1753,7 +1789,49 @@
                     "withTag": "Hero"
                   },
                   "as": "h",
-                  "do": [{ "set": { "name": "alive", "value": { "+": [{ "var": "alive" }, 1] } } }]
+                  "do": [
+                    {
+                      "if": {
+                        "cond": {
+                          "!": [
+                            {
+                              "if": [
+                                { "hasComponent": [{ "var": "h" }, "StealthState"] },
+                                {
+                                  "!": [
+                                    {
+                                      "maskCovered": [
+                                        {
+                                          "getComponent": [{ "var": "h" }, "StealthState", "mask"]
+                                        },
+                                        {
+                                          "if": [
+                                            { "hasComponent": [{ "var": "b" }, "DetectionState"] },
+                                            {
+                                              "getComponent": [
+                                                { "var": "b" },
+                                                "DetectionState",
+                                                "mask"
+                                              ]
+                                            },
+                                            0
+                                          ]
+                                        }
+                                      ]
+                                    }
+                                  ]
+                                },
+                                false
+                              ]
+                            }
+                          ]
+                        },
+                        "then": [
+                          { "set": { "name": "alive", "value": { "+": [{ "var": "alive" }, 1] } } }
+                        ]
+                      }
+                    }
+                  ]
                 }
               },
               {
@@ -1780,7 +1858,50 @@
                                       { "!": [{ "hasComponent": [{ "var": "pick" }, "Dead"] }] }
                                     ]
                                   },
-                                  { "!": [{ "hasComponent": [{ "var": "pick" }, "Falling"] }] }
+                                  { "!": [{ "hasComponent": [{ "var": "pick" }, "Falling"] }] },
+                                  {
+                                    "!": [
+                                      {
+                                        "if": [
+                                          { "hasComponent": [{ "var": "pick" }, "StealthState"] },
+                                          {
+                                            "!": [
+                                              {
+                                                "maskCovered": [
+                                                  {
+                                                    "getComponent": [
+                                                      { "var": "pick" },
+                                                      "StealthState",
+                                                      "mask"
+                                                    ]
+                                                  },
+                                                  {
+                                                    "if": [
+                                                      {
+                                                        "hasComponent": [
+                                                          { "var": "b" },
+                                                          "DetectionState"
+                                                        ]
+                                                      },
+                                                      {
+                                                        "getComponent": [
+                                                          { "var": "b" },
+                                                          "DetectionState",
+                                                          "mask"
+                                                        ]
+                                                      },
+                                                      0
+                                                    ]
+                                                  }
+                                                ]
+                                              }
+                                            ]
+                                          },
+                                          false
+                                        ]
+                                      }
+                                    ]
+                                  }
                                 ]
                               }
                             ]
@@ -1810,26 +1931,84 @@
                                     "do": [
                                       {
                                         "if": {
-                                          "cond": { "==": [{ "var": "idx" }, { "var": "k" }] },
+                                          "cond": {
+                                            "!": [
+                                              {
+                                                "if": [
+                                                  {
+                                                    "hasComponent": [{ "var": "h" }, "StealthState"]
+                                                  },
+                                                  {
+                                                    "!": [
+                                                      {
+                                                        "maskCovered": [
+                                                          {
+                                                            "getComponent": [
+                                                              { "var": "h" },
+                                                              "StealthState",
+                                                              "mask"
+                                                            ]
+                                                          },
+                                                          {
+                                                            "if": [
+                                                              {
+                                                                "hasComponent": [
+                                                                  { "var": "b" },
+                                                                  "DetectionState"
+                                                                ]
+                                                              },
+                                                              {
+                                                                "getComponent": [
+                                                                  { "var": "b" },
+                                                                  "DetectionState",
+                                                                  "mask"
+                                                                ]
+                                                              },
+                                                              0
+                                                            ]
+                                                          }
+                                                        ]
+                                                      }
+                                                    ]
+                                                  },
+                                                  false
+                                                ]
+                                              }
+                                            ]
+                                          },
                                           "then": [
-                                            { "set": { "name": "pick", "value": { "var": "h" } } },
                                             {
-                                              "emitEvent": {
-                                                "type": "BossHunting",
-                                                "data": {
-                                                  "entity": { "var": "b" },
-                                                  "target": { "var": "h" },
-                                                  "tick": { "tick": [] }
-                                                }
+                                              "if": {
+                                                "cond": {
+                                                  "==": [{ "var": "idx" }, { "var": "k" }]
+                                                },
+                                                "then": [
+                                                  {
+                                                    "set": {
+                                                      "name": "pick",
+                                                      "value": { "var": "h" }
+                                                    }
+                                                  },
+                                                  {
+                                                    "emitEvent": {
+                                                      "type": "BossHunting",
+                                                      "data": {
+                                                        "entity": { "var": "b" },
+                                                        "target": { "var": "h" },
+                                                        "tick": { "tick": [] }
+                                                      }
+                                                    }
+                                                  }
+                                                ]
+                                              }
+                                            },
+                                            {
+                                              "set": {
+                                                "name": "idx",
+                                                "value": { "+": [{ "var": "idx" }, 1] }
                                               }
                                             }
                                           ]
-                                        }
-                                      },
-                                      {
-                                        "set": {
-                                          "name": "idx",
-                                          "value": { "+": [{ "var": "idx" }, 1] }
                                         }
                                       }
                                     ]
@@ -1865,7 +2044,41 @@
                           { "!": [{ "hasComponent": [{ "var": "pick" }, "Dead"] }] }
                         ]
                       },
-                      { "!": [{ "hasComponent": [{ "var": "pick" }, "Falling"] }] }
+                      { "!": [{ "hasComponent": [{ "var": "pick" }, "Falling"] }] },
+                      {
+                        "!": [
+                          {
+                            "if": [
+                              { "hasComponent": [{ "var": "pick" }, "StealthState"] },
+                              {
+                                "!": [
+                                  {
+                                    "maskCovered": [
+                                      {
+                                        "getComponent": [{ "var": "pick" }, "StealthState", "mask"]
+                                      },
+                                      {
+                                        "if": [
+                                          { "hasComponent": [{ "var": "b" }, "DetectionState"] },
+                                          {
+                                            "getComponent": [
+                                              { "var": "b" },
+                                              "DetectionState",
+                                              "mask"
+                                            ]
+                                          },
+                                          0
+                                        ]
+                                      }
+                                    ]
+                                  }
+                                ]
+                              },
+                              false
+                            ]
+                          }
+                        ]
+                      }
                     ]
                   },
                   "then": [
@@ -1901,6 +2114,22 @@
                               "entity": { "var": "b" },
                               "component": "NpcAgent",
                               "values": { "target": -1 }
+                            }
+                          }
+                        ]
+                      }
+                    },
+                    {
+                      "if": {
+                        "cond": {
+                          "!=": [{ "getComponent": [{ "var": "b" }, "BossHunt", "hunted"] }, -1]
+                        },
+                        "then": [
+                          {
+                            "modifyComponent": {
+                              "entity": { "var": "b" },
+                              "component": "BossHunt",
+                              "values": { "hunted": -1 }
                             }
                           }
                         ]
@@ -3069,6 +3298,173 @@
                           "x": { "getComponent": [{ "var": "b" }, "Position", "x"] },
                           "y": { "getComponent": [{ "var": "b" }, "Position", "y"] }
                         }
+                      }
+                    }
+                  ]
+                }
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "CloakBreak",
+      "order": 200,
+      "query": { "all": ["Player", "Input", "LocomotionState"], "withTag": "Hero" },
+      "as": "e",
+      "do": [
+        {
+          "if": {
+            "cond": {
+              "or": [
+                { "hasComponent": [{ "var": "e" }, "Cloaking"] },
+                { "hasComponent": [{ "var": "e" }, "Cloaked"] }
+              ]
+            },
+            "then": [
+              {
+                "let": {
+                  "bindings": {
+                    "broken": 0,
+                    "state": { "getComponent": [{ "var": "e" }, "LocomotionState", "state"] }
+                  },
+                  "do": [
+                    {
+                      "if": {
+                        "cond": {
+                          "or": [
+                            { "==": [{ "var": "state" }, 1] },
+                            { "==": [{ "var": "state" }, 2] },
+                            { "==": [{ "var": "state" }, 3] },
+                            { "hasComponent": [{ "var": "e" }, "Dead"] }
+                          ]
+                        },
+                        "then": [{ "set": { "name": "broken", "value": 1 } }]
+                      }
+                    },
+                    {
+                      "forEach": {
+                        "query": { "all": ["AbilitySlot"] },
+                        "as": "s",
+                        "do": [
+                          {
+                            "if": {
+                              "cond": {
+                                "and": [
+                                  {
+                                    "==": [
+                                      { "getComponent": [{ "var": "s" }, "AbilitySlot", "owner"] },
+                                      { "var": "e" }
+                                    ]
+                                  },
+                                  {
+                                    ">=": [
+                                      { "getComponent": [{ "var": "s" }, "AbilitySlot", "phase"] },
+                                      0
+                                    ]
+                                  }
+                                ]
+                              },
+                              "then": [{ "set": { "name": "broken", "value": 1 } }]
+                            }
+                          }
+                        ]
+                      }
+                    },
+                    {
+                      "forEachEvent": {
+                        "type": "ShieldCast",
+                        "as": "ev",
+                        "do": [
+                          {
+                            "if": {
+                              "cond": {
+                                "==": [
+                                  { "eventField": [{ "var": "ev" }, "entity"] },
+                                  { "var": "e" }
+                                ]
+                              },
+                              "then": [{ "set": { "name": "broken", "value": 1 } }]
+                            }
+                          }
+                        ]
+                      }
+                    },
+                    {
+                      "forEachEvent": {
+                        "type": "SlowDomeCast",
+                        "as": "ev",
+                        "do": [
+                          {
+                            "if": {
+                              "cond": {
+                                "==": [
+                                  { "eventField": [{ "var": "ev" }, "entity"] },
+                                  { "var": "e" }
+                                ]
+                              },
+                              "then": [{ "set": { "name": "broken", "value": 1 } }]
+                            }
+                          }
+                        ]
+                      }
+                    },
+                    {
+                      "forEachEvent": {
+                        "type": "CastFireball",
+                        "as": "ev",
+                        "do": [
+                          {
+                            "if": {
+                              "cond": {
+                                "==": [
+                                  { "eventField": [{ "var": "ev" }, "entity"] },
+                                  { "var": "e" }
+                                ]
+                              },
+                              "then": [{ "set": { "name": "broken", "value": 1 } }]
+                            }
+                          }
+                        ]
+                      }
+                    },
+                    {
+                      "forEachEvent": {
+                        "type": "$rewind/request",
+                        "as": "ev",
+                        "do": [
+                          {
+                            "if": {
+                              "cond": {
+                                "==": [
+                                  { "eventField": [{ "var": "ev" }, "initiator"] },
+                                  { "var": "e" }
+                                ]
+                              },
+                              "then": [{ "set": { "name": "broken", "value": 1 } }]
+                            }
+                          }
+                        ]
+                      }
+                    },
+                    {
+                      "if": {
+                        "cond": { "==": [{ "var": "broken" }, 1] },
+                        "then": [
+                          {
+                            "emitEvent": {
+                              "type": "CloakBreak",
+                              "data": { "entity": { "var": "e" }, "tick": { "tick": [] } }
+                            }
+                          },
+                          {
+                            "removeComponent": { "entity": { "var": "e" }, "component": "Cloaking" }
+                          },
+                          {
+                            "removeComponent": { "entity": { "var": "e" }, "component": "Cloaked" }
+                          }
+                        ]
                       }
                     }
                   ]
@@ -4304,6 +4700,56 @@
                   "y": { "getComponent": [{ "var": "owner" }, "Position", "y"] }
                 }
               }
+            },
+            {
+              "if": {
+                "cond": {
+                  "or": [
+                    { "hasComponent": [{ "var": "owner" }, "Cloaking"] },
+                    { "hasComponent": [{ "var": "owner" }, "Cloaked"] }
+                  ]
+                },
+                "then": [
+                  {
+                    "emitEvent": {
+                      "type": "CloakBreak",
+                      "data": { "entity": { "var": "owner" }, "tick": { "tick": [] } }
+                    }
+                  },
+                  { "removeComponent": { "entity": { "var": "owner" }, "component": "Cloaking" } },
+                  { "removeComponent": { "entity": { "var": "owner" }, "component": "Cloaked" } }
+                ]
+              }
+            },
+            {
+              "forEach": {
+                "query": { "all": ["Minion"], "withTag": "BossMinion" },
+                "as": "m",
+                "do": [
+                  {
+                    "if": {
+                      "cond": {
+                        "or": [
+                          { "hasComponent": [{ "var": "m" }, "Cloaking"] },
+                          { "hasComponent": [{ "var": "m" }, "Cloaked"] }
+                        ]
+                      },
+                      "then": [
+                        {
+                          "emitEvent": {
+                            "type": "CloakBreak",
+                            "data": { "entity": { "var": "m" }, "tick": { "tick": [] } }
+                          }
+                        },
+                        {
+                          "removeComponent": { "entity": { "var": "m" }, "component": "Cloaking" }
+                        },
+                        { "removeComponent": { "entity": { "var": "m" }, "component": "Cloaked" } }
+                      ]
+                    }
+                  }
+                ]
+              }
             }
           ],
           "timeout": { "then": "commit" }
@@ -5045,6 +5491,117 @@
           }
         }
       ]
+    },
+    {
+      "id": "cloak",
+      "trigger": { "input": { "bit": 10 } },
+      "condition": {
+        "and": [
+          { "!": [{ "hasComponent": [{ "var": "owner" }, "Dead"] }] },
+          { "!": [{ "hasComponent": [{ "var": "owner" }, "Holding"] }] },
+          { "!": [{ "hasComponent": [{ "var": "owner" }, "Charging"] }] },
+          { "!": [{ "hasComponent": [{ "var": "owner" }, "Cloaking"] }] },
+          { "!": [{ "hasComponent": [{ "var": "owner" }, "Cloaked"] }] }
+        ]
+      },
+      "cooldownTicks": 1200,
+      "effects": [
+        {
+          "addComponent": {
+            "entity": { "var": "owner" },
+            "component": "Cloaking",
+            "values": { "startTick": { "tick": [] }, "ticks": 60 }
+          }
+        },
+        {
+          "spawnEntity": {
+            "prefab": "BuffCloakFade",
+            "overrides": {
+              "BuffInstance": { "source": { "var": "owner" }, "target": { "var": "owner" } }
+            }
+          }
+        },
+        {
+          "emitEvent": {
+            "type": "HeroCloak",
+            "data": {
+              "entity": { "var": "owner" },
+              "slot": { "getComponent": [{ "var": "owner" }, "Player", "slot"] },
+              "tick": { "tick": [] },
+              "x": { "getComponent": [{ "var": "owner" }, "Position", "x"] },
+              "y": { "getComponent": [{ "var": "owner" }, "Position", "y"] }
+            }
+          }
+        }
+      ]
+    },
+    {
+      "id": "bossCloak",
+      "trigger": { "event": { "type": "BossCloak", "as": "ask" } },
+      "condition": {
+        "and": [
+          { "!": [{ "hasComponent": [{ "var": "owner" }, "Dead"] }] },
+          { "==": [{ "eventField": [{ "var": "ask" }, "caster"] }, { "var": "owner" }] },
+          { "!": [{ "hasComponent": [{ "var": "owner" }, "Cloaking"] }] },
+          { "!": [{ "hasComponent": [{ "var": "owner" }, "Cloaked"] }] }
+        ]
+      },
+      "cooldownTicks": 1200,
+      "effects": [
+        {
+          "emitEvent": {
+            "type": "BossCloakStart",
+            "data": {
+              "entity": { "var": "owner" },
+              "ticks": 60,
+              "x": { "getComponent": [{ "var": "owner" }, "Position", "x"] },
+              "y": { "getComponent": [{ "var": "owner" }, "Position", "y"] }
+            }
+          }
+        },
+        {
+          "addComponent": {
+            "entity": { "var": "owner" },
+            "component": "Cloaking",
+            "values": { "startTick": { "tick": [] }, "ticks": 60 }
+          }
+        },
+        {
+          "spawnEntity": {
+            "prefab": "BuffBossCloakFade",
+            "overrides": {
+              "BuffInstance": { "source": { "var": "owner" }, "target": { "var": "owner" } }
+            }
+          }
+        },
+        {
+          "forEach": {
+            "query": {
+              "all": ["Minion"],
+              "not": ["Dead", "Cloaking", "Cloaked"],
+              "withTag": "BossMinion"
+            },
+            "as": "m",
+            "do": [
+              {
+                "addComponent": {
+                  "entity": { "var": "m" },
+                  "component": "Cloaking",
+                  "values": { "startTick": { "tick": [] }, "ticks": 60 }
+                }
+              },
+              {
+                "spawnEntity": {
+                  "prefab": "BuffBossCloakFade",
+                  "overrides": {
+                    "BuffInstance": { "source": { "var": "owner" }, "target": { "var": "m" } }
+                  }
+                }
+              }
+            ]
+          }
+        }
+      ]
     }
   ],
   "buffs": [
@@ -5068,6 +5625,249 @@
       "onExpire": [
         { "removeComponent": { "entity": { "var": "target" }, "component": "Shielded" } }
       ]
+    },
+    {
+      "id": "cloakFade",
+      "class": "positive",
+      "durationTicks": 60,
+      "stacking": "refresh",
+      "periodic": {
+        "everyTicks": 1,
+        "do": [
+          {
+            "if": {
+              "cond": { "!": [{ "hasComponent": [{ "var": "target" }, "Cloaking"] }] },
+              "then": [
+                {
+                  "modifyComponent": {
+                    "entity": { "var": "self" },
+                    "component": "BuffInstance",
+                    "values": { "dispelled": 1 }
+                  }
+                }
+              ],
+              "else": [
+                {
+                  "if": {
+                    "cond": {
+                      "==": [
+                        { "getComponent": [{ "var": "self" }, "BuffInstance", "remaining"] },
+                        2
+                      ]
+                    },
+                    "then": [
+                      {
+                        "spawnEntity": {
+                          "prefab": "BuffCloakSoft",
+                          "overrides": {
+                            "BuffInstance": {
+                              "source": { "var": "source" },
+                              "target": { "var": "target" }
+                            }
+                          }
+                        }
+                      }
+                    ]
+                  }
+                }
+              ]
+            }
+          }
+        ]
+      },
+      "onExpire": [
+        { "removeComponent": { "entity": { "var": "target" }, "component": "Cloaking" } },
+        {
+          "if": {
+            "cond": {
+              "==": [{ "getComponent": [{ "var": "self" }, "BuffInstance", "dispelled"] }, 0]
+            },
+            "then": [
+              {
+                "addComponent": {
+                  "entity": { "var": "target" },
+                  "component": "Cloaked",
+                  "values": { "atTick": { "tick": [] } }
+                }
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "cloakSoft",
+      "class": "positive",
+      "durationTicks": 60,
+      "stacking": "refresh",
+      "statMods": [{ "component": "StealthSources", "value": 1 }],
+      "periodic": {
+        "everyTicks": 1,
+        "do": [
+          {
+            "if": {
+              "cond": { "!": [{ "hasComponent": [{ "var": "target" }, "Cloaked"] }] },
+              "then": [
+                {
+                  "modifyComponent": {
+                    "entity": { "var": "self" },
+                    "component": "BuffInstance",
+                    "values": { "dispelled": 1 }
+                  }
+                }
+              ],
+              "else": [
+                {
+                  "if": {
+                    "cond": {
+                      "==": [
+                        { "getComponent": [{ "var": "self" }, "BuffInstance", "remaining"] },
+                        2
+                      ]
+                    },
+                    "then": [
+                      {
+                        "spawnEntity": {
+                          "prefab": "BuffCloakHard",
+                          "overrides": {
+                            "BuffInstance": {
+                              "source": { "var": "source" },
+                              "target": { "var": "target" }
+                            }
+                          }
+                        }
+                      }
+                    ]
+                  }
+                }
+              ]
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "cloakHard",
+      "class": "positive",
+      "durationTicks": 300,
+      "stacking": "refresh",
+      "statMods": [{ "component": "StealthSources", "value": 2 }],
+      "periodic": {
+        "everyTicks": 1,
+        "do": [
+          {
+            "if": {
+              "cond": { "!": [{ "hasComponent": [{ "var": "target" }, "Cloaked"] }] },
+              "then": [
+                {
+                  "modifyComponent": {
+                    "entity": { "var": "self" },
+                    "component": "BuffInstance",
+                    "values": { "dispelled": 1 }
+                  }
+                }
+              ]
+            }
+          }
+        ]
+      },
+      "onExpire": [{ "removeComponent": { "entity": { "var": "target" }, "component": "Cloaked" } }]
+    },
+    {
+      "id": "bossCloakFade",
+      "class": "positive",
+      "durationTicks": 60,
+      "stacking": "refresh",
+      "periodic": {
+        "everyTicks": 1,
+        "do": [
+          {
+            "if": {
+              "cond": { "!": [{ "hasComponent": [{ "var": "target" }, "Cloaking"] }] },
+              "then": [
+                {
+                  "modifyComponent": {
+                    "entity": { "var": "self" },
+                    "component": "BuffInstance",
+                    "values": { "dispelled": 1 }
+                  }
+                }
+              ],
+              "else": [
+                {
+                  "if": {
+                    "cond": {
+                      "==": [
+                        { "getComponent": [{ "var": "self" }, "BuffInstance", "remaining"] },
+                        2
+                      ]
+                    },
+                    "then": [
+                      {
+                        "spawnEntity": {
+                          "prefab": "BuffBossCloak",
+                          "overrides": {
+                            "BuffInstance": {
+                              "source": { "var": "source" },
+                              "target": { "var": "target" }
+                            }
+                          }
+                        }
+                      }
+                    ]
+                  }
+                }
+              ]
+            }
+          }
+        ]
+      },
+      "onExpire": [
+        { "removeComponent": { "entity": { "var": "target" }, "component": "Cloaking" } },
+        {
+          "if": {
+            "cond": {
+              "==": [{ "getComponent": [{ "var": "self" }, "BuffInstance", "dispelled"] }, 0]
+            },
+            "then": [
+              {
+                "addComponent": {
+                  "entity": { "var": "target" },
+                  "component": "Cloaked",
+                  "values": { "atTick": { "tick": [] } }
+                }
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "bossCloak",
+      "class": "positive",
+      "durationTicks": 240,
+      "stacking": "refresh",
+      "statMods": [{ "component": "StealthSources", "value": 1 }],
+      "periodic": {
+        "everyTicks": 1,
+        "do": [
+          {
+            "if": {
+              "cond": { "!": [{ "hasComponent": [{ "var": "target" }, "Cloaked"] }] },
+              "then": [
+                {
+                  "modifyComponent": {
+                    "entity": { "var": "self" },
+                    "component": "BuffInstance",
+                    "values": { "dispelled": 1 }
+                  }
+                }
+              ]
+            }
+          }
+        ]
+      },
+      "onExpire": [{ "removeComponent": { "entity": { "var": "target" }, "component": "Cloaked" } }]
     }
   ],
   "abilityRuntime": {
@@ -5204,6 +6004,28 @@
                   "input": "targetDistance",
                   "curve": { "type": "linear", "slope": -20971520, "intercept": 2621440 },
                   "weight": 55706
+                }
+              ]
+            },
+            {
+              "executor": "cast",
+              "event": "BossCloak",
+              "considerations": [
+                {
+                  "input": "abilityReady",
+                  "slot": 6,
+                  "curve": { "type": "linear", "slope": 65536, "intercept": 0 },
+                  "weight": 65536
+                },
+                {
+                  "input": "targetKnown",
+                  "curve": { "type": "linear", "slope": 65536, "intercept": 0 },
+                  "weight": 65536
+                },
+                {
+                  "input": "always",
+                  "curve": { "type": "constant", "value": 45875 },
+                  "weight": 65536
                 }
               ]
             }
@@ -5358,5 +6180,6 @@
   },
   "timeScale": true,
   "fog": true,
+  "softStealthChannels": [0],
   "capacity": 512
 }

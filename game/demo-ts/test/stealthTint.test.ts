@@ -52,18 +52,22 @@ interface Stand {
   readonly tint: StealthTint;
   readonly entities: Map<EntityId, EntityView>;
   readonly instances: Map<EntityId, ModelInstanceView>;
+  /** Доставленный тик кадра — вход доли затухания (FOW-13). */
+  readonly clock: { tick: number | undefined };
 }
 
 function stand(stealth?: { allyOpacity?: number; enemyOpacity?: number }): Stand {
   const entities = new Map<EntityId, EntityView>();
   const instances = new Map<EntityId, ModelInstanceView>();
+  const clock = { tick: undefined as number | undefined };
   const tint = createStealthTint({
     entities: () => entities,
     instanceFor: (entity) => instances.get(entity) ?? null,
     heroId: () => HERO,
+    tick: () => clock.tick,
     ...(stealth === undefined ? {} : { stealth }),
   });
-  return { tint, entities, instances };
+  return { tint, entities, instances, clock };
 }
 
 describe('FOW-13: подача стелс-состояний из доставленного снапшота', () => {
@@ -157,5 +161,51 @@ describe('FOW-13: подача стелс-состояний из доставл
     // Сущность без детальной модели (батч/заглушка) просто не тонируется.
     s.entities.set(ENEMY, viewOf({ [STATS.team]: 1, [STATS.stealthMask]: 1 }));
     expect(() => { s.tint.update(); }).not.toThrow();
+  });
+
+  it('затухание ведёт доставка: доля — от доставленного тика, цель — вид, который встанет (FOW-13)', () => {
+    const s = stand();
+    const ally = ownedInstance(1);
+    const enemy = ownedInstance(1);
+    s.instances.set(ALLY, ally.view);
+    s.instances.set(ENEMY, enemy.view);
+    s.entities.set(HERO, viewOf({ [STATS.team]: 0 }));
+    // Канала ещё нет (маска 0), но затухание идёт: тик начала 100, длительность 60.
+    s.entities.set(ALLY, viewOf({ [STATS.team]: 0, [STATS.cloakStart]: 100, [STATS.cloakTicks]: 60 }));
+    s.entities.set(ENEMY, viewOf({ [STATS.team]: 1, [STATS.cloakStart]: 100, [STATS.cloakTicks]: 60 }));
+
+    // Середина фазы: половина пути от единицы к непрозрачности своего вида.
+    s.clock.tick = 130;
+    s.tint.update();
+    expect(ally.material.opacity).toBeCloseTo(1 + (STEALTH_TINT_DEFAULTS.allyOpacity - 1) * 0.5, 5);
+    // Чужой без детекции у команды зрителя — к силуэту.
+    expect(enemy.material.opacity).toBeCloseTo(1 + (STEALTH_TINT_DEFAULTS.enemyOpacity - 1) * 0.5, 5);
+
+    // Конец фазы — значение вида целиком, хотя маска ещё не доставлена.
+    s.clock.tick = 160;
+    s.tint.update();
+    expect(ally.material.opacity).toBeCloseTo(STEALTH_TINT_DEFAULTS.allyOpacity, 5);
+
+    // Перемотка на тик до каста — обычная подача, без остаточного перехода.
+    s.clock.tick = 90;
+    s.tint.update();
+    expect(ally.material.opacity).toBe(1);
+    expect(ally.material.transparent).toBe(false);
+    expect(enemy.material.opacity).toBe(1);
+  });
+
+  it('без доставленного тика затухание не ведётся, а детекция команды ведёт чужого к обычной подаче', () => {
+    const s = stand();
+    const enemy = ownedInstance(1);
+    s.instances.set(ENEMY, enemy.view);
+    s.entities.set(HERO, viewOf({ [STATS.team]: 0, [STATS.detectionMask]: 1 }));
+    s.entities.set(ENEMY, viewOf({ [STATS.team]: 1, [STATS.cloakStart]: 100, [STATS.cloakTicks]: 60 }));
+    s.tint.update();
+    expect(enemy.material.opacity).toBe(1);
+    // У команды зрителя есть детекция: какой канал взведётся, зритель не знает,
+    // и чужой остаётся в обычной подаче до прихода маски.
+    s.clock.tick = 130;
+    s.tint.update();
+    expect(enemy.material.opacity).toBe(1);
   });
 });

@@ -85,6 +85,12 @@ export const ACTION_BITS = {
    */
   confirm: 8,
   cancel: 9,
+  /**
+   * Инвиз героя — определение `cloak` сцены (`fog-of-war` FOW-12, FOW-13):
+   * бит фронта, как у щита. Восьмой и девятый биты заняты подтверждением и
+   * отменой шага прицеливания, поэтому следующий свободный — десятый.
+   */
+  cloak: 10,
 } as const;
 
 /**
@@ -309,6 +315,15 @@ export const STATS = {
   stealthMask: 'stealth',
   detectionMask: 'detection',
   /**
+   * Затухание невидимости (`Cloaking.startTick`/`Cloaking.ticks`, FOW-13
+   * «затухание ведёт доставка»): тик начала и длительность фазы, по которым
+   * клиент ведёт долю перехода ОТ ДОСТАВЛЕННОГО ТИКА — второго таймера у
+   * презентации нет, и на перемотке доля следует миру. Компонент есть только
+   * у входящего в невидимость; у остальных записи молча нет (HUD-8).
+   */
+  cloakStart: 'cloakStart',
+  cloakTicks: 'cloakTicks',
+  /**
    * Жертва жгута вытягивания (`Tether.target`) — вход ЛУЧА между двумя
    * сущностями (`rendering` REND-23): запись `effects.byKind.Boss` манифеста
    * называет этот стат полем `targetFromStat`, и рендер тянет отрезок от
@@ -350,6 +365,7 @@ export const ABILITY_SLOTS = Object.freeze({
   rewind: 4,
   throwHeld: 5,
   dodge: 6,
+  cloak: 7,
 });
 
 /**
@@ -371,6 +387,7 @@ export const COOLDOWN_SOURCES: Readonly<Record<string, number>> = Object.freeze(
   capture: ABILITY_SLOTS.capture,
   shield: ABILITY_SLOTS.shield,
   rewind: ABILITY_SLOTS.rewind,
+  cloak: ABILITY_SLOTS.cloak,
 });
 
 /** Порядок панели кулдаунов HUD — порядок кнопок, а не источников. */
@@ -382,6 +399,7 @@ export const COOLDOWN_ABILITIES: readonly string[] = Object.freeze([
   'capture',
   'shield',
   'rewind',
+  'cloak',
 ]);
 
 /**

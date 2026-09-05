@@ -514,6 +514,7 @@ const BOSS_SLOTS = [
   'SlotBossField',
   'SlotBossSpawn',
   'SlotBossTether',
+  'SlotBossCloak',
 ] as const;
 
 function only(...keep: readonly string[]): SceneDef {
@@ -673,6 +674,7 @@ const SLOT_PREFAB: Record<string, string> = {
   BossField: 'SlotBossField',
   BossSpawn: 'SlotBossSpawn',
   BossTether: 'SlotBossTether',
+  BossCloak: 'SlotBossCloak',
 };
 
 /**
@@ -687,10 +689,11 @@ const ASK_SLOT: Record<string, number> = {
   BossField: 3,
   BossSpawn: 4,
   BossTether: 5,
+  BossCloak: 6,
 };
 
-/** Ротационных слотов шесть; толчок и аура в ротацию не входят вовсе. */
-const BOSS_ROTATION_SLOTS = 6;
+/** Ротационных слотов семь (седьмой — невидимость); толчок и аура в ротацию не входят вовсе. */
+const BOSS_ROTATION_SLOTS = 7;
 
 const slotPrefabField = (prefab: string, field: string): number =>
   (SCENE.prefabs!.find((entry) => entry.name === prefab)!.components.AbilitySlot as Record<
@@ -2379,6 +2382,7 @@ describe('числа и картинка босса: ретюн виден в д
     expect(rotation.transitions ?? []).toEqual([]);
     expect(rotation.actions.map((action) => action.executor)).toEqual([
       'seekTarget',
+      'cast',
       'cast',
       'cast',
       'cast',

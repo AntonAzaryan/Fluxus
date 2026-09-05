@@ -68,6 +68,12 @@ export const DEMO_STATS: readonly StatSource[] = Object.freeze([
   // них записи молча нет — ровно сценарий HUD-8.
   { name: STATS.stealthMask, component: 'StealthState', field: 'mask' },
   { name: STATS.detectionMask, component: 'DetectionState', field: 'mask' },
+  // Затухание невидимости (FOW-13): тик начала и длительность фазы едут
+  // статами, а долю перехода клиент считает от доставленного тика. Компонент
+  // `Cloaking` вешает определение `cloak`/`bossCloak` сцены и снимает бафф
+  // затухания; у остальных записи молча нет — ровно сценарий HUD-8.
+  { name: STATS.cloakStart, component: 'Cloaking', field: 'startTick' },
+  { name: STATS.cloakTicks, component: 'Cloaking', field: 'ticks' },
   // Жертва жгута вытягивания — второй конец луча (REND-23): запись
   // `effects.byKind.Boss` манифеста называет этот стат полем `targetFromStat`.
   // Компонент есть только у кастующего босса, у остальных записи молча нет —
